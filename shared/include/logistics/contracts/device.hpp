@@ -5,16 +5,16 @@
 
 namespace logistics::contracts {
 
-enum class DeviceRole : std::uint8_t {
-    kInput,
-    kCamera,
-    kRecognition,
-    kSorting,
-    kLineTracer,
-};
+    enum class DeviceRole : std::uint8_t {
+        kInput,
+        kCamera,
+        kRecognition,
+        kSorting,
+        kLineTracer,
+    };
 
-[[nodiscard]] constexpr std::string_view ToString(DeviceRole role) {
-    switch (role) {
+    [[nodiscard]] constexpr std::string_view ToString(DeviceRole role) {
+        switch (role) {
         case DeviceRole::kInput:
             return "input";
         case DeviceRole::kCamera:
@@ -25,8 +25,8 @@ enum class DeviceRole : std::uint8_t {
             return "sorting";
         case DeviceRole::kLineTracer:
             return "linetracer";
+        }
+        return "unknown";
     }
-    return "unknown";
-}
 
 }  // namespace logistics::contracts

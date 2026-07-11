@@ -59,23 +59,23 @@ int main() {
     assert(status_policy.maximum_qos == mqtt::Qos::kAtLeastOnce);
     assert(status_policy.retain == mqtt::RetainPolicy::kLatestStateAllowed);
 
-    constexpr mqtt::EnvelopeView valid_envelope{mqtt::MessageType::kHeartbeat, "PI-01", "2026-08-20T14:31:30", "{}"};
+    constexpr mqtt::EnvelopeView valid_envelope{ mqtt::MessageType::kHeartbeat, "PI-01", "2026-08-20T14:31:30", "{}" };
     static_assert(valid_envelope.IsValid());
-    constexpr mqtt::EnvelopeView invalid_envelope{mqtt::MessageType::kUnknown, "PI-01", "2026-08-20T14:31:30", "{}"};
+    constexpr mqtt::EnvelopeView invalid_envelope{ mqtt::MessageType::kUnknown, "PI-01", "2026-08-20T14:31:30", "{}" };
     static_assert(!invalid_envelope.IsValid());
 
-    constexpr mqtt::CommandRequestView command_request{"REQ-0001", mqtt::ControlCommand::kStart, "PI-01"};
+    constexpr mqtt::CommandRequestView command_request{ "REQ-0001", mqtt::ControlCommand::kStart, "PI-01" };
     static_assert(command_request.IsValid());
-    constexpr mqtt::CommandResponseView command_response{"REQ-0001", mqtt::ControlCommand::kStart,
-                                                         mqtt::CommandResult::kReceived};
+    constexpr mqtt::CommandResponseView command_response{ "REQ-0001", mqtt::ControlCommand::kStart,
+                                                         mqtt::CommandResult::kReceived };
     static_assert(command_response.IsValid());
 
     static_assert(mqtt::kHeartbeatInterval.count() == 5);
     static_assert(mqtt::kHeartbeatDelayedAfter.count() == 10);
     static_assert(mqtt::kHeartbeatOfflineAfter.count() == 15);
     static_assert(mqtt::kMqttMaximumRetries == 3);
-    static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{9}) == mqtt::ConnectionState::kOnline);
-    static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{10}) == mqtt::ConnectionState::kDelayed);
-    static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{15}) == mqtt::ConnectionState::kOffline);
+    static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 9 }) == mqtt::ConnectionState::kOnline);
+    static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 10 }) == mqtt::ConnectionState::kDelayed);
+    static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 15 }) == mqtt::ConnectionState::kOffline);
     return 0;
 }

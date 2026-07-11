@@ -1,5 +1,5 @@
 #include "logistics/device/node_runtime.hpp"
 
 int main() {
-    return logistics::device::NodeRuntime{logistics::contracts::DeviceRole::kSorting}.Run();
+    return logistics::device::NodeRuntime{ logistics::contracts::DeviceRole::kSorting }.Run();
 }
