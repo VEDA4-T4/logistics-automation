@@ -1,0 +1,12 @@
+[mqtt]
+host=0.0.0.0
+port=1883
+client_id=central-server
+
+[database]
+path=/var/lib/logistics/logistics.db
+
+[storage]
+image_root=/var/lib/logistics/images
+log_root=/var/log/logistics
+

@@ -67,3 +67,22 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Runtime and local configuration
+*.ini
+!*.ini.example
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+logs/
+images/
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Codex/PDF review intermediates
+tmp/

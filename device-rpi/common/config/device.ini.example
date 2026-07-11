@@ -1,0 +1,17 @@
+[device]
+id=PI-01
+role=input
+
+[mqtt]
+host=127.0.0.1
+port=1883
+
+[serial]
+device=/dev/ttyUSB0
+baud_rate=115200
+
+[camera]
+device=/dev/video0
+width=1280
+height=720
+

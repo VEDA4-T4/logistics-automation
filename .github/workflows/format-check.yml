@@ -1,0 +1,42 @@
+name: C++ Format Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  clang-format:
+    name: clang-format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Check formatting
+        run: |
+          FILES=$(find . \
+            -type f \( \
+              -name "*.cpp" -o \
+              -name "*.cc" -o \
+              -name "*.cxx" -o \
+              -name "*.hpp" -o \
+              -name "*.h" -o \
+              -name "*.hh" \
+            \) \
+            -not -path "./build/*" \
+            -not -path "./.git/*")
+
+          if [ -z "$FILES" ]; then
+            echo "No C/C++ files found."
+            exit 0
+          fi
+
+          clang-format --dry-run --Werror $FILES

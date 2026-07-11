@@ -1,0 +1,12 @@
+[mqtt]
+host=127.0.0.1
+port=1883
+client_id=control-center
+
+[rtsp]
+channel_count=4
+reconnect_interval_ms=3000
+
+[ui]
+language=ko_KR
+

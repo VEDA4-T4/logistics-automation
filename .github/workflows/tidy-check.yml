@@ -1,0 +1,37 @@
+name: C++ Tidy Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tidy cmake g++
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Run clang-tidy
+        run: |
+          find . \
+            -type f \( \
+              -name "*.cpp" -o \
+              -name "*.cc" -o \
+              -name "*.cxx" \
+            \) \
+            -not -path "./build/*" \
+            -not -path "./.git/*" \
+            -not -path "./control-center/*" \
+            -print0 | xargs -0 clang-tidy -p build
