@@ -9,7 +9,7 @@ on:
 jobs:
   clang-format:
     name: clang-format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
@@ -39,4 +39,4 @@ jobs:
             exit 0
           fi
 
-          clang-format --dry-run --Werror $FILES
+          clang-format-18 --dry-run --Werror $FILES
