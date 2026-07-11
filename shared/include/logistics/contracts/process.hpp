@@ -5,17 +5,17 @@
 
 namespace logistics::contracts {
 
-    enum class ProcessState : std::uint8_t {
-        kIdle,
-        kRunning,
-        kStopped,
-        kError,
-        kEmergencyStop,
-        kRecovery,
-    };
+enum class ProcessState : std::uint8_t {
+    kIdle,
+    kRunning,
+    kStopped,
+    kError,
+    kEmergencyStop,
+    kRecovery,
+};
 
-    [[nodiscard]] constexpr std::string_view ToString(ProcessState state) {
-        switch (state) {
+[[nodiscard]] constexpr std::string_view ToString(ProcessState state) {
+    switch (state) {
         case ProcessState::kIdle:
             return "IDLE";
         case ProcessState::kRunning:
@@ -28,8 +28,8 @@ namespace logistics::contracts {
             return "ESTOP";
         case ProcessState::kRecovery:
             return "RECOVERY";
-        }
-        return "UNKNOWN";
     }
+    return "UNKNOWN";
+}
 
 }  // namespace logistics::contracts

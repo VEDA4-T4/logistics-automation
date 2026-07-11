@@ -4,13 +4,13 @@
 
 namespace logistics::device {
 
-    class NodeRuntime final {
-    public:
-        explicit NodeRuntime(contracts::DeviceRole role);
-        [[nodiscard]] int Run() const;
+class NodeRuntime final {
+public:
+    explicit NodeRuntime(contracts::DeviceRole role);
+    [[nodiscard]] int Run() const;
 
-    private:
-        contracts::DeviceRole role_;
-    };
+private:
+    contracts::DeviceRole role_;
+};
 
 }  // namespace logistics::device

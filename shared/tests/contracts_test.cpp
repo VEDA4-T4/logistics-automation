@@ -67,7 +67,7 @@ int main() {
     constexpr mqtt::CommandRequestView command_request{ "REQ-0001", mqtt::ControlCommand::kStart, "PI-01" };
     static_assert(command_request.IsValid());
     constexpr mqtt::CommandResponseView command_response{ "REQ-0001", mqtt::ControlCommand::kStart,
-                                                         mqtt::CommandResult::kReceived };
+                                                          mqtt::CommandResult::kReceived };
     static_assert(command_response.IsValid());
 
     static_assert(mqtt::kHeartbeatInterval.count() == 5);
