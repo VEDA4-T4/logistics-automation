@@ -1,4 +1,6 @@
 BasedOnStyle: Google
+Standard: c++17
+
 ColumnLimit: 120
 
 DerivePointerAlignment: false
@@ -16,3 +18,5 @@ AccessModifierOffset: -4
 AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
+
+Cpp11BracedListStyle: Block
