@@ -19,4 +19,4 @@ AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
 
-Cpp11BracedListStyle: Block
+Cpp11BracedListStyle: false
