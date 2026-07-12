@@ -1,12 +1,14 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 namespace logistics::contracts::mqtt {
 
-enum class TopicKind {
+enum class TopicKind : std::uint8_t {
     kUnknown,
     kQtRequest,
     kQtResponse,
@@ -27,7 +29,7 @@ enum class TopicKind {
 
 struct ParsedTopic {
     TopicKind kind{ TopicKind::kUnknown };
-    std::string_view endpoint_id{};
+    std::string_view endpoint_id;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return kind != TopicKind::kUnknown;
@@ -54,11 +56,11 @@ inline constexpr std::string_view kDeviceHeartbeatSubscription = "device/+/heart
 namespace detail {
 
 [[nodiscard]] constexpr bool StartsWith(std::string_view value, std::string_view prefix) noexcept {
-    return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
+    return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
 }
 
 [[nodiscard]] constexpr bool EndsWith(std::string_view value, std::string_view suffix) noexcept {
-    return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
+    return value.size() >= suffix.size() && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
 [[nodiscard]] inline std::string PrefixTopic(std::string_view prefix, std::string_view endpoint_id) {
@@ -103,7 +105,7 @@ namespace detail {
     if (!IsValidTopicLevel(endpoint)) {
         return {};
     }
-    return { kind, endpoint };
+    return { .kind = kind, .endpoint_id = endpoint };
 }
 
 }  // namespace detail
@@ -158,32 +160,33 @@ namespace detail {
 
 [[nodiscard]] constexpr ParsedTopic ParseTopic(std::string_view topic) noexcept {
     if (topic == kSystemBroadcastCommandTopic) {
-        return { TopicKind::kSystemBroadcastCommand, {} };
+        return { .kind = TopicKind::kSystemBroadcastCommand, .endpoint_id = {} };
     }
     if (topic == kServerStatusTopic) {
-        return { TopicKind::kServerStatus, {} };
+        return { .kind = TopicKind::kServerStatus, .endpoint_id = {} };
     }
     if (topic == kServerHeartbeatTopic) {
-        return { TopicKind::kServerHeartbeat, {} };
+        return { .kind = TopicKind::kServerHeartbeat, .endpoint_id = {} };
     }
 
-    constexpr struct {
+    struct TopicPattern {
         std::string_view prefix;
         std::string_view suffix;
         TopicKind kind;
-    } patterns[] = {
-        { "server/request", "", TopicKind::kQtRequest },
-        { "qt", "response", TopicKind::kQtResponse },
-        { "qt", "status", TopicKind::kQtStatus },
-        { "qt", "event", TopicKind::kQtEvent },
-        { "qt", "error", TopicKind::kQtError },
-        { "device", "register", TopicKind::kDeviceRegister },
-        { "device", "command", TopicKind::kDeviceCommand },
-        { "device", "response", TopicKind::kDeviceResponse },
-        { "device", "status", TopicKind::kDeviceStatus },
-        { "device", "event", TopicKind::kDeviceEvent },
-        { "device", "error", TopicKind::kDeviceError },
-        { "device", "heartbeat", TopicKind::kDeviceHeartbeat },
+    };
+    constexpr std::array patterns = {
+        TopicPattern{ .prefix = "server/request", .suffix = "", .kind = TopicKind::kQtRequest },
+        TopicPattern{ .prefix = "qt", .suffix = "response", .kind = TopicKind::kQtResponse },
+        TopicPattern{ .prefix = "qt", .suffix = "status", .kind = TopicKind::kQtStatus },
+        TopicPattern{ .prefix = "qt", .suffix = "event", .kind = TopicKind::kQtEvent },
+        TopicPattern{ .prefix = "qt", .suffix = "error", .kind = TopicKind::kQtError },
+        TopicPattern{ .prefix = "device", .suffix = "register", .kind = TopicKind::kDeviceRegister },
+        TopicPattern{ .prefix = "device", .suffix = "command", .kind = TopicKind::kDeviceCommand },
+        TopicPattern{ .prefix = "device", .suffix = "response", .kind = TopicKind::kDeviceResponse },
+        TopicPattern{ .prefix = "device", .suffix = "status", .kind = TopicKind::kDeviceStatus },
+        TopicPattern{ .prefix = "device", .suffix = "event", .kind = TopicKind::kDeviceEvent },
+        TopicPattern{ .prefix = "device", .suffix = "error", .kind = TopicKind::kDeviceError },
+        TopicPattern{ .prefix = "device", .suffix = "heartbeat", .kind = TopicKind::kDeviceHeartbeat },
     };
 
     for (const auto& pattern : patterns) {
@@ -192,7 +195,7 @@ namespace detail {
             if (detail::StartsWith(topic, request_prefix)) {
                 const auto client_id = topic.substr(request_prefix.size());
                 if (IsValidTopicLevel(client_id)) {
-                    return { pattern.kind, client_id };
+                    return { .kind = pattern.kind, .endpoint_id = client_id };
                 }
             }
             continue;

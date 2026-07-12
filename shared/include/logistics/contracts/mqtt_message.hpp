@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <string_view>
@@ -8,11 +9,17 @@
 
 namespace logistics::contracts::mqtt {
 
+inline constexpr std::string_view kCurrentProtocolVersion = "1.0";
+
+inline constexpr std::string_view kProtocolVersionField = "protocolVersion";
+inline constexpr std::string_view kMessageIdField = "messageId";
 inline constexpr std::string_view kMessageTypeField = "messageType";
-inline constexpr std::string_view kDeviceIdField = "deviceId";
+inline constexpr std::string_view kSourceIdField = "sourceId";
 inline constexpr std::string_view kTimestampField = "timestamp";
 inline constexpr std::string_view kDataField = "data";
 inline constexpr std::string_view kRequestIdField = "requestId";
+inline constexpr std::string_view kTargetDeviceIdField = "targetDeviceId";
+inline constexpr std::string_view kComponentIdField = "componentId";
 
 enum class MessageType : std::uint8_t {
     kUnknown,
@@ -82,29 +89,34 @@ struct DeliveryPolicy {
 };
 
 struct EnvelopeView {
+    std::string_view protocol_version;
+    std::string_view message_id;
     MessageType message_type{ MessageType::kUnknown };
-    std::string_view device_id{};
-    std::string_view timestamp{};
-    std::string_view data_json{};
+    std::string_view source_id;
+    std::string_view timestamp;
+    std::string_view data_json;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
-        return message_type != MessageType::kUnknown && IsValidTopicLevel(device_id) && !timestamp.empty() &&
+        return protocol_version == kCurrentProtocolVersion && IsValidTopicLevel(message_id) &&
+               message_type != MessageType::kUnknown && IsValidTopicLevel(source_id) && !timestamp.empty() &&
                !data_json.empty();
     }
 };
 
 struct CommandRequestView {
-    std::string_view request_id{};
+    std::string_view request_id;
     ControlCommand command{ ControlCommand::kUnknown };
-    std::string_view target_device{};
+    std::string_view target_device;
+    std::string_view component_id;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
-        return IsValidTopicLevel(request_id) && command != ControlCommand::kUnknown && IsValidTopicLevel(target_device);
+        return IsValidTopicLevel(request_id) && command != ControlCommand::kUnknown &&
+               IsValidTopicLevel(target_device) && (component_id.empty() || IsValidTopicLevel(component_id));
     }
 };
 
 struct CommandResponseView {
-    std::string_view request_id{};
+    std::string_view request_id;
     ControlCommand command{ ControlCommand::kUnknown };
     CommandResult result{ CommandResult::kUnknown };
 
@@ -156,7 +168,7 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 }
 
 [[nodiscard]] constexpr MessageType MessageTypeFromString(std::string_view value) noexcept {
-    constexpr MessageType values[] = {
+    constexpr std::array values = {
         MessageType::kDeviceRegister,   MessageType::kHeartbeat,       MessageType::kBoxDetected,
         MessageType::kPositionDetected, MessageType::kBarcodeDetected, MessageType::kProductImage,
         MessageType::kProductInfo,      MessageType::kDestinationSet,  MessageType::kDeviceStatus,
@@ -164,8 +176,9 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
         MessageType::kCommandResponse,
     };
     for (const auto type : values) {
-        if (ToString(type) == value)
+        if (ToString(type) == value) {
             return type;
+        }
     }
     return MessageType::kUnknown;
 }
@@ -195,14 +208,15 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 }
 
 [[nodiscard]] constexpr ControlCommand ControlCommandFromString(std::string_view value) noexcept {
-    constexpr ControlCommand values[] = {
+    constexpr std::array values = {
         ControlCommand::kStart,      ControlCommand::kStop,           ControlCommand::kRestart,
         ControlCommand::kInitialize, ControlCommand::kStatusRequest,  ControlCommand::kEmergencyStop,
         ControlCommand::kRecovery,   ControlCommand::kDestinationSet,
     };
     for (const auto command : values) {
-        if (ToString(command) == value)
+        if (ToString(command) == value) {
             return command;
+        }
     }
     return ControlCommand::kUnknown;
 }
@@ -230,13 +244,14 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 }
 
 [[nodiscard]] constexpr CommandResult CommandResultFromString(std::string_view value) noexcept {
-    constexpr CommandResult values[] = {
+    constexpr std::array values = {
         CommandResult::kReceived, CommandResult::kProcessing, CommandResult::kSuccess,    CommandResult::kFailed,
         CommandResult::kRejected, CommandResult::kTimeout,    CommandResult::kDuplicated,
     };
     for (const auto result : values) {
-        if (ToString(result) == value)
+        if (ToString(result) == value) {
             return result;
+        }
     }
     return CommandResult::kUnknown;
 }
@@ -270,13 +285,19 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 [[nodiscard]] constexpr DeliveryPolicy PolicyFor(MessageType type) noexcept {
     switch (type) {
         case MessageType::kHeartbeat:
-            return { Qos::kAtMostOnce, Qos::kAtMostOnce, RetainPolicy::kNever };
+            return { .minimum_qos = Qos::kAtMostOnce, .maximum_qos = Qos::kAtMostOnce, .retain = RetainPolicy::kNever };
         case MessageType::kDeviceStatus:
-            return { Qos::kAtMostOnce, Qos::kAtLeastOnce, RetainPolicy::kLatestStateAllowed };
+            return { .minimum_qos = Qos::kAtMostOnce,
+                     .maximum_qos = Qos::kAtLeastOnce,
+                     .retain = RetainPolicy::kLatestStateAllowed };
         case MessageType::kErrorOccurred:
-            return { Qos::kAtLeastOnce, Qos::kAtLeastOnce, RetainPolicy::kAllowed };
+            return { .minimum_qos = Qos::kAtLeastOnce,
+                     .maximum_qos = Qos::kAtLeastOnce,
+                     .retain = RetainPolicy::kAllowed };
         default:
-            return { Qos::kAtLeastOnce, Qos::kAtLeastOnce, RetainPolicy::kNever };
+            return { .minimum_qos = Qos::kAtLeastOnce,
+                     .maximum_qos = Qos::kAtLeastOnce,
+                     .retain = RetainPolicy::kNever };
     }
 }
 

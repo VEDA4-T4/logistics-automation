@@ -11,7 +11,7 @@ int main() {
     using logistics::contracts::DeviceRole;
     using logistics::contracts::ProcessState;
 
-    assert(logistics::contracts::ToString(DeviceRole::kCamera) == "camera");
+    assert(logistics::contracts::ToString(DeviceRole::kVision) == "vision");
     assert(logistics::contracts::ToString(ProcessState::kEmergencyStop) == "ESTOP");
 
     namespace mqtt = logistics::contracts::mqtt;
@@ -59,15 +59,29 @@ int main() {
     assert(status_policy.maximum_qos == mqtt::Qos::kAtLeastOnce);
     assert(status_policy.retain == mqtt::RetainPolicy::kLatestStateAllowed);
 
-    constexpr mqtt::EnvelopeView valid_envelope{ mqtt::MessageType::kHeartbeat, "PI-01", "2026-08-20T14:31:30", "{}" };
+    constexpr mqtt::EnvelopeView valid_envelope{ .protocol_version = mqtt::kCurrentProtocolVersion,
+                                                 .message_id = "MSG-0001",
+                                                 .message_type = mqtt::MessageType::kHeartbeat,
+                                                 .source_id = "PI-01",
+                                                 .timestamp = "2026-08-20T14:31:30+09:00",
+                                                 .data_json = "{}" };
     static_assert(valid_envelope.IsValid());
-    constexpr mqtt::EnvelopeView invalid_envelope{ mqtt::MessageType::kUnknown, "PI-01", "2026-08-20T14:31:30", "{}" };
+    constexpr mqtt::EnvelopeView invalid_envelope{ .protocol_version = "2.0",
+                                                   .message_id = "MSG-0002",
+                                                   .message_type = mqtt::MessageType::kHeartbeat,
+                                                   .source_id = "PI-01",
+                                                   .timestamp = "2026-08-20T14:31:30+09:00",
+                                                   .data_json = "{}" };
     static_assert(!invalid_envelope.IsValid());
 
-    constexpr mqtt::CommandRequestView command_request{ "REQ-0001", mqtt::ControlCommand::kStart, "PI-01" };
+    constexpr mqtt::CommandRequestView command_request{ .request_id = "REQ-0001",
+                                                        .command = mqtt::ControlCommand::kStart,
+                                                        .target_device = "PI-INPUT-01",
+                                                        .component_id = "CONVEYOR-MOTOR-01" };
     static_assert(command_request.IsValid());
-    constexpr mqtt::CommandResponseView command_response{ "REQ-0001", mqtt::ControlCommand::kStart,
-                                                          mqtt::CommandResult::kReceived };
+    constexpr mqtt::CommandResponseView command_response{ .request_id = "REQ-0001",
+                                                          .command = mqtt::ControlCommand::kStart,
+                                                          .result = mqtt::CommandResult::kReceived };
     static_assert(command_response.IsValid());
 
     static_assert(mqtt::kHeartbeatInterval.count() == 5);
