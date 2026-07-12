@@ -13,8 +13,6 @@ function(add_device_node target_name source_file)
 endfunction()
 
 add_device_node(logistics_input_node input-node/main.cpp)
-add_device_node(logistics_camera_node camera-node/main.cpp)
-add_device_node(logistics_recognition_node recognition-node/main.cpp)
+add_device_node(logistics_vision_node vision-node/main.cpp)
 add_device_node(logistics_sorting_node sorting-node/main.cpp)
 add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
-
