@@ -29,8 +29,7 @@ logistics-automation/
 │   │   ├── device_status/
 │   │   └── config/
 │   ├── input-node/                # 투입/컨베이어
-│   ├── camera-node/               # 상자 검출/좌표 계산
-│   ├── recognition-node/          # 바코드 인식/이미지 저장
+│   ├── vision-node/               # 영상 수신/상품 검출/좌표·바코드 인식
 │   ├── sorting-node/              # 분류 장치 중계
 │   ├── linetracer-node/           # 운반 상태 중계
 │   └── logs/
@@ -66,4 +65,3 @@ logistics-automation/
 - 기본 호스트 CMake: `shared`, `central-server-rpi`, `device-rpi`
 - 선택 빌드: `control-center` (`LOGISTICS_BUILD_CONTROL_CENTER=ON`, Qt 6 필요)
 - 별도 펌웨어 빌드: `stm32/*-controller` (STM32CubeIDE/ARM toolchain)
-
