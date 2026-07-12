@@ -22,8 +22,14 @@ Topic 생성·분석 함수와 중앙 서버용 wildcard 구독 상수는
 
 ## Payload와 전송 정책
 
-공통 JSON envelope의 필수 필드는 `messageType`, `deviceId`, `timestamp`, `data`입니다. 제어 명령의
-`data`에는 `requestId`를 포함하며, 재전송할 때도 같은 값을 유지합니다.
+공통 JSON envelope의 필수 필드는 `protocolVersion`, `messageId`, `messageType`, `sourceId`,
+`timestamp`, `data`입니다. 현재 protocol version은 `1.0`이며 timestamp는 UTC의 `Z` 또는 명시적인
+offset을 포함한 ISO 8601 형식을 사용합니다.
+
+`sourceId`는 메시지를 발행한 Qt, 중앙 서버 또는 장치 ID입니다. 제어 명령의 `data`에는
+`requestId`, `targetDeviceId`, 선택적인 `componentId`를 포함합니다. `targetDeviceId`는 명령을 받는
+Raspberry Pi/STM32 장치를 식별하며, `componentId`는 그 장치가 제어하는 개별 모터나 센서를
+식별합니다. 명령을 재전송할 때는 동일한 `messageId`와 `requestId`를 유지합니다.
 
 - heartbeat: QoS 0, retain 미사용, 5초 간격
 - 장치 상태: QoS 0 또는 1, 최신 상태 retain 가능
