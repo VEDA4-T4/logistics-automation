@@ -24,12 +24,6 @@ target_sources(
         vision-node/detection.hpp
 )
 
-find_package(OpenCV 4 REQUIRED COMPONENTS core)
-if(OpenCV_VERSION VERSION_LESS 4.8.0)
-    set(OPENCV_VISION_COMPONENT barcode)
-else()
-    set(OPENCV_VISION_COMPONENT objdetect)
-endif()
-find_package(OpenCV 4 REQUIRED COMPONENTS core highgui imgproc ${OPENCV_VISION_COMPONENT} videoio)
+find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgproc objdetect videoio)
 target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
