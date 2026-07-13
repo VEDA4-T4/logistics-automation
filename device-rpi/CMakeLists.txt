@@ -16,3 +16,7 @@ add_device_node(logistics_input_node input-node/main.cpp)
 add_device_node(logistics_vision_node vision-node/main.cpp)
 add_device_node(logistics_sorting_node sorting-node/main.cpp)
 add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
+
+find_package(OpenCV 4 REQUIRED COMPONENTS core highgui objdetect videoio)
+target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
