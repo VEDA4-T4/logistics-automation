@@ -1,7 +1,13 @@
 #pragma once
 
 #include <opencv2/core.hpp>
+#if __has_include(<opencv2/objdetect/barcode.hpp>)
 #include <opencv2/objdetect/barcode.hpp>
+#elif __has_include(<opencv2/barcode.hpp>)
+#include <opencv2/barcode.hpp>
+#else
+#error "OpenCV barcode detector header was not found"
+#endif
 #include <optional>
 #include <string>
 #include <string_view>
