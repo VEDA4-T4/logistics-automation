@@ -140,14 +140,15 @@ ParseStatus ParseArguments(const int argc, char* argv[], CameraSettings& setting
 }
 
 std::string BuildCameraPipeline(const CameraSettings& settings) {
-    std::ostringstream pipeline;
-    pipeline << "libcamerasrc ! "
-             << "video/x-raw,width=" << settings.width << ",height=" << settings.height << ",framerate=" << settings.fps
-             << "/1 ! "
-             << "videoconvert ! "
-             << "video/x-raw,format=BGR ! "
-             << "appsink drop=true max-buffers=1 sync=false wait-on-eos=false";
-    return pipeline.str();
+    std::string pipeline = "libcamerasrc ! video/x-raw,width=";
+    pipeline += std::to_string(settings.width);
+    pipeline += ",height=";
+    pipeline += std::to_string(settings.height);
+    pipeline += ",framerate=";
+    pipeline += std::to_string(settings.fps);
+    pipeline += "/1 ! videoconvert ! video/x-raw,format=BGR ! ";
+    pipeline += "appsink drop=true max-buffers=1 sync=false wait-on-eos=false";
+    return pipeline;
 }
 
 bool OpenCamera(cv::VideoCapture& camera, const CameraSettings& settings) {
