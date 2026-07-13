@@ -17,7 +17,7 @@ jobs:
       - name: Install clang-tidy
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-tidy cmake g++
+          sudo apt-get install -y clang-tidy cmake g++ libopencv-dev
 
       - name: Configure
         run: |
