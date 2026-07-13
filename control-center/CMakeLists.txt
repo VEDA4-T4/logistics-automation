@@ -24,6 +24,18 @@ qt_add_executable(
     include/logistics/control_center/main_window.hpp
 )
 
+add_custom_target(
+    logistics_control_center_config ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/config"
+    COMMAND
+        ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_LIST_DIR}/config"
+        "${CMAKE_CURRENT_BINARY_DIR}/config"
+    COMMENT "Copying control-center configuration"
+    VERBATIM
+)
+add_dependencies(logistics_control_center logistics_control_center_config)
+
 target_include_directories(logistics_control_center PRIVATE include)
 target_link_libraries(
     logistics_control_center
