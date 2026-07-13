@@ -1,218 +1,312 @@
 #include <algorithm>
-#include <cctype>
+#include <charconv>
+#include <chrono>
 #include <cstddef>
+#include <iomanip>
 #include <iostream>
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/objdetect/barcode.hpp>
 #include <opencv2/videoio.hpp>
-#include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_set>
-#include <vector>
+
+#include "detection.hpp"
 
 namespace {
 
+using Clock = std::chrono::steady_clock;
+
 constexpr int kEscapeKey = 27;
 constexpr int kWaitKeyDelayMs = 1;
-constexpr int kBoxCloseKernelSize = 11;
-constexpr int kBoxOpenKernelSize = 5;
+constexpr int kReconnectIntervalMs = 3000;
+constexpr int kMaximumConsecutiveFrameErrors = 3;
+constexpr int kReconnectPollIntervalMs = 100;
+constexpr int kMaximumCameraDimension = 8192;
+constexpr int kMaximumCameraFps = 240;
 constexpr std::size_t kBarcodeCornerCount = 4;
-constexpr std::size_t kEan13DigitCount = 13;
-constexpr char kSupportedBarcodeType[] = "EAN_13";
-constexpr double kMinimumBoxAreaPixels = 2500.0;
-constexpr double kMaximumBoxFrameAreaRatio = 0.8;
-constexpr double kMinimumBoxRectangularity = 0.65;
-constexpr double kMaximumBoxAspectRatio = 1.4;
-const cv::Scalar kBoxMaskLowerHsv{ 0, 0, 160 };
-const cv::Scalar kBoxMaskUpperHsv{ 180, 70, 255 };
+constexpr double kLatencySmoothingFactor = 0.1;
 const cv::Scalar kBoxOutlineColor{ 255, 128, 0 };
 const cv::Scalar kBarcodeBoxColor{ 0, 255, 0 };
-const cv::Scalar kNotFoundColor{ 0, 0, 255 };
-const cv::Mat kBoxCloseKernel =
-    cv::getStructuringElement(cv::MORPH_RECT, cv::Size(kBoxCloseKernelSize, kBoxCloseKernelSize));
-const cv::Mat kBoxOpenKernel =
-    cv::getStructuringElement(cv::MORPH_RECT, cv::Size(kBoxOpenKernelSize, kBoxOpenKernelSize));
+const cv::Scalar kErrorColor{ 0, 0, 255 };
+const cv::Scalar kTextColor{ 255, 255, 255 };
 
-const std::string kCameraPipeline =
-    "libcamerasrc ! "
-    "video/x-raw,width=1280,height=720,framerate=30/1 ! "
-    "videoconvert ! "
-    "video/x-raw,format=BGR ! "
-    "appsink drop=true max-buffers=1 sync=false";
-
-struct DetectedBox {
-    cv::Rect roi;
-    cv::RotatedRect outline;
+struct CameraSettings {
+    int width = 1280;
+    int height = 720;
+    int fps = 30;
 };
 
-std::optional<DetectedBox> DetectStyrofoamBox(const cv::Mat& frame, cv::Mat& box_mask) {
-    cv::Mat hsv_frame;
-    cv::cvtColor(frame, hsv_frame, cv::COLOR_BGR2HSV);
-    cv::inRange(hsv_frame, kBoxMaskLowerHsv, kBoxMaskUpperHsv, box_mask);
+enum class ParseStatus {
+    kSuccess,
+    kHelp,
+    kError,
+};
 
-    cv::morphologyEx(box_mask, box_mask, cv::MORPH_CLOSE, kBoxCloseKernel);
-    cv::morphologyEx(box_mask, box_mask, cv::MORPH_OPEN, kBoxOpenKernel);
+struct LatencyMetrics {
+    double capture_ms = 0.0;
+    double processing_ms = 0.0;
+    double total_ms = 0.0;
+};
 
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(box_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-    const double maximum_box_area = static_cast<double>(frame.total()) * kMaximumBoxFrameAreaRatio;
-    const cv::Rect frame_bounds{ 0, 0, frame.cols, frame.rows };
-    double largest_box_area = 0.0;
-    std::optional<DetectedBox> detected_box;
-
-    for (const std::vector<cv::Point>& contour : contours) {
-        const double contour_area = cv::contourArea(contour);
-        if (contour_area < kMinimumBoxAreaPixels || contour_area > maximum_box_area) {
-            continue;
+class LatencyTracker final {
+public:
+    void Update(const LatencyMetrics& current) {
+        if (!initialized_) {
+            average_ = current;
+            initialized_ = true;
+            return;
         }
 
-        const cv::RotatedRect outline = cv::minAreaRect(contour);
-        const double width = static_cast<double>(outline.size.width);
-        const double height = static_cast<double>(outline.size.height);
-        if (width <= 0.0 || height <= 0.0) {
-            continue;
-        }
-
-        const double aspect_ratio = std::max(width, height) / std::min(width, height);
-        const double rectangularity = contour_area / (width * height);
-        if (aspect_ratio > kMaximumBoxAspectRatio || rectangularity < kMinimumBoxRectangularity) {
-            continue;
-        }
-
-        const cv::Rect roi = cv::boundingRect(contour) & frame_bounds;
-        if (roi.empty() || contour_area <= largest_box_area) {
-            continue;
-        }
-
-        largest_box_area = contour_area;
-        detected_box = DetectedBox{ roi, outline };
+        average_.capture_ms = Smooth(average_.capture_ms, current.capture_ms);
+        average_.processing_ms = Smooth(average_.processing_ms, current.processing_ms);
+        average_.total_ms = Smooth(average_.total_ms, current.total_ms);
     }
 
-    return detected_box;
-}
-
-void DrawDetectedBox(cv::Mat& frame, const DetectedBox& detected_box) {
-    cv::Point2f corners[kBarcodeCornerCount];
-    detected_box.outline.points(corners);
-
-    for (std::size_t corner_index = 0; corner_index < kBarcodeCornerCount; ++corner_index) {
-        const cv::Point2f& start = corners[corner_index];
-        const cv::Point2f& end = corners[(corner_index + 1) % kBarcodeCornerCount];
-        cv::line(frame, start, end, kBoxOutlineColor, 2);
+    [[nodiscard]] const LatencyMetrics& average() const {
+        return average_;
     }
 
-    const cv::Point center{ cvRound(detected_box.outline.center.x), cvRound(detected_box.outline.center.y) };
-    const cv::Point label_position{ detected_box.roi.x, std::max(25, detected_box.roi.y - 8) };
-    cv::circle(frame, center, 4, kBoxOutlineColor, cv::FILLED);
-    cv::putText(frame, "BOX", label_position, cv::FONT_HERSHEY_SIMPLEX, 0.7, kBoxOutlineColor, 2);
+private:
+    [[nodiscard]] static double Smooth(const double previous, const double current) {
+        return previous * (1.0 - kLatencySmoothingFactor) + current * kLatencySmoothingFactor;
+    }
+
+    bool initialized_ = false;
+    LatencyMetrics average_;
+};
+
+void PrintUsage(const char* executable) {
+    std::cout << "Usage: " << executable << " [--width N] [--height N] [--fps N]\n"
+              << "Defaults: --width 1280 --height 720 --fps 30\n";
 }
 
-bool IsValidEan13(std::string_view value) {
-    if (value.size() != kEan13DigitCount || !std::all_of(value.begin(), value.end(), [](const char character) {
-            return std::isdigit(static_cast<unsigned char>(character)) != 0;
-        })) {
+bool ParsePositiveInteger(const std::string_view value, int& output) {
+    int parsed_value = 0;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed_value);
+    if (error != std::errc{} || end != value.data() + value.size() || parsed_value <= 0) {
         return false;
     }
 
-    int checksum_sum = 0;
-    for (std::size_t index = 0; index + 1 < value.size(); ++index) {
-        const int digit = value[index] - '0';
-        checksum_sum += digit * (index % 2 == 0 ? 1 : 3);
+    output = parsed_value;
+    return true;
+}
+
+ParseStatus ParseArguments(const int argc, char* argv[], CameraSettings& settings) {
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if (argument == "--help" || argument == "-h") {
+            PrintUsage(argv[0]);
+            return ParseStatus::kHelp;
+        }
+
+        if (argument != "--width" && argument != "--height" && argument != "--fps") {
+            std::cerr << "Unknown option: " << argument << '\n';
+            PrintUsage(argv[0]);
+            return ParseStatus::kError;
+        }
+
+        if (index + 1 >= argc) {
+            std::cerr << "Missing value for " << argument << '\n';
+            return ParseStatus::kError;
+        }
+
+        int value = 0;
+        if (!ParsePositiveInteger(argv[++index], value)) {
+            std::cerr << "Invalid positive integer for " << argument << ": " << argv[index] << '\n';
+            return ParseStatus::kError;
+        }
+
+        if (argument == "--width") {
+            settings.width = value;
+        } else if (argument == "--height") {
+            settings.height = value;
+        } else {
+            settings.fps = value;
+        }
     }
 
-    const int expected_check_digit = (10 - (checksum_sum % 10)) % 10;
-    return expected_check_digit == value.back() - '0';
+    if (settings.width > kMaximumCameraDimension || settings.height > kMaximumCameraDimension ||
+        settings.fps > kMaximumCameraFps) {
+        std::cerr << "Camera settings exceed supported limits: maximum dimension " << kMaximumCameraDimension
+                  << ", maximum FPS " << kMaximumCameraFps << ".\n";
+        return ParseStatus::kError;
+    }
+
+    return ParseStatus::kSuccess;
+}
+
+std::string BuildCameraPipeline(const CameraSettings& settings) {
+    std::ostringstream pipeline;
+    pipeline << "libcamerasrc ! "
+             << "video/x-raw,width=" << settings.width << ",height=" << settings.height << ",framerate=" << settings.fps
+             << "/1 ! "
+             << "videoconvert ! "
+             << "video/x-raw,format=BGR ! "
+             << "appsink drop=true max-buffers=1 sync=false wait-on-eos=false";
+    return pipeline.str();
+}
+
+bool OpenCamera(cv::VideoCapture& camera, const CameraSettings& settings) {
+    camera.release();
+    return camera.open(BuildCameraPipeline(settings), cv::CAP_GSTREAMER);
+}
+
+bool IsExitKey(const int key) {
+    const int normalized_key = key & 0xff;
+    return normalized_key == 'q' || normalized_key == kEscapeKey;
+}
+
+bool WaitForReconnectOrExit() {
+    int elapsed_ms = 0;
+    while (elapsed_ms < kReconnectIntervalMs) {
+        const int wait_ms = std::min(kReconnectPollIntervalMs, kReconnectIntervalMs - elapsed_ms);
+        if (IsExitKey(cv::waitKey(wait_ms))) {
+            return true;
+        }
+        elapsed_ms += wait_ms;
+    }
+    return false;
+}
+
+template <typename Duration>
+double ToMilliseconds(const Duration duration) {
+    return std::chrono::duration<double, std::milli>(duration).count();
+}
+
+void ShowCameraError(const CameraSettings& settings, const std::string& message, const char* window_name) {
+    cv::Mat error_frame(settings.height, settings.width, CV_8UC3, cv::Scalar::all(0));
+    cv::putText(error_frame, message, cv::Point(30, 60), cv::FONT_HERSHEY_SIMPLEX, 0.8, kErrorColor, 2);
+    cv::putText(error_frame, "Retrying camera connection...", cv::Point(30, 100), cv::FONT_HERSHEY_SIMPLEX, 0.7,
+                kTextColor, 2);
+    cv::imshow(window_name, error_frame);
+}
+
+void DrawDetectionResult(cv::Mat& frame, const logistics::vision::DetectionResult& result) {
+    if (!result.box.has_value()) {
+        cv::putText(frame, "BOX: not found", cv::Point(20, 35), cv::FONT_HERSHEY_SIMPLEX, 0.8, kErrorColor, 2);
+        return;
+    }
+
+    cv::Point2f box_corners[kBarcodeCornerCount];
+    result.box->outline.points(box_corners);
+    for (std::size_t index = 0; index < kBarcodeCornerCount; ++index) {
+        cv::line(frame, box_corners[index], box_corners[(index + 1) % kBarcodeCornerCount], kBoxOutlineColor, 2);
+    }
+
+    const cv::Point center{ cvRound(result.box->outline.center.x), cvRound(result.box->outline.center.y) };
+    const cv::Point box_label_position{ result.box->roi.x, std::max(25, result.box->roi.y - 8) };
+    cv::circle(frame, center, 4, kBoxOutlineColor, cv::FILLED);
+    cv::putText(frame, "BOX", box_label_position, cv::FONT_HERSHEY_SIMPLEX, 0.7, kBoxOutlineColor, 2);
+
+    for (const logistics::vision::DetectedBarcode& barcode : result.barcodes) {
+        if (barcode.corners.size() == kBarcodeCornerCount) {
+            for (std::size_t index = 0; index < kBarcodeCornerCount; ++index) {
+                cv::line(frame, barcode.corners[index], barcode.corners[(index + 1) % kBarcodeCornerCount],
+                         kBarcodeBoxColor, 2);
+            }
+
+            cv::putText(frame, barcode.type + ": " + barcode.value, barcode.corners.front(), cv::FONT_HERSHEY_SIMPLEX,
+                        0.6, kBarcodeBoxColor, 2);
+        }
+    }
+}
+
+void DrawLatency(cv::Mat& frame, const LatencyMetrics& latency) {
+    std::ostringstream text;
+    text << std::fixed << std::setprecision(1) << "capture " << latency.capture_ms << " ms | detect "
+         << latency.processing_ms << " ms | total " << latency.total_ms << " ms";
+    cv::putText(frame, text.str(), cv::Point(20, frame.rows - 20), cv::FONT_HERSHEY_SIMPLEX, 0.6, kTextColor, 2);
 }
 
 }  // namespace
 
-int main() {
-    cv::VideoCapture camera(kCameraPipeline, cv::CAP_GSTREAMER);
-    if (!camera.isOpened()) {
-        std::cerr << "Failed to open the Raspberry Pi camera GStreamer pipeline.\n";
-        return 1;
+int main(const int argc, char* argv[]) {
+    CameraSettings settings;
+    const ParseStatus parse_status = ParseArguments(argc, argv, settings);
+    if (parse_status == ParseStatus::kHelp) {
+        return 0;
+    }
+    if (parse_status == ParseStatus::kError) {
+        return 2;
     }
 
     constexpr char kWindowName[] = "vision-node camera";
     cv::namedWindow(kWindowName, cv::WINDOW_AUTOSIZE);
 
-    cv::barcode::BarcodeDetector barcode_detector;
+    cv::VideoCapture camera;
+    logistics::vision::DetectionModule detection_module;
+    LatencyTracker latency_tracker;
     std::unordered_set<std::string> reported_barcodes;
-    std::vector<std::string> decoded_values;
-    std::vector<std::string> decoded_types;
-    std::vector<cv::Point2f> barcode_corners;
-    cv::Mat box_mask;
-
-    std::cout << "Camera started. Press q or Esc to exit.\n";
-
     cv::Mat frame;
+    int consecutive_frame_errors = 0;
     int exit_code = 0;
-    while (true) {
-        if (!camera.read(frame) || frame.empty()) {
-            std::cerr << "Failed to receive a camera frame.\n";
-            exit_code = 1;
-            break;
+    auto last_latency_log = Clock::now();
+
+    std::cout << "Camera settings: " << settings.width << 'x' << settings.height << " @ " << settings.fps << " FPS\n"
+              << "Press q or Esc to exit.\n";
+
+    bool should_exit = false;
+    while (!should_exit) {
+        if (!camera.isOpened()) {
+            if (!OpenCamera(camera, settings)) {
+                std::cerr << "Failed to open camera. Retrying in " << kReconnectIntervalMs << " ms.\n";
+                ShowCameraError(settings, "CAMERA: disconnected", kWindowName);
+                should_exit = WaitForReconnectOrExit();
+                continue;
+            }
+
+            consecutive_frame_errors = 0;
+            std::cout << "Camera connected.\n";
         }
 
-        const std::optional<DetectedBox> detected_box = DetectStyrofoamBox(frame, box_mask);
-        if (detected_box.has_value()) {
-            const cv::Mat box_roi = frame(detected_box->roi).clone();
-            DrawDetectedBox(frame, *detected_box);
+        const auto capture_started = Clock::now();
+        if (!camera.read(frame) || frame.empty()) {
+            ++consecutive_frame_errors;
+            std::cerr << "Camera frame error " << consecutive_frame_errors << '/' << kMaximumConsecutiveFrameErrors
+                      << ".\n";
 
-            decoded_values.clear();
-            decoded_types.clear();
-            barcode_corners.clear();
-
-            barcode_detector.detectAndDecodeWithType(box_roi, decoded_values, decoded_types, barcode_corners);
-
-            for (std::size_t barcode_index = 0; barcode_index < decoded_values.size(); ++barcode_index) {
-                const std::string& decoded_value = decoded_values[barcode_index];
-                if (decoded_value.empty()) {
-                    continue;
-                }
-
-                if (barcode_index >= decoded_types.size() || decoded_types[barcode_index] != kSupportedBarcodeType ||
-                    !IsValidEan13(decoded_value)) {
-                    continue;
-                }
-
-                const std::string label = decoded_types[barcode_index] + ": " + decoded_value;
-
-                if (reported_barcodes.insert(decoded_value).second) {
-                    std::cout << "Barcode detected: " << label << '\n';
-                }
-
-                const std::size_t first_corner = barcode_index * kBarcodeCornerCount;
-                if (barcode_corners.size() < first_corner + kBarcodeCornerCount) {
-                    continue;
-                }
-
-                const cv::Point2f roi_offset{ static_cast<float>(detected_box->roi.x),
-                                              static_cast<float>(detected_box->roi.y) };
-                for (std::size_t corner_index = 0; corner_index < kBarcodeCornerCount; ++corner_index) {
-                    const cv::Point2f start = barcode_corners[first_corner + corner_index] + roi_offset;
-                    const cv::Point2f end =
-                        barcode_corners[first_corner + ((corner_index + 1) % kBarcodeCornerCount)] + roi_offset;
-                    cv::line(frame, start, end, kBarcodeBoxColor, 2);
-                }
-
-                const cv::Point2f label_position = barcode_corners[first_corner] + roi_offset;
-                cv::putText(frame, label, label_position, cv::FONT_HERSHEY_SIMPLEX, 0.6, kBarcodeBoxColor, 2);
+            if (consecutive_frame_errors >= kMaximumConsecutiveFrameErrors) {
+                camera.release();
+                ShowCameraError(settings, "CAMERA: frame stream lost", kWindowName);
+                should_exit = WaitForReconnectOrExit();
             }
-        } else {
-            cv::putText(frame, "BOX: not found", cv::Point(20, 35), cv::FONT_HERSHEY_SIMPLEX, 0.8, kNotFoundColor, 2);
+            continue;
+        }
+        const auto frame_received = Clock::now();
+        consecutive_frame_errors = 0;
+
+        const logistics::vision::DetectionResult detection_result = detection_module.Process(frame);
+        const auto processing_finished = Clock::now();
+
+        const LatencyMetrics current_latency{
+            ToMilliseconds(frame_received - capture_started),
+            ToMilliseconds(processing_finished - frame_received),
+            ToMilliseconds(processing_finished - capture_started),
+        };
+        latency_tracker.Update(current_latency);
+
+        DrawDetectionResult(frame, detection_result);
+        DrawLatency(frame, latency_tracker.average());
+
+        for (const logistics::vision::DetectedBarcode& barcode : detection_result.barcodes) {
+            if (reported_barcodes.insert(barcode.value).second) {
+                std::cout << "Barcode detected: " << barcode.type << ": " << barcode.value << '\n';
+            }
+        }
+
+        if (processing_finished - last_latency_log >= std::chrono::seconds(1)) {
+            const LatencyMetrics& average = latency_tracker.average();
+            std::cout << std::fixed << std::setprecision(1) << "Latency: capture=" << average.capture_ms
+                      << " ms, detect=" << average.processing_ms << " ms, total=" << average.total_ms << " ms\n";
+            last_latency_log = processing_finished;
         }
 
         cv::imshow(kWindowName, frame);
-
-        const int key = cv::waitKey(kWaitKeyDelayMs) & 0xff;
-        if (key == 'q' || key == kEscapeKey) {
-            break;
-        }
+        should_exit = IsExitKey(cv::waitKey(kWaitKeyDelayMs));
     }
 
     camera.release();
