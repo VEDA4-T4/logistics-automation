@@ -324,6 +324,115 @@ struct MqttMessage {
     return ConnectionState::kUnknown;
 }
 
+[[nodiscard]] constexpr bool IsAsciiDigit(char value) noexcept {
+    return value >= '0' && value <= '9';
+}
+
+[[nodiscard]] constexpr int ParseTwoDigits(std::string_view value, std::size_t offset) noexcept {
+    if (offset + 1U >= value.size() || !IsAsciiDigit(value[offset]) || !IsAsciiDigit(value[offset + 1U])) {
+        return -1;
+    }
+
+    return (value[offset] - '0') * 10 + (value[offset + 1U] - '0');
+}
+
+[[nodiscard]] constexpr int ParseFourDigits(std::string_view value, std::size_t offset) noexcept {
+    if (offset + 3U >= value.size()) {
+        return -1;
+    }
+
+    int result = 0;
+
+    for (std::size_t index = 0U; index < 4U; ++index) {
+        if (!IsAsciiDigit(value[offset + index])) {
+            return -1;
+        }
+
+        result = result * 10 + (value[offset + index] - '0');
+    }
+
+    return result;
+}
+
+[[nodiscard]] constexpr bool IsLeapYear(int year) noexcept {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+[[nodiscard]] constexpr int DaysInMonth(int year, int month) noexcept {
+    constexpr std::array<int, 12U> days = {
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    };
+
+    if (month < 1 || month > 12) {
+        return 0;
+    }
+
+    if (month == 2 && IsLeapYear(year)) {
+        return 29;
+    }
+
+    return days[static_cast<std::size_t>(month - 1)];
+}
+
+/*
+ * Accepted forms:
+ *   YYYY-MM-DDTHH:MM:SSZ
+ *   YYYY-MM-DDTHH:MM:SS+09:00
+ *   YYYY-MM-DDTHH:MM:SS-05:00
+ * Fractional seconds are also accepted before Z or the explicit offset.
+ */
+[[nodiscard]] constexpr bool IsValidIso8601Timestamp(std::string_view value) noexcept {
+    if (value.size() < 20U || value[4] != '-' || value[7] != '-' || value[10] != 'T' || value[13] != ':' ||
+        value[16] != ':') {
+        return false;
+    }
+
+    const int year = ParseFourDigits(value, 0U);
+    const int month = ParseTwoDigits(value, 5U);
+    const int day = ParseTwoDigits(value, 8U);
+    const int hour = ParseTwoDigits(value, 11U);
+    const int minute = ParseTwoDigits(value, 14U);
+    const int second = ParseTwoDigits(value, 17U);
+
+    if (year < 0 || month < 1 || month > 12 || day < 1 || day > DaysInMonth(year, month) || hour < 0 || hour > 23 ||
+        minute < 0 || minute > 59 || second < 0 || second > 59) {
+        return false;
+    }
+
+    std::size_t timezone_offset = 19U;
+
+    if (value[timezone_offset] == '.') {
+        ++timezone_offset;
+        const std::size_t fraction_begin = timezone_offset;
+
+        while (timezone_offset < value.size() && IsAsciiDigit(value[timezone_offset])) {
+            ++timezone_offset;
+        }
+
+        if (timezone_offset == fraction_begin) {
+            return false;
+        }
+    }
+
+    if (timezone_offset >= value.size()) {
+        return false;
+    }
+
+    if (value[timezone_offset] == 'Z') {
+        return timezone_offset + 1U == value.size();
+    }
+
+    if ((value[timezone_offset] != '+' && value[timezone_offset] != '-') || timezone_offset + 6U != value.size() ||
+        value[timezone_offset + 3U] != ':') {
+        return false;
+    }
+
+    const int offset_hour = ParseTwoDigits(value, timezone_offset + 1U);
+    const int offset_minute = ParseTwoDigits(value, timezone_offset + 4U);
+
+    return offset_hour >= 0 && offset_hour <= 23 && offset_minute >= 0 && offset_minute <= 59;
+}
+
 [[nodiscard]] constexpr std::string_view ToString(CodecError error) noexcept {
     switch (error) {
         case CodecError::kNone:
@@ -420,7 +529,8 @@ inline bool MqttMessage::IsValid() const noexcept {
         .data_json = "{}",
     };
 
-    return envelope.IsValid() && PayloadMatchesMessageType(message_type, data) && IsPayloadValid(data);
+    return envelope.IsValid() && IsValidIso8601Timestamp(timestamp) && PayloadMatchesMessageType(message_type, data) &&
+           IsPayloadValid(data);
 }
 
 namespace codec_detail {
@@ -728,6 +838,12 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
         !ReadRequiredString(root, kMessageTypeField, message_type, status) ||
         !ReadRequiredString(root, kSourceIdField, message.source_id, status) ||
         !ReadRequiredString(root, kTimestampField, message.timestamp, status)) {
+        return false;
+    }
+
+    if (!IsValidIso8601Timestamp(message.timestamp)) {
+        status = MakeError(CodecError::kInvalidFieldValue, kTimestampField,
+                           "Timestamp must be ISO 8601 with UTC Z or an explicit offset");
         return false;
     }
 
