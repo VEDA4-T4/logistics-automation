@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "linetracer_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,7 +50,6 @@ UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN PV */
-uint8_t rx_byte;
 
 /* USER CODE END PV */
 
@@ -108,7 +107,7 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
-  HAL_UART_Receive_IT(&huart6, &rx_byte, 1);
+  App_Init(&htim3, &huart6);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -118,6 +117,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    App_Task();
   }
   /* USER CODE END 3 */
 }
@@ -558,15 +558,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-	   if (huart->Instance == USART6)
-	    {
-	        HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-	        HAL_UART_Transmit(&huart6, &rx_byte, 1, 10);
-	        HAL_UART_Receive_IT(&huart6, &rx_byte, 1);
-	    }
-}
 /* USER CODE END 4 */
 
 /**
