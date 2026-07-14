@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QStackedLayout>
+#include <QStatusBar>
 #include <QStringList>
 #include <QTimer>
 #include <QUrl>
@@ -20,6 +21,9 @@
 #include <cmath>
 #include <cstddef>
 #include <vector>
+
+#include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/control_center/mqtt_client.hpp"
 
 namespace logistics::control_center {
 namespace {
@@ -33,7 +37,11 @@ struct ControlCenterConfig {
     QString path;
     QString mqtt_host{ "127.0.0.1" };
     QString mqtt_client_id{ "control-center" };
+    QString mqtt_username;
+    QString mqtt_password;
     int mqtt_port{ kDefaultMqttPort };
+    int mqtt_reconnect_interval_ms{ kDefaultReconnectIntervalMs };
+    int mqtt_keep_alive_seconds{ 30 };
     int channel_count{ kDefaultChannelCount };
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     std::vector<QUrl> stream_urls;
@@ -116,11 +124,14 @@ ControlCenterConfig loadControlCenterConfig() {
     }
 
     const auto mqtt_client_id = settings.value("mqtt/client_id", config.mqtt_client_id).toString().trimmed();
-    if (mqtt_client_id.isEmpty()) {
-        config.warnings.append(QStringLiteral("mqtt/client_id가 비어 있어 control-center를 사용합니다."));
+    if (!logistics::contracts::mqtt::IsValidTopicLevel(mqtt_client_id.toStdString())) {
+        config.warnings.append(QStringLiteral("mqtt/client_id가 비어 있거나 잘못되어 control-center를 사용합니다."));
     } else {
         config.mqtt_client_id = mqtt_client_id;
     }
+
+    config.mqtt_username = settings.value("mqtt/username").toString();
+    config.mqtt_password = settings.value("mqtt/password").toString();
 
     bool mqtt_port_is_valid = false;
     const auto mqtt_port = settings.value("mqtt/port", kDefaultMqttPort).toInt(&mqtt_port_is_valid);
@@ -128,6 +139,23 @@ ControlCenterConfig loadControlCenterConfig() {
         config.mqtt_port = mqtt_port;
     } else {
         config.warnings.append(QStringLiteral("mqtt/port가 잘못되어 1883을 사용합니다."));
+    }
+
+    bool mqtt_reconnect_interval_is_valid = false;
+    const auto mqtt_reconnect_interval = settings.value("mqtt/reconnect_interval_ms", kDefaultReconnectIntervalMs)
+                                             .toInt(&mqtt_reconnect_interval_is_valid);
+    if (mqtt_reconnect_interval_is_valid && mqtt_reconnect_interval > 0) {
+        config.mqtt_reconnect_interval_ms = mqtt_reconnect_interval;
+    } else {
+        config.warnings.append(QStringLiteral("mqtt/reconnect_interval_ms가 잘못되어 3000ms를 사용합니다."));
+    }
+
+    bool mqtt_keep_alive_is_valid = false;
+    const auto mqtt_keep_alive = settings.value("mqtt/keep_alive_seconds", 30).toInt(&mqtt_keep_alive_is_valid);
+    if (mqtt_keep_alive_is_valid && mqtt_keep_alive > 0 && mqtt_keep_alive <= 65535) {
+        config.mqtt_keep_alive_seconds = mqtt_keep_alive;
+    } else {
+        config.warnings.append(QStringLiteral("mqtt/keep_alive_seconds가 잘못되어 30초를 사용합니다."));
     }
 
     bool channel_count_is_valid = false;
@@ -182,9 +210,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setMinimumSize(1280, 720);
 
     const auto config = loadControlCenterConfig();
-    mqtt_host_ = config.mqtt_host;
-    mqtt_port_ = config.mqtt_port;
-    mqtt_client_id_ = config.mqtt_client_id;
     channel_count_ = static_cast<std::size_t>(config.channel_count);
     reconnect_interval_ms_ = config.reconnect_interval_ms;
     stream_urls_ = config.stream_urls;
@@ -204,6 +229,54 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     video_grid->setContentsMargins(4, 4, 4, 4);
     video_grid->setSpacing(4);
     setCentralWidget(central_widget);
+
+    mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
+    mqtt_status_label_->setObjectName(QStringLiteral("mqttConnectionStatus"));
+    mqtt_status_label_->setMargin(4);
+    statusBar()->setSizeGripEnabled(false);
+    statusBar()->addPermanentWidget(mqtt_status_label_);
+
+    mqtt_client_ = new MqttClient({ .host = config.mqtt_host,
+                                    .client_id = config.mqtt_client_id,
+                                    .username = config.mqtt_username,
+                                    .password = config.mqtt_password,
+                                    .port = config.mqtt_port,
+                                    .reconnect_interval_ms = config.mqtt_reconnect_interval_ms,
+                                    .keep_alive_seconds = config.mqtt_keep_alive_seconds },
+                                  this);
+    connect(mqtt_client_, &MqttClient::connectionStateChanged, this,
+            [this](MqttClient::ConnectionState state, const QString& detail) {
+                mqtt_status_label_->setToolTip(detail);
+                switch (state) {
+                    case MqttClient::ConnectionState::Connected:
+                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
+                        mqtt_status_label_->setStyleSheet("color: #86efac; font-weight: 700;");
+                        break;
+                    case MqttClient::ConnectionState::Connecting:
+                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결 중"));
+                        mqtt_status_label_->setStyleSheet("color: #fbbf24; font-weight: 700;");
+                        break;
+                    case MqttClient::ConnectionState::Reconnecting:
+                        mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
+                        mqtt_status_label_->setStyleSheet("color: #fb923c; font-weight: 700;");
+                        break;
+                    case MqttClient::ConnectionState::Error:
+                        mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
+                        mqtt_status_label_->setStyleSheet("color: #fca5a5; font-weight: 700;");
+                        break;
+                    case MqttClient::ConnectionState::Disconnected:
+                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
+                        mqtt_status_label_->setStyleSheet("color: #9ca3af; font-weight: 700;");
+                        break;
+                }
+            });
+    connect(mqtt_client_, &MqttClient::messageRejected, this, [this](const QString& topic, const QString& reason) {
+        statusBar()->showMessage(QStringLiteral("MQTT 메시지 거부 [%1]: %2").arg(topic, reason), 5000);
+    });
+    connect(mqtt_client_, &MqttClient::errorOccurred, this, [this](const QString& detail) {
+        mqtt_status_label_->setToolTip(detail);
+        statusBar()->showMessage(detail, 5000);
+    });
 
     const auto grid_column_count = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(channel_count_))));
 
@@ -330,6 +403,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             QMessageBox::warning(this, QStringLiteral("설정 확인"), warning_message);
         });
     }
+
+    mqtt_client_->start();
 }
 
 void MainWindow::updatePlaybackState(std::size_t channel) {

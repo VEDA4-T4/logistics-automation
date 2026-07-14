@@ -16,6 +16,8 @@ class QWidget;
 
 namespace logistics::control_center {
 
+class MqttClient;
+
 class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
@@ -42,10 +44,9 @@ private:
     std::vector<QUrl> stream_urls_{};
     std::vector<ChannelState> channel_states_{};
     std::vector<bool> reconnecting_{};
-    QString mqtt_host_{};
-    QString mqtt_client_id_{};
+    MqttClient* mqtt_client_{ nullptr };
+    QLabel* mqtt_status_label_{ nullptr };
     std::size_t channel_count_{ 4 };
-    int mqtt_port_{ 1883 };
     int reconnect_interval_ms_{ 3000 };
 };
 
