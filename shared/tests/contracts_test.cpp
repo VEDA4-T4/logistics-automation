@@ -1,17 +1,22 @@
+#include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_message.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/contracts/process.hpp"
+#include "logistics/contracts/uart_codec.hpp"
 
 namespace mqtt = logistics::contracts::mqtt;
+namespace uart = logistics::contracts::uart;
 
 namespace {
 
@@ -25,6 +30,68 @@ mqtt::MqttMessage MakeMessage(std::string message_id, mqtt::MessageType message_
         .timestamp = "2026-08-20T14:31:30+09:00",
         .data = std::move(payload),
     };
+}
+
+uart::UartCommand ResolveTestUartCommand(const mqtt::MqttMessage& message) {
+    if (message.message_type == mqtt::MessageType::kDestinationSet) {
+        return uart::UartCommand::kGateSet;
+    }
+
+    if (message.message_type != mqtt::MessageType::kControlCommand) {
+        return uart::UartCommand::kUnknown;
+    }
+
+    const auto* payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(message);
+
+    if (payload == nullptr) {
+        return uart::UartCommand::kUnknown;
+    }
+
+    if (payload->command == mqtt::ControlCommand::kStart && payload->component_id == "CONVEYOR-MOTOR-01") {
+        return uart::UartCommand::kConveyorStart;
+    }
+
+    if (payload->command == mqtt::ControlCommand::kStop && payload->component_id == "CONVEYOR-MOTOR-01") {
+        return uart::UartCommand::kConveyorStop;
+    }
+
+    return uart::UartCommand::kUnknown;
+}
+
+bool BuildTestUartPayload(const mqtt::MqttMessage& message, uart::UartCommand command,
+                          std::vector<std::uint8_t>& output_payload) {
+    output_payload.clear();
+
+    if (command == uart::UartCommand::kConveyorStart) {
+        const auto* payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(message);
+
+        if (payload == nullptr || !payload->params.is_object() || !payload->params.contains("speed") ||
+            !payload->params.at("speed").is_number_integer()) {
+            return false;
+        }
+
+        const int speed = payload->params.at("speed").get<int>();
+
+        if (speed < 0 || speed > 100) {
+            return false;
+        }
+
+        output_payload.push_back(static_cast<std::uint8_t>(speed));
+        return true;
+    }
+
+    if (command == uart::UartCommand::kGateSet) {
+        const auto* payload = mqtt::GetPayload<mqtt::DestinationSetPayload>(message);
+
+        if (payload == nullptr || payload->destination != "DEST-01") {
+            return false;
+        }
+
+        output_payload.push_back(0x01U);
+        return true;
+    }
+
+    return true;
 }
 
 template <typename PayloadType>
@@ -358,6 +425,399 @@ void TestMqttCodecInvalidInputs() {
     assert(mismatched_result.status.error == mqtt::CodecError::kUnexpectedPayloadType);
 }
 
+void TestMqttTimestampValidation() {
+    assert(mqtt::IsValidIso8601Timestamp("2026-08-20T05:31:30Z"));
+    assert(mqtt::IsValidIso8601Timestamp("2026-08-20T14:31:30+09:00"));
+    assert(mqtt::IsValidIso8601Timestamp("2026-08-20T14:31:30.123+09:00"));
+
+    assert(!mqtt::IsValidIso8601Timestamp("2026-08-20T14:31:30"));
+    assert(!mqtt::IsValidIso8601Timestamp("2026/08/20 14:31:30"));
+    assert(!mqtt::IsValidIso8601Timestamp("2026-13-20T14:31:30+09:00"));
+
+    const auto invalid_timestamp = mqtt::DeserializeMessage(R"json(
+        {
+            "protocolVersion": "1.0",
+            "messageId": "MSG-BAD-TIME-01",
+            "messageType": "HEARTBEAT",
+            "sourceId": "PI-01",
+            "timestamp": "2026-08-20T14:31:30",
+            "data": {
+                "status": "ONLINE",
+                "currentState": "IDLE",
+                "uptime": 3600,
+                "jobId": null,
+                "errorCode": null
+            }
+        }
+    )json");
+
+    assert(!invalid_timestamp.IsSuccess());
+    assert(invalid_timestamp.status.error == mqtt::CodecError::kInvalidFieldValue);
+    assert(invalid_timestamp.status.field == "timestamp");
+}
+
+void TestUartEnumConversions() {
+    assert(uart::UartCommandFromCode(static_cast<std::uint8_t>(uart::UartCommand::kConveyorStart)) ==
+           uart::UartCommand::kConveyorStart);
+    assert(uart::UartCommandFromCode(0xFEU) == uart::UartCommand::kUnknown);
+
+    assert(uart::UartResultFromCode(0x00U) == uart::UartResult::kSuccess);
+    assert(uart::UartResultFromCode(0x14U) == uart::UartResult::kHardwareError);
+    assert(uart::UartResultFromCode(0xFEU) == uart::UartResult::kUnknown);
+
+    assert(uart::UartErrorCodeFromCode(0x00U) == uart::UartErrorCode::kNone);
+    assert(uart::UartErrorCodeFromCode(0x15U) == uart::UartErrorCode::kCrcError);
+    assert(uart::UartErrorCodeFromCode(0xFEU) == uart::UartErrorCode::kUnknown);
+
+    assert(uart::ToString(uart::UartCommand::kCommandResult) == "COMMAND_RESULT");
+    assert(uart::ToString(uart::UartResult::kProcessing) == "RESULT_PROCESSING");
+    assert(uart::ToString(uart::UartErrorCode::kHardwareError) == "ERR_HARDWARE_ERROR");
+}
+
+void TestUartCrc16() {
+    constexpr std::array<std::uint8_t, 9> input{
+        '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    };
+
+    assert(uart::CalculateCrc16(input.data(), input.size()) == 0x29B1U);
+}
+
+void TestUartFrameRoundTrip() {
+    const uart::UartFrame original{
+        .version = uart::wire::kProtocolVersion,
+        .sequence = 0x2AU,
+        .command = uart::UartCommand::kConveyorStart,
+        .payload = { 80U },
+    };
+
+    const auto encoded = uart::EncodeFrame(original);
+
+    assert(encoded.IsSuccess());
+    assert(encoded.bytes.size() == original.payload.size() + 7U);
+    assert(encoded.bytes[0] == uart::wire::kSof);
+    assert(encoded.bytes[1] == uart::wire::kProtocolVersion);
+    assert(encoded.bytes[2] == original.sequence);
+    assert(encoded.bytes[3] == static_cast<std::uint8_t>(original.command));
+    assert(encoded.bytes[4] == original.payload.size());
+
+    const auto decoded = uart::DecodeFrame(encoded.bytes);
+
+    assert(decoded.IsSuccess());
+    assert(decoded.value.version == original.version);
+    assert(decoded.value.sequence == original.sequence);
+    assert(decoded.value.command == original.command);
+    assert(decoded.value.payload == original.payload);
+}
+
+void TestUartInvalidFrames() {
+    const uart::UartFrame original{
+        .version = uart::wire::kProtocolVersion,
+        .sequence = 0x2AU,
+        .command = uart::UartCommand::kStatusRequest,
+        .payload = {},
+    };
+
+    const auto encoded = uart::EncodeFrame(original);
+    assert(encoded.IsSuccess());
+
+    {
+        const std::vector<std::uint8_t> too_short{ uart::wire::kSof, uart::wire::kProtocolVersion };
+
+        const auto decoded = uart::DecodeFrame(too_short);
+        assert(!decoded.IsSuccess());
+        assert(decoded.status.error == uart::CodecError::kFrameTooShort);
+    }
+
+    {
+        auto bytes = encoded.bytes;
+        bytes[0] = 0x00U;
+
+        const auto decoded = uart::DecodeFrame(bytes);
+        assert(!decoded.IsSuccess());
+        assert(decoded.status.error == uart::CodecError::kInvalidSof);
+    }
+
+    {
+        auto bytes = encoded.bytes;
+        bytes[1] = static_cast<std::uint8_t>(uart::wire::kProtocolVersion + 1U);
+
+        const auto decoded = uart::DecodeFrame(bytes);
+        assert(!decoded.IsSuccess());
+        assert(decoded.status.error == uart::CodecError::kUnsupportedVersion);
+    }
+
+    {
+        auto bytes = encoded.bytes;
+        bytes[4] = 1U;
+
+        const auto decoded = uart::DecodeFrame(bytes);
+        assert(!decoded.IsSuccess());
+        assert(decoded.status.error == uart::CodecError::kInvalidLength);
+    }
+
+    {
+        auto bytes = encoded.bytes;
+        bytes[3] = 0xFEU;
+
+        const auto decoded = uart::DecodeFrame(bytes);
+        assert(!decoded.IsSuccess());
+        assert(decoded.status.error == uart::CodecError::kUnknownCommand);
+    }
+
+    {
+        auto bytes = encoded.bytes;
+        bytes.back() ^= 0x01U;
+
+        const auto decoded = uart::DecodeFrame(bytes);
+        assert(!decoded.IsSuccess());
+        assert(decoded.status.error == uart::CodecError::kCrcMismatch);
+    }
+
+    {
+        auto bytes = encoded.bytes;
+        bytes.push_back(0x00U);
+
+        const auto decoded = uart::DecodeFrame(bytes);
+        assert(!decoded.IsSuccess());
+        assert(decoded.status.error == uart::CodecError::kTrailingBytes);
+    }
+
+    {
+        uart::UartFrame oversized{
+            .version = uart::wire::kProtocolVersion,
+            .sequence = 0x2AU,
+            .command = uart::UartCommand::kConveyorStart,
+            .payload = std::vector<std::uint8_t>(uart::wire::kMaximumPayloadSize + 1U, 0U),
+        };
+
+        const auto oversized_result = uart::EncodeFrame(oversized);
+        assert(!oversized_result.IsSuccess());
+        assert(oversized_result.status.error == uart::CodecError::kPayloadTooLarge);
+    }
+}
+
+void TestUartCommandResultPayload() {
+    {
+        const uart::CommandResultPayload original{
+            .original_command = uart::UartCommand::kConveyorStart,
+            .result = uart::UartResult::kSuccess,
+            .error_code = uart::UartErrorCode::kNone,
+        };
+
+        const auto encoded = uart::EncodeCommandResultPayload(original);
+
+        assert(encoded.IsSuccess());
+        assert(encoded.bytes.size() == 3U);
+
+        const auto decoded = uart::DecodeCommandResultPayload(encoded.bytes);
+
+        assert(decoded.IsSuccess());
+        assert(decoded.value.original_command == original.original_command);
+        assert(decoded.value.result == original.result);
+        assert(decoded.value.error_code == original.error_code);
+    }
+
+    {
+        const uart::CommandResultPayload original{
+            .original_command = uart::UartCommand::kDeliveryStart,
+            .result = uart::UartResult::kHardwareError,
+            .error_code = uart::UartErrorCode::kHardwareError,
+        };
+
+        const auto encoded = uart::EncodeCommandResultPayload(original);
+
+        assert(encoded.IsSuccess());
+
+        const auto decoded = uart::DecodeCommandResultPayload(encoded.bytes);
+
+        assert(decoded.IsSuccess());
+        assert(decoded.value.result == uart::UartResult::kHardwareError);
+        assert(decoded.value.error_code == uart::UartErrorCode::kHardwareError);
+    }
+
+    {
+        const uart::CommandResultPayload invalid{
+            .original_command = uart::UartCommand::kConveyorStart,
+            .result = uart::UartResult::kHardwareError,
+            .error_code = uart::UartErrorCode::kNone,
+        };
+
+        const auto encoded = uart::EncodeCommandResultPayload(invalid);
+
+        assert(!encoded.IsSuccess());
+        assert(encoded.status.error == uart::CodecError::kInvalidPayload);
+    }
+}
+
+void TestMqttToUartConversion() {
+    {
+        const mqtt::MqttMessage message = MakeMessage("MSG-BRIDGE-01", mqtt::MessageType::kControlCommand,
+                                                      mqtt::ControlCommandPayload{
+                                                          .request_id = "REQ-BRIDGE-01",
+                                                          .command = mqtt::ControlCommand::kStatusRequest,
+                                                          .target_device_id = "PI-01",
+                                                          .component_id = "",
+                                                          .params = mqtt::Json::object(),
+                                                      },
+                                                      "SERVER-01");
+
+        const auto converted = uart::bridge::ConvertMqttToUart(message, 0x2AU);
+
+        assert(converted.IsSuccess());
+        assert(converted.frame.sequence == 0x2AU);
+        assert(converted.frame.command == uart::UartCommand::kStatusRequest);
+        assert(converted.frame.payload.empty());
+    }
+
+    {
+        const mqtt::MqttMessage message =
+            MakeMessage("MSG-BRIDGE-02",
+                        mqtt::MessageType::kControlCommand,
+                        mqtt::ControlCommandPayload{
+                            .request_id = "REQ-BRIDGE-02",
+                            .command = mqtt::ControlCommand::kStart,
+                            .target_device_id = "PI-01",
+                            .component_id = "CONVEYOR-MOTOR-01",
+                            .params =
+                                {
+                                    {"speed", 50},
+                                },
+                        },
+                        "SERVER-01");
+
+        const auto converted =
+            uart::bridge::ConvertMqttToUart(message, 0x2BU, ResolveTestUartCommand, BuildTestUartPayload);
+
+        assert(converted.IsSuccess());
+        assert(converted.frame.sequence == 0x2BU);
+        assert(converted.frame.command == uart::UartCommand::kConveyorStart);
+        assert(converted.frame.payload == std::vector<std::uint8_t>{ 50U });
+
+        const auto encoded = uart::EncodeFrame(converted.frame);
+        assert(encoded.IsSuccess());
+    }
+
+    {
+        const mqtt::MqttMessage message =
+            MakeMessage("MSG-BRIDGE-03",
+                        mqtt::MessageType::kControlCommand,
+                        mqtt::ControlCommandPayload{
+                            .request_id = "REQ-BRIDGE-03",
+                            .command = mqtt::ControlCommand::kStart,
+                            .target_device_id = "PI-01",
+                            .component_id = "CONVEYOR-MOTOR-01",
+                            .params =
+                                {
+                                    {"speed", 101},
+                                },
+                        },
+                        "SERVER-01");
+
+        const auto converted =
+            uart::bridge::ConvertMqttToUart(message, 0x2CU, ResolveTestUartCommand, BuildTestUartPayload);
+
+        assert(!converted.IsSuccess());
+        assert(converted.status.error == uart::bridge::Error::kInvalidPayload);
+    }
+}
+
+void TestUartToMqttConversion() {
+    {
+        const uart::CommandResultPayload command_result{
+            .original_command = uart::UartCommand::kStatusRequest,
+            .result = uart::UartResult::kSuccess,
+            .error_code = uart::UartErrorCode::kNone,
+        };
+
+        const auto encoded_payload = uart::EncodeCommandResultPayload(command_result);
+        assert(encoded_payload.IsSuccess());
+
+        const uart::UartFrame frame{
+            .version = uart::wire::kProtocolVersion,
+            .sequence = 0x2AU,
+            .command = uart::UartCommand::kCommandResult,
+            .payload = encoded_payload.bytes,
+        };
+
+        const uart::bridge::PendingRequestContext context{
+            .request_id = "REQ-BRIDGE-01",
+            .mqtt_command = mqtt::ControlCommand::kStatusRequest,
+        };
+
+        const auto converted = uart::bridge::ConvertUartCommandResultToMqtt(frame, context, "MSG-BRIDGE-RESPONSE-01",
+                                                                            "PI-01", "2026-08-20T14:31:30+09:00");
+
+        assert(converted.IsSuccess());
+        assert(converted.message.message_type == mqtt::MessageType::kCommandResponse);
+
+        const auto* payload = mqtt::GetPayload<mqtt::CommandResponsePayload>(converted.message);
+
+        assert(payload != nullptr);
+        assert(payload->request_id == context.request_id);
+        assert(payload->command == context.mqtt_command);
+        assert(payload->result == mqtt::CommandResult::kSuccess);
+        assert(!payload->error_code.has_value());
+
+        const auto serialized = mqtt::SerializeMessage(converted.message);
+        assert(serialized.IsSuccess());
+    }
+
+    {
+        const uart::CommandResultPayload command_result{
+            .original_command = uart::UartCommand::kConveyorStart,
+            .result = uart::UartResult::kHardwareError,
+            .error_code = uart::UartErrorCode::kHardwareError,
+        };
+
+        const auto encoded_payload = uart::EncodeCommandResultPayload(command_result);
+        assert(encoded_payload.IsSuccess());
+
+        const uart::UartFrame frame{
+            .version = uart::wire::kProtocolVersion,
+            .sequence = 0x2BU,
+            .command = uart::UartCommand::kCommandResult,
+            .payload = encoded_payload.bytes,
+        };
+
+        const uart::bridge::PendingRequestContext context{
+            .request_id = "REQ-BRIDGE-02",
+            .mqtt_command = mqtt::ControlCommand::kStart,
+        };
+
+        const auto converted = uart::bridge::ConvertUartCommandResultToMqtt(frame, context, "MSG-BRIDGE-RESPONSE-02",
+                                                                            "PI-01", "2026-08-20T14:31:30+09:00");
+
+        assert(converted.IsSuccess());
+
+        const auto* payload = mqtt::GetPayload<mqtt::CommandResponsePayload>(converted.message);
+
+        assert(payload != nullptr);
+        assert(payload->result == mqtt::CommandResult::kFailed);
+        assert(payload->error_code.has_value());
+        assert(*payload->error_code == "ERR_HARDWARE_ERROR");
+    }
+
+    {
+        const uart::UartFrame frame{
+            .version = uart::wire::kProtocolVersion,
+            .sequence = 0x2CU,
+            .command = uart::UartCommand::kStatusRequest,
+            .payload = {},
+        };
+
+        const uart::bridge::PendingRequestContext context{
+            .request_id = "REQ-BRIDGE-03",
+            .mqtt_command = mqtt::ControlCommand::kStatusRequest,
+        };
+
+        const auto converted = uart::bridge::ConvertUartCommandResultToMqtt(frame, context, "MSG-BRIDGE-RESPONSE-03",
+                                                                            "PI-01", "2026-08-20T14:31:30+09:00");
+
+        assert(!converted.IsSuccess());
+        assert(converted.status.error == uart::bridge::Error::kUnexpectedUartCommand);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -450,12 +910,22 @@ int main() {
     static_assert(mqtt::kHeartbeatDelayedAfter.count() == 10);
     static_assert(mqtt::kHeartbeatOfflineAfter.count() == 15);
     static_assert(mqtt::kMqttMaximumRetries == 3);
+    static_assert(uart::wire::kResponseTimeoutMilliseconds == 500U);
+    static_assert(uart::wire::kMaximumRetries == 3U);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 9 }) == mqtt::ConnectionState::kOnline);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 10 }) == mqtt::ConnectionState::kDelayed);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 15 }) == mqtt::ConnectionState::kOffline);
 
     TestAllMqttMessageRoundTrips();
     TestMqttCodecInvalidInputs();
+    TestMqttTimestampValidation();
+    TestUartEnumConversions();
+    TestUartCrc16();
+    TestUartFrameRoundTrip();
+    TestUartInvalidFrames();
+    TestUartCommandResultPayload();
+    TestMqttToUartConversion();
+    TestUartToMqttConversion();
 
     return 0;
 }
