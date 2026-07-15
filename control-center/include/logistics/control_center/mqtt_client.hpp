@@ -46,7 +46,8 @@ signals:
     void messageReceived(const QString& topic, const QJsonObject& envelope);
     void messageRejected(const QString& topic, const QString& reason);
     void errorOccurred(const QString& detail);
-    void commandPublished(qint32 message_id, const QString& request_id);
+    void commandPublished(qint32 message_id, const QString& request_id,
+                          logistics::contracts::mqtt::ControlCommand command);
 
 private:
     void connectToBroker();

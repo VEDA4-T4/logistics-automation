@@ -132,7 +132,7 @@ qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& t
         return -1;
     }
 
-    emit commandPublished(message_id, request_id);
+    emit commandPublished(message_id, request_id, command);
     return message_id;
 }
 
