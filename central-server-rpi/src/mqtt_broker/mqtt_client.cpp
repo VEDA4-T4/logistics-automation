@@ -5,7 +5,10 @@
 #include <string>
 #include <utility>
 
+#include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/contracts/mqtt_message.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/mqtt_validation.hpp"
 
 namespace logistics::central_server {
 namespace {
@@ -27,6 +30,16 @@ inline constexpr std::array kRequiredSubscriptions{
 [[nodiscard]] bool IsValidPublishTopic(std::string_view topic) noexcept {
     return !topic.empty() && topic.find('+') == std::string_view::npos && topic.find('#') == std::string_view::npos &&
            topic.find('\0') == std::string_view::npos && mqtt::ParseTopic(topic).IsValid();
+}
+
+[[nodiscard]] constexpr bool IsQosAllowed(const mqtt::DeliveryPolicy& policy, mqtt::Qos qos) noexcept {
+    const auto value = static_cast<std::uint8_t>(qos);
+    return value >= static_cast<std::uint8_t>(policy.minimum_qos) &&
+           value <= static_cast<std::uint8_t>(policy.maximum_qos);
+}
+
+[[nodiscard]] constexpr bool IsRetainAllowed(const mqtt::DeliveryPolicy& policy, bool retain) noexcept {
+    return !retain || policy.retain != mqtt::RetainPolicy::kNever;
 }
 
 void DefaultLog(MqttLogLevel level, std::string_view message) {
@@ -140,6 +153,32 @@ bool MqttClient::Publish(std::string_view topic, std::string_view payload, int q
         return false;
     }
     return true;
+}
+
+bool MqttClient::PublishMessage(std::string_view topic, const mqtt::MqttMessage& message, mqtt::Qos qos, bool retain) {
+    const auto validation = mqtt::ValidateTopicMessage(topic, message);
+    if (!validation.IsSuccess()) {
+        Log(MqttLogLevel::kError,
+            "rejected MQTT message publish; error=" + std::string(mqtt::ToString(validation.error)) +
+                "; message=" + validation.message);
+        return false;
+    }
+
+    const auto policy = mqtt::PolicyFor(message.message_type);
+    if (!IsQosAllowed(policy, qos) || !IsRetainAllowed(policy, retain)) {
+        Log(MqttLogLevel::kError, "rejected MQTT message publish that violates QoS or retain policy");
+        return false;
+    }
+
+    const auto encoded = mqtt::SerializeMessage(message);
+    if (!encoded.IsSuccess()) {
+        Log(MqttLogLevel::kError,
+            "MQTT serialization failed; error=" + std::string(mqtt::ToString(encoded.status.error)) +
+                "; field=" + encoded.status.field + "; message=" + encoded.status.message);
+        return false;
+    }
+
+    return Publish(topic, encoded.payload, static_cast<int>(qos), retain);
 }
 
 void MqttClient::HandleConnected(int reason_code, std::string_view reason) {

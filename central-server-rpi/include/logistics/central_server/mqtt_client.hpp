@@ -10,6 +10,13 @@
 #include "logistics/central_server/mqtt_config.hpp"
 #include "logistics/central_server/mqtt_transport.hpp"
 
+namespace logistics::contracts::mqtt {
+
+struct MqttMessage;
+enum class Qos : std::uint8_t;
+
+}  // namespace logistics::contracts::mqtt
+
 namespace logistics::central_server {
 
 enum class MqttLogLevel : std::uint8_t {
@@ -39,6 +46,8 @@ public:
     [[nodiscard]] bool IsConnected() const noexcept;
 
     [[nodiscard]] bool Publish(std::string_view topic, std::string_view payload, int qos = 1, bool retain = false);
+    [[nodiscard]] bool PublishMessage(std::string_view topic, const contracts::mqtt::MqttMessage& message,
+                                      contracts::mqtt::Qos qos, bool retain = false);
 
 private:
     void HandleConnected(int reason_code, std::string_view reason);

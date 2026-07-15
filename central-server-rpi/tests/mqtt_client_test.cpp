@@ -12,6 +12,8 @@
 
 #include "logistics/central_server/mqtt_config.hpp"
 #include "logistics/central_server/mqtt_transport.hpp"
+#include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/contracts/mqtt_message.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 
 namespace {
@@ -227,6 +229,48 @@ void TestMessagesAreForwarded() {
     assert(received_payload == "payload");
 }
 
+void TestTypedMessagePublishing() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+
+    assert(client.Start());
+    fake->SimulateConnected();
+
+    const mqtt::MqttMessage command{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-PUBLISH-01",
+        .message_type = mqtt::MessageType::kControlCommand,
+        .source_id = "SERVER-01",
+        .timestamp = "2026-07-15T17:30:00+09:00",
+        .data =
+            mqtt::ControlCommandPayload{
+                .request_id = "REQ-PUBLISH-01",
+                .command = mqtt::ControlCommand::kStatusRequest,
+                .target_device_id = "PI-01",
+                .component_id = {},
+                .params = mqtt::Json::object(),
+            },
+    };
+
+    assert(client.PublishMessage(mqtt::DeviceCommandTopic("PI-01"), command, mqtt::Qos::kAtLeastOnce));
+    assert(fake->publications.size() == 1);
+    assert(fake->publications.front().topic == "device/PI-01/command");
+    assert(fake->publications.front().qos == 1);
+    assert(!fake->publications.front().retain);
+
+    const auto decoded = mqtt::DeserializeMessage(fake->publications.front().payload);
+    assert(decoded.IsSuccess());
+    assert(decoded.value.message_id == command.message_id);
+    assert(mqtt::GetPayload<mqtt::ControlCommandPayload>(decoded.value) != nullptr);
+
+    assert(!client.PublishMessage(mqtt::DeviceCommandTopic("PI-02"), command, mqtt::Qos::kAtLeastOnce));
+    assert(!client.PublishMessage(mqtt::DeviceCommandTopic("PI-01"), command, mqtt::Qos::kAtLeastOnce, true));
+    assert(fake->publications.size() == 1);
+
+    client.Stop();
+}
+
 void TestStartFailureIsLogged() {
     auto transport = std::make_unique<FakeTransport>();
     auto* fake = transport.get();
@@ -269,6 +313,7 @@ int main() {
     TestInvalidConfigIsRejected();
     TestConnectReconnectAndPublish();
     TestMessagesAreForwarded();
+    TestTypedMessagePublishing();
     TestStartFailureIsLogged();
     TestConnectionRejectionIsLogged();
     return 0;
