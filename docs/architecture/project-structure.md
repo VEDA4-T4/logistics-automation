@@ -38,7 +38,7 @@ logistics-automation/
 │   ├── rotation-controller/
 │   ├── sorting-controller/
 │   ├── linetracer-controller/
-│   └── common/                    # UART codec/안전/공통 드라이버
+│   └── common/                    # UART HAL 연동/안전 처리/공통 드라이버
 ├── shared/
 │   ├── include/                   # 공통 C++ 도메인 타입
 │   ├── contracts/mqtt/            # Topic/Payload schema
