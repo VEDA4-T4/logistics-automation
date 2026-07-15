@@ -1,7 +1,13 @@
 [mqtt]
-host=0.0.0.0
+host=127.0.0.1
 port=1883
 client_id=central-server
+username=
+password=
+keep_alive_seconds=30
+reconnect_min_delay_seconds=1
+reconnect_max_delay_seconds=30
+clean_session=true
 
 [database]
 path=/var/lib/logistics/logistics.db

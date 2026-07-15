@@ -1,0 +1,61 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string_view>
+
+#include "logistics/central_server/mqtt_config.hpp"
+#include "logistics/central_server/mqtt_transport.hpp"
+
+namespace logistics::central_server {
+
+enum class MqttLogLevel : std::uint8_t {
+    kInfo,
+    kWarning,
+    kError,
+};
+
+class MqttClient final {
+public:
+    using Logger = std::function<void(MqttLogLevel level, std::string_view message)>;
+    using MessageHandler = std::function<void(std::string_view topic, std::string_view payload)>;
+
+    MqttClient(MqttConfig config, std::unique_ptr<MqttTransport> transport);
+    ~MqttClient();
+
+    MqttClient(const MqttClient&) = delete;
+    MqttClient& operator=(const MqttClient&) = delete;
+    MqttClient(MqttClient&&) = delete;
+    MqttClient& operator=(MqttClient&&) = delete;
+
+    void SetLogger(Logger logger);
+    void SetMessageHandler(MessageHandler handler);
+
+    [[nodiscard]] bool Start();
+    void Stop() noexcept;
+    [[nodiscard]] bool IsConnected() const noexcept;
+
+    [[nodiscard]] bool Publish(std::string_view topic, std::string_view payload, int qos = 1, bool retain = false);
+
+private:
+    void HandleConnected(int reason_code, std::string_view reason);
+    void HandleDisconnected(int reason_code, std::string_view reason);
+    void HandleMessage(std::string_view topic, std::string_view payload);
+    void HandleTransportLog(MqttTransportLogLevel level, std::string_view message);
+    void SubscribeRequiredTopics();
+    void Log(MqttLogLevel level, std::string_view message) const;
+
+    MqttConfig config_;
+    std::unique_ptr<MqttTransport> transport_;
+    std::atomic_bool connected_{ false };
+    std::atomic_bool running_{ false };
+    std::atomic_bool stopping_{ false };
+    mutable std::mutex callback_mutex_;
+    Logger logger_;
+    MessageHandler message_handler_;
+};
+
+}  // namespace logistics::central_server
