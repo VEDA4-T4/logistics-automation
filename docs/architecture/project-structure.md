@@ -29,7 +29,7 @@ logistics-automation/
 │   │   ├── device_status/
 │   │   └── config/
 │   ├── kernel/
-│   │   └── vedaurt/                # serdev 드라이버/Device Tree Overlay
+│   │   └── vedauart/               # serdev 드라이버/Device Tree Overlay
 │   ├── input-node/                # 투입/컨베이어
 │   ├── vision-node/               # 영상 수신/상품 검출/좌표·바코드 인식
 │   ├── sorting-node/              # 분류 장치 중계
