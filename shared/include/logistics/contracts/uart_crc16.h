@@ -16,10 +16,7 @@ extern "C" {
  * 계산 범위는 호출자가 전달한 byte 배열 전체이다.
  * UART Frame에서는 VERSION부터 PAYLOAD까지 전달한다.
  */
-uint16_t uart_crc16_ccitt(
-    const uint8_t *data,
-    size_t length
-);
+uint16_t uart_crc16_ccitt(const uint8_t* data, size_t length);
 
 #ifdef __cplusplus
 }

@@ -9,7 +9,6 @@
 extern "C" {
 #endif
 
-
 /*
  * ============================================================================
  * UART Parser 설정
@@ -30,7 +29,6 @@ extern "C" {
 #define UART_PARSER_TIMEOUT_MS 100U
 #endif
 
-
 /*
  * ============================================================================
  * Parser 상태
@@ -39,8 +37,7 @@ extern "C" {
  * Parser는 UART byte stream을 한 byte씩 받아
  * 현재 어느 필드를 수신하고 있는지 상태로 관리한다.
  */
-typedef enum
-{
+typedef enum {
     /* SOF 대기 */
     UART_PARSER_WAIT_SOF = 0,
 
@@ -67,7 +64,6 @@ typedef enum
 
 } uart_parser_state_t;
 
-
 /*
  * ============================================================================
  * Parser 처리 결과
@@ -79,8 +75,7 @@ typedef enum
  * NO_FRAME 또는 오류가 반환된 경우에는
  * 출력 Frame을 사용하지 않아야 한다.
  */
-typedef enum
-{
+typedef enum {
     /* 아직 완성된 Frame이 없음 */
     UART_PARSER_NO_FRAME = 0,
 
@@ -110,7 +105,6 @@ typedef enum
 
 } uart_parser_result_t;
 
-
 /*
  * ============================================================================
  * UART Parser 객체
@@ -126,8 +120,7 @@ typedef enum
  * 두 채널이 같은 Parser 객체를 공유하면
  * 서로 다른 UART의 byte가 섞일 수 있다.
  */
-typedef struct
-{
+typedef struct {
     /*
      * 현재 Parser 상태
      */
@@ -169,7 +162,6 @@ typedef struct
 
 } uart_parser_t;
 
-
 /*
  * Parser를 초기 상태로 초기화한다.
  *
@@ -180,19 +172,13 @@ typedef struct
  *   payload_index  = 0
  *   elapsed_ms     = 0
  */
-void uart_parser_init(
-    uart_parser_t *parser
-);
-
+void uart_parser_init(uart_parser_t* parser);
 
 /*
  * 현재 수신 중인 Frame을 폐기하고
  * SOF 대기 상태로 되돌린다.
  */
-void uart_parser_reset(
-    uart_parser_t *parser
-);
-
+void uart_parser_reset(uart_parser_t* parser);
 
 /*
  * UART에서 수신한 byte 하나를 Parser에 입력한다.
@@ -229,12 +215,7 @@ void uart_parser_reset(
  *   하나의 Frame 처리가 끝나면 다음 byte부터
  *   새로운 Frame으로 자동 처리한다.
  */
-uart_parser_result_t uart_parser_feed(
-    uart_parser_t *parser,
-    uint8_t byte,
-    uart_frame_t *frame
-);
-
+uart_parser_result_t uart_parser_feed(uart_parser_t* parser, uint8_t byte, uart_frame_t* frame);
 
 /*
  * 부분 수신 Timeout을 처리한다.
@@ -251,11 +232,7 @@ uart_parser_result_t uart_parser_feed(
  * UART_PARSER_TIMEOUT_MS 이상 시간이 지나면
  * 현재 수신 중인 Frame을 폐기한다.
  */
-uart_parser_result_t uart_parser_tick(
-    uart_parser_t *parser,
-    uint32_t elapsed_ms
-);
-
+uart_parser_result_t uart_parser_tick(uart_parser_t* parser, uint32_t elapsed_ms);
 
 #ifdef __cplusplus
 }
