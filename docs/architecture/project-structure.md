@@ -46,6 +46,8 @@ logistics-automation/
 │   │   └── logistics/contracts/
 │   │       ├── uart_protocol.h    # UART 공통 Frame/상태/응답 규격
 │   │       └── uart/              # 장치별 CMD/Payload 계약
+│   │           ├── input_commands.h
+│   │           └── sorting_commands.h
 │   ├── contracts/mqtt/            # Topic/Payload schema
 │   ├── contracts/uart/            # UART codec/CRC/parser 구현
 │   └── tests/
