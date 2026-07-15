@@ -1,4 +1,4 @@
-#include "uart_crc16.h"
+#include "logistics/contracts/uart_crc16.h"
 
 uint16_t uart_crc16_ccitt(const uint8_t* data, size_t length) {
     uint16_t crc = UART_CRC16_INITIAL_VALUE;

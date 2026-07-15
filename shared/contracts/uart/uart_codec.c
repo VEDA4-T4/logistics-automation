@@ -1,4 +1,4 @@
-#include "uart_codec.h"
+#include "logistics/contracts/uart_codec.h"
 
 #include <string.h>
 

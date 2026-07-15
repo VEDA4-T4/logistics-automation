@@ -42,9 +42,12 @@ logistics-automation/
 │   ├── linetracer-controller/
 │   └── common/                    # UART HAL 연동/안전 처리/공통 드라이버
 ├── shared/
-│   ├── include/                   # 공통 C++ 도메인 타입
+│   ├── include/                   # 공통 도메인 타입과 공개 헤더
+│   │   └── logistics/contracts/
+│   │       ├── uart_protocol.h    # UART 공통 Frame/상태/응답 규격
+│   │       └── uart/              # 장치별 CMD/Payload 계약
 │   ├── contracts/mqtt/            # Topic/Payload schema
-│   ├── contracts/uart/            # Packet/Command/Result 정의
+│   ├── contracts/uart/            # UART codec/CRC/parser 구현
 │   └── tests/
 ├── deploy/
 │   ├── mosquitto/

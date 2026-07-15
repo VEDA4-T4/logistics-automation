@@ -105,32 +105,42 @@ extern "C" {
  *
  * 공통 프로토콜은 명령 번호 영역만 예약한다.
  *
- * 컨베이어 STM32:
+ * input-controller (컨베이어/초음파 센서):
  *   0x10 ~ 0x1F
  *
- * 로봇팔 STM32:
+ * rotation-controller (로봇팔, 예약):
  *   0x20 ~ 0x2F
  *
- * 라인트레이서 STM32:
+ * sorting-controller (분류장치):
+ *   0x30 ~ 0x3F
+ *
+ * linetracer-controller:
  *   0x40 ~ 0x4F
  *
  * 각 담당자는 해당 영역 안에서 장치 전용 명령을 정의한다.
  *
- * 예:
- *
- *   #define UART_CMD_CONVEYOR_START  0x10U
- *   #define UART_CMD_CONVEYOR_STOP   0x11U
- *
  * 공통 헤더에서는 장치별 명령의 Payload 의미까지 판단하지 않는다.
- * 장치별 Payload 의미와 값의 범위는 각 STM32 프로그램에서 검증한다.
+ * 장치별 CMD, Payload 길이와 값 범위는 장치별 contract에서 검증한다.
  */
-#define UART_CMD_DEVICE_MIN 0x10U
-#define UART_CMD_DEVICE_MAX 0x4FU
+#define UART_CMD_INPUT_MIN 0x10U
+#define UART_CMD_INPUT_MAX 0x1FU
+
+#define UART_CMD_ROTATION_MIN 0x20U
+#define UART_CMD_ROTATION_MAX 0x2FU
+
+#define UART_CMD_SORTING_MIN 0x30U
+#define UART_CMD_SORTING_MAX 0x3FU
+
+#define UART_CMD_LINETRACER_MIN 0x40U
+#define UART_CMD_LINETRACER_MAX 0x4FU
+
+#define UART_CMD_DEVICE_MIN UART_CMD_INPUT_MIN
+#define UART_CMD_DEVICE_MAX UART_CMD_LINETRACER_MAX
 
 /*
  * 장치별 명령인지 확인한다.
  */
-static inline uint8_t uart_is_device_command(uint8_t command) {
+static inline uint8_t uart_is_device_command(uint32_t command) {
     if (command >= UART_CMD_DEVICE_MIN && command <= UART_CMD_DEVICE_MAX) {
         return 1U;
     }
@@ -138,7 +148,7 @@ static inline uint8_t uart_is_device_command(uint8_t command) {
     return 0U;
 }
 
-#define UART_IS_DEVICE_COMMAND(command) uart_is_device_command((uint8_t)(command))
+#define UART_IS_DEVICE_COMMAND(command) uart_is_device_command((uint32_t)(command))
 
 /*
  * ============================================================================
@@ -478,7 +488,7 @@ static inline uint8_t uart_payload_length_is_valid(uint32_t length) {
  * 공통 명령어 검증
  * ============================================================================
  */
-static inline uint8_t uart_command_is_common(uint8_t command) {
+static inline uint8_t uart_command_is_common(uint32_t command) {
     switch (command) {
         case UART_CMD_PING:
         case UART_CMD_GET_STATUS:
@@ -505,9 +515,12 @@ static inline uint8_t uart_command_is_common(uint8_t command) {
  * 전체 명령어 검증
  * ============================================================================
  *
- * 공통 명령어와 장치별 예약 명령어만 허용한다.
+ * 공통 CMD이거나 장치 CMD 예약 범위에 속하는지 검사한다.
+ *
+ * 실제 장치에서 지원하는 CMD인지와 Payload가 유효한지는
+ * 각 장치별 contract에서 추가로 검사해야 한다.
  */
-static inline uint8_t uart_command_is_valid(uint8_t command) {
+static inline uint8_t uart_command_is_valid(uint32_t command) {
     if (uart_command_is_common(command) != 0U) {
         return 1U;
     }
@@ -519,7 +532,7 @@ static inline uint8_t uart_command_is_valid(uint8_t command) {
     return 0U;
 }
 
-#define UART_IS_VALID_COMMAND(command) uart_command_is_valid((uint8_t)(command))
+#define UART_IS_VALID_COMMAND(command) uart_command_is_valid((uint32_t)(command))
 
 /*
  * ============================================================================
@@ -529,16 +542,10 @@ static inline uint8_t uart_command_is_valid(uint8_t command) {
  * 공통 명령어는 이 함수에서 고정 길이를 검증한다.
  *
  * 장치별 명령어는 공통 헤더에서 Payload의 의미를 알 수 없으므로
- * 0~128바이트 범위만 확인한다.
- *
- * 예를 들어 컨베이어 명령이 다음과 같다면:
- *
- *   CONVEYOR_SPEED Payload:
- *   [0] speed
- *
- * 속도가 0~100인지 여부는 컨베이어 STM32의 main.c에서 검사한다.
+ * 0~128바이트 범위만 확인한다. 정확한 길이와 값 범위는
+ * 각 장치별 contract에서 검사한다.
  */
-static inline uint8_t uart_command_payload_length_is_valid(uint8_t command, uint8_t length) {
+static inline uint8_t uart_command_payload_length_is_valid(uint32_t command, uint32_t length) {
     /*
      * 명령어 자체가 유효한지 확인한다.
      */
@@ -613,7 +620,7 @@ static inline uint8_t uart_command_payload_length_is_valid(uint8_t command, uint
 }
 
 #define UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(command, length) \
-    uart_command_payload_length_is_valid((uint8_t)(command), (uint8_t)(length))
+    uart_command_payload_length_is_valid((uint32_t)(command), (uint32_t)(length))
 
 /*
  * ============================================================================
@@ -632,7 +639,7 @@ static inline uint8_t uart_command_payload_length_is_valid(uint8_t command, uint
  *
  * 위 동작은 STM32 main.c의 안전 제어 코드에서 구현한다.
  */
-#define UART_IS_EMERGENCY_COMMAND(command) ((uint8_t)(command) == UART_CMD_EMERGENCY_STOP)
+#define UART_IS_EMERGENCY_COMMAND(command) ((uint32_t)(command) == UART_CMD_EMERGENCY_STOP)
 
 /*
  * ============================================================================
