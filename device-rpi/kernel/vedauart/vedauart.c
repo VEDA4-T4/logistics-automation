@@ -35,6 +35,13 @@
 #define VEDAUART_RX_BUFFER_SIZE 65536U
 #define VEDAUART_MAX_WRITE_SIZE 4096U
 
+/* serdev changed receive_buf() from int to ssize_t in Linux 6.8. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+typedef ssize_t vedauart_receive_result_t;
+#else
+typedef int vedauart_receive_result_t;
+#endif
+
 struct vedauart_data {
 	struct serdev_device *serdev;
 
@@ -144,8 +151,9 @@ static void vedauart_release_kref(struct kref *refcount)
 	kfree(data);
 }
 
-static size_t vedauart_receive_buf(struct serdev_device *serdev,
-				   const u8 *buffer, size_t count)
+static vedauart_receive_result_t
+vedauart_receive_buf(struct serdev_device *serdev, const u8 *buffer,
+		     size_t count)
 {
 	struct vedauart_data *data = serdev_device_get_drvdata(serdev);
 	unsigned long flags;
@@ -154,14 +162,14 @@ static size_t vedauart_receive_buf(struct serdev_device *serdev,
 	size_t i;
 
 	if (!data)
-		return count;
+		return (vedauart_receive_result_t)count;
 
 	atomic64_add(count, &data->rx_received_count);
 
 	if (!READ_ONCE(data->online) ||
 	    atomic_read(&data->open_count) == 0) {
 		atomic64_add(count, &data->rx_discarded_closed_count);
-		return count;
+		return (vedauart_receive_result_t)count;
 	}
 
 	spin_lock_irqsave(&data->rx_lock, flags);
@@ -171,7 +179,7 @@ static size_t vedauart_receive_buf(struct serdev_device *serdev,
 	    atomic_read(&data->open_count) == 0) {
 		spin_unlock_irqrestore(&data->rx_lock, flags);
 		atomic64_add(count, &data->rx_discarded_closed_count);
-		return count;
+		return (vedauart_receive_result_t)count;
 	}
 
 	for (i = 0U; i < count; i++) {
@@ -195,7 +203,7 @@ static size_t vedauart_receive_buf(struct serdev_device *serdev,
 		wake_up_interruptible(&data->rx_wait_queue);
 
 	/* The callback consumed every byte, including bytes counted as dropped. */
-	return count;
+	return (vedauart_receive_result_t)count;
 }
 
 static void vedauart_write_wakeup(struct serdev_device *serdev)
