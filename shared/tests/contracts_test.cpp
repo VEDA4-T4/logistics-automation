@@ -9,6 +9,7 @@
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_message.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/mqtt_validation.hpp"
 #include "logistics/contracts/process.hpp"
 
 namespace mqtt = logistics::contracts::mqtt;
@@ -388,6 +389,54 @@ void TestMqttTimestampValidation() {
     assert(invalid_timestamp.status.error == mqtt::CodecError::kInvalidFieldValue);
     assert(invalid_timestamp.status.field == "timestamp");
 }
+
+void TestMqttTopicMessageValidation() {
+    const auto heartbeat = MakeMessage("MSG-TOPIC-01", mqtt::MessageType::kHeartbeat,
+                                       mqtt::HeartbeatPayload{
+                                           .status = mqtt::ConnectionState::kOnline,
+                                           .current_state = "IDLE",
+                                           .uptime = 3600,
+                                           .job_id = std::nullopt,
+                                           .error_code = std::nullopt,
+                                       });
+
+    assert(mqtt::ValidateTopicMessage("device/PI-01/heartbeat", heartbeat).IsSuccess());
+
+    const auto wrong_source = mqtt::ValidateTopicMessage("device/PI-02/heartbeat", heartbeat);
+    assert(!wrong_source.IsSuccess());
+    assert(wrong_source.error == mqtt::TopicMessageError::kSourceIdMismatch);
+
+    const auto wrong_message_type = mqtt::ValidateTopicMessage("device/PI-01/status", heartbeat);
+    assert(!wrong_message_type.IsSuccess());
+    assert(wrong_message_type.error == mqtt::TopicMessageError::kUnexpectedMessageType);
+
+    const auto command = MakeMessage("MSG-TOPIC-02", mqtt::MessageType::kControlCommand,
+                                     mqtt::ControlCommandPayload{
+                                         .request_id = "REQ-TOPIC-01",
+                                         .command = mqtt::ControlCommand::kStatusRequest,
+                                         .target_device_id = "PI-01",
+                                         .component_id = {},
+                                         .params = mqtt::Json::object(),
+                                     },
+                                     "SERVER-01");
+
+    assert(mqtt::ValidateTopicMessage("device/PI-01/command", command).IsSuccess());
+
+    const auto wrong_target = mqtt::ValidateTopicMessage("device/PI-02/command", command);
+    assert(!wrong_target.IsSuccess());
+    assert(wrong_target.error == mqtt::TopicMessageError::kTargetDeviceIdMismatch);
+
+    const auto broadcast = MakeMessage("MSG-TOPIC-03", mqtt::MessageType::kEmergencyStop,
+                                       mqtt::EmergencyStopPayload{
+                                           .request_id = "REQ-TOPIC-02",
+                                           .command = mqtt::ControlCommand::kEmergencyStop,
+                                           .target_device_id = "ALL",
+                                       },
+                                       "SERVER-01");
+
+    assert(mqtt::ValidateTopicMessage(mqtt::kSystemBroadcastCommandTopic, broadcast).IsSuccess());
+    assert(mqtt::ToString(mqtt::TopicMessageError::kSourceIdMismatch) == "SOURCE_ID_MISMATCH");
+}
 }  // namespace
 
 int main() {
@@ -487,6 +536,7 @@ int main() {
     TestAllMqttMessageRoundTrips();
     TestMqttCodecInvalidInputs();
     TestMqttTimestampValidation();
+    TestMqttTopicMessageValidation();
 
     return 0;
 }

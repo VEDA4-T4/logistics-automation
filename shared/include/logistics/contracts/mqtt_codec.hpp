@@ -1169,6 +1169,7 @@ template <typename PayloadType>
         }
 
         return {
+            .payload = {},
             .status = codec_detail::MakeError(error, field, description),
         };
     }
@@ -1191,6 +1192,7 @@ template <typename PayloadType>
         };
     } catch (const nlohmann::json::exception& exception) {
         return {
+            .payload = {},
             .status = codec_detail::MakeError(CodecError::kSerializationFailed, "", exception.what()),
         };
     }
