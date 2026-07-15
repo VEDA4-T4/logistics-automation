@@ -23,11 +23,16 @@ qt_add_executable(
     logistics_control_center
     src/main.cpp
     src/main_window.cpp
+    src/command_response.cpp
     src/mqtt_client.cpp
     src/mqtt_message_validator.cpp
+    src/process_control_panel.cpp
     include/logistics/control_center/main_window.hpp
+    include/logistics/control_center/command_response.hpp
     include/logistics/control_center/mqtt_client.hpp
     include/logistics/control_center/mqtt_message_validator.hpp
+    include/logistics/control_center/process_control_panel.hpp
+    include/logistics/control_center/process_control_state.hpp
 )
 
 add_custom_target(
@@ -67,6 +72,26 @@ if(BUILD_TESTING)
     target_link_libraries(control_center_mqtt_validator_test PRIVATE Qt6::Core logistics::contracts)
     logistics_enable_warnings(control_center_mqtt_validator_test)
     add_test(NAME control_center_mqtt_validator_test COMMAND control_center_mqtt_validator_test)
+
+    add_executable(
+        control_center_command_response_test
+        tests/command_response_test.cpp
+        src/command_response.cpp
+        include/logistics/control_center/command_response.hpp
+    )
+    target_include_directories(control_center_command_response_test PRIVATE include)
+    target_link_libraries(control_center_command_response_test PRIVATE Qt6::Core logistics::contracts)
+    logistics_enable_warnings(control_center_command_response_test)
+    add_test(NAME control_center_command_response_test COMMAND control_center_command_response_test)
+
+    add_executable(
+        control_center_process_control_state_test
+        tests/process_control_state_test.cpp
+        include/logistics/control_center/process_control_state.hpp
+    )
+    target_include_directories(control_center_process_control_state_test PRIVATE include)
+    logistics_enable_warnings(control_center_process_control_state_test)
+    add_test(NAME control_center_process_control_state_test COMMAND control_center_process_control_state_test)
 
     add_executable(
         control_center_mqtt_reconnect_test
