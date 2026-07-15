@@ -1,6 +1,7 @@
 #include "logistics/central_server/mqtt_client.hpp"
 
 #include <array>
+#include <cstddef>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -26,6 +27,8 @@ inline constexpr std::array kRequiredSubscriptions{
     Subscription{ mqtt::kDeviceEventSubscription, 1 },     Subscription{ mqtt::kDeviceErrorSubscription, 1 },
     Subscription{ mqtt::kDeviceHeartbeatSubscription, 1 },
 };
+
+inline constexpr std::size_t kMaximumMqttPayloadSize = 268435455U;
 
 [[nodiscard]] bool IsValidPublishTopic(std::string_view topic) noexcept {
     return !topic.empty() && topic.find('+') == std::string_view::npos && topic.find('#') == std::string_view::npos &&
@@ -74,6 +77,21 @@ void MqttClient::SetMessageHandler(MessageHandler handler) {
     message_handler_ = std::move(handler);
 }
 
+bool MqttClient::SetWill(MqttWill will) {
+    if (running_) {
+        Log(MqttLogLevel::kError, "MQTT Last Will cannot be changed while the client is running");
+        return false;
+    }
+    if (!IsValidPublishTopic(will.topic) || will.qos < 0 || will.qos > 2 ||
+        will.payload.size() > kMaximumMqttPayloadSize) {
+        Log(MqttLogLevel::kError, "rejected invalid MQTT Last Will configuration");
+        return false;
+    }
+
+    will_ = std::move(will);
+    return true;
+}
+
 bool MqttClient::Start() {
     if (running_.exchange(true)) {
         return true;
@@ -108,6 +126,7 @@ bool MqttClient::Start() {
         .reconnect_min_delay_seconds = config_.reconnect_min_delay_seconds,
         .reconnect_max_delay_seconds = config_.reconnect_max_delay_seconds,
         .clean_session = config_.clean_session,
+        .will = will_,
     };
     const auto result = transport_->Start(options);
     if (!result) {

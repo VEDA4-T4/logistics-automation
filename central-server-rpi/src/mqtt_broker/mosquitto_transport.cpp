@@ -100,6 +100,15 @@ public:
             result = mosquitto_reconnect_delay_set(client_, options.reconnect_min_delay_seconds,
                                                    options.reconnect_max_delay_seconds, true);
         }
+        if (result == MOSQ_ERR_SUCCESS && options.will.has_value()) {
+            if (options.will->payload.size() > static_cast<std::size_t>(INT_MAX)) {
+                result = MOSQ_ERR_PAYLOAD_SIZE;
+            } else {
+                result = mosquitto_will_set(client_, options.will->topic.c_str(),
+                                            static_cast<int>(options.will->payload.size()),
+                                            options.will->payload.data(), options.will->qos, options.will->retain);
+            }
+        }
         if (result == MOSQ_ERR_SUCCESS) {
             result = mosquitto_connect_async(client_, options.host.c_str(), options.port, options.keep_alive_seconds);
         }

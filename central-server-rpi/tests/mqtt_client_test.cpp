@@ -174,10 +174,26 @@ void TestConnectReconnectAndPublish() {
     std::vector<std::string> logs;
     client.SetLogger([&logs](central_server::MqttLogLevel, std::string_view message) { logs.emplace_back(message); });
 
+    assert(client.SetWill({
+        .topic = std::string(mqtt::kServerStatusTopic),
+        .payload = R"json({"status":"OFFLINE"})json",
+        .qos = 1,
+        .retain = true,
+    }));
+
     assert(client.Start());
     assert(fake->start_count == 1);
     assert(fake->last_options.host == "127.0.0.1");
     assert(fake->last_options.reconnect_max_delay_seconds == 16);
+    assert(fake->last_options.will.has_value());
+    assert(fake->last_options.will->topic == mqtt::kServerStatusTopic);
+    assert(fake->last_options.will->retain);
+    assert(!client.SetWill({
+        .topic = std::string(mqtt::kServerStatusTopic),
+        .payload = "{}",
+        .qos = 1,
+        .retain = true,
+    }));
     assert(!client.IsConnected());
 
     fake->SimulateConnected();

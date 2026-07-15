@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string_view>
 
 #include "logistics/central_server/mqtt_config.hpp"
@@ -40,6 +41,7 @@ public:
 
     void SetLogger(Logger logger);
     void SetMessageHandler(MessageHandler handler);
+    [[nodiscard]] bool SetWill(MqttWill will);
 
     [[nodiscard]] bool Start();
     void Stop() noexcept;
@@ -65,6 +67,7 @@ private:
     mutable std::mutex callback_mutex_;
     Logger logger_;
     MessageHandler message_handler_;
+    std::optional<MqttWill> will_;
 };
 
 }  // namespace logistics::central_server

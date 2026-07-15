@@ -3,10 +3,18 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace logistics::central_server {
+
+struct MqttWill final {
+    std::string topic;
+    std::string payload;
+    int qos{ 1 };
+    bool retain{ true };
+};
 
 struct MqttTransportOptions final {
     std::string host;
@@ -18,6 +26,7 @@ struct MqttTransportOptions final {
     std::uint32_t reconnect_min_delay_seconds{ 1 };
     std::uint32_t reconnect_max_delay_seconds{ 30 };
     bool clean_session{ true };
+    std::optional<MqttWill> will;
 };
 
 struct MqttOperationResult final {
