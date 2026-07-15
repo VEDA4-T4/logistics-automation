@@ -13,6 +13,12 @@ target_link_libraries(logistics_central_server_mqtt_core PUBLIC logistics::contr
 include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
 logistics_enable_warnings(logistics_central_server_mqtt_core)
 
+add_library(logistics_central_server_device_manager src/device_manager/device_manager.cpp)
+add_library(logistics::central_server_device_manager ALIAS logistics_central_server_device_manager)
+target_include_directories(logistics_central_server_device_manager PUBLIC include)
+target_link_libraries(logistics_central_server_device_manager PUBLIC logistics::contracts)
+logistics_enable_warnings(logistics_central_server_device_manager)
+
 if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
     find_package(Threads REQUIRED)
     find_package(PkgConfig QUIET)
@@ -60,13 +66,13 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         logistics_central_server
         src/main.cpp
         src/application.cpp
-        src/device_manager/device_manager.cpp
     )
     target_include_directories(logistics_central_server PRIVATE include)
     target_link_libraries(
         logistics_central_server
         PRIVATE
             logistics::central_server_mosquitto
+            logistics::central_server_device_manager
             logistics::contracts
             Threads::Threads
     )
@@ -78,4 +84,9 @@ if(BUILD_TESTING)
     target_link_libraries(central_server_mqtt_test PRIVATE logistics::central_server_mqtt_core)
     logistics_enable_warnings(central_server_mqtt_test)
     add_test(NAME central_server_mqtt_test COMMAND central_server_mqtt_test)
+
+    add_executable(central_server_device_manager_test tests/device_manager_test.cpp)
+    target_link_libraries(central_server_device_manager_test PRIVATE logistics::central_server_device_manager)
+    logistics_enable_warnings(central_server_device_manager_test)
+    add_test(NAME central_server_device_manager_test COMMAND central_server_device_manager_test)
 endif()

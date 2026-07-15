@@ -13,9 +13,14 @@
 #include "logistics/central_server/mqtt_client.hpp"
 #include "logistics/central_server/mqtt_config.hpp"
 #include "logistics/central_server/mqtt_transport.hpp"
+#include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/mqtt_validation.hpp"
 
 namespace logistics::central_server {
 namespace {
+
+namespace mqtt = contracts::mqtt;
 
 volatile std::sig_atomic_t stop_requested = 0;
 
@@ -51,8 +56,24 @@ int Application::Run(int argc, char* argv[]) {
         return 1;
     }
 
+    DeviceManager device_manager;
     MqttClient mqtt_client(std::move(mqtt_config), CreateMosquittoTransport());
-    mqtt_client.SetMessageHandler([](std::string_view topic, std::string_view) {
+    mqtt_client.SetMessageHandler([&device_manager](std::string_view topic, std::string_view payload) {
+        const auto decoded = mqtt::DeserializeMessage(payload);
+        if (!decoded.IsSuccess()) {
+            std::cerr << "[server][ERROR] invalid MQTT JSON; error=" << mqtt::ToString(decoded.status.error)
+                      << "; field=" << decoded.status.field << "; message=" << decoded.status.message << '\n';
+            return;
+        }
+
+        const auto validation = mqtt::ValidateTopicMessage(topic, decoded.value);
+        if (!validation.IsSuccess()) {
+            std::cerr << "[server][ERROR] MQTT topic/message mismatch; error=" << mqtt::ToString(validation.error)
+                      << "; message=" << validation.message << '\n';
+            return;
+        }
+
+        device_manager.HandleMessage(mqtt::ParseTopic(topic), decoded.value);
         std::clog << "[server][INFO] MQTT message received: " << topic << '\n';
     });
 
@@ -64,7 +85,7 @@ int Application::Run(int argc, char* argv[]) {
         return 1;
     }
 
-    std::clog << "[server][INFO] central server started; registered devices=" << DeviceManager::RegisteredDeviceCount()
+    std::clog << "[server][INFO] central server started; registered devices=" << device_manager.RegisteredDeviceCount()
               << '\n';
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
