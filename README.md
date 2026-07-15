@@ -52,6 +52,24 @@ topic을 다시 구독합니다. 연결 오류는 표준 오류로 기록되어 
 `libmosquitto` 없이 설정 파서와 MQTT 상태 로직만 빌드·테스트하려면
 `-DLOGISTICS_ENABLE_MOSQUITTO_TRANSPORT=OFF`를 지정합니다.
 
+### 장치 Raspberry Pi MQTT 설정
+
+장치 노드는 `device-rpi/config/node.ini.example`을 복사해 고유 `device_id`, broker 주소와 인증 정보를
+설정합니다. 중앙 서버와 함께 기본 빌드하면 같은 `libmosquitto` 라이브러리를 사용하도록 장치 MQTT runtime도
+활성화됩니다.
+
+```sh
+cp device-rpi/config/node.ini.example device-rpi/config/node.ini
+cmake -S . -B build
+cmake --build build
+./build/device-rpi/logistics_vision_node device-rpi/config/node.ini
+```
+
+설정 경로는 첫 번째 실행 인수 또는 `LOGISTICS_DEVICE_CONFIG` 환경 변수로 지정할 수 있습니다. 연결되면
+`device/{deviceId}/command`와 `system/broadcast/command`를 구독하고, 공통 JSON codec으로 생성한 heartbeat를
+5초마다 `device/{deviceId}/heartbeat`로 발행합니다. 비정상 연결 종료 시에는 codec으로 생성한 `OFFLINE` 상태가
+Last Will로 발행됩니다.
+
 ### 중앙관제 MQTT 설정
 
 `control-center/config/control-centor.ini.example`을 `control-centor.ini`로 복사한 뒤 브로커 값을 입력합니다.

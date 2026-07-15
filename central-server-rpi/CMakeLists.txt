@@ -1,5 +1,3 @@
-option(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT "Build the central server with libmosquitto" ON)
-
 add_library(
     logistics_central_server_mqtt_core
     src/mqtt_broker/mqtt_config.cpp

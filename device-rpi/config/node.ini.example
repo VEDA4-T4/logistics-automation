@@ -1,0 +1,13 @@
+[device]
+device_id=PI-TEST
+
+[mqtt]
+host=127.0.0.1
+port=1883
+client_id=PI-TEST
+username=
+password=
+keep_alive_seconds=30
+reconnect_min_delay_seconds=1
+reconnect_max_delay_seconds=30
+clean_session=true

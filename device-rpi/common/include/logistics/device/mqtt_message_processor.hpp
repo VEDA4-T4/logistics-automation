@@ -28,6 +28,9 @@ public:
         std::string message_id, std::string timestamp, std::string current_state, std::uint64_t uptime,
         std::optional<std::string> job_id = std::nullopt, std::optional<std::string> error_code = std::nullopt) const;
 
+    [[nodiscard]] contracts::mqtt::EncodeResult EncodeOfflineStatus(std::string message_id,
+                                                                    std::string timestamp) const;
+
 private:
     std::string device_id_;
 };

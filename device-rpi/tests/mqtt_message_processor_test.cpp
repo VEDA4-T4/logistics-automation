@@ -66,6 +66,14 @@ void TestHeartbeatEncoding() {
     assert(heartbeat != nullptr);
     assert(heartbeat->uptime == 42);
     assert(heartbeat->current_state == "IDLE");
+
+    const auto offline = processor.EncodeOfflineStatus("MSG-WILL-01", "2026-07-15T17:30:00+09:00");
+    assert(offline.IsSuccess());
+    const auto decoded_offline = mqtt::DeserializeMessage(offline.payload);
+    assert(decoded_offline.IsSuccess());
+    const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(decoded_offline.value);
+    assert(status != nullptr);
+    assert(status->status == mqtt::ConnectionState::kOffline);
 }
 
 }  // namespace

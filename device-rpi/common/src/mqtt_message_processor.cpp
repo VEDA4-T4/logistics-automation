@@ -86,4 +86,23 @@ mqtt::EncodeResult MqttMessageProcessor::EncodeHeartbeat(std::string message_id,
     return mqtt::SerializeMessage(message);
 }
 
+mqtt::EncodeResult MqttMessageProcessor::EncodeOfflineStatus(std::string message_id, std::string timestamp) const {
+    const mqtt::MqttMessage message{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = std::move(message_id),
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = device_id_,
+        .timestamp = std::move(timestamp),
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = mqtt::ConnectionState::kOffline,
+                .current_state = "DISCONNECTED",
+                .job_id = std::nullopt,
+                .error_code = std::string("ERR-MQTT-DISCONNECTED"),
+            },
+    };
+
+    return mqtt::SerializeMessage(message);
+}
+
 }  // namespace logistics::device

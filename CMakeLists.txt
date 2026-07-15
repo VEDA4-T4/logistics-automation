@@ -11,6 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(LOGISTICS_BUILD_CONTROL_CENTER "Build the Qt control center" OFF)
 option(LOGISTICS_BUILD_CENTRAL_SERVER "Build the central Raspberry Pi server" ON)
 option(LOGISTICS_BUILD_DEVICE_NODES "Build Raspberry Pi device nodes" ON)
+option(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT "Build MQTT clients with libmosquitto" ON)
 
 add_subdirectory(shared)
 
