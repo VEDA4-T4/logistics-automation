@@ -176,11 +176,11 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
 [[nodiscard]] constexpr MessageType MessageTypeFromString(std::string_view value) noexcept {
     constexpr std::array values = {
-        MessageType::kDeviceRegister,   MessageType::kHeartbeat,       MessageType::kBoxDetected,
-        MessageType::kWorkCreated,      MessageType::kWorkCompleted,    MessageType::kPositionDetected,
-        MessageType::kBarcodeDetected,  MessageType::kProductImage,     MessageType::kProductInfo,
-        MessageType::kDestinationSet,   MessageType::kDeviceStatus,     MessageType::kControlCommand,
-        MessageType::kErrorOccurred,    MessageType::kEmergencyStop,    MessageType::kCommandResponse,
+        MessageType::kDeviceRegister,  MessageType::kHeartbeat,     MessageType::kBoxDetected,
+        MessageType::kWorkCreated,     MessageType::kWorkCompleted, MessageType::kPositionDetected,
+        MessageType::kBarcodeDetected, MessageType::kProductImage,  MessageType::kProductInfo,
+        MessageType::kDestinationSet,  MessageType::kDeviceStatus,  MessageType::kControlCommand,
+        MessageType::kErrorOccurred,   MessageType::kEmergencyStop, MessageType::kCommandResponse,
     };
     for (const auto type : values) {
         if (ToString(type) == value) {

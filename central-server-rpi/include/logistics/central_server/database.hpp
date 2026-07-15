@@ -29,9 +29,15 @@ struct DatabaseStatus {
     DatabaseStatusCode code{ DatabaseStatusCode::kOk };
     std::string message;
 
-    [[nodiscard]] bool ok() const noexcept { return code == DatabaseStatusCode::kOk; }
-    [[nodiscard]] bool retryable() const noexcept { return code == DatabaseStatusCode::kBusy; }
-    [[nodiscard]] static DatabaseStatus Ok() { return {}; }
+    [[nodiscard]] bool ok() const noexcept {
+        return code == DatabaseStatusCode::kOk;
+    }
+    [[nodiscard]] bool retryable() const noexcept {
+        return code == DatabaseStatusCode::kBusy;
+    }
+    [[nodiscard]] static DatabaseStatus Ok() {
+        return {};
+    }
 };
 
 struct DatabaseConfig {
@@ -80,7 +86,9 @@ public:
     [[nodiscard]] DatabaseStatus Commit();
     [[nodiscard]] DatabaseStatus Rollback();
     [[nodiscard]] DatabaseStatus IntegrityCheck();
-    [[nodiscard]] bool IsOpen() const noexcept { return handle_ != nullptr; }
+    [[nodiscard]] bool IsOpen() const noexcept {
+        return handle_ != nullptr;
+    }
 
 private:
     sqlite3* handle_{ nullptr };
@@ -93,7 +101,9 @@ public:
     Transaction(const Transaction&) = delete;
     Transaction& operator=(const Transaction&) = delete;
 
-    [[nodiscard]] const DatabaseStatus& status() const noexcept { return status_; }
+    [[nodiscard]] const DatabaseStatus& status() const noexcept {
+        return status_;
+    }
     [[nodiscard]] DatabaseStatus Commit();
 
 private:

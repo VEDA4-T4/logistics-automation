@@ -22,7 +22,8 @@ struct ServerConfig {
 
 std::string Trim(std::string value) {
     const auto first = value.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return {};
+    if (first == std::string::npos)
+        return {};
     const auto last = value.find_last_not_of(" \t\r\n");
     return value.substr(first, last - first + 1);
 }
@@ -46,7 +47,8 @@ DatabaseStatus LoadConfig(const std::filesystem::path& path, bool required, Serv
     while (std::getline(input, line)) {
         ++line_number;
         line = Trim(line);
-        if (line.empty() || line[0] == '#' || line[0] == ';') continue;
+        if (line.empty() || line[0] == '#' || line[0] == ';')
+            continue;
         if (line.front() == '[' && line.back() == ']') {
             section = Trim(line.substr(1, line.size() - 2));
             continue;
@@ -57,9 +59,12 @@ DatabaseStatus LoadConfig(const std::filesystem::path& path, bool required, Serv
         }
         const std::string key = Trim(line.substr(0, equals));
         const std::string value = Trim(line.substr(equals + 1));
-        if (section == "database" && key == "path") config.database.path = value;
-        else if (section == "database" && key == "migration_dir") config.database.migration_dir = value;
-        else if (section == "storage" && key == "image_root") config.storage.image_root = value;
+        if (section == "database" && key == "path")
+            config.database.path = value;
+        else if (section == "database" && key == "migration_dir")
+            config.database.migration_dir = value;
+        else if (section == "storage" && key == "image_root")
+            config.storage.image_root = value;
         else {
             int parsed = 0;
             const bool recognized = (section == "database" && key == "busy_timeout_ms") ||
@@ -69,18 +74,26 @@ DatabaseStatus LoadConfig(const std::filesystem::path& path, bool required, Serv
                                     (section == "storage" && key == "error_retention_days") ||
                                     (section == "storage" && key == "security_retention_days") ||
                                     (section == "storage" && key == "image_retention_days");
-            if (!recognized) continue;
+            if (!recognized)
+                continue;
             if (!ParseInteger(value, parsed)) {
-                return { DatabaseStatusCode::kInvalidArgument, "invalid integer at config line " +
-                                                                    std::to_string(line_number) };
+                return { DatabaseStatusCode::kInvalidArgument,
+                         "invalid integer at config line " + std::to_string(line_number) };
             }
-            if (section == "database") config.database.busy_timeout_ms = parsed;
-            else if (key == "cleanup_interval_hours") config.storage.cleanup_interval_hours = parsed;
-            else if (key == "mqtt_retention_days") config.storage.mqtt_retention_days = parsed;
-            else if (key == "device_status_retention_days") config.storage.device_status_retention_days = parsed;
-            else if (key == "error_retention_days") config.storage.error_retention_days = parsed;
-            else if (key == "security_retention_days") config.storage.security_retention_days = parsed;
-            else config.storage.image_retention_days = parsed;
+            if (section == "database")
+                config.database.busy_timeout_ms = parsed;
+            else if (key == "cleanup_interval_hours")
+                config.storage.cleanup_interval_hours = parsed;
+            else if (key == "mqtt_retention_days")
+                config.storage.mqtt_retention_days = parsed;
+            else if (key == "device_status_retention_days")
+                config.storage.device_status_retention_days = parsed;
+            else if (key == "error_retention_days")
+                config.storage.error_retention_days = parsed;
+            else if (key == "security_retention_days")
+                config.storage.security_retention_days = parsed;
+            else
+                config.storage.image_retention_days = parsed;
         }
     }
     return DatabaseStatus::Ok();

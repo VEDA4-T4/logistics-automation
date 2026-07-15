@@ -59,7 +59,9 @@ std::string ReadFile(const std::filesystem::path& path, DatabaseStatus& status) 
 }  // namespace
 
 Statement::Statement(sqlite3_stmt* statement) noexcept : statement_(statement) {}
-Statement::~Statement() { sqlite3_finalize(statement_); }
+Statement::~Statement() {
+    sqlite3_finalize(statement_);
+}
 
 Statement::Statement(Statement&& other) noexcept : statement_(std::exchange(other.statement_, nullptr)) {}
 
@@ -72,8 +74,9 @@ Statement& Statement::operator=(Statement&& other) noexcept {
 }
 
 DatabaseStatus Statement::Bind(int index, std::string_view value) {
-    return FromSqlite(sqlite3_bind_text(statement_, index, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT),
-                      sqlite3_db_handle(statement_), "bind text");
+    return FromSqlite(
+        sqlite3_bind_text(statement_, index, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT),
+        sqlite3_db_handle(statement_), "bind text");
 }
 
 DatabaseStatus Statement::Bind(int index, std::int64_t value) {
@@ -105,10 +108,16 @@ std::string Statement::ColumnText(int index) const {
     return text == nullptr ? std::string{} : std::string(reinterpret_cast<const char*>(text), bytes);
 }
 
-std::int64_t Statement::ColumnInt64(int index) const { return sqlite3_column_int64(statement_, index); }
-int Statement::ColumnInt(int index) const { return sqlite3_column_int(statement_, index); }
+std::int64_t Statement::ColumnInt64(int index) const {
+    return sqlite3_column_int64(statement_, index);
+}
+int Statement::ColumnInt(int index) const {
+    return sqlite3_column_int(statement_, index);
+}
 
-Database::~Database() { sqlite3_close(handle_); }
+Database::~Database() {
+    sqlite3_close(handle_);
+}
 Database::Database(Database&& other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
 
 Database& Database::operator=(Database&& other) noexcept {
@@ -170,9 +179,15 @@ DatabaseStatus Database::Prepare(std::string_view sql, Statement& output) {
     return DatabaseStatus::Ok();
 }
 
-DatabaseStatus Database::Begin() { return Execute("BEGIN IMMEDIATE"); }
-DatabaseStatus Database::Commit() { return Execute("COMMIT"); }
-DatabaseStatus Database::Rollback() { return Execute("ROLLBACK"); }
+DatabaseStatus Database::Begin() {
+    return Execute("BEGIN IMMEDIATE");
+}
+DatabaseStatus Database::Commit() {
+    return Execute("COMMIT");
+}
+DatabaseStatus Database::Rollback() {
+    return Execute("ROLLBACK");
+}
 
 DatabaseStatus Database::IntegrityCheck() {
     Statement statement;

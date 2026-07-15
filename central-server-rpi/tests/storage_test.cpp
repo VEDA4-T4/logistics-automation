@@ -18,17 +18,18 @@ std::int64_t Scalar(logistics::central_server::Database& database, std::string_v
 }
 
 std::size_t CountFiles(const std::filesystem::path& root) {
-    if (!std::filesystem::exists(root)) return 0;
+    if (!std::filesystem::exists(root))
+        return 0;
     std::size_t count = 0;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-        if (entry.is_regular_file()) ++count;
+        if (entry.is_regular_file())
+            ++count;
     }
     return count;
 }
 
-logistics::contracts::mqtt::EnvelopeView Envelope(std::string_view id,
-                                                   logistics::contracts::mqtt::MessageType type,
-                                                   std::string_view source = "PI-INPUT-01") {
+logistics::contracts::mqtt::EnvelopeView Envelope(std::string_view id, logistics::contracts::mqtt::MessageType type,
+                                                  std::string_view source = "PI-INPUT-01") {
     return { .protocol_version = logistics::contracts::mqtt::kCurrentProtocolVersion,
              .message_id = id,
              .message_type = type,
@@ -37,7 +38,8 @@ logistics::contracts::mqtt::EnvelopeView Envelope(std::string_view id,
              .data_json = "{}" };
 }
 
-logistics::central_server::TransportMetadata Metadata(std::int64_t time, std::string topic = "device/PI-INPUT-01/event") {
+logistics::central_server::TransportMetadata Metadata(std::int64_t time,
+                                                      std::string topic = "device/PI-INPUT-01/event") {
     return { .topic = std::move(topic),
              .qos = 1,
              .retained = false,
@@ -57,8 +59,8 @@ int main() {
 
     server::Database database;
     server::DatabaseConfig database_config{ .path = root / "test.db",
-                                             .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
-                                             .busy_timeout_ms = 100 };
+                                            .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+                                            .busy_timeout_ms = 100 };
     assert(database.Open(database_config).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
@@ -71,14 +73,16 @@ int main() {
     constexpr std::int64_t base_time = 1'700'000'000'000;
 
     server::Database lock_holder;
-    assert(lock_holder.Open({ .path = root / "test.db", .migration_dir = database_config.migration_dir,
-                              .busy_timeout_ms = 100 }).ok());
+    assert(
+        lock_holder
+            .Open({ .path = root / "test.db", .migration_dir = database_config.migration_dir, .busy_timeout_ms = 100 })
+            .ok());
     assert(lock_holder.Begin().ok());
     server::EventPayload busy_payload;
     busy_payload.device_role = "input";
-    const auto busy_result = persistence.PersistValidatedEvent(
-        Envelope("MSG-BUSY", mqtt::MessageType::kHeartbeat), busy_payload,
-        Metadata(base_time, "device/PI-INPUT-01/heartbeat"));
+    const auto busy_result =
+        persistence.PersistValidatedEvent(Envelope("MSG-BUSY", mqtt::MessageType::kHeartbeat), busy_payload,
+                                          Metadata(base_time, "device/PI-INPUT-01/heartbeat"));
     assert(busy_result.status == server::PersistenceStatus::kRetryableError);
     assert(lock_holder.Rollback().ok());
 
@@ -99,8 +103,8 @@ int main() {
     server::EventPayload barcode;
     barcode.work_id = work_id;
     barcode.barcode = "8801234567890";
-    result = persistence.PersistValidatedEvent(Envelope("MSG-BARCODE-1", mqtt::MessageType::kBarcodeDetected),
-                                               barcode, Metadata(base_time + 2));
+    result = persistence.PersistValidatedEvent(Envelope("MSG-BARCODE-1", mqtt::MessageType::kBarcodeDetected), barcode,
+                                               Metadata(base_time + 2));
     assert(result.status == server::PersistenceStatus::kStored);
 
     server::EventPayload missing_work;
@@ -109,7 +113,10 @@ int main() {
     result = persistence.PersistValidatedEvent(Envelope("MSG-BAD-WORK", mqtt::MessageType::kDestinationSet),
                                                missing_work, Metadata(base_time + 3));
     assert(result.status == server::PersistenceStatus::kPermanentError);
-    assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BAD-WORK' AND processing_state='REJECTED'") == 1);
+    assert(
+        Scalar(database,
+               "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BAD-WORK' AND processing_state='REJECTED'") ==
+        1);
 
     server::EventPayload image;
     image.work_id = work_id;
