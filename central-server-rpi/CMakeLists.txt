@@ -17,6 +17,17 @@ target_include_directories(logistics_central_server_device_manager PUBLIC includ
 target_link_libraries(logistics_central_server_device_manager PUBLIC logistics::contracts)
 logistics_enable_warnings(logistics_central_server_device_manager)
 
+add_library(logistics_central_server_mqtt_handler src/mqtt_handler/mqtt_handler.cpp)
+add_library(logistics::central_server_mqtt_handler ALIAS logistics_central_server_mqtt_handler)
+target_include_directories(logistics_central_server_mqtt_handler PUBLIC include)
+target_link_libraries(
+    logistics_central_server_mqtt_handler
+    PUBLIC
+        logistics::central_server_device_manager
+        logistics::contracts
+)
+logistics_enable_warnings(logistics_central_server_mqtt_handler)
+
 if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
     find_package(Threads REQUIRED)
     find_package(PkgConfig QUIET)
@@ -70,8 +81,7 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         logistics_central_server
         PRIVATE
             logistics::central_server_mosquitto
-            logistics::central_server_device_manager
-            logistics::contracts
+            logistics::central_server_mqtt_handler
             Threads::Threads
     )
     logistics_enable_warnings(logistics_central_server)
@@ -99,4 +109,9 @@ if(BUILD_TESTING)
     target_link_libraries(central_server_device_manager_test PRIVATE logistics::central_server_device_manager)
     logistics_enable_warnings(central_server_device_manager_test)
     add_test(NAME central_server_device_manager_test COMMAND central_server_device_manager_test)
+
+    add_executable(central_server_mqtt_handler_test tests/mqtt_handler_test.cpp)
+    target_link_libraries(central_server_mqtt_handler_test PRIVATE logistics::central_server_mqtt_handler)
+    logistics_enable_warnings(central_server_mqtt_handler_test)
+    add_test(NAME central_server_mqtt_handler_test COMMAND central_server_mqtt_handler_test)
 endif()
