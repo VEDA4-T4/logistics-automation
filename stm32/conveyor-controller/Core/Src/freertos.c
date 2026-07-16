@@ -75,6 +75,34 @@ const osThreadAttr_t SortingControlTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for SafetyTask */
+osThreadId_t SafetyTaskHandle;
+const osThreadAttr_t SafetyTask_attributes = {
+  .name = "SafetyTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
+/* Definitions for CommTxTask */
+osThreadId_t CommTxTaskHandle;
+const osThreadAttr_t CommTxTask_attributes = {
+  .name = "CommTxTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for SensorTask */
+osThreadId_t SensorTaskHandle;
+const osThreadAttr_t SensorTask_attributes = {
+  .name = "SensorTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for HealthTask */
+osThreadId_t HealthTaskHandle;
+const osThreadAttr_t HealthTask_attributes = {
+  .name = "HealthTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -85,6 +113,10 @@ void StartDefaultTask(void *argument);
 void StartCommRxTask(void *argument);
 void StartInputControlTask(void *argument);
 void StartSortingControlTask(void *argument);
+void StartSafetyTask(void *argument);
+void StartCommTxTask(void *argument);
+void StartSensorTask(void *argument);
+void StartHealthTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -126,6 +158,18 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of SortingControlTask */
   SortingControlTaskHandle = osThreadNew(StartSortingControlTask, NULL, &SortingControlTask_attributes);
+
+  /* creation of SafetyTask */
+  SafetyTaskHandle = osThreadNew(StartSafetyTask, NULL, &SafetyTask_attributes);
+
+  /* creation of CommTxTask */
+  CommTxTaskHandle = osThreadNew(StartCommTxTask, NULL, &CommTxTask_attributes);
+
+  /* creation of SensorTask */
+  SensorTaskHandle = osThreadNew(StartSensorTask, NULL, &SensorTask_attributes);
+
+  /* creation of HealthTask */
+  HealthTaskHandle = osThreadNew(StartHealthTask, NULL, &HealthTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -207,6 +251,78 @@ __weak void StartSortingControlTask(void *argument)
     osDelay(1);
   }
   /* USER CODE END StartSortingControlTask */
+}
+
+/* USER CODE BEGIN Header_StartSafetyTask */
+/**
+* @brief Function implementing the SafetyTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartSafetyTask */
+__weak void StartSafetyTask(void *argument)
+{
+  /* USER CODE BEGIN StartSafetyTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartSafetyTask */
+}
+
+/* USER CODE BEGIN Header_StartCommTxTask */
+/**
+* @brief Function implementing the CommTxTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartCommTxTask */
+__weak void StartCommTxTask(void *argument)
+{
+  /* USER CODE BEGIN StartCommTxTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartCommTxTask */
+}
+
+/* USER CODE BEGIN Header_StartSensorTask */
+/**
+* @brief Function implementing the SensorTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartSensorTask */
+__weak void StartSensorTask(void *argument)
+{
+  /* USER CODE BEGIN StartSensorTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartSensorTask */
+}
+
+/* USER CODE BEGIN Header_StartHealthTask */
+/**
+* @brief Function implementing the HealthTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartHealthTask */
+__weak void StartHealthTask(void *argument)
+{
+  /* USER CODE BEGIN StartHealthTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartHealthTask */
 }
 
 /* Private application code --------------------------------------------------*/
