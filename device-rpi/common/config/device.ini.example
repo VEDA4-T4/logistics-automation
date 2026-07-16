@@ -15,3 +15,15 @@ device=/dev/video0
 width=1280
 height=720
 
+[http_upload]
+log_endpoint=https://central-rpi.local/api/v1/uploads/logs
+bearer_token=replace-with-a-device-upload-token
+ca_certificate=/etc/logistics/tls/ca.crt
+spool_directory=/var/lib/logistics/log-spool
+rotate_bytes=5242880
+rotate_interval_seconds=3600
+maximum_spool_bytes=104857600
+request_timeout_seconds=30
+maximum_attempts=5
+initial_backoff_seconds=1
+maximum_backoff_seconds=60
