@@ -29,6 +29,7 @@
 #include "logistics/control_center/command_response.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
+#include "logistics/control_center/product_result_panel.hpp"
 
 namespace logistics::control_center {
 namespace {
@@ -47,6 +48,7 @@ struct ControlCenterConfig {
     int mqtt_port{ kDefaultMqttPort };
     int mqtt_reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     int mqtt_keep_alive_seconds{ 30 };
+    QUrl image_base_url{ QStringLiteral("http://127.0.0.1:8080/") };
     QString control_target_device_id{ "SYSTEM" };
     int channel_count{ kDefaultChannelCount };
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
@@ -112,6 +114,14 @@ bool isValidMqttHost(const QString& host) {
            url.path().isEmpty() && !url.hasQuery() && !url.hasFragment();
 }
 
+bool isValidHttpBaseUrl(const QUrl& url) {
+    const auto scheme = url.scheme();
+    const bool valid_scheme = scheme.compare(QStringLiteral("http"), Qt::CaseInsensitive) == 0 ||
+                              scheme.compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0;
+    return url.isValid() && valid_scheme && !url.host().isEmpty() && url.userInfo().isEmpty() && !url.hasQuery() &&
+           !url.hasFragment();
+}
+
 ControlCenterConfig loadControlCenterConfig() {
     ControlCenterConfig config;
     config.path = controlCenterConfigPath();
@@ -170,6 +180,18 @@ ControlCenterConfig loadControlCenterConfig() {
         config.warnings.append(QStringLiteral("control/target_device_id가 잘못되어 SYSTEM을 사용합니다."));
     } else {
         config.control_target_device_id = control_target_device_id;
+    }
+
+    auto image_base_url = QUrl(settings.value("http/image_base_url", config.image_base_url).toString().trimmed());
+    if (!isValidHttpBaseUrl(image_base_url)) {
+        config.warnings.append(QStringLiteral("http/image_base_url이 잘못되어 http://127.0.0.1:8080/을 사용합니다."));
+    } else {
+        auto path = image_base_url.path();
+        if (!path.endsWith(QLatin1Char('/'))) {
+            path.append(QLatin1Char('/'));
+            image_base_url.setPath(path);
+        }
+        config.image_base_url = image_base_url;
     }
 
     bool channel_count_is_valid = false;
@@ -250,8 +272,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     video_grid->setSpacing(4);
     content_layout->addWidget(video_container, 1);
 
-    process_control_panel_ = new ProcessControlPanel(central_widget);
-    content_layout->addWidget(process_control_panel_);
+    auto* side_panel = new QWidget(central_widget);
+    side_panel->setMinimumWidth(300);
+    side_panel->setMaximumWidth(320);
+    auto* side_layout = new QVBoxLayout(side_panel);
+    side_layout->setContentsMargins(0, 0, 0, 0);
+    side_layout->setSpacing(0);
+    product_result_panel_ = new ProductResultPanel(config.image_base_url, side_panel);
+    process_control_panel_ = new ProcessControlPanel(side_panel);
+    side_layout->addWidget(product_result_panel_, 0);
+    side_layout->addWidget(process_control_panel_, 1);
+    content_layout->addWidget(side_panel);
     setCentralWidget(central_widget);
 
     mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
@@ -537,6 +568,19 @@ void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand c
 
 void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& envelope) {
     const auto parsed_topic = logistics::contracts::mqtt::ParseTopic(topic.toStdString());
+    if (parsed_topic.kind == logistics::contracts::mqtt::TopicKind::kQtEvent ||
+        parsed_topic.kind == logistics::contracts::mqtt::TopicKind::kQtStatus) {
+        const auto product_update = current_product_state_.applyEnvelope(envelope);
+        if (product_update.handled) {
+            if (product_update.applied) {
+                product_result_panel_->setCurrentProduct(current_product_state_.product());
+            } else if (!product_update.error.isEmpty()) {
+                statusBar()->showMessage(product_update.error, 4000);
+            }
+            return;
+        }
+    }
+
     if (parsed_topic.kind != logistics::contracts::mqtt::TopicKind::kQtResponse) {
         return;
     }

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "logistics/contracts/mqtt_message.hpp"
+#include "logistics/control_center/current_product_state.hpp"
 
 class QAudioOutput;
 class QJsonObject;
@@ -20,6 +21,7 @@ class QWidget;
 namespace logistics::control_center {
 
 class MqttClient;
+class ProductResultPanel;
 class ProcessControlPanel;
 
 class MainWindow final : public QMainWindow {
@@ -54,11 +56,13 @@ private:
     std::vector<bool> reconnecting_{};
     MqttClient* mqtt_client_{ nullptr };
     QLabel* mqtt_status_label_{ nullptr };
+    ProductResultPanel* product_result_panel_{ nullptr };
     ProcessControlPanel* process_control_panel_{ nullptr };
     QTimer* command_response_timer_{ nullptr };
     QString control_target_device_id_{ "SYSTEM" };
     QString pending_request_id_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
+    CurrentProductState current_product_state_;
     std::size_t channel_count_{ 4 };
     int reconnect_interval_ms_{ 3000 };
 };
