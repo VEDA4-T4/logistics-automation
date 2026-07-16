@@ -284,8 +284,7 @@ int main(int argc, char** argv) {
                 }
 
                 if (stats.sensor_status % 25U == 1U) {
-                    printf("  SENSOR_STATUS: seq=%u sensor_id=%u distance=%umm\n", frame.sequence, sensor_id,
-                           distance);
+                    printf("  SENSOR_STATUS: seq=%u sensor_id=%u distance=%umm\n", frame.sequence, sensor_id, distance);
                 }
             } else if (frame.command == UART_CMD_EVENT) {
                 uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
@@ -295,8 +294,7 @@ int main(int argc, char** argv) {
 
                     if (frame.length != APP_HEARTBEAT_PAYLOAD_SIZE) {
                         stats.heartbeat_bad_size++;
-                        printf("  heartbeat 크기 오류: %u (기대값 %u)\n", frame.length,
-                               APP_HEARTBEAT_PAYLOAD_SIZE);
+                        printf("  heartbeat 크기 오류: %u (기대값 %u)\n", frame.length, APP_HEARTBEAT_PAYLOAD_SIZE);
                     } else {
                         uint32_t uptime = (uint32_t)frame.payload[APP_HEARTBEAT_UPTIME_INDEX] |
                                           ((uint32_t)frame.payload[APP_HEARTBEAT_UPTIME_INDEX + 1U] << 8U) |
@@ -305,9 +303,8 @@ int main(int argc, char** argv) {
 
                         if (stats.heartbeat % 10U == 1U) {
                             printf("  heartbeat: state=%u error=%u uptime=%us sensors=[%u,%u]\n",
-                                   frame.payload[APP_HEARTBEAT_STATE_INDEX],
-                                   frame.payload[APP_HEARTBEAT_ERROR_INDEX], uptime,
-                                   frame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX],
+                                   frame.payload[APP_HEARTBEAT_STATE_INDEX], frame.payload[APP_HEARTBEAT_ERROR_INDEX],
+                                   uptime, frame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX],
                                    frame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX]);
                         }
                     }
@@ -334,8 +331,8 @@ int main(int argc, char** argv) {
                      */
                     if (burst_active_id == (int)burst_id && burst_normals_seen > 0U) {
                         stats.priority_fail++;
-                        printf("  우선순위 위반! burst=%u에서 normal %u개가 urgent보다 먼저 도착\n",
-                               burst_id, burst_normals_seen);
+                        printf("  우선순위 위반! burst=%u에서 normal %u개가 urgent보다 먼저 도착\n", burst_id,
+                               burst_normals_seen);
                     } else {
                         stats.priority_ok++;
                         printf("  긴급 우선 확인: burst=%u urgent가 먼저 도착\n", burst_id);
@@ -359,8 +356,7 @@ int main(int argc, char** argv) {
                 }
             } else {
                 stats.other++;
-                printf("  기타 프레임: %s seq=%u len=%u\n", command_name(frame.command), frame.sequence,
-                       frame.length);
+                printf("  기타 프레임: %s seq=%u len=%u\n", command_name(frame.command), frame.sequence, frame.length);
             }
         }
     }
@@ -396,8 +392,7 @@ int main(int argc, char** argv) {
     printf("\n판정: %s\n", pass ? "PASS" : "FAIL");
 
     if (stats.burst_urgent == 0U) {
-        printf("참고: burst 시험이 관측되지 않았습니다. 우선순위 검증에는 %.0f초 이상 수신이 필요합니다.\n",
-               6.0 * 2.0);
+        printf("참고: burst 시험이 관측되지 않았습니다. 우선순위 검증에는 %.0f초 이상 수신이 필요합니다.\n", 6.0 * 2.0);
     }
 
     return pass ? 0 : 1;

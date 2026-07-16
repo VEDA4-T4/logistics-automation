@@ -80,18 +80,18 @@ typedef struct {
 
 /* 송신 통계. 디버거 Live Expressions로 관찰한다. */
 typedef struct {
-    uint32_t enqueued;                   /* 일반 큐 등록 성공 수 */
-    uint32_t enqueued_urgent;            /* 긴급 큐 등록 성공 수 */
-    uint32_t dropped_queue_full;         /* 일반 큐 가득 참으로 드랍 */
-    uint32_t dropped_urgent_queue_full;  /* 긴급 큐 가득 참으로 드랍 */
-    uint32_t dropped_invalid;            /* 채널/길이 오류로 드랍 */
-    uint32_t dropped_encode_error;       /* 프레임 인코딩 실패로 드랍 */
-    uint32_t dropped_ring_full;          /* 채널 링버퍼 가득 참으로 드랍 */
+    uint32_t enqueued;                     /* 일반 큐 등록 성공 수 */
+    uint32_t enqueued_urgent;              /* 긴급 큐 등록 성공 수 */
+    uint32_t dropped_queue_full;           /* 일반 큐 가득 참으로 드랍 */
+    uint32_t dropped_urgent_queue_full;    /* 긴급 큐 가득 참으로 드랍 */
+    uint32_t dropped_invalid;              /* 채널/길이 오류로 드랍 */
+    uint32_t dropped_encode_error;         /* 프레임 인코딩 실패로 드랍 */
+    uint32_t dropped_ring_full;            /* 채널 링버퍼 가득 참으로 드랍 */
     uint32_t tx_error[COMM_TX_CH_COUNT];   /* HAL 송신 오류 수 */
     uint32_t tx_timeout[COMM_TX_CH_COUNT]; /* DMA 송신 timeout 수 */
     uint32_t tx_retry[COMM_TX_CH_COUNT];   /* timeout 후 재시도 수 */
     uint32_t sent[COMM_TX_CH_COUNT];       /* DMA 송신 완료 프레임 수 */
-    uint32_t heartbeat_sent;             /* heartbeat 송신 시도 수 */
+    uint32_t heartbeat_sent;               /* heartbeat 송신 시도 수 */
 } comm_tx_stats_t;
 
 /*

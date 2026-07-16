@@ -35,11 +35,10 @@
 
 #include "FreeRTOS.h"
 #include "cmsis_os.h"
+#include "logistics/contracts/uart_codec.h"
 #include "queue.h"
 #include "task.h"
 #include "usart.h"
-
-#include "logistics/contracts/uart_codec.h"
 
 /* TX Queue 깊이 */
 #define COMM_TX_NORMAL_QUEUE_DEPTH 8U
@@ -119,8 +118,8 @@ static uint32_t comm_tx_channel_index(const comm_tx_channel_state_t* channel) {
 static void comm_tx_start_dma(comm_tx_channel_state_t* channel) {
     channel->tx_start_tick = HAL_GetTick();
 
-    HAL_StatusTypeDef status = HAL_UART_Transmit_DMA(channel->huart, channel->frames[channel->tail],
-                                                     channel->frame_lengths[channel->tail]);
+    HAL_StatusTypeDef status =
+        HAL_UART_Transmit_DMA(channel->huart, channel->frames[channel->tail], channel->frame_lengths[channel->tail]);
 
     if (status != HAL_OK) {
         /*
@@ -279,8 +278,8 @@ static void comm_tx_check_timeouts(void) {
     }
 }
 
-static int32_t comm_tx_enqueue(QueueHandle_t queue, comm_tx_channel_t channel, uint8_t command,
-                               const uint8_t* payload, uint8_t length, uint8_t urgent) {
+static int32_t comm_tx_enqueue(QueueHandle_t queue, comm_tx_channel_t channel, uint8_t command, const uint8_t* payload,
+                               uint8_t length, uint8_t urgent) {
     if (queue == (QueueHandle_t)0) {
         return -1;
     }

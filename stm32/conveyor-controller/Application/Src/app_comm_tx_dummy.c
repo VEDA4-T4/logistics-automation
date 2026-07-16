@@ -20,10 +20,9 @@
 
 #include "app_comm_tx_dummy.h"
 
+#include "app_comm_tx.h"
 #include "cmsis_os.h"
 #include "main.h"
-
-#include "app_comm_tx.h"
 
 /* 주기 송신 간격 */
 #define COMM_TX_DUMMY_PERIOD_MS 200U
