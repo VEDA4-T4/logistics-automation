@@ -30,7 +30,13 @@ if(BUILD_TESTING)
             COMMAND ${CMAKE_COMMAND} -E env "PATH=${LOGISTICS_COMPILER_RUNTIME_DIR};$ENV{PATH}"
                     $<TARGET_FILE:contracts_test>
         )
+        add_test(
+            NAME uart_contracts_test
+            COMMAND ${CMAKE_COMMAND} -E env "PATH=${LOGISTICS_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                    $<TARGET_FILE:uart_contracts_test>
+        )
     else()
         add_test(NAME contracts_test COMMAND contracts_test)
+        add_test(NAME uart_contracts_test COMMAND uart_contracts_test)
     endif()
 endif()
