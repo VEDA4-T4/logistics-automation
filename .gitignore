@@ -50,6 +50,26 @@ stm32/**/Release/
 stm32/**/.metadata/
 stm32/**/.settings/language.settings.xml
 
+# STM32CubeIDE generated binaries and reports
+*.elf
+*.map
+*.bin
+*.hex
+*.srec
+*.lst
+*.su
+*.cyclo
+*.crl
+
+# Developer-specific debug configurations
+*.launch
+*.jlink
+
+# TouchGFX generated files
+**/TouchGFX/generated/
+**/TouchGFX/build/
+**/TouchGFX/simulator/msvs/.vs/
+
 # CMake generated files
 CMakeFiles/
 CMakeCache.txt
