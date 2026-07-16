@@ -34,6 +34,9 @@ jobs:
             \) \
             -not -path "./build/*" \
             -not -path "./.git/*" \
+            -not -path "./stm32/*/Application/*" \
+            -not -path "./stm32/*/Core/*" \
+            -not -path "./stm32/*/Application/*" \
             -not -path "./stm32/*/Core/*" \
             -not -path "./stm32/*/Drivers/*" \
             -not -path "./stm32/*/Middlewares/*" \
