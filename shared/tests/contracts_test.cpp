@@ -3,6 +3,7 @@
 #include <stdexcept>
 
 #include "logistics/contracts/device.hpp"
+#include "logistics/contracts/http_upload.hpp"
 #include "logistics/contracts/mqtt_message.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/contracts/process.hpp"
@@ -94,5 +95,37 @@ int main() {
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 9 }) == mqtt::ConnectionState::kOnline);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 10 }) == mqtt::ConnectionState::kDelayed);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 15 }) == mqtt::ConnectionState::kOffline);
+
+    namespace http = logistics::contracts::http;
+    const http::UploadMetadataView image_upload{
+        .kind = http::UploadKind::kImage,
+        .device_id = "PI-VISION-01",
+        .work_id = "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+        .message_id = "550e8400-e29b-41d4-a716-446655440000",
+        .captured_at = "2026-07-16T03:00:00.000Z",
+        .sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        .mime_type = "image/jpeg",
+        .byte_size = 1024,
+    };
+    assert(http::Validate(image_upload) == http::ValidationError::kNone);
+
+    auto invalid_upload = image_upload;
+    invalid_upload.byte_size = http::kMaximumImageBytes + 1;
+    assert(http::Validate(invalid_upload) == http::ValidationError::kInvalidSize);
+    invalid_upload = image_upload;
+    invalid_upload.sha256 = "ABC";
+    assert(http::Validate(invalid_upload) == http::ValidationError::kInvalidChecksum);
+
+    const http::UploadMetadataView log_upload{
+        .kind = http::UploadKind::kLog,
+        .device_id = "PI-SORTING-01",
+        .message_id = "550e8400-e29b-41d4-a716-446655440001",
+        .started_at = "2026-07-16T02:00:00.000Z",
+        .ended_at = "2026-07-16T03:00:00.000Z",
+        .sha256 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        .mime_type = "application/gzip",
+        .byte_size = 2048,
+    };
+    assert(http::Validate(log_upload) == http::ValidationError::kNone);
     return 0;
 }
