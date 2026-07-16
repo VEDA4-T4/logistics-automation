@@ -48,6 +48,15 @@ cmake --build build
 설정 경로는 실행 파일의 첫 번째 인수 또는 `LOGISTICS_CENTRAL_SERVER_CONFIG` 환경 변수로 지정할 수 있습니다.
 연결이 끊기면 설정한 최소·최대 지연 사이에서 지수 backoff로 자동 재연결하고, 연결이 복구될 때 서버의 필수
 topic을 다시 구독합니다. 연결 오류는 표준 오류로 기록되어 systemd journal에서 확인할 수 있습니다.
+등록 장치 목록은 `[device_registry] path`의 JSON 파일에 보존됩니다. 중앙 서버 재시작 시 기존 장치는
+`OFFLINE`으로 복원되고 retained 상태나 다음 등록 메시지가 도착하면 같은 장치 ID의 상태가 갱신됩니다.
+상대 경로는 `server.ini`가 있는 디렉터리를 기준으로 해석됩니다. 이 파일 저장소는 SQLite 장치 저장소가
+실행 경로에 연결되기 전까지 사용하는 임시 어댑터입니다.
+
+Last Will payload는 MQTT CONNECT 전에 broker에 등록되므로 비정상 단절 순간에 장치가 payload의 timestamp를
+다시 쓸 수 없습니다. 장치 목록은 payload의 `lastReportedTimestamp`와 별도로 마지막 heartbeat 발생 시각
+`lastHeartbeatTimestamp`, 중앙 서버가 Will을 받은 실제 시각 `lastSeenTimestamp`와 `disconnectedAt`을
+보존합니다. 정상 종료 메시지의 timestamp는 종료 직전에 새로 생성됩니다.
 
 `libmosquitto` 없이 설정 파서와 MQTT 상태 로직만 빌드·테스트하려면
 `-DLOGISTICS_ENABLE_MOSQUITTO_TRANSPORT=OFF`를 지정합니다.
@@ -70,6 +79,17 @@ cmake --build build
 공통 JSON codec으로 발행합니다. 이어서 heartbeat를 5초마다 `device/{deviceId}/heartbeat`로 발행합니다.
 정상 종료 시에는 retained `OFFLINE` 상태를 먼저 발행하고 연결을 종료합니다. 비정상 연결 종료 시에는 같은
 `OFFLINE` 상태가 Last Will로 발행되며, 재연결하면 retained `ONLINE` 상태가 이를 덮어쓰고 장치를 다시 등록합니다.
+
+중앙 서버의 공통 codec → MQTT client → libmosquitto 발행 경로는 별도 smoke 실행 파일로 확인할 수 있습니다.
+Raspberry Pi에서 해당 장치 노드를 실행하거나 `device/{deviceId}/command`를 구독한 뒤 Ubuntu에서 실행합니다.
+
+```sh
+./build/central-server-rpi/central_server_mqtt_smoke \
+  central-server-rpi/config/server.ini PI-TEST
+```
+
+성공하면 QoS 1 `STATUS_REQUEST`가 `device/PI-TEST/command`로 한 번 발행됩니다. 이 도구는 실행 중인 중앙
+서버의 client ID와 충돌하지 않도록 매 실행마다 별도 smoke client ID를 사용합니다.
 
 ### 중앙관제 MQTT 설정
 
