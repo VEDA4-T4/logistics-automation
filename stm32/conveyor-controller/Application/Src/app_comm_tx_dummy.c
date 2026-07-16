@@ -87,9 +87,17 @@ void CommTxDummy_Run(void) {
         /* heartbeat에 실리는 센서 상태도 함께 갱신한다. */
         CommTx_SetSensorState(channel, (uint8_t)UART_SENSOR_DETECTED);
 
-        /* 주기적으로 큐 포화·긴급 우선순위 burst 시험 */
+        /*
+         * 주기적으로 큐 포화·긴급 우선순위 burst 시험.
+         *
+         * burst 시점의 iteration은 항상 BURST_INTERVAL의 배수(짝수)라서
+         * 주기 송신 채널을 그대로 쓰면 투입 채널로만 나간다.
+         * 두 채널 모두 시험되도록 burst_id 홀짝으로 채널을 번갈아 정한다.
+         */
         if (iteration != 0U && (iteration % COMM_TX_DUMMY_BURST_INTERVAL) == 0U) {
-            comm_tx_dummy_burst(channel, burst_id);
+            comm_tx_channel_t burst_channel = ((burst_id & 1U) == 0U) ? COMM_TX_CH_INPUT : COMM_TX_CH_SORTING;
+
+            comm_tx_dummy_burst(burst_channel, burst_id);
             burst_id++;
         }
 
