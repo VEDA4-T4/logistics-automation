@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -56,11 +57,16 @@ private:
 
 class MqttNodeClient::Impl final {
 public:
-    Impl(MqttNodeConfig config, std::string device_type)
+    Impl(MqttNodeConfig config, std::string device_type, std::shared_ptr<DeviceStatus> device_status)
         : config_(std::move(config)),
           device_type_(std::move(device_type)),
           processor_(config_.device_id),
-          message_session_id_(GenerateMessageSessionId()) {}
+          message_session_id_(GenerateMessageSessionId()),
+          device_status_(std::move(device_status)) {
+        if (device_status_ == nullptr || !device_status_->IsForDevice(config_.device_id)) {
+            throw std::invalid_argument("device status must belong to the configured device ID");
+        }
+    }
 
     ~Impl() {
         Stop();
@@ -80,8 +86,10 @@ public:
             std::cerr << "[device][mqtt][ERROR] invalid MQTT node configuration\n";
             return false;
         }
+        device_status_->SetConnectionState(mqtt::ConnectionState::kReconnecting);
         if (Library().Result() != MOSQ_ERR_SUCCESS) {
             running_ = false;
+            device_status_->SetConnectionState(mqtt::ConnectionState::kOffline);
             std::cerr << "[device][mqtt][ERROR] unable to initialize libmosquitto: " << ErrorText(Library().Result())
                       << '\n';
             return false;
@@ -90,6 +98,7 @@ public:
         client_ = mosquitto_new(config_.client_id.c_str(), config_.clean_session, this);
         if (client_ == nullptr) {
             running_ = false;
+            device_status_->SetConnectionState(mqtt::ConnectionState::kOffline);
             std::cerr << "[device][mqtt][ERROR] unable to allocate Mosquitto client\n";
             return false;
         }
@@ -130,9 +139,18 @@ public:
 
     void Stop() noexcept {
         if (!running_.exchange(false) && client_ == nullptr) {
+            try {
+                device_status_->SetConnectionState(mqtt::ConnectionState::kOffline);
+            } catch (...) {
+            }
             return;
         }
         const bool was_connected = connected_.exchange(false);
+        const std::string timestamp = CurrentIso8601Timestamp();
+        try {
+            device_status_->SetConnectionState(mqtt::ConnectionState::kOffline);
+        } catch (...) {
+        }
         if (client_ == nullptr) {
             return;
         }
@@ -141,9 +159,12 @@ public:
         if (was_connected) {
             try {
                 const auto offline = processor_.EncodeOfflineStatus(
-                    LifecycleMessageId("OFFLINE", connection_generation_), CurrentIso8601Timestamp());
+                    LifecycleMessageId("OFFLINE", connection_generation_), timestamp);
                 offline_queued =
                     PublishEncoded(mqtt::DeviceStatusTopic(config_.device_id), offline, 1, true, "offline status");
+                if (offline_queued) {
+                    device_status_->MarkCommunication(timestamp);
+                }
             } catch (...) {
                 std::cerr << "[device][mqtt][ERROR] unable to prepare offline status during shutdown\n";
             }
@@ -163,16 +184,20 @@ public:
         return connected_;
     }
 
-    [[nodiscard]] bool PublishHeartbeat(std::string message_id, std::string timestamp, std::string current_state,
-                                        std::uint64_t uptime) {
+    [[nodiscard]] bool PublishHeartbeat(std::string message_id, std::string timestamp) {
         if (!connected_ || client_ == nullptr) {
             return false;
         }
 
-        const auto encoded =
-            processor_.EncodeHeartbeat(std::move(message_id), std::move(timestamp), std::move(current_state), uptime);
+        const auto status = device_status_->Snapshot();
+        const auto encoded = processor_.EncodeHeartbeat(std::move(message_id), timestamp, status.current_state,
+                                                        status.uptime, status.job_id, status.error_code);
         const std::string topic = mqtt::DeviceHeartbeatTopic(config_.device_id);
-        return PublishEncoded(topic, encoded, 0, false, "heartbeat");
+        const bool published = PublishEncoded(topic, encoded, 0, false, "heartbeat");
+        if (published) {
+            device_status_->MarkCommunication(std::move(timestamp));
+        }
+        return published;
     }
 
 private:
@@ -200,17 +225,20 @@ private:
         return true;
     }
 
-    [[nodiscard]] bool PublishOnlineStatusAndRegistration() {
+    [[nodiscard]] bool PublishOnlineStatusAndRegistration(std::string_view timestamp) {
         const auto generation = ++connection_generation_;
-        const std::string timestamp = CurrentIso8601Timestamp();
+        const auto status = device_status_->Snapshot();
 
-        const auto online = processor_.EncodeOnlineStatus(LifecycleMessageId("STATUS", generation), timestamp, "IDLE");
+        const auto online =
+            processor_.EncodeOnlineStatus(LifecycleMessageId("STATUS", generation), std::string(timestamp),
+                                          status.current_state);
         const bool online_published =
             PublishEncoded(mqtt::DeviceStatusTopic(config_.device_id), online, 1, true, "online status");
 
         const auto registration =
-            processor_.EncodeDeviceRegistration(LifecycleMessageId("REGISTER", generation), timestamp, device_type_,
-                                                config_.node_name, config_.ip_address, false);
+            processor_.EncodeDeviceRegistration(LifecycleMessageId("REGISTER", generation), std::string(timestamp),
+                                                device_type_, config_.node_name, config_.ip_address,
+                                                status.uart_connected);
         const bool registration_published =
             PublishEncoded(mqtt::DeviceRegisterTopic(config_.device_id), registration, 1, false, "device registration");
         return online_published && registration_published;
@@ -236,11 +264,14 @@ private:
         }
 
         connected_ = true;
+        const std::string timestamp = CurrentIso8601Timestamp();
+        device_status_->SetConnectionState(mqtt::ConnectionState::kOnline);
+        device_status_->MarkCommunication(timestamp);
         const std::string command_topic = mqtt::DeviceCommandTopic(config_.device_id);
         const std::string broadcast_topic(mqtt::kSystemBroadcastCommandTopic);
         const int command_result = mosquitto_subscribe(client_, nullptr, command_topic.c_str(), 1);
         const int broadcast_result = mosquitto_subscribe(client_, nullptr, broadcast_topic.c_str(), 1);
-        const bool lifecycle_published = PublishOnlineStatusAndRegistration();
+        const bool lifecycle_published = PublishOnlineStatusAndRegistration(timestamp);
         if (command_result != MOSQ_ERR_SUCCESS || broadcast_result != MOSQ_ERR_SUCCESS) {
             std::cerr << "[device][mqtt][ERROR] MQTT command subscription failed\n";
         }
@@ -252,6 +283,10 @@ private:
 
     void HandleDisconnected(int reason_code) {
         connected_ = false;
+        const std::string timestamp = CurrentIso8601Timestamp();
+        device_status_->SetConnectionState(running_ ? mqtt::ConnectionState::kReconnecting
+                                                    : mqtt::ConnectionState::kOffline);
+        device_status_->MarkCommunication(timestamp);
         if (running_) {
             std::cerr << "[device][mqtt][WARN] MQTT broker disconnected (" << reason_code
                       << "); automatic reconnect is active\n";
@@ -262,6 +297,7 @@ private:
         if (received.topic == nullptr || received.payloadlen < 0) {
             return;
         }
+        device_status_->MarkCommunication(CurrentIso8601Timestamp());
         const char* bytes = received.payload == nullptr ? "" : static_cast<const char*>(received.payload);
         const auto decoded = processor_.DecodeCommand(
             received.topic, std::string_view(bytes, static_cast<std::size_t>(received.payloadlen)));
@@ -308,6 +344,7 @@ private:
     std::string device_type_;
     MqttMessageProcessor processor_;
     std::string message_session_id_;
+    std::shared_ptr<DeviceStatus> device_status_;
     mosquitto* client_{ nullptr };
     std::atomic_bool running_{ false };
     std::atomic_bool connected_{ false };
@@ -317,8 +354,9 @@ private:
     CommandHandler command_handler_;
 };
 
-MqttNodeClient::MqttNodeClient(MqttNodeConfig config, std::string device_type)
-    : impl_(std::make_unique<Impl>(std::move(config), std::move(device_type))) {}
+MqttNodeClient::MqttNodeClient(MqttNodeConfig config, std::string device_type,
+                               std::shared_ptr<DeviceStatus> device_status)
+    : impl_(std::make_unique<Impl>(std::move(config), std::move(device_type), std::move(device_status))) {}
 
 MqttNodeClient::~MqttNodeClient() = default;
 
@@ -338,9 +376,8 @@ bool MqttNodeClient::IsConnected() const noexcept {
     return impl_->IsConnected();
 }
 
-bool MqttNodeClient::PublishHeartbeat(std::string message_id, std::string timestamp, std::string current_state,
-                                      std::uint64_t uptime) {
-    return impl_->PublishHeartbeat(std::move(message_id), std::move(timestamp), std::move(current_state), uptime);
+bool MqttNodeClient::PublishHeartbeat(std::string message_id, std::string timestamp) {
+    return impl_->PublishHeartbeat(std::move(message_id), std::move(timestamp));
 }
 
 }  // namespace logistics::device

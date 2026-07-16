@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -12,6 +13,7 @@
 
 #ifdef LOGISTICS_DEVICE_MQTT_ENABLED
 #include "logistics/contracts/mqtt_message.hpp"
+#include "logistics/device/device_status.hpp"
 #include "logistics/device/mqtt_node_client.hpp"
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
@@ -59,7 +61,8 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
     }
 
     const std::string device_id = config.device_id;
-    MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(role_)));
+    auto device_status = std::make_shared<DeviceStatus>(device_id);
+    MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(role_)), device_status);
     mqtt_client.SetCommandHandler([](const contracts::mqtt::MqttMessage& message) {
         std::clog << "[device][INFO] MQTT command received: " << contracts::mqtt::ToString(message.message_type)
                   << '\n';
@@ -72,8 +75,7 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
     std::signal(SIGINT, HandleSignal);
     std::signal(SIGTERM, HandleSignal);
 
-    const auto started_at = std::chrono::steady_clock::now();
-    auto next_heartbeat = started_at;
+    auto next_heartbeat = std::chrono::steady_clock::now();
     const std::string message_session_id = GenerateMessageSessionId();
     std::uint64_t message_sequence = 1;
 
@@ -83,10 +85,8 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
     while (stop_requested == 0) {
         const auto now = std::chrono::steady_clock::now();
         if (mqtt_client.IsConnected() && now >= next_heartbeat) {
-            const auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - started_at).count();
-            static_cast<void>(
-                mqtt_client.PublishHeartbeat(MakeMessageId(device_id, message_session_id, message_sequence++),
-                                             CurrentIso8601Timestamp(), "IDLE", static_cast<std::uint64_t>(uptime)));
+            static_cast<void>(mqtt_client.PublishHeartbeat(
+                MakeMessageId(device_id, message_session_id, message_sequence++), CurrentIso8601Timestamp()));
             next_heartbeat = now + contracts::mqtt::kHeartbeatInterval;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

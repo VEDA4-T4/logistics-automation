@@ -1,8 +1,8 @@
 add_library(
     device_mqtt_core
-    common/src/mqtt_node_config.cpp
-    common/src/mqtt_message_processor.cpp
-    common/src/mqtt_time.cpp
+    common/config/mqtt_node_config.cpp
+    common/mqtt_client/mqtt_message_processor.cpp
+    common/mqtt_client/mqtt_time.cpp
 )
 add_library(logistics::device_mqtt_core ALIAS device_mqtt_core)
 
@@ -12,6 +12,12 @@ target_link_libraries(device_mqtt_core PUBLIC logistics::contracts)
 include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
 logistics_enable_warnings(device_mqtt_core)
 
+add_library(device_status common/device_status/device_status.cpp)
+add_library(logistics::device_status ALIAS device_status)
+target_include_directories(device_status PUBLIC common/include)
+target_link_libraries(device_status PUBLIC logistics::contracts)
+logistics_enable_warnings(device_status)
+
 add_library(
     device_runtime
     common/src/node_runtime.cpp
@@ -19,7 +25,13 @@ add_library(
 add_library(logistics::device_runtime ALIAS device_runtime)
 
 target_include_directories(device_runtime PUBLIC common/include)
-target_link_libraries(device_runtime PUBLIC logistics::contracts PRIVATE logistics::device_mqtt_core)
+target_link_libraries(
+    device_runtime
+    PUBLIC logistics::contracts
+    PRIVATE
+        logistics::device_mqtt_core
+        logistics::device_status
+)
 
 logistics_enable_warnings(device_runtime)
 
@@ -61,12 +73,14 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         )
     endif()
 
-    add_library(device_mqtt_mosquitto common/src/mqtt_node_client.cpp)
+    add_library(device_mqtt_mosquitto common/mqtt_client/mqtt_node_client.cpp)
     add_library(logistics::device_mqtt_mosquitto ALIAS device_mqtt_mosquitto)
     target_include_directories(device_mqtt_mosquitto PUBLIC common/include)
     target_link_libraries(
         device_mqtt_mosquitto
-        PUBLIC logistics::device_mqtt_core
+        PUBLIC
+            logistics::device_mqtt_core
+            logistics::device_status
         PRIVATE ${LOGISTICS_DEVICE_MOSQUITTO_TARGET}
     )
     logistics_enable_warnings(device_mqtt_mosquitto)
@@ -96,4 +110,9 @@ if(BUILD_TESTING)
     target_link_libraries(device_mqtt_node_config_test PRIVATE logistics::device_mqtt_core)
     logistics_enable_warnings(device_mqtt_node_config_test)
     add_test(NAME device_mqtt_node_config_test COMMAND device_mqtt_node_config_test)
+
+    add_executable(device_status_test tests/device_status_test.cpp)
+    target_link_libraries(device_status_test PRIVATE logistics::device_status)
+    logistics_enable_warnings(device_status_test)
+    add_test(NAME device_status_test COMMAND device_status_test)
 endif()

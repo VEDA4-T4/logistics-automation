@@ -6,6 +6,7 @@
 #include <string>
 
 #include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/device/device_status.hpp"
 #include "logistics/device/mqtt_node_config.hpp"
 
 namespace logistics::device {
@@ -14,7 +15,7 @@ class MqttNodeClient final {
 public:
     using CommandHandler = std::function<void(const contracts::mqtt::MqttMessage& message)>;
 
-    MqttNodeClient(MqttNodeConfig config, std::string device_type);
+    MqttNodeClient(MqttNodeConfig config, std::string device_type, std::shared_ptr<DeviceStatus> device_status);
     ~MqttNodeClient();
 
     MqttNodeClient(const MqttNodeClient&) = delete;
@@ -27,8 +28,7 @@ public:
     [[nodiscard]] bool Start();
     void Stop() noexcept;
     [[nodiscard]] bool IsConnected() const noexcept;
-    [[nodiscard]] bool PublishHeartbeat(std::string message_id, std::string timestamp, std::string current_state,
-                                        std::uint64_t uptime);
+    [[nodiscard]] bool PublishHeartbeat(std::string message_id, std::string timestamp);
 
 private:
     class Impl;
