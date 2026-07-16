@@ -23,7 +23,7 @@ if(BUILD_TESTING)
 
     add_executable(uart_contracts_test tests/uart_contracts_test.cpp)
     target_link_libraries(uart_contracts_test PRIVATE logistics::uart)
-    add_test(NAME uart_contracts_test COMMAND uart_contracts_test)
+    
     if(WIN32)
         get_filename_component(LOGISTICS_COMPILER_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
         add_test(
