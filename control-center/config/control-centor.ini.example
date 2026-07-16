@@ -1,0 +1,29 @@
+; Copy this file to config/control-centor.ini and replace the example values.
+; Do not commit control-centor.ini because it can contain credentials.
+
+[mqtt]
+host=127.0.0.1
+port=1883
+client_id=control-center
+username=
+password=
+reconnect_interval_ms=3000
+keep_alive_seconds=30
+
+[control]
+; The central server resolves this logical target to the appropriate devices.
+target_device_id=SYSTEM
+
+[rtsp]
+; Supported channel count: 1-16
+channel_count=4
+reconnect_interval_ms=3000
+
+; Define one RTSP or RTSPS URL for every configured channel.
+channel_1_url=rtsp://username:password@camera-1.example.com:554/stream
+channel_2_url=rtsp://username:password@camera-2.example.com:554/stream
+channel_3_url=rtsp://username:password@camera-3.example.com:554/stream
+channel_4_url=rtsp://username:password@camera-4.example.com:554/stream
+
+[ui]
+language=ko_KR

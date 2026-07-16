@@ -44,6 +44,32 @@ build/
 Build/
 build-*/
 
+# STM32CubeIDE local build and workspace artifacts
+stm32/**/Debug/
+stm32/**/Release/
+stm32/**/.metadata/
+stm32/**/.settings/language.settings.xml
+
+# STM32CubeIDE generated binaries and reports
+*.elf
+*.map
+*.bin
+*.hex
+*.srec
+*.lst
+*.su
+*.cyclo
+*.crl
+
+# Developer-specific debug configurations
+*.launch
+*.jlink
+
+# TouchGFX generated files
+**/TouchGFX/generated/
+**/TouchGFX/build/
+**/TouchGFX/simulator/msvs/.vs/
+
 # CMake generated files
 CMakeFiles/
 CMakeCache.txt
@@ -117,6 +143,7 @@ ui_*.h
 *.qmlc
 *.jsc
 Makefile*
+!device-rpi/kernel/vedauart/Makefile
 *build-*
 build/
 *.qm
@@ -139,7 +166,19 @@ CMakeLists.txt.user*
 # QtCreator 4.8< compilation database
 compile_commands.json
 
+# Out-of-tree Linux kernel module artifacts
+*.ko
+*.mod
+*.mod.c
+*.order
+Module.symvers
+.*.cmd
+.tmp_versions/
+
 # QtCreator local machine specific files for imported projects
 *creator.user*
 
 *_qmlcache.qrc
+
+# STM32CubeIDE per-user debug view state
+**/.settings/com.st.stm32cube.ide.mcu.sfrview.prefs
