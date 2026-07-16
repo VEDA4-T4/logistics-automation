@@ -2,6 +2,8 @@ name: Kernel Driver Check
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "device-rpi/kernel/vedauart/**"
       - ".github/workflows/kernel-driver-check.yml"
