@@ -20,12 +20,15 @@ inline constexpr std::string_view kDataField = "data";
 inline constexpr std::string_view kRequestIdField = "requestId";
 inline constexpr std::string_view kTargetDeviceIdField = "targetDeviceId";
 inline constexpr std::string_view kComponentIdField = "componentId";
+inline constexpr std::string_view kWorkIdField = "workId";
 
 enum class MessageType : std::uint8_t {
     kUnknown,
     kDeviceRegister,
     kHeartbeat,
     kBoxDetected,
+    kWorkCreated,
+    kWorkCompleted,
     kPositionDetected,
     kBarcodeDetected,
     kProductImage,
@@ -141,6 +144,10 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
             return "HEARTBEAT";
         case MessageType::kBoxDetected:
             return "BOX_DETECTED";
+        case MessageType::kWorkCreated:
+            return "WORK_CREATED";
+        case MessageType::kWorkCompleted:
+            return "WORK_COMPLETED";
         case MessageType::kPositionDetected:
             return "POSITION_DETECTED";
         case MessageType::kBarcodeDetected:
@@ -169,11 +176,11 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
 [[nodiscard]] constexpr MessageType MessageTypeFromString(std::string_view value) noexcept {
     constexpr std::array values = {
-        MessageType::kDeviceRegister,   MessageType::kHeartbeat,       MessageType::kBoxDetected,
-        MessageType::kPositionDetected, MessageType::kBarcodeDetected, MessageType::kProductImage,
-        MessageType::kProductInfo,      MessageType::kDestinationSet,  MessageType::kDeviceStatus,
-        MessageType::kControlCommand,   MessageType::kErrorOccurred,   MessageType::kEmergencyStop,
-        MessageType::kCommandResponse,
+        MessageType::kDeviceRegister,  MessageType::kHeartbeat,     MessageType::kBoxDetected,
+        MessageType::kWorkCreated,     MessageType::kWorkCompleted, MessageType::kPositionDetected,
+        MessageType::kBarcodeDetected, MessageType::kProductImage,  MessageType::kProductInfo,
+        MessageType::kDestinationSet,  MessageType::kDeviceStatus,  MessageType::kControlCommand,
+        MessageType::kErrorOccurred,   MessageType::kEmergencyStop, MessageType::kCommandResponse,
     };
     for (const auto type : values) {
         if (ToString(type) == value) {
