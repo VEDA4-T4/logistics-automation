@@ -25,27 +25,35 @@ void TestCommonValidationDoesNotTruncateWideValues() {
 }
 
 void TestInputPayloadValidation() {
-    constexpr std::array<std::uint8_t, 1> kConveyor1{ UART_CONVEYOR_ID_1 };
-    constexpr std::array<std::uint8_t, 1> kInvalidConveyor{ 3U };
-    constexpr std::array<std::uint8_t, 2> kSpeed100{ UART_CONVEYOR_ID_2, 100U };
-    constexpr std::array<std::uint8_t, 2> kSpeed101{ UART_CONVEYOR_ID_2, 101U };
-    constexpr std::array<std::uint8_t, 5> kVisionResult{ 0x34U, 0x12U, UART_VISION_DETECTED, 2U, 90U };
+    constexpr std::array<std::uint8_t, 1> kUnexpectedPayload{ 1U };
+    constexpr std::array<std::uint8_t, 1> kSpeed100{ 100U };
+    constexpr std::array<std::uint8_t, 1> kSpeed101{ 101U };
+    constexpr std::array<std::uint8_t, 5> kVisionResult{ 0x34U, 0x12U, UART_INPUT_VISION_DETECTED, 2U, 90U };
+    constexpr std::array<std::uint8_t, 4> kInputSensorDetected{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_DETECTED, 10U,
+                                                               0U };
+    constexpr std::array<std::uint8_t, 4> kInvalidInputSensor{ 2U, UART_SENSOR_DETECTED, 10U, 0U };
 
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONVEYOR_START, kConveyor1.data(), kConveyor1.size()) != 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONVEYOR_START, kInvalidConveyor.data(), kInvalidConveyor.size()) ==
+    assert(UART_IS_VALID_INPUT_COMMAND(UART_CMD_INPUT_CONVEYOR_START) != 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_START, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_START, kUnexpectedPayload.data(),
+                                       kUnexpectedPayload.size()) == 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_SET_SPEED, kSpeed100.data(), kSpeed100.size()) != 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_SET_SPEED, kSpeed101.data(), kSpeed101.size()) == 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONTROL_RESET, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_VISION_RESULT, kVisionResult.data(), kVisionResult.size()) !=
            0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONVEYOR_SET_SPEED, kSpeed100.data(), kSpeed100.size()) != 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONVEYOR_SET_SPEED, kSpeed101.data(), kSpeed101.size()) == 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONTROL_RESET, nullptr, 0U) != 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_VISION_RESULT, kVisionResult.data(), kVisionResult.size()) != 0U);
-    assert(uart_vision_cycle_id(kVisionResult.data()) == 0x1234U);
-    assert(UART_CONVEYOR_STATUS_PAYLOAD_SIZE == 6U);
+    assert(uart_input_vision_cycle_id(kVisionResult.data()) == 0x1234U);
+    assert(uart_input_sensor_status_is_valid(kInputSensorDetected.data(), kInputSensorDetected.size()) != 0U);
+    assert(uart_input_sensor_status_is_valid(kInvalidInputSensor.data(), kInvalidInputSensor.size()) == 0U);
+    assert(UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
 }
 
 void TestSortingPayloadValidation() {
     constexpr std::array<std::uint8_t, 3> kRouteDestination2{ 0x34U, 0x12U, UART_SORTING_DESTINATION_2 };
     constexpr std::array<std::uint8_t, 3> kInvalidDestination{ 0x34U, 0x12U, 4U };
     constexpr std::array<std::uint8_t, 2> kCancelCycle{ 0x34U, 0x12U };
+    constexpr std::array<std::uint8_t, 1> kSortingSpeed100{ 100U };
+    constexpr std::array<std::uint8_t, 1> kSortingSpeed101{ 101U };
     constexpr std::array<std::uint8_t, 4> kSensorDetected{ UART_SORTING_SENSOR_ID_2, UART_SENSOR_DETECTED, 10U, 0U };
     constexpr std::array<std::uint8_t, 4> kCompleteEvent{ UART_SORTING_EVENT_CYCLE_COMPLETE, 0x34U, 0x12U,
                                                           UART_SORTING_DESTINATION_2 };
@@ -71,9 +79,20 @@ void TestSortingPayloadValidation() {
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_GET_STATUS, nullptr, 0U) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RESET, nullptr, 0U) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RESET, nullptr, 256U) == 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_START, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_STOP, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_GET_STATUS, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_SET_SPEED, kSortingSpeed100.data(),
+                                         kSortingSpeed100.size()) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_SET_SPEED, kSortingSpeed101.data(),
+                                         kSortingSpeed101.size()) == 0U);
 
     assert(uart_sorting_route_cycle_id(kRouteDestination2.data()) == 0x1234U);
     assert(uart_sorting_cancel_cycle_id(kCancelCycle.data()) == 0x1234U);
+    assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_1) != 0U);
+    assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_2) != 0U);
+    assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_3) != 0U);
+    assert(uart_sorting_sensor_id_is_valid(4U) == 0U);
     assert(uart_sorting_sensor_matches_destination(UART_SORTING_SENSOR_ID_2, UART_SORTING_DESTINATION_2) != 0U);
     assert(uart_sorting_sensor_matches_destination(UART_SORTING_SENSOR_ID_1, UART_SORTING_DESTINATION_2) == 0U);
     assert(uart_sorting_sensor_status_is_valid(kSensorDetected.data(), kSensorDetected.size()) != 0U);
@@ -83,6 +102,7 @@ void TestSortingPayloadValidation() {
                                                kInvalidUnexpectedSensorEvent.size()) == 0U);
     assert(UART_IS_VALID_SORTING_EVENT_PAYLOAD(kFaultEvent.data(), kFaultEvent.size()) != 0U);
     assert(UART_SORTING_STATUS_PAYLOAD_SIZE == 7U);
+    assert(UART_SORTING_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
     assert(UART_SORTING_CYCLE_EVENT_PAYLOAD_SIZE == 4U);
     assert(UART_SORTING_UNEXPECTED_EVENT_PAYLOAD_SIZE == 5U);
     assert(UART_SORTING_FAULT_EVENT_PAYLOAD_SIZE == 5U);
@@ -92,10 +112,9 @@ void TestCodecAndParserRoundTrip() {
     uart_frame_t source{};
     source.version = UART_PROTOCOL_VERSION;
     source.sequence = 7U;
-    source.command = UART_CMD_CONVEYOR_SET_SPEED;
-    source.length = UART_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
-    source.payload[UART_CONVEYOR_SPEED_ID_INDEX] = UART_CONVEYOR_ID_1;
-    source.payload[UART_CONVEYOR_SPEED_VALUE_INDEX] = 70U;
+    source.command = UART_CMD_INPUT_CONVEYOR_SET_SPEED;
+    source.length = UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
+    source.payload[UART_INPUT_CONVEYOR_SPEED_VALUE_INDEX] = 70U;
 
     std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
     std::size_t encoded_length = 0U;

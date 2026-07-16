@@ -14,20 +14,27 @@ extern "C" {
  * sorting-controller CMD
  * ============================================================================
  *
- * Raspberry Pi -> sorting-controller STM32 명령이다.
+ * 전용 UART 채널의 Raspberry Pi -> sorting-controller STM32 명령이다.
+ * 이 계약은 분류 컨베이어 벨트 2와 분류 게이트를 함께 담당하므로
+ * conveyor_id와 gate_id를 전송하지 않는다.
  *
  * 분류 게이트는 1개이므로 gate_id를 전송하지 않는다. Raspberry Pi는
  * 목적지 ID만 전송하고, 목적지별 실제 게이트 각도는 STM32 설정에서
  * 관리한다.
  *
- * 목적지 초음파 센서 감지는 STM32 내부 동작이다. 현재 목적지와 같은
- * 센서가 물품을 감지하면 게이트를 자동으로 Home 위치로 복귀시킨다.
+ * 목적지 초음파 센서 1~3의 감지 결과는 SortingControlTask로 전달한다.
+ * 현재 목적지와 같은 센서가 물품을 감지하면 분류 게이트 서보를
+ * 자동으로 Home 위치로 복귀시킨다.
  */
 typedef enum {
     UART_CMD_SORTING_ROUTE_ITEM = 0x30U,
     UART_CMD_SORTING_GET_STATUS = 0x31U,
     UART_CMD_SORTING_CANCEL = 0x32U,
-    UART_CMD_SORTING_RESET = 0x33U
+    UART_CMD_SORTING_RESET = 0x33U,
+    UART_CMD_SORTING_CONVEYOR_START = 0x34U,
+    UART_CMD_SORTING_CONVEYOR_STOP = 0x35U,
+    UART_CMD_SORTING_CONVEYOR_SET_SPEED = 0x36U,
+    UART_CMD_SORTING_CONVEYOR_GET_STATUS = 0x37U
 
 } uart_sorting_command_t;
 
@@ -59,6 +66,29 @@ typedef enum {
 
 #define UART_SORTING_SENSOR_ID_MIN UART_SORTING_SENSOR_ID_1
 #define UART_SORTING_SENSOR_ID_MAX UART_SORTING_SENSOR_ID_3
+
+/* SORTING_CONVEYOR_START / STOP / GET_STATUS */
+#define UART_SORTING_CONVEYOR_COMMAND_PAYLOAD_SIZE 0U
+
+/* SORTING_CONVEYOR_SET_SPEED */
+#define UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX 0U
+#define UART_SORTING_CONVEYOR_SET_SPEED_PAYLOAD_SIZE 1U
+#define UART_SORTING_CONVEYOR_SPEED_MIN 0U
+#define UART_SORTING_CONVEYOR_SPEED_MAX 100U
+
+typedef enum {
+    UART_SORTING_CONVEYOR_STOPPED = 0x00U,
+    UART_SORTING_CONVEYOR_RUNNING = 0x01U,
+    UART_SORTING_CONVEYOR_FAULT = 0x02U
+
+} uart_sorting_conveyor_state_t;
+
+/* SORTING_CONVEYOR_GET_STATUS response data after the common response header. */
+#define UART_SORTING_CONVEYOR_STATUS_STATE_INDEX UART_RESPONSE_HEADER_SIZE
+#define UART_SORTING_CONVEYOR_STATUS_SPEED_INDEX (UART_RESPONSE_HEADER_SIZE + 1U)
+#define UART_SORTING_CONVEYOR_STATUS_DATA_SIZE 2U
+#define UART_SORTING_CONVEYOR_STATUS_PAYLOAD_SIZE \
+    (UART_RESPONSE_HEADER_SIZE + UART_SORTING_CONVEYOR_STATUS_DATA_SIZE)
 
 /*
  * ============================================================================
@@ -194,6 +224,10 @@ static inline uint8_t uart_sorting_command_is_valid(uint32_t command) {
         case UART_CMD_SORTING_GET_STATUS:
         case UART_CMD_SORTING_CANCEL:
         case UART_CMD_SORTING_RESET:
+        case UART_CMD_SORTING_CONVEYOR_START:
+        case UART_CMD_SORTING_CONVEYOR_STOP:
+        case UART_CMD_SORTING_CONVEYOR_SET_SPEED:
+        case UART_CMD_SORTING_CONVEYOR_GET_STATUS:
             return 1U;
 
         default:
@@ -229,6 +263,10 @@ static inline uint8_t uart_sorting_sensor_matches_destination(uint32_t sensor_id
 
 static inline uint8_t uart_sorting_gate_state_is_valid(uint32_t state) {
     return (state <= UART_SORTING_GATE_FAULT) ? 1U : 0U;
+}
+
+static inline uint8_t uart_sorting_conveyor_state_is_valid(uint32_t state) {
+    return (state <= UART_SORTING_CONVEYOR_FAULT) ? 1U : 0U;
 }
 
 static inline uint8_t uart_sorting_event_is_valid(uint32_t event_id) {
@@ -288,6 +326,18 @@ static inline uint8_t uart_sorting_payload_is_valid(uint32_t command, const uint
 
         case UART_CMD_SORTING_RESET:
             return (length == UART_SORTING_RESET_PAYLOAD_SIZE) ? 1U : 0U;
+
+        case UART_CMD_SORTING_CONVEYOR_START:
+        case UART_CMD_SORTING_CONVEYOR_STOP:
+        case UART_CMD_SORTING_CONVEYOR_GET_STATUS:
+            return (length == UART_SORTING_CONVEYOR_COMMAND_PAYLOAD_SIZE) ? 1U : 0U;
+
+        case UART_CMD_SORTING_CONVEYOR_SET_SPEED:
+            if (length != UART_SORTING_CONVEYOR_SET_SPEED_PAYLOAD_SIZE || payload == NULL) {
+                return 0U;
+            }
+
+            return (payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] <= UART_SORTING_CONVEYOR_SPEED_MAX) ? 1U : 0U;
 
         case UART_CMD_SORTING_ROUTE_ITEM:
             if (length != UART_SORTING_ROUTE_PAYLOAD_SIZE || payload == NULL) {

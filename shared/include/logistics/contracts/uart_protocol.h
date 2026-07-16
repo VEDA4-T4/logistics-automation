@@ -105,13 +105,13 @@ extern "C" {
  *
  * 공통 프로토콜은 명령 번호 영역만 예약한다.
  *
- * input-controller (컨베이어/초음파 센서):
+ * input-controller (투입 컨베이어 벨트 1/초음파 센서 1):
  *   0x10 ~ 0x1F
  *
  * rotation-controller (로봇팔, 예약):
  *   0x20 ~ 0x2F
  *
- * sorting-controller (분류장치):
+ * sorting-controller (분류 컨베이어 벨트 2/게이트/초음파 센서 1~3):
  *   0x30 ~ 0x3F
  *
  * linetracer-controller:
