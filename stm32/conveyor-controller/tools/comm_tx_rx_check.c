@@ -21,6 +21,7 @@
  *       -o comm_tx_rx_check \
  *       comm_tx_rx_check.c \
  *       ../../../shared/contracts/uart/uart_parser.c \
+ *       ../../../shared/contracts/uart/uart_codec.c \
  *       ../../../shared/contracts/uart/uart_crc16.c
  *
  * 사용 예:
@@ -35,6 +36,11 @@
  *   - 라우팅 오류(sensor_id 불일치) 0
  *   - heartbeat 2회 이상, 주기 1.0±0.5초 유지
  *   - 긴급 우선순위 위반 0 (burst 시험이 관측된 경우)
+ *
+ * 초기 동기화:
+ *   STM32가 계속 송신 중인 스트림에 프레임 중간부터 접속하면 payload 안의
+ *   0xAA를 SOF로 오인해 오류가 1~2회 날 수 있다. 첫 정상 프레임을 받기
+ *   전의 파서 오류는 동기화 아티팩트로 보고 판정에서 제외한다.
  */
 
 #include <fcntl.h>
@@ -94,6 +100,7 @@ typedef struct {
     uint32_t priority_fail;
     uint32_t other;
     uint32_t seq_gap;
+    uint32_t sync_discard;
 } rx_stats_t;
 
 static const char* command_name(uint8_t command) {
@@ -202,6 +209,9 @@ int main(int argc, char** argv) {
     int have_last_seq = 0;
     uint8_t last_seq = 0U;
 
+    /* 첫 정상 프레임 수신 전에는 파서 오류를 동기화 아티팩트로 무시한다 */
+    int synced = 0;
+
     /* 현재 관측 중인 burst의 우선순위 판정 상태 */
     int burst_active_id = -1;
     uint32_t burst_normals_seen = 0U;
@@ -233,35 +243,39 @@ int main(int argc, char** argv) {
                 case UART_PARSER_NO_FRAME:
                     continue;
 
-                case UART_PARSER_INVALID_SOF:
-                    stats.sof_error++;
-                    continue;
-
-                case UART_PARSER_INVALID_VERSION:
-                    stats.version_error++;
-                    continue;
-
-                case UART_PARSER_INVALID_LENGTH:
-                    stats.length_error++;
-                    continue;
-
-                case UART_PARSER_INVALID_COMMAND:
-                    stats.command_error++;
-                    continue;
-
-                case UART_PARSER_CRC_ERROR:
-                    stats.crc_error++;
-                    printf("  CRC 오류 발생\n");
-                    continue;
-
                 case UART_PARSER_FRAME_READY:
                     break;
+
+                case UART_PARSER_INVALID_SOF:
+                case UART_PARSER_INVALID_VERSION:
+                case UART_PARSER_INVALID_LENGTH:
+                case UART_PARSER_INVALID_COMMAND:
+                case UART_PARSER_CRC_ERROR:
+                    if (!synced) {
+                        stats.sync_discard++;
+                        continue;
+                    }
+
+                    if (result == UART_PARSER_INVALID_SOF) {
+                        stats.sof_error++;
+                    } else if (result == UART_PARSER_INVALID_VERSION) {
+                        stats.version_error++;
+                    } else if (result == UART_PARSER_INVALID_LENGTH) {
+                        stats.length_error++;
+                    } else if (result == UART_PARSER_INVALID_COMMAND) {
+                        stats.command_error++;
+                    } else {
+                        stats.crc_error++;
+                        printf("  CRC 오류 발생\n");
+                    }
+                    continue;
 
                 default:
                     continue;
             }
 
             /* 완성된 프레임 처리 */
+            synced = 1;
             stats.frames++;
 
             /* SEQUENCE 연속성 (드랍/재시도 감지용 통계, 오류 아님) */
@@ -377,6 +391,7 @@ int main(int argc, char** argv) {
     printf("  명령어 오류        : %u\n", stats.command_error);
     printf("  길이 오류          : %u\n", stats.length_error);
     printf("  SOF 재동기화       : %u\n", stats.sof_error);
+    printf("  초기 동기화 무시   : %u\n", stats.sync_discard);
     printf("  라우팅 오류        : %u\n", stats.wrong_channel);
     printf("  SEQ 끊김           : %u\n", stats.seq_gap);
     printf("  heartbeat 크기 오류: %u\n", stats.heartbeat_bad_size);
