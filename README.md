@@ -31,46 +31,6 @@ Qt 6가 설치된 환경에서 중앙관제를 함께 빌드하려면 다음 옵
 cmake -S . -B build -DLOGISTICS_BUILD_CONTROL_CENTER=ON
 ```
 
-### 중앙 서버 MQTT 설정
-
-중앙 서버는 외부 Mosquitto broker에 `libmosquitto` 클라이언트로 연결합니다. Ubuntu/Raspberry Pi 빌드 환경에
-개발 패키지를 설치한 뒤 예제 설정을 복사해 broker 주소와 인증 정보를 입력합니다.
-
-```sh
-sudo apt-get update
-sudo apt-get install -y libmosquitto-dev
-cp central-server-rpi/config/server.ini.example central-server-rpi/config/server.ini
-cmake -S . -B build
-cmake --build build
-./build/central-server-rpi/logistics_central_server central-server-rpi/config/server.ini
-```
-
-설정 경로는 실행 파일의 첫 번째 인수 또는 `LOGISTICS_CENTRAL_SERVER_CONFIG` 환경 변수로 지정할 수 있습니다.
-연결이 끊기면 설정한 최소·최대 지연 사이에서 지수 backoff로 자동 재연결하고, 연결이 복구될 때 서버의 필수
-topic을 다시 구독합니다. 연결 오류는 표준 오류로 기록되어 systemd journal에서 확인할 수 있습니다.
-
-`libmosquitto` 없이 설정 파서와 MQTT 상태 로직만 빌드·테스트하려면
-`-DLOGISTICS_ENABLE_MOSQUITTO_TRANSPORT=OFF`를 지정합니다.
-
-### 장치 Raspberry Pi MQTT 설정
-
-장치 노드는 `device-rpi/config/node.ini.example`을 복사해 고유 `device_id`, `node_name`, 장치 IP 주소,
-broker 주소와 인증 정보를 설정합니다. 중앙 서버와 함께 기본 빌드하면 같은 `libmosquitto` 라이브러리를
-사용하도록 장치 MQTT runtime도 활성화됩니다.
-
-```sh
-cp device-rpi/config/node.ini.example device-rpi/config/node.ini
-cmake -S . -B build
-cmake --build build
-./build/device-rpi/logistics_vision_node device-rpi/config/node.ini
-```
-
-설정 경로는 첫 번째 실행 인수 또는 `LOGISTICS_DEVICE_CONFIG` 환경 변수로 지정할 수 있습니다. 연결되면
-`device/{deviceId}/command`와 `system/broadcast/command`를 구독하고, retained `ONLINE` 상태와 장치 등록을
-공통 JSON codec으로 발행합니다. 이어서 heartbeat를 5초마다 `device/{deviceId}/heartbeat`로 발행합니다.
-정상 종료 시에는 retained `OFFLINE` 상태를 먼저 발행하고 연결을 종료합니다. 비정상 연결 종료 시에는 같은
-`OFFLINE` 상태가 Last Will로 발행되며, 재연결하면 retained `ONLINE` 상태가 이를 덮어쓰고 장치를 다시 등록합니다.
-
 ### 중앙관제 MQTT 설정
 
 `control-center/config/control-centor.ini.example`을 `control-centor.ini`로 복사한 뒤 브로커 값을 입력합니다.
