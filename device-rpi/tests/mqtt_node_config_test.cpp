@@ -57,7 +57,13 @@ clean_session=yes
 
     const std::string timestamp = device::CurrentIso8601Timestamp();
     assert(logistics::contracts::mqtt::IsValidIso8601Timestamp(timestamp));
-    assert(device::MakeMessageId(config.device_id, 42) == "PI-01-MSG-42");
+    const std::string first_session = device::GenerateMessageSessionId();
+    const std::string second_session = device::GenerateMessageSessionId();
+    assert(first_session != second_session);
+    assert(logistics::contracts::mqtt::IsValidTopicLevel(first_session));
+    assert(device::MakeMessageId(config.device_id, first_session, 42) == "PI-01-MSG-" + first_session + "-42");
+    assert(device::MakeMessageId(config.device_id, first_session, 1) !=
+           device::MakeMessageId(config.device_id, second_session, 1));
 
     std::error_code error;
     std::filesystem::remove(path, error);

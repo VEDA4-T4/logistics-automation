@@ -50,6 +50,10 @@ inline constexpr std::string_view kErrorLevelField = "errorLevel";
 inline constexpr std::string_view kMessageField = "message";
 inline constexpr std::string_view kDistanceField = "distance";
 
+[[nodiscard]] constexpr bool IsValidErrorLevel(std::string_view value) noexcept {
+    return value == "INFO" || value == "WARNING" || value == "ERROR" || value == "CRITICAL";
+}
+
 enum class CodecError : std::uint8_t {
     kNone,
     kMalformedJson,
@@ -97,6 +101,26 @@ struct DecodeResult {
     }
 };
 
+[[nodiscard]] constexpr bool IsHexDigit(char value) noexcept {
+    return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F');
+}
+
+[[nodiscard]] constexpr bool IsValidUuid(std::string_view value) noexcept {
+    if (value.size() != 36U || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-') {
+        return false;
+    }
+
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        if (index == 8U || index == 13U || index == 18U || index == 23U) {
+            continue;
+        }
+        if (!IsHexDigit(value[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 struct DeviceRegisterPayload {
     std::string device_type;
     std::string node_name;
@@ -123,17 +147,32 @@ struct HeartbeatPayload {
 };
 
 struct BoxDetectedPayload {
-    std::string job_id;
     bool detected{ false };
     std::string image_name;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidTopicLevel(job_id) && !image_name.empty();
+        return detected && !image_name.empty();
+    }
+};
+
+struct WorkCreatedPayload {
+    std::string work_id;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return IsValidUuid(work_id);
+    }
+};
+
+struct WorkCompletedPayload {
+    std::string work_id;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return IsValidUuid(work_id);
     }
 };
 
 struct PositionDetectedPayload {
-    std::string job_id;
+    std::string work_id;
     std::int32_t box_x{ 0 };
     std::int32_t box_y{ 0 };
     std::int32_t box_width{ 0 };
@@ -145,13 +184,13 @@ struct PositionDetectedPayload {
     std::string position_status;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidTopicLevel(job_id) && box_x >= 0 && box_y >= 0 && box_width > 0 && box_height > 0 &&
-               center_x >= 0 && center_y >= 0 && !position_status.empty();
+        return IsValidUuid(work_id) && box_x >= 0 && box_y >= 0 && box_width > 0 && box_height > 0 && center_x >= 0 &&
+               center_y >= 0 && !position_status.empty();
     }
 };
 
 struct BarcodeDetectedPayload {
-    std::string job_id;
+    std::string work_id;
     std::string barcode;
     std::int32_t center_x{ 0 };
     std::int32_t center_y{ 0 };
@@ -160,24 +199,24 @@ struct BarcodeDetectedPayload {
     std::string result;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidTopicLevel(job_id) && !barcode.empty() && center_x >= 0 && center_y >= 0 && !image_name.empty() &&
+        return IsValidUuid(work_id) && !barcode.empty() && center_x >= 0 && center_y >= 0 && !image_name.empty() &&
                !image_path.empty() && !result.empty();
     }
 };
 
 struct ProductImagePayload {
-    std::string job_id;
+    std::string work_id;
     std::string image_name;
     std::string image_path;
     Json metadata{ Json::object() };
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidTopicLevel(job_id) && !image_name.empty() && !image_path.empty() && metadata.is_object();
+        return IsValidUuid(work_id) && !image_name.empty() && !image_path.empty() && metadata.is_object();
     }
 };
 
 struct ProductInfoPayload {
-    std::string job_id;
+    std::string work_id;
     std::string barcode;
     std::string product_name;
     std::string category;
@@ -185,14 +224,14 @@ struct ProductInfoPayload {
     std::string image_path;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidTopicLevel(job_id) && !barcode.empty() && !product_name.empty() && !category.empty() &&
+        return IsValidUuid(work_id) && !barcode.empty() && !product_name.empty() && !category.empty() &&
                !destination.empty() && !image_path.empty();
     }
 };
 
 struct DestinationSetPayload {
     std::string request_id;
-    std::string job_id;
+    std::string work_id;
     ControlCommand command{ ControlCommand::kDestinationSet };
     std::string target_device_id;
     std::string destination;
@@ -205,7 +244,7 @@ struct DestinationSetPayload {
             .component_id = {},
         };
 
-        return command == ControlCommand::kDestinationSet && request.IsValid() && IsValidTopicLevel(job_id) &&
+        return command == ControlCommand::kDestinationSet && request.IsValid() && IsValidUuid(work_id) &&
                IsValidTopicLevel(destination);
     }
 };
@@ -251,8 +290,9 @@ struct ErrorOccurredPayload {
     std::optional<std::int32_t> distance;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return (!job_id.has_value() || IsValidTopicLevel(*job_id)) && !error_code.empty() && !error_level.empty() &&
-               !current_state.empty() && !message.empty() && (!distance.has_value() || *distance >= 0);
+        return (!job_id.has_value() || IsValidTopicLevel(*job_id)) && !error_code.empty() &&
+               IsValidErrorLevel(error_level) && !current_state.empty() && !message.empty() &&
+               (!distance.has_value() || *distance >= 0);
     }
 };
 
@@ -292,10 +332,10 @@ struct CommandResponsePayload {
 };
 
 using MessagePayload =
-    std::variant<std::monostate, DeviceRegisterPayload, HeartbeatPayload, BoxDetectedPayload, PositionDetectedPayload,
-                 BarcodeDetectedPayload, ProductImagePayload, ProductInfoPayload, DestinationSetPayload,
-                 DeviceStatusPayload, ControlCommandPayload, ErrorOccurredPayload, EmergencyStopPayload,
-                 CommandResponsePayload>;
+    std::variant<std::monostate, DeviceRegisterPayload, HeartbeatPayload, BoxDetectedPayload, WorkCreatedPayload,
+                 WorkCompletedPayload, PositionDetectedPayload, BarcodeDetectedPayload, ProductImagePayload,
+                 ProductInfoPayload, DestinationSetPayload, DeviceStatusPayload, ControlCommandPayload,
+                 ErrorOccurredPayload, EmergencyStopPayload, CommandResponsePayload>;
 
 struct MqttMessage {
     std::string protocol_version{ std::string(kCurrentProtocolVersion) };
@@ -478,6 +518,10 @@ struct MqttMessage {
             return std::holds_alternative<HeartbeatPayload>(payload);
         case MessageType::kBoxDetected:
             return std::holds_alternative<BoxDetectedPayload>(payload);
+        case MessageType::kWorkCreated:
+            return std::holds_alternative<WorkCreatedPayload>(payload);
+        case MessageType::kWorkCompleted:
+            return std::holds_alternative<WorkCompletedPayload>(payload);
         case MessageType::kPositionDetected:
             return std::holds_alternative<PositionDetectedPayload>(payload);
         case MessageType::kBarcodeDetected:
@@ -558,6 +602,22 @@ namespace codec_detail {
     }
 
     output = iterator->get<std::string>();
+    if (output.empty()) {
+        status = MakeError(CodecError::kInvalidFieldValue, field, "Required JSON string must not be empty");
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool ReadRequiredUuid(const Json& object, std::string_view field, std::string& output,
+                                           CodecStatus& status) {
+    if (!ReadRequiredString(object, field, output, status)) {
+        return false;
+    }
+    if (!IsValidUuid(output)) {
+        status = MakeError(CodecError::kInvalidFieldValue, field, "JSON field must contain a UUID");
+        return false;
+    }
     return true;
 }
 
@@ -899,15 +959,26 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 
 [[nodiscard]] inline Json SerializePayload(const BoxDetectedPayload& payload) {
     return {
-        { std::string(kJobIdField), payload.job_id },
         { std::string(kDetectedField), payload.detected },
         { std::string(kImageNameField), payload.image_name },
     };
 }
 
+[[nodiscard]] inline Json SerializePayload(const WorkCreatedPayload& payload) {
+    return {
+        { std::string(kWorkIdField), payload.work_id },
+    };
+}
+
+[[nodiscard]] inline Json SerializePayload(const WorkCompletedPayload& payload) {
+    return {
+        { std::string(kWorkIdField), payload.work_id },
+    };
+}
+
 [[nodiscard]] inline Json SerializePayload(const PositionDetectedPayload& payload) {
     return {
-        { std::string(kJobIdField), payload.job_id },
+        { std::string(kWorkIdField), payload.work_id },
         { std::string(kBoxXField), payload.box_x },
         { std::string(kBoxYField), payload.box_y },
         { std::string(kBoxWidthField), payload.box_width },
@@ -922,7 +993,7 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 
 [[nodiscard]] inline Json SerializePayload(const BarcodeDetectedPayload& payload) {
     return {
-        { std::string(kJobIdField), payload.job_id },         { std::string(kBarcodeField), payload.barcode },
+        { std::string(kWorkIdField), payload.work_id },       { std::string(kBarcodeField), payload.barcode },
         { std::string(kCenterXField), payload.center_x },     { std::string(kCenterYField), payload.center_y },
         { std::string(kImageNameField), payload.image_name }, { std::string(kImagePathField), payload.image_path },
         { std::string(kResultField), payload.result },
@@ -931,7 +1002,7 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 
 [[nodiscard]] inline Json SerializePayload(const ProductImagePayload& payload) {
     return {
-        { std::string(kJobIdField), payload.job_id },
+        { std::string(kWorkIdField), payload.work_id },
         { std::string(kImageNameField), payload.image_name },
         { std::string(kImagePathField), payload.image_path },
         { std::string(kMetadataField), payload.metadata },
@@ -940,19 +1011,16 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 
 [[nodiscard]] inline Json SerializePayload(const ProductInfoPayload& payload) {
     return {
-        { std::string(kJobIdField), payload.job_id },
-        { std::string(kBarcodeField), payload.barcode },
-        { std::string(kProductNameField), payload.product_name },
-        { std::string(kCategoryField), payload.category },
-        { std::string(kDestinationField), payload.destination },
-        { std::string(kImagePathField), payload.image_path },
+        { std::string(kWorkIdField), payload.work_id },           { std::string(kBarcodeField), payload.barcode },
+        { std::string(kProductNameField), payload.product_name }, { std::string(kCategoryField), payload.category },
+        { std::string(kDestinationField), payload.destination },  { std::string(kImagePathField), payload.image_path },
     };
 }
 
 [[nodiscard]] inline Json SerializePayload(const DestinationSetPayload& payload) {
     return {
         { std::string(kRequestIdField), payload.request_id },
-        { std::string(kJobIdField), payload.job_id },
+        { std::string(kWorkIdField), payload.work_id },
         { std::string(kCommandField), std::string(ToString(payload.command)) },
         { std::string(kTargetDeviceIdField), payload.target_device_id },
         { std::string(kDestinationField), payload.destination },
@@ -1035,13 +1103,20 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, BoxDetectedPayload& payload, CodecStatus& status) {
-    return ReadRequiredString(data, kJobIdField, payload.job_id, status) &&
-           ReadRequiredBoolean(data, kDetectedField, payload.detected, status) &&
+    return ReadRequiredBoolean(data, kDetectedField, payload.detected, status) &&
            ReadRequiredString(data, kImageNameField, payload.image_name, status);
 }
 
+[[nodiscard]] inline bool DeserializePayload(const Json& data, WorkCreatedPayload& payload, CodecStatus& status) {
+    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status);
+}
+
+[[nodiscard]] inline bool DeserializePayload(const Json& data, WorkCompletedPayload& payload, CodecStatus& status) {
+    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status);
+}
+
 [[nodiscard]] inline bool DeserializePayload(const Json& data, PositionDetectedPayload& payload, CodecStatus& status) {
-    return ReadRequiredString(data, kJobIdField, payload.job_id, status) &&
+    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
            ReadRequiredSignedInteger(data, kBoxXField, payload.box_x, status) &&
            ReadRequiredSignedInteger(data, kBoxYField, payload.box_y, status) &&
            ReadRequiredSignedInteger(data, kBoxWidthField, payload.box_width, status) &&
@@ -1054,7 +1129,7 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, BarcodeDetectedPayload& payload, CodecStatus& status) {
-    return ReadRequiredString(data, kJobIdField, payload.job_id, status) &&
+    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
            ReadRequiredString(data, kBarcodeField, payload.barcode, status) &&
            ReadRequiredSignedInteger(data, kCenterXField, payload.center_x, status) &&
            ReadRequiredSignedInteger(data, kCenterYField, payload.center_y, status) &&
@@ -1064,14 +1139,14 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ProductImagePayload& payload, CodecStatus& status) {
-    return ReadRequiredString(data, kJobIdField, payload.job_id, status) &&
+    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
            ReadRequiredString(data, kImageNameField, payload.image_name, status) &&
            ReadRequiredString(data, kImagePathField, payload.image_path, status) &&
            ReadOptionalObjectValue(data, kMetadataField, payload.metadata, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ProductInfoPayload& payload, CodecStatus& status) {
-    return ReadRequiredString(data, kJobIdField, payload.job_id, status) &&
+    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
            ReadRequiredString(data, kBarcodeField, payload.barcode, status) &&
            ReadRequiredString(data, kProductNameField, payload.product_name, status) &&
            ReadRequiredString(data, kCategoryField, payload.category, status) &&
@@ -1081,7 +1156,7 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, DestinationSetPayload& payload, CodecStatus& status) {
     return ReadRequiredString(data, kRequestIdField, payload.request_id, status) &&
-           ReadRequiredString(data, kJobIdField, payload.job_id, status) &&
+           ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
            ReadControlCommand(data, kCommandField, payload.command, status) &&
            ReadRequiredString(data, kTargetDeviceIdField, payload.target_device_id, status) &&
            ReadRequiredString(data, kDestinationField, payload.destination, status);
@@ -1103,12 +1178,44 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ErrorOccurredPayload& payload, CodecStatus& status) {
-    return ReadOptionalString(data, kJobIdField, payload.job_id, status) &&
-           ReadRequiredString(data, kErrorCodeField, payload.error_code, status) &&
-           ReadRequiredString(data, kErrorLevelField, payload.error_level, status) &&
-           ReadRequiredString(data, kCurrentStateField, payload.current_state, status) &&
+    if (!ReadOptionalString(data, kJobIdField, payload.job_id, status) ||
+        !ReadRequiredString(data, kErrorCodeField, payload.error_code, status) ||
+        !ReadRequiredString(data, kErrorLevelField, payload.error_level, status)) {
+        return false;
+    }
+    if (!IsValidErrorLevel(payload.error_level)) {
+        status = MakeError(CodecError::kInvalidFieldValue, kErrorLevelField,
+                           "errorLevel must be INFO, WARNING, ERROR, or CRITICAL");
+        return false;
+    }
+    return ReadRequiredString(data, kCurrentStateField, payload.current_state, status) &&
            ReadRequiredString(data, kMessageField, payload.message, status) &&
            ReadOptionalSignedInteger(data, kDistanceField, payload.distance, status);
+}
+
+[[nodiscard]] inline std::optional<std::string_view> WorkIdFromPayload(const MessagePayload& payload) noexcept {
+    if (const auto* value = std::get_if<WorkCreatedPayload>(&payload); value != nullptr) {
+        return value->work_id;
+    }
+    if (const auto* value = std::get_if<WorkCompletedPayload>(&payload); value != nullptr) {
+        return value->work_id;
+    }
+    if (const auto* value = std::get_if<PositionDetectedPayload>(&payload); value != nullptr) {
+        return value->work_id;
+    }
+    if (const auto* value = std::get_if<BarcodeDetectedPayload>(&payload); value != nullptr) {
+        return value->work_id;
+    }
+    if (const auto* value = std::get_if<ProductImagePayload>(&payload); value != nullptr) {
+        return value->work_id;
+    }
+    if (const auto* value = std::get_if<ProductInfoPayload>(&payload); value != nullptr) {
+        return value->work_id;
+    }
+    if (const auto* value = std::get_if<DestinationSetPayload>(&payload); value != nullptr) {
+        return value->work_id;
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, EmergencyStopPayload& payload, CodecStatus& status) {
@@ -1159,13 +1266,43 @@ template <typename PayloadType>
             .data_json = "{}",
         };
 
-        if (!envelope.IsValid()) {
+        if (message.protocol_version != kCurrentProtocolVersion) {
+            error = CodecError::kUnsupportedProtocolVersion;
+            field = kProtocolVersionField;
+            description = "Unsupported MQTT protocol version";
+        } else if (!IsValidTopicLevel(message.message_id)) {
+            error = CodecError::kInvalidEnvelope;
+            field = kMessageIdField;
+            description = "messageId must be one non-wildcard MQTT topic level";
+        } else if (message.message_type == MessageType::kUnknown) {
+            error = CodecError::kUnknownMessageType;
+            field = kMessageTypeField;
+            description = "Unknown MQTT message type";
+        } else if (!IsValidTopicLevel(message.source_id)) {
+            error = CodecError::kInvalidEnvelope;
+            field = kSourceIdField;
+            description = "sourceId must be one non-wildcard MQTT topic level";
+        } else if (!IsValidIso8601Timestamp(message.timestamp)) {
+            error = CodecError::kInvalidFieldValue;
+            field = kTimestampField;
+            description = "Timestamp must be ISO 8601 with UTC Z or an explicit offset";
+        } else if (!envelope.IsValid()) {
             error = CodecError::kInvalidEnvelope;
             field = "";
             description = "MQTT envelope is invalid";
         } else if (!PayloadMatchesMessageType(message.message_type, message.data)) {
             error = CodecError::kUnexpectedPayloadType;
             description = "Payload type does not match messageType";
+        } else if (const auto work_id = codec_detail::WorkIdFromPayload(message.data);
+                   work_id.has_value() && !IsValidUuid(*work_id)) {
+            error = CodecError::kInvalidFieldValue;
+            field = kWorkIdField;
+            description = "workId must contain a UUID";
+        } else if (const auto* payload = std::get_if<ErrorOccurredPayload>(&message.data);
+                   payload != nullptr && !IsValidErrorLevel(payload->error_level)) {
+            error = CodecError::kInvalidFieldValue;
+            field = kErrorLevelField;
+            description = "errorLevel must be INFO, WARNING, ERROR, or CRITICAL";
         }
 
         return {
@@ -1233,6 +1370,12 @@ template <typename PayloadType>
             break;
         case MessageType::kBoxDetected:
             decoded = codec_detail::DecodeAndAssignPayload<BoxDetectedPayload>(*data, result.value, result.status);
+            break;
+        case MessageType::kWorkCreated:
+            decoded = codec_detail::DecodeAndAssignPayload<WorkCreatedPayload>(*data, result.value, result.status);
+            break;
+        case MessageType::kWorkCompleted:
+            decoded = codec_detail::DecodeAndAssignPayload<WorkCompletedPayload>(*data, result.value, result.status);
             break;
         case MessageType::kPositionDetected:
             decoded = codec_detail::DecodeAndAssignPayload<PositionDetectedPayload>(*data, result.value, result.status);

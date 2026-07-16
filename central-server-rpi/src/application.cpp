@@ -3,8 +3,14 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <memory>
+#include <mutex>
+#include <sstream>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -39,6 +45,29 @@ void HandleSignal(int) {
     return std::filesystem::path("config") / "server.ini";
 }
 
+[[nodiscard]] std::string CurrentIso8601Timestamp() {
+    const std::time_t current_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm utc_time{};
+    {
+        static std::mutex time_mutex;
+        std::lock_guard lock(time_mutex);
+        const std::tm* converted = std::gmtime(&current_time);
+        if (converted == nullptr) {
+            return {};
+        }
+        utc_time = *converted;
+    }
+
+    std::ostringstream output;
+    output << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
+    return output.str();
+}
+
+[[nodiscard]] constexpr bool IsDeviceRegistryMessage(mqtt::MessageType type) noexcept {
+    return type == mqtt::MessageType::kDeviceRegister || type == mqtt::MessageType::kHeartbeat ||
+           type == mqtt::MessageType::kDeviceStatus || type == mqtt::MessageType::kErrorOccurred;
+}
+
 }  // namespace
 
 int Application::Run(int argc, char* argv[]) {
@@ -56,7 +85,13 @@ int Application::Run(int argc, char* argv[]) {
         return 1;
     }
 
-    DeviceManager device_manager;
+    std::unique_ptr<DeviceManager> device_manager;
+    try {
+        device_manager = std::make_unique<DeviceManager>(mqtt_config.device_registry_path);
+    } catch (const DeviceRegistryError& error) {
+        std::cerr << "[server][ERROR] " << error.what() << '\n';
+        return 1;
+    }
     MqttClient mqtt_client(std::move(mqtt_config), CreateMosquittoTransport());
     mqtt_client.SetMessageHandler([&device_manager](std::string_view topic, std::string_view payload) {
         const auto decoded = mqtt::DeserializeMessage(payload);
@@ -74,11 +109,14 @@ int Application::Run(int argc, char* argv[]) {
         }
 
         const auto parsed_topic = mqtt::ParseTopic(topic);
-        device_manager.HandleMessage(parsed_topic, decoded.value);
+        if (IsDeviceRegistryMessage(decoded.value.message_type) &&
+            !device_manager->HandleMessage(parsed_topic, decoded.value, CurrentIso8601Timestamp())) {
+            std::cerr << "[server][ERROR] device registry update failed: " << device_manager->LastError() << '\n';
+        }
         std::clog << "[server][INFO] MQTT message received: " << topic << '\n';
         if (decoded.value.message_type == mqtt::MessageType::kDeviceRegister) {
             std::clog << "[server][INFO] device registered: " << parsed_topic.endpoint_id
-                      << "; registered devices=" << device_manager.RegisteredDeviceCount() << '\n';
+                      << "; registered devices=" << device_manager->RegisteredDeviceCount() << '\n';
         }
     });
 
@@ -90,7 +128,7 @@ int Application::Run(int argc, char* argv[]) {
         return 1;
     }
 
-    std::clog << "[server][INFO] central server started; registered devices=" << device_manager.RegisteredDeviceCount()
+    std::clog << "[server][INFO] central server started; registered devices=" << device_manager->RegisteredDeviceCount()
               << '\n';
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

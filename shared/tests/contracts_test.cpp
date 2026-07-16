@@ -16,6 +16,8 @@ namespace mqtt = logistics::contracts::mqtt;
 
 namespace {
 
+constexpr std::string_view kTestWorkId = "123e4567-e89b-12d3-a456-426614174000";
+
 mqtt::MqttMessage MakeMessage(std::string message_id, mqtt::MessageType message_type, mqtt::MessagePayload payload,
                               std::string source_id = "PI-01") {
     return {
@@ -76,14 +78,24 @@ void TestAllMqttMessageRoundTrips() {
 
     AssertRoundTrip<mqtt::BoxDetectedPayload>(MakeMessage("MSG-0003", mqtt::MessageType::kBoxDetected,
                                                           mqtt::BoxDetectedPayload{
-                                                              .job_id = "JOB-0001",
                                                               .detected = true,
                                                               .image_name = "JOB-0001-BOX.jpg",
                                                           }));
 
+    AssertRoundTrip<mqtt::WorkCreatedPayload>(MakeMessage("MSG-0003-A", mqtt::MessageType::kWorkCreated,
+                                                          mqtt::WorkCreatedPayload{
+                                                              .work_id = std::string(kTestWorkId),
+                                                          },
+                                                          "SERVER-01"));
+
+    AssertRoundTrip<mqtt::WorkCompletedPayload>(MakeMessage("MSG-0003-B", mqtt::MessageType::kWorkCompleted,
+                                                            mqtt::WorkCompletedPayload{
+                                                                .work_id = std::string(kTestWorkId),
+                                                            }));
+
     AssertRoundTrip<mqtt::PositionDetectedPayload>(MakeMessage("MSG-0004", mqtt::MessageType::kPositionDetected,
                                                                mqtt::PositionDetectedPayload{
-                                                                   .job_id = "JOB-0001",
+                                                                   .work_id = std::string(kTestWorkId),
                                                                    .box_x = 120,
                                                                    .box_y = 80,
                                                                    .box_width = 380,
@@ -97,7 +109,7 @@ void TestAllMqttMessageRoundTrips() {
 
     AssertRoundTrip<mqtt::BarcodeDetectedPayload>(MakeMessage("MSG-0005", mqtt::MessageType::kBarcodeDetected,
                                                               mqtt::BarcodeDetectedPayload{
-                                                                  .job_id = "JOB-0001",
+                                                                  .work_id = std::string(kTestWorkId),
                                                                   .barcode = "8801234567890",
                                                                   .center_x = 315,
                                                                   .center_y = 226,
@@ -111,7 +123,7 @@ void TestAllMqttMessageRoundTrips() {
             "MSG-0006",
             mqtt::MessageType::kProductImage,
             mqtt::ProductImagePayload{
-                .job_id = "JOB-0001",
+                .work_id = std::string(kTestWorkId),
                 .image_name = "JOB-0001.jpg",
                 .image_path = "/data/images/JOB-0001.jpg",
                 .metadata =
@@ -127,7 +139,7 @@ void TestAllMqttMessageRoundTrips() {
 
     AssertRoundTrip<mqtt::ProductInfoPayload>(MakeMessage("MSG-0007", mqtt::MessageType::kProductInfo,
                                                           mqtt::ProductInfoPayload{
-                                                              .job_id = "JOB-0001",
+                                                              .work_id = std::string(kTestWorkId),
                                                               .barcode = "8801234567890",
                                                               .product_name = "Sample Product",
                                                               .category = "A",
@@ -139,7 +151,7 @@ void TestAllMqttMessageRoundTrips() {
     AssertRoundTrip<mqtt::DestinationSetPayload>(MakeMessage("MSG-0008", mqtt::MessageType::kDestinationSet,
                                                              mqtt::DestinationSetPayload{
                                                                  .request_id = "REQ-0002",
-                                                                 .job_id = "JOB-0001",
+                                                                 .work_id = std::string(kTestWorkId),
                                                                  .command = mqtt::ControlCommand::kDestinationSet,
                                                                  .target_device_id = "PI-LT-01",
                                                                  .destination = "DEST-01",
@@ -347,9 +359,52 @@ void TestMqttCodecInvalidInputs() {
     assert(!unknown_result.IsSuccess());
     assert(unknown_result.status.error == mqtt::CodecError::kUnknownCommandResult);
 
+    const auto invalid_work_id = mqtt::DeserializeMessage(R"json(
+        {
+            "protocolVersion": "1.0",
+            "messageId": "MSG-BAD-WORK-01",
+            "messageType": "WORK_COMPLETED",
+            "sourceId": "PI-01",
+            "timestamp": "2026-08-20T14:31:30+09:00",
+            "data": { "workId": "JOB-0001" }
+        }
+    )json");
+    assert(!invalid_work_id.IsSuccess());
+    assert(invalid_work_id.status.error == mqtt::CodecError::kInvalidFieldValue);
+    assert(invalid_work_id.status.field == "workId");
+
+    const auto invalid_work_message = MakeMessage("MSG-BAD-WORK-02", mqtt::MessageType::kWorkCompleted,
+                                                  mqtt::WorkCompletedPayload{
+                                                      .work_id = "JOB-0001",
+                                                  });
+    const auto invalid_work_encoded = mqtt::SerializeMessage(invalid_work_message);
+    assert(!invalid_work_encoded.IsSuccess());
+    assert(invalid_work_encoded.status.error == mqtt::CodecError::kInvalidFieldValue);
+    assert(invalid_work_encoded.status.field == "workId");
+
+    const auto invalid_error_level = mqtt::DeserializeMessage(R"json(
+        {
+            "protocolVersion": "1.0",
+            "messageId": "MSG-BAD-ERROR-01",
+            "messageType": "ERROR_OCCURRED",
+            "sourceId": "PI-01",
+            "timestamp": "2026-08-20T14:31:30+09:00",
+            "data": {
+                "jobId": null,
+                "errorCode": "ERR-01",
+                "errorLevel": "SEVERE",
+                "currentState": "ERROR",
+                "message": "failure",
+                "distance": null
+            }
+        }
+    )json");
+    assert(!invalid_error_level.IsSuccess());
+    assert(invalid_error_level.status.error == mqtt::CodecError::kInvalidFieldValue);
+    assert(invalid_error_level.status.field == "errorLevel");
+
     const mqtt::MqttMessage mismatched_message = MakeMessage("MSG-BAD-09", mqtt::MessageType::kHeartbeat,
                                                              mqtt::BoxDetectedPayload{
-                                                                 .job_id = "JOB-0001",
                                                                  .detected = true,
                                                                  .image_name = "JOB-0001.jpg",
                                                              });
@@ -388,6 +443,20 @@ void TestMqttTimestampValidation() {
     assert(!invalid_timestamp.IsSuccess());
     assert(invalid_timestamp.status.error == mqtt::CodecError::kInvalidFieldValue);
     assert(invalid_timestamp.status.field == "timestamp");
+
+    auto invalid_timestamp_message = MakeMessage("MSG-BAD-TIME-02", mqtt::MessageType::kHeartbeat,
+                                                 mqtt::HeartbeatPayload{
+                                                     .status = mqtt::ConnectionState::kOnline,
+                                                     .current_state = "IDLE",
+                                                     .uptime = 1,
+                                                     .job_id = std::nullopt,
+                                                     .error_code = std::nullopt,
+                                                 });
+    invalid_timestamp_message.timestamp = "2026-08-20T14:31:30";
+    const auto invalid_encoded = mqtt::SerializeMessage(invalid_timestamp_message);
+    assert(!invalid_encoded.IsSuccess());
+    assert(invalid_encoded.status.error == mqtt::CodecError::kInvalidFieldValue);
+    assert(invalid_encoded.status.field == "timestamp");
 }
 
 void TestMqttTopicMessageValidation() {
@@ -436,6 +505,12 @@ void TestMqttTopicMessageValidation() {
 
     assert(mqtt::ValidateTopicMessage(mqtt::kSystemBroadcastCommandTopic, broadcast).IsSuccess());
     assert(mqtt::ToString(mqtt::TopicMessageError::kSourceIdMismatch) == "SOURCE_ID_MISMATCH");
+
+    const auto work_completed = MakeMessage("MSG-TOPIC-04", mqtt::MessageType::kWorkCompleted,
+                                            mqtt::WorkCompletedPayload{
+                                                .work_id = std::string(kTestWorkId),
+                                            });
+    assert(mqtt::ValidateTopicMessage("device/PI-01/event", work_completed).IsSuccess());
 }
 }  // namespace
 
@@ -476,6 +551,10 @@ int main() {
     assert(invalid_id_rejected);
 
     assert(mqtt::MessageTypeFromString("CONTROL_COMMAND") == mqtt::MessageType::kControlCommand);
+    assert(mqtt::MessageTypeFromString("WORK_CREATED") == mqtt::MessageType::kWorkCreated);
+    assert(mqtt::MessageTypeFromString("WORK_COMPLETED") == mqtt::MessageType::kWorkCompleted);
+    assert(mqtt::kWorkIdField == "workId");
+    assert(mqtt::IsValidUuid(kTestWorkId));
     assert(mqtt::ControlCommandFromString("EMERGENCY_STOP") == mqtt::ControlCommand::kEmergencyStop);
     assert(mqtt::CommandResultFromString("RECEIVED") == mqtt::CommandResult::kReceived);
     assert(mqtt::ToString(mqtt::CommandResult::kDuplicated) == "DUPLICATED");

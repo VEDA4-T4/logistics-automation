@@ -12,6 +12,7 @@ struct MqttConfig final {
     std::string client_id;
     std::string username;
     std::string password;
+    std::filesystem::path device_registry_path;
     std::uint16_t port{ 1883 };
     std::uint16_t keep_alive_seconds{ 30 };
     std::uint32_t reconnect_min_delay_seconds{ 1 };

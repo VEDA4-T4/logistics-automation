@@ -38,7 +38,7 @@ MqttMessageProcessor::MqttMessageProcessor(std::string device_id) : device_id_(s
     }
 }
 
-IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, std::string_view payload) const {
+IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, std::string_view payload) {
     auto decoded = mqtt::DeserializeMessage(payload);
     if (!decoded.IsSuccess()) {
         return {
@@ -68,9 +68,43 @@ IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, 
         };
     }
 
+    const auto canonical = mqtt::SerializeMessage(decoded.value);
+    if (!canonical.IsSuccess()) {
+        return {
+            .message = {},
+            .error = "unable to normalize MQTT command payload",
+        };
+    }
+
+    {
+        std::lock_guard lock(recent_messages_mutex_);
+        const auto existing = recent_messages_.find(decoded.value.message_id);
+        if (existing != recent_messages_.end()) {
+            if (existing->second != canonical.payload) {
+                return {
+                    .message = {},
+                    .error = "messageId was reused with a different MQTT command payload",
+                };
+            }
+            return {
+                .message = std::move(decoded.value),
+                .error = {},
+                .duplicate = true,
+            };
+        }
+
+        recent_message_order_.push_back(decoded.value.message_id);
+        recent_messages_.emplace(decoded.value.message_id, canonical.payload);
+        if (recent_message_order_.size() > kRecentMessageLimit) {
+            recent_messages_.erase(recent_message_order_.front());
+            recent_message_order_.pop_front();
+        }
+    }
+
     return {
         .message = std::move(decoded.value),
         .error = {},
+        .duplicate = false,
     };
 }
 

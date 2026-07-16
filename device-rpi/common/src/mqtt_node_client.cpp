@@ -57,7 +57,10 @@ private:
 class MqttNodeClient::Impl final {
 public:
     Impl(MqttNodeConfig config, std::string device_type)
-        : config_(std::move(config)), device_type_(std::move(device_type)), processor_(config_.device_id) {}
+        : config_(std::move(config)),
+          device_type_(std::move(device_type)),
+          processor_(config_.device_id),
+          message_session_id_(GenerateMessageSessionId()) {}
 
     ~Impl() {
         Stop();
@@ -138,8 +141,7 @@ public:
         if (was_connected) {
             try {
                 const auto offline = processor_.EncodeOfflineStatus(
-                    "OFFLINE-" + config_.device_id + '-' + std::to_string(connection_generation_),
-                    CurrentIso8601Timestamp());
+                    LifecycleMessageId("OFFLINE", connection_generation_), CurrentIso8601Timestamp());
                 offline_queued =
                     PublishEncoded(mqtt::DeviceStatusTopic(config_.device_id), offline, 1, true, "offline status");
             } catch (...) {
@@ -174,6 +176,10 @@ public:
     }
 
 private:
+    [[nodiscard]] std::string LifecycleMessageId(std::string_view kind, std::uint64_t sequence) const {
+        return std::string(kind) + '-' + MakeMessageId(config_.device_id, message_session_id_, sequence);
+    }
+
     [[nodiscard]] bool PublishEncoded(const std::string& topic, const mqtt::EncodeResult& encoded, int qos, bool retain,
                                       std::string_view description) {
         if (!encoded.IsSuccess() || encoded.payload.size() > static_cast<std::size_t>(INT_MAX)) {
@@ -198,21 +204,20 @@ private:
         const auto generation = ++connection_generation_;
         const std::string timestamp = CurrentIso8601Timestamp();
 
-        const auto online = processor_.EncodeOnlineStatus(
-            "STATUS-" + config_.device_id + '-' + std::to_string(generation), timestamp, "IDLE");
+        const auto online = processor_.EncodeOnlineStatus(LifecycleMessageId("STATUS", generation), timestamp, "IDLE");
         const bool online_published =
             PublishEncoded(mqtt::DeviceStatusTopic(config_.device_id), online, 1, true, "online status");
 
         const auto registration =
-            processor_.EncodeDeviceRegistration("REGISTER-" + config_.device_id + '-' + std::to_string(generation),
-                                                timestamp, device_type_, config_.node_name, config_.ip_address, false);
+            processor_.EncodeDeviceRegistration(LifecycleMessageId("REGISTER", generation), timestamp, device_type_,
+                                                config_.node_name, config_.ip_address, false);
         const bool registration_published =
             PublishEncoded(mqtt::DeviceRegisterTopic(config_.device_id), registration, 1, false, "device registration");
         return online_published && registration_published;
     }
 
     [[nodiscard]] int ConfigureLastWill() {
-        const auto encoded = processor_.EncodeOfflineStatus("WILL-" + config_.device_id, CurrentIso8601Timestamp());
+        const auto encoded = processor_.EncodeOfflineStatus(LifecycleMessageId("WILL", 0), CurrentIso8601Timestamp());
         if (!encoded.IsSuccess() || encoded.payload.size() > static_cast<std::size_t>(INT_MAX)) {
             return MOSQ_ERR_INVAL;
         }
@@ -264,6 +269,10 @@ private:
             std::cerr << "[device][mqtt][ERROR] " << decoded.error << '\n';
             return;
         }
+        if (decoded.duplicate) {
+            std::clog << "[device][mqtt][INFO] duplicate MQTT command ignored: " << decoded.message.message_id << '\n';
+            return;
+        }
 
         CommandHandler handler;
         {
@@ -298,6 +307,7 @@ private:
     MqttNodeConfig config_;
     std::string device_type_;
     MqttMessageProcessor processor_;
+    std::string message_session_id_;
     mosquitto* client_{ nullptr };
     std::atomic_bool running_{ false };
     std::atomic_bool connected_{ false };

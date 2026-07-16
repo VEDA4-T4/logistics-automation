@@ -74,6 +74,7 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
 
     const auto started_at = std::chrono::steady_clock::now();
     auto next_heartbeat = started_at;
+    const std::string message_session_id = GenerateMessageSessionId();
     std::uint64_t message_sequence = 1;
 
     std::clog << "[device][INFO] device node started: id=" << device_id << "; role=" << contracts::ToString(role_)
@@ -83,9 +84,9 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
         const auto now = std::chrono::steady_clock::now();
         if (mqtt_client.IsConnected() && now >= next_heartbeat) {
             const auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - started_at).count();
-            static_cast<void>(mqtt_client.PublishHeartbeat(MakeMessageId(device_id, message_sequence++),
-                                                           CurrentIso8601Timestamp(), "IDLE",
-                                                           static_cast<std::uint64_t>(uptime)));
+            static_cast<void>(
+                mqtt_client.PublishHeartbeat(MakeMessageId(device_id, message_session_id, message_sequence++),
+                                             CurrentIso8601Timestamp(), "IDLE", static_cast<std::uint64_t>(uptime)));
             next_heartbeat = now + contracts::mqtt::kHeartbeatInterval;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

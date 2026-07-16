@@ -101,6 +101,7 @@ MqttConfig LoadMqttConfig(const std::filesystem::path& path) {
     std::size_t line_number{};
     bool found_mqtt_section = false;
     std::unordered_set<std::string> assigned_keys;
+    bool registry_path_assigned = false;
 
     while (std::getline(input, line)) {
         ++line_number;
@@ -119,7 +120,7 @@ MqttConfig LoadMqttConfig(const std::filesystem::path& path) {
             continue;
         }
 
-        if (section != "mqtt") {
+        if (section != "mqtt" && section != "device_registry") {
             continue;
         }
 
@@ -130,7 +131,18 @@ MqttConfig LoadMqttConfig(const std::filesystem::path& path) {
         const std::string_view key = Trim(text.substr(0, delimiter));
         const std::string_view value = Trim(text.substr(delimiter + 1));
         if (key.empty()) {
-            ThrowLineError(path, line_number, "MQTT setting key is empty");
+            ThrowLineError(path, line_number, "configuration key is empty");
+        }
+        if (section == "device_registry") {
+            if (key != "path") {
+                ThrowLineError(path, line_number, "unknown [device_registry] setting: " + std::string(key));
+            }
+            if (registry_path_assigned) {
+                ThrowLineError(path, line_number, "duplicate [device_registry] setting: path");
+            }
+            config.device_registry_path = value;
+            registry_path_assigned = true;
+            continue;
         }
         if (!assigned_keys.emplace(key).second) {
             ThrowLineError(path, line_number, "duplicate [mqtt] setting: " + std::string(key));
@@ -144,6 +156,11 @@ MqttConfig LoadMqttConfig(const std::filesystem::path& path) {
     if (!config.IsValid()) {
         throw ConfigError("invalid [mqtt] configuration in " + path.string() +
                           ": host/client_id are required, delays must be ordered, and password requires username");
+    }
+    if (config.device_registry_path.empty()) {
+        config.device_registry_path = path.parent_path() / "devices.json";
+    } else if (config.device_registry_path.is_relative()) {
+        config.device_registry_path = path.parent_path() / config.device_registry_path;
     }
     return config;
 }

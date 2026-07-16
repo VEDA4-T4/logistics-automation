@@ -14,7 +14,7 @@ namespace {
 namespace device = logistics::device;
 namespace mqtt = logistics::contracts::mqtt;
 
-[[nodiscard]] std::string MakeCommandPayload(std::string target_device_id) {
+[[nodiscard]] std::string MakeCommandPayload(std::string target_device_id, std::string request_id = "REQ-COMMAND-01") {
     const mqtt::MqttMessage command{
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = "MSG-COMMAND-01",
@@ -23,7 +23,7 @@ namespace mqtt = logistics::contracts::mqtt;
         .timestamp = "2026-07-15T17:30:00+09:00",
         .data =
             mqtt::ControlCommandPayload{
-                .request_id = "REQ-COMMAND-01",
+                .request_id = std::move(request_id),
                 .command = mqtt::ControlCommand::kStatusRequest,
                 .target_device_id = std::move(target_device_id),
                 .component_id = {},
@@ -37,7 +37,7 @@ namespace mqtt = logistics::contracts::mqtt;
 }
 
 void TestCommandDecoding() {
-    const device::MqttMessageProcessor processor("PI-01");
+    device::MqttMessageProcessor processor("PI-01");
     const auto decoded = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
 
     assert(decoded.IsSuccess());
@@ -45,6 +45,15 @@ void TestCommandDecoding() {
     const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(decoded.message);
     assert(command != nullptr);
     assert(command->target_device_id == "PI-01");
+
+    const auto duplicate = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
+    assert(duplicate.IsSuccess());
+    assert(duplicate.duplicate);
+
+    const auto conflicting_id =
+        processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01", "REQ-COMMAND-02"));
+    assert(!conflicting_id.IsSuccess());
+    assert(conflicting_id.error.find("reused") != std::string::npos);
 
     const auto wrong_device = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-02"), MakeCommandPayload("PI-02"));
     assert(!wrong_device.IsSuccess());

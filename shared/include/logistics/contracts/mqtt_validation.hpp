@@ -50,8 +50,9 @@ struct TopicMessageStatus {
 namespace validation_detail {
 
 [[nodiscard]] constexpr bool IsDeviceEventMessage(MessageType type) noexcept {
-    return type == MessageType::kBoxDetected || type == MessageType::kPositionDetected ||
-           type == MessageType::kBarcodeDetected || type == MessageType::kProductImage;
+    return type == MessageType::kBoxDetected || type == MessageType::kWorkCompleted ||
+           type == MessageType::kPositionDetected || type == MessageType::kBarcodeDetected ||
+           type == MessageType::kProductImage;
 }
 
 [[nodiscard]] constexpr bool IsMessageTypeAllowed(TopicKind kind, MessageType type) noexcept {

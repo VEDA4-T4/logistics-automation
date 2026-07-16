@@ -9,6 +9,10 @@ reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
 clean_session=true
 
+[device_registry]
+# Relative paths are resolved from this server.ini file.
+path=devices.json
+
 [database]
 path=/var/lib/logistics/logistics.db
 

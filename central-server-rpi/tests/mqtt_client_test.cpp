@@ -111,6 +111,9 @@ reconnect_min_delay_seconds=2
 reconnect_max_delay_seconds=20
 clean_session=yes
 
+[device_registry]
+path=registry/devices.json
+
 [database]
 path=/var/lib/logistics/logistics.db
 )ini");
@@ -125,6 +128,7 @@ path=/var/lib/logistics/logistics.db
     assert(config.reconnect_min_delay_seconds == 2);
     assert(config.reconnect_max_delay_seconds == 20);
     assert(config.clean_session);
+    assert(config.device_registry_path == path.parent_path() / "registry/devices.json");
     assert(config.IsValid());
 
     std::error_code error;
@@ -158,6 +162,7 @@ client_id=central-server
         .client_id = "central-server-test",
         .username = {},
         .password = {},
+        .device_registry_path = {},
         .port = 1883,
         .keep_alive_seconds = 30,
         .reconnect_min_delay_seconds = 1,
