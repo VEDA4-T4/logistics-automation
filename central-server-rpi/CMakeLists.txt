@@ -75,6 +75,18 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
             Threads::Threads
     )
     logistics_enable_warnings(logistics_central_server)
+
+    add_executable(central_server_mqtt_smoke tests/mqtt_publish_smoke.cpp)
+    target_include_directories(central_server_mqtt_smoke PRIVATE include)
+    target_link_libraries(
+        central_server_mqtt_smoke
+        PRIVATE
+            logistics::central_server_mosquitto
+            logistics::central_server_mqtt_core
+            logistics::contracts
+            Threads::Threads
+    )
+    logistics_enable_warnings(central_server_mqtt_smoke)
 endif()
 
 if(BUILD_TESTING)
