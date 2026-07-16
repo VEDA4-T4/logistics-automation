@@ -1,0 +1,2 @@
+# Allow the runtime service to access /dev/vedauart through the dialout group.
+KERNEL=="vedauart", MODE="0660", GROUP="dialout"

@@ -31,6 +31,9 @@ offset을 포함한 ISO 8601 형식을 사용합니다.
 Raspberry Pi/STM32 장치를 식별하며, `componentId`는 그 장치가 제어하는 개별 모터나 센서를
 식별합니다. 명령을 재전송할 때는 동일한 `messageId`와 `requestId`를 유지합니다.
 
+`BOX_DETECTED`를 저장하면 중앙 서버는 UUID형 `workId`를 발급해 `WORK_CREATED`로 응답합니다. 이후의 위치,
+이미지, 바코드, 상품 정보, 목적지 및 `WORK_COMPLETED` payload는 같은 `workId`를 포함해야 합니다.
+
 - heartbeat: QoS 0, retain 미사용, 5초 간격
 - 장치 상태: QoS 0 또는 1, 최신 상태 retain 가능
 - 제어·목적지·응답: QoS 1, retain 미사용

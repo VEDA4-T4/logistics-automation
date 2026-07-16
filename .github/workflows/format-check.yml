@@ -36,7 +36,9 @@ jobs:
             -not -path "./.git/*" \
             -not -path "./stm32/*/Core/*" \
             -not -path "./stm32/*/Drivers/*" \
-            -not -path "./stm32/*/Middlewares/*")
+            -not -path "./stm32/*/Middlewares/*" \
+            -not -path "./device-rpi/kernel/*" \
+            -not -path "./.git/*")
 
           if [ -z "$FILES" ]; then
             echo "No C/C++ files found."
