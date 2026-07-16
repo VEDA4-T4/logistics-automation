@@ -45,6 +45,9 @@ int main() {
     assert(invalid_id_rejected);
 
     assert(mqtt::MessageTypeFromString("CONTROL_COMMAND") == mqtt::MessageType::kControlCommand);
+    assert(mqtt::MessageTypeFromString("WORK_CREATED") == mqtt::MessageType::kWorkCreated);
+    assert(mqtt::MessageTypeFromString("WORK_COMPLETED") == mqtt::MessageType::kWorkCompleted);
+    assert(mqtt::kWorkIdField == "workId");
     assert(mqtt::ControlCommandFromString("EMERGENCY_STOP") == mqtt::ControlCommand::kEmergencyStop);
     assert(mqtt::CommandResultFromString("RECEIVED") == mqtt::CommandResult::kReceived);
     assert(mqtt::ToString(mqtt::CommandResult::kDuplicated) == "DUPLICATED");

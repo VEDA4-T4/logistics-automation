@@ -143,6 +143,7 @@ ui_*.h
 *.qmlc
 *.jsc
 Makefile*
+!device-rpi/kernel/vedauart/Makefile
 *build-*
 build/
 *.qm
@@ -164,6 +165,15 @@ CMakeLists.txt.user*
 
 # QtCreator 4.8< compilation database
 compile_commands.json
+
+# Out-of-tree Linux kernel module artifacts
+*.ko
+*.mod
+*.mod.c
+*.order
+Module.symvers
+.*.cmd
+.tmp_versions/
 
 # QtCreator local machine specific files for imported projects
 *creator.user*

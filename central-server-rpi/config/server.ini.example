@@ -5,8 +5,15 @@ client_id=central-server
 
 [database]
 path=/var/lib/logistics/logistics.db
+migration_dir=/usr/share/logistics/migrations
+busy_timeout_ms=5000
 
 [storage]
 image_root=/var/lib/logistics/images
 log_root=/var/log/logistics
-
+cleanup_interval_hours=24
+mqtt_retention_days=30
+device_status_retention_days=30
+error_retention_days=180
+security_retention_days=180
+image_retention_days=30
