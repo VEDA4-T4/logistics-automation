@@ -22,6 +22,7 @@ jobs:
 
       - name: Check formatting
         run: |
+          # CubeMX-generated and third-party sources keep upstream formatting.
           FILES=$(find . \
             -type f \( \
               -name "*.cpp" -o \
@@ -32,7 +33,10 @@ jobs:
               -name "*.hh" \
             \) \
             -not -path "./build/*" \
-            -not -path "./.git/*")
+            -not -path "./.git/*" \
+            -not -path "./stm32/*/Core/*" \
+            -not -path "./stm32/*/Drivers/*" \
+            -not -path "./stm32/*/Middlewares/*")
 
           if [ -z "$FILES" ]; then
             echo "No C/C++ files found."
