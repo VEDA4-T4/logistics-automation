@@ -65,7 +65,7 @@ int main() {
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(database.IntegrityCheck().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 2);
 
     server::StorageConfig storage;
     storage.image_root = root / "images";

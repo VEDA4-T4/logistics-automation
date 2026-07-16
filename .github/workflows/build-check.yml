@@ -19,7 +19,16 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake curl g++ ninja-build
+          sudo apt-get install -y \
+            cmake \
+            curl \
+            g++ \
+            libcurl4-openssl-dev \
+            libmicrohttpd-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            ninja-build \
+            pkg-config
 
       - name: Cache OpenCV
         id: cache-opencv
@@ -45,3 +54,6 @@ jobs:
 
       - name: Build
         run: cmake --build build --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
