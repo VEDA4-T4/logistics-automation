@@ -21,6 +21,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -46,11 +47,254 @@
 /* USER CODE BEGIN Variables */
 
 /* USER CODE END Variables */
+/* Definitions for SensorTask */
+osThreadId_t SensorTaskHandle;
+const osThreadAttr_t SensorTask_attributes = {
+  .name = "SensorTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for CommRxTask */
+osThreadId_t CommRxTaskHandle;
+const osThreadAttr_t CommRxTask_attributes = {
+  .name = "CommRxTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for ControlTask */
+osThreadId_t ControlTaskHandle;
+const osThreadAttr_t ControlTask_attributes = {
+  .name = "ControlTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for SafetyTask */
+osThreadId_t SafetyTaskHandle;
+const osThreadAttr_t SafetyTask_attributes = {
+  .name = "SafetyTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
+/* Definitions for CommTxTask */
+osThreadId_t CommTxTaskHandle;
+const osThreadAttr_t CommTxTask_attributes = {
+  .name = "CommTxTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for HealthTask */
+osThreadId_t HealthTaskHandle;
+const osThreadAttr_t HealthTask_attributes = {
+  .name = "HealthTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
+/* Definitions for UnloadTask */
+osThreadId_t UnloadTaskHandle;
+const osThreadAttr_t UnloadTask_attributes = {
+  .name = "UnloadTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
 /* USER CODE END FunctionPrototypes */
+
+void StartSensorTask(void *argument);
+void StartCommRxTask(void *argument);
+void StartControlTask(void *argument);
+void StartSafetyTask(void *argument);
+void StartCommTxTask(void *argument);
+void StartHealthTask(void *argument);
+void StartUnloadTask(void *argument);
+
+void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
+
+/**
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
+void MX_FREERTOS_Init(void) {
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of SensorTask */
+  SensorTaskHandle = osThreadNew(StartSensorTask, NULL, &SensorTask_attributes);
+
+  /* creation of CommRxTask */
+  CommRxTaskHandle = osThreadNew(StartCommRxTask, NULL, &CommRxTask_attributes);
+
+  /* creation of ControlTask */
+  ControlTaskHandle = osThreadNew(StartControlTask, NULL, &ControlTask_attributes);
+
+  /* creation of SafetyTask */
+  SafetyTaskHandle = osThreadNew(StartSafetyTask, NULL, &SafetyTask_attributes);
+
+  /* creation of CommTxTask */
+  CommTxTaskHandle = osThreadNew(StartCommTxTask, NULL, &CommTxTask_attributes);
+
+  /* creation of HealthTask */
+  HealthTaskHandle = osThreadNew(StartHealthTask, NULL, &HealthTask_attributes);
+
+  /* creation of UnloadTask */
+  UnloadTaskHandle = osThreadNew(StartUnloadTask, NULL, &UnloadTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
+}
+
+/* USER CODE BEGIN Header_StartSensorTask */
+/**
+  * @brief  Function implementing the SensorTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartSensorTask */
+__weak void StartSensorTask(void *argument)
+{
+  /* USER CODE BEGIN StartSensorTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartSensorTask */
+}
+
+/* USER CODE BEGIN Header_StartCommRxTask */
+/**
+* @brief Function implementing the CommRxTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartCommRxTask */
+__weak void StartCommRxTask(void *argument)
+{
+  /* USER CODE BEGIN StartCommRxTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartCommRxTask */
+}
+
+/* USER CODE BEGIN Header_StartControlTask */
+/**
+* @brief Function implementing the ControlTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartControlTask */
+__weak void StartControlTask(void *argument)
+{
+  /* USER CODE BEGIN StartControlTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartControlTask */
+}
+
+/* USER CODE BEGIN Header_StartSafetyTask */
+/**
+* @brief Function implementing the SafetyTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartSafetyTask */
+__weak void StartSafetyTask(void *argument)
+{
+  /* USER CODE BEGIN StartSafetyTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartSafetyTask */
+}
+
+/* USER CODE BEGIN Header_StartCommTxTask */
+/**
+* @brief Function implementing the CommTxTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartCommTxTask */
+__weak void StartCommTxTask(void *argument)
+{
+  /* USER CODE BEGIN StartCommTxTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartCommTxTask */
+}
+
+/* USER CODE BEGIN Header_StartHealthTask */
+/**
+* @brief Function implementing the HealthTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartHealthTask */
+__weak void StartHealthTask(void *argument)
+{
+  /* USER CODE BEGIN StartHealthTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartHealthTask */
+}
+
+/* USER CODE BEGIN Header_StartUnloadTask */
+/**
+* @brief Function implementing the UnloadTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartUnloadTask */
+__weak void StartUnloadTask(void *argument)
+{
+  /* USER CODE BEGIN StartUnloadTask */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END StartUnloadTask */
+}
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
