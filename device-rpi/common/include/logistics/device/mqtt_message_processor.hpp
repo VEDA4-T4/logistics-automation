@@ -28,6 +28,14 @@ public:
         std::string message_id, std::string timestamp, std::string current_state, std::uint64_t uptime,
         std::optional<std::string> job_id = std::nullopt, std::optional<std::string> error_code = std::nullopt) const;
 
+    [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceRegistration(std::string message_id, std::string timestamp,
+                                                                         std::string device_type, std::string node_name,
+                                                                         std::string ip_address,
+                                                                         bool uart_connected) const;
+
+    [[nodiscard]] contracts::mqtt::EncodeResult EncodeOnlineStatus(std::string message_id, std::string timestamp,
+                                                                   std::string current_state = "IDLE") const;
+
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeOfflineStatus(std::string message_id,
                                                                     std::string timestamp) const;
 

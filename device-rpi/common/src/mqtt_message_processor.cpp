@@ -8,6 +8,28 @@
 
 namespace logistics::device {
 
+namespace {
+
+[[nodiscard]] contracts::mqtt::EncodeResult ValidateAndSerialize(std::string_view topic,
+                                                                 const contracts::mqtt::MqttMessage& message) {
+    namespace mqtt = contracts::mqtt;
+
+    const auto validation = mqtt::ValidateTopicMessage(topic, message);
+    if (!validation.IsSuccess()) {
+        return {
+            .payload = {},
+            .status = {
+                .error = mqtt::CodecError::kInvalidPayload,
+                .field = std::string(mqtt::kDataField),
+                .message = validation.message,
+            },
+        };
+    }
+    return mqtt::SerializeMessage(message);
+}
+
+}  // namespace
+
 namespace mqtt = contracts::mqtt;
 
 MqttMessageProcessor::MqttMessageProcessor(std::string device_id) : device_id_(std::move(device_id)) {
@@ -72,18 +94,49 @@ mqtt::EncodeResult MqttMessageProcessor::EncodeHeartbeat(std::string message_id,
             },
     };
 
-    const auto validation = mqtt::ValidateTopicMessage(mqtt::DeviceHeartbeatTopic(device_id_), message);
-    if (!validation.IsSuccess()) {
-        return {
-            .payload = {},
-            .status = {
-                .error = mqtt::CodecError::kInvalidPayload,
-                .field = std::string(mqtt::kDataField),
-                .message = validation.message,
+    return ValidateAndSerialize(mqtt::DeviceHeartbeatTopic(device_id_), message);
+}
+
+mqtt::EncodeResult MqttMessageProcessor::EncodeDeviceRegistration(std::string message_id, std::string timestamp,
+                                                                  std::string device_type, std::string node_name,
+                                                                  std::string ip_address, bool uart_connected) const {
+    const mqtt::MqttMessage message{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = std::move(message_id),
+        .message_type = mqtt::MessageType::kDeviceRegister,
+        .source_id = device_id_,
+        .timestamp = std::move(timestamp),
+        .data =
+            mqtt::DeviceRegisterPayload{
+                .device_type = std::move(device_type),
+                .node_name = std::move(node_name),
+                .status = mqtt::ConnectionState::kOnline,
+                .ip_address = std::move(ip_address),
+                .uart_connected = uart_connected,
             },
-        };
-    }
-    return mqtt::SerializeMessage(message);
+    };
+
+    return ValidateAndSerialize(mqtt::DeviceRegisterTopic(device_id_), message);
+}
+
+mqtt::EncodeResult MqttMessageProcessor::EncodeOnlineStatus(std::string message_id, std::string timestamp,
+                                                            std::string current_state) const {
+    const mqtt::MqttMessage message{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = std::move(message_id),
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = device_id_,
+        .timestamp = std::move(timestamp),
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = mqtt::ConnectionState::kOnline,
+                .current_state = std::move(current_state),
+                .job_id = std::nullopt,
+                .error_code = std::nullopt,
+            },
+    };
+
+    return ValidateAndSerialize(mqtt::DeviceStatusTopic(device_id_), message);
 }
 
 mqtt::EncodeResult MqttMessageProcessor::EncodeOfflineStatus(std::string message_id, std::string timestamp) const {
@@ -102,7 +155,7 @@ mqtt::EncodeResult MqttMessageProcessor::EncodeOfflineStatus(std::string message
             },
     };
 
-    return mqtt::SerializeMessage(message);
+    return ValidateAndSerialize(mqtt::DeviceStatusTopic(device_id_), message);
 }
 
 }  // namespace logistics::device

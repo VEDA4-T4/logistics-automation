@@ -73,8 +73,13 @@ int Application::Run(int argc, char* argv[]) {
             return;
         }
 
-        device_manager.HandleMessage(mqtt::ParseTopic(topic), decoded.value);
+        const auto parsed_topic = mqtt::ParseTopic(topic);
+        device_manager.HandleMessage(parsed_topic, decoded.value);
         std::clog << "[server][INFO] MQTT message received: " << topic << '\n';
+        if (decoded.value.message_type == mqtt::MessageType::kDeviceRegister) {
+            std::clog << "[server][INFO] device registered: " << parsed_topic.endpoint_id
+                      << "; registered devices=" << device_manager.RegisteredDeviceCount() << '\n';
+        }
     });
 
     stop_requested = 0;

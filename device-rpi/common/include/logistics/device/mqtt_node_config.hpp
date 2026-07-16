@@ -9,6 +9,8 @@ namespace logistics::device {
 
 struct MqttNodeConfig final {
     std::string device_id;
+    std::string node_name;
+    std::string ip_address;
     std::string host;
     std::string client_id;
     std::string username;

@@ -14,7 +14,7 @@ class MqttNodeClient final {
 public:
     using CommandHandler = std::function<void(const contracts::mqtt::MqttMessage& message)>;
 
-    explicit MqttNodeClient(MqttNodeConfig config);
+    MqttNodeClient(MqttNodeConfig config, std::string device_type);
     ~MqttNodeClient();
 
     MqttNodeClient(const MqttNodeClient&) = delete;

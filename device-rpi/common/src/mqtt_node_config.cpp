@@ -59,6 +59,14 @@ void AssignDeviceValue(MqttNodeConfig& config, const std::filesystem::path& path
         config.device_id = value;
         return;
     }
+    if (key == "node_name") {
+        config.node_name = value;
+        return;
+    }
+    if (key == "ip_address") {
+        config.ip_address = value;
+        return;
+    }
     ThrowLineError(path, line_number, "unknown [device] setting: " + std::string(key));
 }
 
@@ -92,8 +100,8 @@ void AssignMqttValue(MqttNodeConfig& config, const std::filesystem::path& path, 
 }  // namespace
 
 bool MqttNodeConfig::IsValid() const noexcept {
-    return contracts::mqtt::IsValidTopicLevel(device_id) && !host.empty() &&
-           contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
+    return contracts::mqtt::IsValidTopicLevel(device_id) && !node_name.empty() && !ip_address.empty() &&
+           !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
            reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
            (password.empty() || !username.empty());
 }

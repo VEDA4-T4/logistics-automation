@@ -59,7 +59,7 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
     }
 
     const std::string device_id = config.device_id;
-    MqttNodeClient mqtt_client(std::move(config));
+    MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(role_)));
     mqtt_client.SetCommandHandler([](const contracts::mqtt::MqttMessage& message) {
         std::clog << "[device][INFO] MQTT command received: " << contracts::mqtt::ToString(message.message_type)
                   << '\n';

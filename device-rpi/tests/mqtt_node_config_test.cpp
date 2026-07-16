@@ -26,6 +26,8 @@ void TestConfigLoading() {
         output << R"ini(
 [device]
 device_id=PI-01
+node_name=vision-node-01
+ip_address=192.168.0.21
 
 [mqtt]
 host=192.168.0.10
@@ -42,6 +44,8 @@ clean_session=yes
 
     const auto config = device::LoadMqttNodeConfig(path);
     assert(config.device_id == "PI-01");
+    assert(config.node_name == "vision-node-01");
+    assert(config.ip_address == "192.168.0.21");
     assert(config.host == "192.168.0.10");
     assert(config.port == 1884);
     assert(config.client_id == "PI-01");
@@ -59,9 +63,37 @@ clean_session=yes
     std::filesystem::remove(path, error);
 }
 
+void TestRegistrationFieldsAreRequired() {
+    const auto path = MakeTemporaryConfigPath();
+    {
+        std::ofstream output(path);
+        assert(output);
+        output << R"ini(
+[device]
+device_id=PI-01
+
+[mqtt]
+host=192.168.0.10
+client_id=PI-01
+)ini";
+    }
+
+    bool rejected = false;
+    try {
+        static_cast<void>(device::LoadMqttNodeConfig(path));
+    } catch (const device::NodeConfigError&) {
+        rejected = true;
+    }
+    assert(rejected);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 }  // namespace
 
 int main() {
     TestConfigLoading();
+    TestRegistrationFieldsAreRequired();
     return 0;
 }

@@ -1,5 +1,7 @@
 [device]
 device_id=PI-TEST
+node_name=vision-node-01
+ip_address=192.168.0.21
 
 [mqtt]
 host=127.0.0.1

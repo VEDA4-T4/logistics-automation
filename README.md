@@ -54,9 +54,9 @@ topic을 다시 구독합니다. 연결 오류는 표준 오류로 기록되어 
 
 ### 장치 Raspberry Pi MQTT 설정
 
-장치 노드는 `device-rpi/config/node.ini.example`을 복사해 고유 `device_id`, broker 주소와 인증 정보를
-설정합니다. 중앙 서버와 함께 기본 빌드하면 같은 `libmosquitto` 라이브러리를 사용하도록 장치 MQTT runtime도
-활성화됩니다.
+장치 노드는 `device-rpi/config/node.ini.example`을 복사해 고유 `device_id`, `node_name`, 장치 IP 주소,
+broker 주소와 인증 정보를 설정합니다. 중앙 서버와 함께 기본 빌드하면 같은 `libmosquitto` 라이브러리를
+사용하도록 장치 MQTT runtime도 활성화됩니다.
 
 ```sh
 cp device-rpi/config/node.ini.example device-rpi/config/node.ini
@@ -66,9 +66,10 @@ cmake --build build
 ```
 
 설정 경로는 첫 번째 실행 인수 또는 `LOGISTICS_DEVICE_CONFIG` 환경 변수로 지정할 수 있습니다. 연결되면
-`device/{deviceId}/command`와 `system/broadcast/command`를 구독하고, 공통 JSON codec으로 생성한 heartbeat를
-5초마다 `device/{deviceId}/heartbeat`로 발행합니다. 비정상 연결 종료 시에는 codec으로 생성한 `OFFLINE` 상태가
-Last Will로 발행됩니다.
+`device/{deviceId}/command`와 `system/broadcast/command`를 구독하고, retained `ONLINE` 상태와 장치 등록을
+공통 JSON codec으로 발행합니다. 이어서 heartbeat를 5초마다 `device/{deviceId}/heartbeat`로 발행합니다.
+정상 종료 시에는 retained `OFFLINE` 상태를 먼저 발행하고 연결을 종료합니다. 비정상 연결 종료 시에는 같은
+`OFFLINE` 상태가 Last Will로 발행되며, 재연결하면 retained `ONLINE` 상태가 이를 덮어쓰고 장치를 다시 등록합니다.
 
 ### 중앙관제 MQTT 설정
 
