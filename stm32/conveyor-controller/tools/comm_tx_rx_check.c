@@ -26,9 +26,13 @@
  *
  * 사용 예:
  *
- *   투입 Pi (USART1 연결):  ./comm_tx_rx_check /dev/serial0 input
- *   분류 Pi (USART6 연결):  ./comm_tx_rx_check /dev/serial0 sorting
- *   수신 시간 지정(초):     ./comm_tx_rx_check /dev/serial0 input 60
+ *   raw tty 직접 수신:        ./comm_tx_rx_check /dev/serial0 input
+ *   vedauart 드라이버 경유:   ./comm_tx_rx_check /dev/vedauart input
+ *   수신 시간 지정(초):       ./comm_tx_rx_check /dev/serial0 sorting 60
+ *
+ * /dev/vedauart는 팀의 serdev kernel module(device-rpi/kernel/vedauart)이
+ * 제공하는 문자 디바이스다. baudrate는 드라이버가 설정하므로 termios 설정
+ * 없이 그대로 읽는다.
  *
  * 판정 기준 (PASS):
  *   - 프레임 1개 이상 수신
@@ -43,7 +47,9 @@
  *   전의 파서 오류는 동기화 아티팩트로 보고 판정에서 제외한다.
  */
 
+#include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -136,41 +142,71 @@ static double monotonic_seconds(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
+/*
+ * 수신 디바이스를 연다.
+ *
+ * tty(/dev/serial0 등)는 termios로 115200 8N1 raw 모드를 설정한다.
+ * vedauart 문자 디바이스(/dev/vedauart)는 tty가 아니고 드라이버가
+ * baudrate를 직접 설정하므로 termios를 건너뛴다.
+ *
+ * 두 경우 모두 O_NONBLOCK으로 열고 수신 대기는 poll()로 한다.
+ */
 static int open_serial(const char* path) {
-    int fd = open(path, O_RDONLY | O_NOCTTY);
+    int fd = open(path, O_RDONLY | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) {
         perror("open");
         return -1;
     }
 
-    struct termios tio;
-    if (tcgetattr(fd, &tio) != 0) {
-        perror("tcgetattr");
-        close(fd);
-        return -1;
+    if (isatty(fd)) {
+        struct termios tio;
+        if (tcgetattr(fd, &tio) != 0) {
+            perror("tcgetattr");
+            close(fd);
+            return -1;
+        }
+
+        cfmakeraw(&tio);
+        cfsetispeed(&tio, B115200);
+        cfsetospeed(&tio, B115200);
+
+        /* 8-N-1 */
+        tio.c_cflag &= ~(tcflag_t)(PARENB | CSTOPB | CSIZE);
+        tio.c_cflag |= CS8 | CLOCAL | CREAD;
+
+        tio.c_cc[VMIN] = 0;
+        tio.c_cc[VTIME] = 0;
+
+        if (tcsetattr(fd, TCSANOW, &tio) != 0) {
+            perror("tcsetattr");
+            close(fd);
+            return -1;
+        }
+
+        tcflush(fd, TCIFLUSH);
     }
-
-    cfmakeraw(&tio);
-    cfsetispeed(&tio, B115200);
-    cfsetospeed(&tio, B115200);
-
-    /* 8-N-1 */
-    tio.c_cflag &= ~(tcflag_t)(PARENB | CSTOPB | CSIZE);
-    tio.c_cflag |= CS8 | CLOCAL | CREAD;
-
-    /* read(): 최소 0바이트, 0.1초 타임아웃 */
-    tio.c_cc[VMIN] = 0;
-    tio.c_cc[VTIME] = 1;
-
-    if (tcsetattr(fd, TCSANOW, &tio) != 0) {
-        perror("tcsetattr");
-        close(fd);
-        return -1;
-    }
-
-    tcflush(fd, TCIFLUSH);
 
     return fd;
+}
+
+/*
+ * 접속 전에 쌓여 있던 수신 데이터를 버린다.
+ *
+ * vedauart 드라이버는 64KB 수신 버퍼를 유지하므로, 프로그램 시작 전에
+ * STM32가 보낸 옛 데이터가 남아 있을 수 있다. 그대로 파싱하면 buffered
+ * 프레임들이 한꺼번에 쏟아져 heartbeat 주기 측정이 왜곡된다.
+ */
+static void discard_stale_data(int fd) {
+    double flush_deadline = monotonic_seconds() + 0.5;
+
+    while (monotonic_seconds() < flush_deadline) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+
+        if (poll(&pfd, 1, 50) > 0 && (pfd.revents & POLLIN)) {
+            uint8_t discard[1024];
+            (void)read(fd, discard, sizeof(discard));
+        }
+    }
 }
 
 int main(int argc, char** argv) {
@@ -199,6 +235,8 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    discard_stale_data(fd);
+
     uart_parser_t parser;
     uart_parser_init(&parser);
 
@@ -221,17 +259,32 @@ int main(int argc, char** argv) {
     double deadline = monotonic_seconds() + duration;
 
     while (monotonic_seconds() < deadline) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int poll_result = poll(&pfd, 1, 100);
+
+        if (poll_result < 0) {
+            perror("poll");
+            break;
+        }
+
+        if (poll_result == 0) {
+            /* 타임아웃: 부분 프레임 폐기 판정을 위해 경과 시간을 알린다 */
+            uart_parser_tick(&parser, 100U);
+            continue;
+        }
+
         uint8_t buffer[256];
         ssize_t bytes_read = read(fd, buffer, sizeof(buffer));
 
         if (bytes_read < 0) {
+            if (errno == EAGAIN || errno == EINTR) {
+                continue;
+            }
             perror("read");
             break;
         }
 
         if (bytes_read == 0) {
-            /* 타임아웃: 부분 프레임 폐기 판정을 위해 경과 시간을 알린다 */
-            uart_parser_tick(&parser, 100U);
             continue;
         }
 
