@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2711";
+
+    fragment@0 {
+        target = <&gpio>;
+
+        __overlay__ {
+            vedauart_uart1_pins: vedauart-uart1-pins {
+                brcm,pins = <14 15>;
+                brcm,function = <2>; /* ALT5: TXD1/RXD1 */
+                brcm,pull = <0 2>;
+            };
+        };
+    };
+
+    fragment@1 {
+        target = <&uart1>;
+
+        __overlay__ {
+            pinctrl-names = "default";
+            pinctrl-0 = <&vedauart_uart1_pins>;
+            status = "okay";
+
+            vedauart {
+                compatible = "veda,vedauart";
+            };
+        };
+    };
+
+    fragment@2 {
+        target-path = "/chosen";
+
+        __overlay__ {
+            bootargs = "8250.nr_uarts=1";
+        };
+    };
+};
