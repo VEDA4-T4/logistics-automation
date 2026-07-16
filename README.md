@@ -47,10 +47,15 @@ username=
 password=
 reconnect_interval_ms=3000
 keep_alive_seconds=30
+
+[http]
+image_base_url=http://127.0.0.1:8080/
 ```
 
 연결되면 QoS 1로 중앙 서버 및 해당 클라이언트 토픽을 구독합니다. 연결이 끊기면
 `reconnect_interval_ms` 간격으로 재연결하며, 연결 및 오류 상태는 중앙관제 상태 표시줄에 나타납니다.
+상품 메시지의 상대 이미지 경로는 `http/image_base_url`을 기준으로 조회합니다. 이미지 바이너리는 MQTT로
+전송하지 않습니다.
 
 ### Qt MQTT 모듈 직접 빌드 (Windows)
 

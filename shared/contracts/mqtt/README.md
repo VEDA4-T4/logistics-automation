@@ -34,6 +34,22 @@ Raspberry Pi/STM32 장치를 식별하며, `componentId`는 그 장치가 제어
 `BOX_DETECTED`를 저장하면 중앙 서버는 UUID형 `workId`를 발급해 `WORK_CREATED`로 응답합니다. 이후의 위치,
 이미지, 바코드, 상품 정보, 목적지 및 `WORK_COMPLETED` payload는 같은 `workId`를 포함해야 합니다.
 
+### Qt 현재 상품 화면 payload
+
+중앙 서버는 현재 상품 변경을 `qt/{clientId}/event`로 전달합니다. `WORK_CREATED`가 새 `workId`로 도착하면
+Qt는 이전 상품 정보를 즉시 비우며, 이후 동일한 `workId`의 메시지만 현재 화면에 합칩니다. 이전 작업의 늦은
+메시지는 무시합니다.
+
+- `BARCODE_DETECTED`: `workId`, `recognitionStatus`, `barcode`, `confidence`
+- `PRODUCT_INFO`: `workId`, `recognitionStatus`, `barcode`, `productId`, `productName`, `destination`, 선택적인 `image`
+- `PRODUCT_IMAGE`: `workId`, `imageId`, `imageUrl` 또는 `imagePath`, `checksum`, `uploadStatus`
+- `DESTINATION_SET`: `workId`, `destination`
+- `WORK_COMPLETED`: `workId`, `result`, 선택적인 `message`
+
+`recognitionStatus`는 `SUCCESS`, `FAILED`, `MISSING_DATA` 중 하나를 사용합니다. `image` object를 사용하는 경우
+`imageId`, `url` 또는 `path`, `checksum`, `uploadStatus`를 포함합니다. 이미지 경로는 HTTP(S) 절대 URL 또는
+Qt 설정의 `http/image_base_url`을 기준으로 하는 상대 경로이며 이미지 바이너리는 MQTT에 포함하지 않습니다.
+
 - heartbeat: QoS 0, retain 미사용, 5초 간격
 - 장치 상태: QoS 0 또는 1, 최신 상태 retain 가능
 - 제어·목적지·응답: QoS 1, retain 미사용
