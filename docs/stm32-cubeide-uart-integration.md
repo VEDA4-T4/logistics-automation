@@ -303,7 +303,6 @@ shared/contracts/uart/uart_parser.c
 | `UART_CMD_CONVEYOR_SET_SPEED` | `0x12` |
 | `UART_CMD_CONVEYOR_GET_STATUS` | `0x13` |
 | `UART_CMD_CONTROL_RESET` | `0x14` |
-| `UART_CMD_VISION_RESULT` | `0x15` |
 
 분류 장치 명령은 다음과 같다.
 
