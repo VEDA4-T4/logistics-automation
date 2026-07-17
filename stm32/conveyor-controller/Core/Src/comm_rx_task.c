@@ -128,13 +128,6 @@ static void comm_rx_route_frame(
                     frame->payload,
                     frame->length);
         }
-        else if (frame->command == UART_CMD_SENSOR_STATUS)
-        {
-            payloadIsValid =
-                uart_input_sensor_status_is_valid(
-                    frame->payload,
-                    frame->length);
-        }
         else
         {
             commRxStats.unsupportedCommands++;
@@ -165,20 +158,6 @@ static void comm_rx_route_frame(
             payloadIsValid =
                 UART_IS_VALID_SORTING_PAYLOAD(
                     frame->command,
-                    frame->payload,
-                    frame->length);
-        }
-        else if (frame->command == UART_CMD_SENSOR_STATUS)
-        {
-            payloadIsValid =
-                uart_sorting_sensor_status_is_valid(
-                    frame->payload,
-                    frame->length);
-        }
-        else if (frame->command == UART_CMD_EVENT)
-        {
-            payloadIsValid =
-                UART_IS_VALID_SORTING_EVENT_PAYLOAD(
                     frame->payload,
                     frame->length);
         }
