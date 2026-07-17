@@ -17,9 +17,12 @@ extern "C" {
  * 전용 UART 채널의 Raspberry Pi -> input-controller STM32 명령이다.
  * 이 계약은 투입 컨베이어 벨트 1만 담당하므로 conveyor_id를 전송하지 않는다.
  *
- * 투입 초음파 센서 1의 감지 결과는 공통 UART_CMD_SENSOR_STATUS 또는
- * UART_CMD_EVENT로 전달한다. InputControlTask는 감지 이벤트를 받으면
- * 투입 컨베이어 벨트 1을 정지한다.
+ * 투입 초음파 센서 1의 감지 결과는 SensorTask가 내부 Queue를 통해
+ * InputControlTask로 전달한다. InputControlTask는 감지를 받으면 투입
+ * 컨베이어 벨트 1을 정지한다.
+ *
+ * SENSOR_STATUS는 HealthTask와 CommTxTask를 통해 STM32에서
+ * Raspberry Pi로 보고하며, Raspberry Pi -> STM32 수신 명령이 아니다.
  */
 typedef enum {
     UART_CMD_INPUT_CONVEYOR_START = 0x10U,
