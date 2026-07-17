@@ -3,8 +3,7 @@
 
 #include <stdint.h>
 
-typedef struct
-{
+typedef struct {
     uint32_t receivedFrames;
     uint32_t inputCommands;
     uint32_t sortingCommands;
@@ -17,9 +16,8 @@ typedef struct
     uint32_t uartRestarts;
 } comm_rx_stats_t;
 
-void StartCommRxTask(void *argument);
+void StartCommRxTask(void* argument);
 
-void comm_rx_get_stats(
-    comm_rx_stats_t *stats);
+void comm_rx_get_stats(comm_rx_stats_t* stats);
 
 #endif /* COMM_RX_TASK_H */
