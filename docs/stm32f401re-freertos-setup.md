@@ -45,7 +45,7 @@ C:\Users\3-20\OneDrive\Desktop\logistics-automation\stm32\conveyor-controller
 │ CommRxTask                                                   │
 │   ├─ 투입 명령 ───────────────▶ InputControlTask             │
 │   │                              └─ 투입 컨베이어(1) 제어     │
-│   └─ 분류 결과/명령 ──────────▶ SortingControlTask           │
+│   └─ 분류 장치 제어 명령 ─────▶ SortingControlTask           │
 │                                  ├─ 분류 컨베이어(2) 제어    │
 │                                  └─ 분류 게이트 제어         │
 └──────────────────────────────────────────────────────────────┘
@@ -55,6 +55,8 @@ C:\Users\3-20\OneDrive\Desktop\logistics-automation\stm32\conveyor-controller
 ```
 
 `투입 컨베이어`, `분류 컨베이어`, `분류 게이트`는 별도의 FreeRTOS 태스크가 아니다. 각각 `InputControlTask`와 `SortingControlTask`가 제어하는 하드웨어 출력 대상이다.
+
+바코드·상품·목적지 판단은 서버와 Raspberry Pi에서 모두 완료한다. STM32는 처리 결과로 생성된 시작·정지·속도·게이트 위치 같은 최종 장치 제어 명령만 수행한다.
 
 ---
 
@@ -121,6 +123,17 @@ TB6612FNG 모터 드라이버를 기준으로 한 핀 구성이다.
 | TB6612FNG 신호 | STM32 핀 | Arduino 헤더 | 용도 |
 |---|---|---|---|
 | STBY | PB6 | D10 | 두 모터 채널 공통 활성화 |
+
+### 5.4 JMOD-MOTOR-1 제어 기준
+
+- 모터 드라이버는 TB6612FNG 기반 `JMOD-MOTOR-1`을 사용한다.
+- 컨베이어 1의 `PWMA`는 `TIM1_CH1`에서 20 kHz PWM으로 구동한다.
+- 컨베이어 정방향은 `AIN1=HIGH`, `AIN2=LOW`로 정의한다. 실제 기구 방향이 반대면 코드 대신 `AO1`과 `AO2` 배선을 서로 바꾼다.
+- 정지 시 PWM을 0%로 내리고 `AIN1=LOW`, `AIN2=LOW`로 둔다.
+- 부팅·초기화·일반 STOP에서는 공용 `STBY`를 올리지 않는다. 실제 START에서만 활성화를 요청하며, 한 채널의 STOP은 다른 채널을 멈추지 않도록 `STBY`를 내리지 않는다.
+- 향후 SafetyTask는 비상 정지 시 `conveyor_motor_power_latch_disable()`로 공용 `STBY`를 LOW로 내리고, 양 채널의 PWM·방향이 안전 상태인지 확인한 뒤에만 latch를 해제해야 한다. 현재 InputControlTask 구현만으로 E-Stop 연동이 완료된 것은 아니며 `CONTROL_RESET`만으로 latch를 해제하지 않는다.
+- JMOD-MOTOR-1 로직을 매뉴얼 기준 5 V로 공급하면 TB6612FNG의 HIGH 입력 최소값은 3.5 V이므로 STM32의 3.3 V GPIO를 직접 연결하지 않고 3.3 V→5 V 레벨 시프터를 사용한다.
+- STM32, JMOD-MOTOR-1, 모터 전원은 GND를 공통으로 연결한다.
 
 ---
 
@@ -346,19 +359,18 @@ Normal < Normal1 < ... < Normal7 < AboveNormal
 - USART1·USART6 수신 DMA와 UART 이벤트 처리
 - 프레임 검사 및 메시지 파싱
 - 투입 명령을 `InputControlTask`에 전달
-- 영상 결과와 분류 명령을 `SortingControlTask`에 전달
+- 서버 처리 결과로 생성된 분류 장치 제어 명령을 `SortingControlTask`에 전달
 - 정지·E-Stop·Reset 명령을 Safety 처리 경로에 전달
 
 #### InputControlTask
 
-- 투입 센서 이벤트 처리
-- 컨베이어 1의 시작·정지·방향·속도 제어
-- 박스를 촬영 위치까지 이동
-- 촬영 또는 다음 공정 명령에 따라 상태 전환
+- 컨베이어 1의 시작·정지·속도 제어
+- 현재 동작 상태와 모터 오류 상태 관리
+- `GET_STATUS` 요청에 사용할 상태 응답 데이터 생성
 
 #### SortingControlTask
 
-- 영상 인식 결과와 분류 명령 처리
+- 서버 처리 결과로 생성된 분류 장치 제어 명령 처리
 - 분류 게이트 위치 설정
 - 컨베이어 2 시작·정지·방향·속도 제어
 - 분류 완료 결과 생성
