@@ -2,8 +2,10 @@
 
 #include <string.h>
 
+#include "app_comm_tx.h"
 #include "app_messages.h"
 #include "app_queues.h"
+#include "input_control_task.h"
 #include "uart_rx.h"
 
 #include "cmsis_os2.h"
@@ -49,27 +51,82 @@ static osStatus_t comm_rx_put_command(
         0U);
 }
 
-static void comm_rx_forward_command(
+static void comm_rx_send_rejection(
+    app_uart_channel_t destination,
+    const uart_frame_t *frame,
+    uart_status_t status,
+    uart_error_t error)
+{
+    comm_tx_channel_t channel;
+    uint8_t payload[UART_RESPONSE_HEADER_SIZE];
+
+    if (frame == NULL)
+    {
+        return;
+    }
+
+    if (destination == APP_UART_CHANNEL_1)
+    {
+        channel = COMM_TX_CH_INPUT;
+    }
+    else if (destination == APP_UART_CHANNEL_6)
+    {
+        channel = COMM_TX_CH_SORTING;
+    }
+    else
+    {
+        commRxStats.responseDrops++;
+        return;
+    }
+
+    payload[UART_RESPONSE_STATUS_INDEX] = (uint8_t)status;
+    payload[UART_RESPONSE_COMMAND_INDEX] = frame->command;
+    payload[UART_RESPONSE_ERROR_INDEX] = (uint8_t)error;
+
+    if (CommTx_SendWithSequence(
+            channel,
+            frame->sequence,
+            UART_CMD_RESPONSE,
+            payload,
+            sizeof(payload)) != 0)
+    {
+        commRxStats.responseDrops++;
+        return;
+    }
+
+    if (status == UART_STATUS_BUSY)
+    {
+        commRxStats.busyResponses++;
+    }
+    else
+    {
+        commRxStats.nackResponses++;
+    }
+}
+
+static uint8_t comm_rx_forward_command(
     osMessageQueueId_t queue,
     const control_command_t *message,
     uint32_t *successCounter)
 {
     if ((message == NULL) || (successCounter == NULL))
     {
-        return;
+        return 0U;
     }
 
     if (comm_rx_put_command(queue, message) == osOK)
     {
         (*successCounter)++;
+        return 1U;
     }
     else
     {
         commRxStats.controlQueueDrops++;
+        return 0U;
     }
 }
 
-static void comm_rx_route_frame(
+void comm_rx_process_frame(
     app_uart_channel_t source,
     const uart_frame_t *frame)
 {
@@ -90,6 +147,8 @@ static void comm_rx_route_frame(
 
     message.source = source;
     message.frame = *frame;
+    message.kind = APP_CONTROL_MESSAGE_UART_COMMAND;
+    message.safetyEpoch = 0U;
 
     commRxStats.receivedFrames++;
 
@@ -104,13 +163,25 @@ static void comm_rx_route_frame(
                 frame->length) == 0U)
         {
             commRxStats.invalidPayloads++;
+            comm_rx_send_rejection(
+                source,
+                frame,
+                UART_STATUS_NACK,
+                UART_ERROR_INVALID_PAYLOAD);
             return;
         }
 
-        comm_rx_forward_command(
-            safetyCommandQueueHandle,
-            &message,
-            &commRxStats.safetyCommands);
+        if (comm_rx_forward_command(
+                safetyCommandQueueHandle,
+                &message,
+                &commRxStats.safetyCommands) == 0U)
+        {
+            comm_rx_send_rejection(
+                source,
+                frame,
+                UART_STATUS_BUSY,
+                UART_ERROR_BUSY);
+        }
 
         return;
     }
@@ -131,19 +202,39 @@ static void comm_rx_route_frame(
         else
         {
             commRxStats.unsupportedCommands++;
+            comm_rx_send_rejection(
+                source,
+                frame,
+                UART_STATUS_NACK,
+                UART_ERROR_UNSUPPORTED_COMMAND);
             return;
         }
 
         if (payloadIsValid == 0U)
         {
             commRxStats.invalidPayloads++;
+            comm_rx_send_rejection(
+                source,
+                frame,
+                UART_STATUS_NACK,
+                UART_ERROR_INVALID_PAYLOAD);
             return;
         }
 
-        comm_rx_forward_command(
-            inputControlQueueHandle,
-            &message,
-            &commRxStats.inputCommands);
+        message.safetyEpoch =
+            input_control_task_capture_command_epoch();
+
+        if (comm_rx_forward_command(
+                inputControlQueueHandle,
+                &message,
+                &commRxStats.inputCommands) == 0U)
+        {
+            comm_rx_send_rejection(
+                source,
+                frame,
+                UART_STATUS_BUSY,
+                UART_ERROR_BUSY);
+        }
 
         return;
     }
@@ -164,19 +255,36 @@ static void comm_rx_route_frame(
         else
         {
             commRxStats.unsupportedCommands++;
+            comm_rx_send_rejection(
+                source,
+                frame,
+                UART_STATUS_NACK,
+                UART_ERROR_UNSUPPORTED_COMMAND);
             return;
         }
 
         if (payloadIsValid == 0U)
         {
             commRxStats.invalidPayloads++;
+            comm_rx_send_rejection(
+                source,
+                frame,
+                UART_STATUS_NACK,
+                UART_ERROR_INVALID_PAYLOAD);
             return;
         }
 
-        comm_rx_forward_command(
-            sortingControlQueueHandle,
-            &message,
-            &commRxStats.sortingCommands);
+        if (comm_rx_forward_command(
+                sortingControlQueueHandle,
+                &message,
+                &commRxStats.sortingCommands) == 0U)
+        {
+            comm_rx_send_rejection(
+                source,
+                frame,
+                UART_STATUS_BUSY,
+                UART_ERROR_BUSY);
+        }
 
         return;
     }
@@ -230,7 +338,7 @@ static void comm_rx_process_chunk(
 
         if (result == UART_PARSER_FRAME_READY)
         {
-            comm_rx_route_frame(
+            comm_rx_process_frame(
                 chunk->channel,
                 &frame);
         }
