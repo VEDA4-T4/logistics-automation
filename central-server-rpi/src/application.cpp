@@ -4,10 +4,14 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -15,11 +19,14 @@
 
 #include "logistics/central_server/database.hpp"
 #include "logistics/central_server/device_manager.hpp"
+#include "logistics/central_server/http_upload_server.hpp"
 #include "logistics/central_server/mqtt_client.hpp"
 #include "logistics/central_server/mqtt_config.hpp"
 #include "logistics/central_server/mqtt_handler.hpp"
 #include "logistics/central_server/mqtt_transport.hpp"
 #include "logistics/central_server/persistence.hpp"
+#include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/contracts/mqtt_topic.hpp"
 
 namespace logistics::central_server {
 namespace {
@@ -27,12 +34,31 @@ namespace {
 struct ServerConfig {
     DatabaseConfig database;
     StorageConfig storage;
+    HttpUploadServerConfig http;
+    std::string qt_client_id{ "control-center" };
 };
 
 volatile std::sig_atomic_t stop_requested = 0;
 
 void HandleSignal(int) {
     stop_requested = 1;
+}
+
+std::string CurrentIso8601Timestamp() {
+    const std::time_t current_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm utc_time{};
+    {
+        static std::mutex time_mutex;
+        std::lock_guard lock(time_mutex);
+        const std::tm* converted = std::gmtime(&current_time);
+        if (converted == nullptr) {
+            return {};
+        }
+        utc_time = *converted;
+    }
+    std::ostringstream output;
+    output << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");
+    return output.str();
 }
 
 std::string Trim(std::string value) {
@@ -53,6 +79,18 @@ bool ParseInteger(std::string_view text, int& output) {
     return result.ec == std::errc{} &&
            result.ptr == end &&
            output >= 0;
+}
+
+bool ParseBoolean(std::string_view text, bool& output) {
+    if (text == "true" || text == "1") {
+        output = true;
+        return true;
+    }
+    if (text == "false" || text == "0") {
+        output = false;
+        return true;
+    }
+    return false;
 }
 
 bool ResolveConfigPath(
@@ -138,7 +176,7 @@ DatabaseStatus LoadServerConfig(
         }
 
         // MQTT와 device_registry 설정은 LoadMqttConfig가 처리합니다.
-        if (section != "database" && section != "storage") {
+        if (section != "database" && section != "storage" && section != "http" && section != "routing") {
             continue;
         }
 
@@ -176,6 +214,44 @@ DatabaseStatus LoadServerConfig(
             continue;
         }
 
+        if (section == "http" && key == "tls_certificate") {
+            config.http.tls_certificate = value;
+            continue;
+        }
+        if (section == "http" && key == "tls_private_key") {
+            config.http.tls_private_key = value;
+            continue;
+        }
+        if (section == "http" && key == "bearer_token") {
+            config.http.bearer_token = value;
+            continue;
+        }
+        if (section == "http" && key == "upload_root") {
+            config.http.upload_root = value;
+            continue;
+        }
+        if (section == "routing" && key == "qt_client_id") {
+            if (!contracts::mqtt::IsValidTopicLevel(value)) {
+                return { DatabaseStatusCode::kInvalidArgument,
+                         "invalid qt_client_id at config line " + std::to_string(line_number) };
+            }
+            config.qt_client_id = value;
+            continue;
+        }
+        if (section == "http" && (key == "enabled" || key == "tls_enabled")) {
+            bool parsed = false;
+            if (!ParseBoolean(value, parsed)) {
+                return { DatabaseStatusCode::kInvalidArgument,
+                         "invalid boolean at config line " + std::to_string(line_number) };
+            }
+            if (key == "enabled") {
+                config.http.enabled = parsed;
+            } else {
+                config.http.tls_enabled = parsed;
+            }
+            continue;
+        }
+
         // log_root는 현재 StorageConfig에 대응 필드가 없으므로
         // 다른 로깅 모듈에서 처리하도록 무시합니다.
         if (section == "storage" && key == "log_root") {
@@ -191,7 +267,8 @@ DatabaseStatus LoadServerConfig(
             (section == "storage" && key == "error_retention_days") ||
             (section == "storage" &&
              key == "security_retention_days") ||
-            (section == "storage" && key == "image_retention_days");
+            (section == "storage" && key == "image_retention_days") ||
+            (section == "http" && key == "port");
 
         if (!recognized_integer) {
             // 다른 기능이 추가한 설정과 병합 가능하도록
@@ -210,6 +287,8 @@ DatabaseStatus LoadServerConfig(
 
         if (section == "database") {
             config.database.busy_timeout_ms = parsed;
+        } else if (section == "http") {
+            config.http.port = parsed;
         } else if (key == "cleanup_interval_hours") {
             config.storage.cleanup_interval_hours = parsed;
         } else if (key == "mqtt_retention_days") {
@@ -326,12 +405,99 @@ int Application::Run(int argc, char* argv[]) {
         return 5;
     }
 
-    MqttHandler mqtt_handler(*device_manager);
+    PersistenceService persistence(database, server_config.storage);
+    MqttHandler mqtt_handler(*device_manager, {}, &persistence);
 
     MqttClient mqtt_client(
         std::move(mqtt_config),
         CreateMosquittoTransport()
     );
+
+    mqtt_handler.SetWorkCreatedHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
+                                           std::string_view device_id, std::string_view work_id) {
+        const contracts::mqtt::MqttMessage message{
+            .protocol_version = std::string(contracts::mqtt::kCurrentProtocolVersion),
+            .message_id = "WORK-" + std::string(work_id),
+            .message_type = contracts::mqtt::MessageType::kWorkCreated,
+            .source_id = "central-server",
+            .timestamp = CurrentIso8601Timestamp(),
+            .data = contracts::mqtt::WorkCreatedPayload{ .work_id = std::string(work_id) },
+        };
+        const bool sent_to_device = mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), message,
+                                                               contracts::mqtt::Qos::kAtLeastOnce);
+        const bool sent_to_qt = mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
+                                                           contracts::mqtt::Qos::kAtLeastOnce);
+        return sent_to_device && sent_to_qt;
+    });
+    mqtt_handler.SetQtEventHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
+                                       const contracts::mqtt::MqttMessage& message) {
+        return mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
+                                          contracts::mqtt::Qos::kAtLeastOnce);
+    });
+    mqtt_handler.SetQtResponseHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
+                                          const contracts::mqtt::MqttMessage& message) {
+        return mqtt_client.PublishMessage(contracts::mqtt::QtResponseTopic(qt_client_id), message,
+                                          contracts::mqtt::Qos::kAtLeastOnce);
+    });
+    mqtt_handler.SetQtStatusHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
+                                        const contracts::mqtt::MqttMessage& message) {
+        return mqtt_client.PublishMessage(contracts::mqtt::QtStatusTopic(qt_client_id), message,
+                                          contracts::mqtt::Qos::kAtLeastOnce);
+    });
+    mqtt_handler.SetQtErrorHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
+                                       const contracts::mqtt::MqttMessage& message) {
+        return mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(qt_client_id), message,
+                                          contracts::mqtt::Qos::kAtLeastOnce);
+    });
+    mqtt_handler.SetCommandRouteHandler([&mqtt_client, &device_manager](
+                                             const contracts::mqtt::MqttMessage& message) {
+        if (contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(message) != nullptr) {
+            auto forwarded = message;
+            auto* payload = contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(forwarded);
+            payload->target_device_id = "ALL";
+            return mqtt_client.PublishMessage(contracts::mqtt::kSystemBroadcastCommandTopic, forwarded,
+                                              contracts::mqtt::Qos::kAtLeastOnce);
+        }
+
+        std::string target_device_id;
+        bool line_tracer_only = false;
+        if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message)) {
+            target_device_id = command->target_device_id;
+        } else if (const auto* destination =
+                       contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(message)) {
+            target_device_id = destination->target_device_id;
+            line_tracer_only = true;
+        } else {
+            return false;
+        }
+
+        const auto publish_to_device = [&mqtt_client, &message](std::string_view device_id) {
+            auto forwarded = message;
+            forwarded.message_id += "-" + std::string(device_id);
+            if (auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(forwarded)) {
+                command->target_device_id = device_id;
+            } else if (auto* destination =
+                           contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(forwarded)) {
+                destination->target_device_id = device_id;
+            }
+            return mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), forwarded,
+                                              contracts::mqtt::Qos::kAtLeastOnce);
+        };
+
+        if (target_device_id != "SYSTEM" && target_device_id != "ALL") {
+            return publish_to_device(target_device_id);
+        }
+        bool attempted = false;
+        bool all_published = true;
+        for (const auto& device : device_manager->RegisteredDevices()) {
+            if (line_tracer_only && device.device_type != "linetracer") {
+                continue;
+            }
+            attempted = true;
+            all_published = publish_to_device(device.device_id) && all_published;
+        }
+        return attempted && all_published;
+    });
 
     mqtt_client.SetMessageHandler(
         [&mqtt_handler](
@@ -354,12 +520,22 @@ int Application::Run(int argc, char* argv[]) {
         return 6;
     }
 
+    HttpUploadServer upload_server(database, server_config.http);
+    database_status = upload_server.Start();
+    if (!database_status.ok()) {
+        mqtt_client.Stop();
+        std::cerr << "[server][ERROR] HTTP upload server startup failed: " << database_status.message << '\n';
+        return 7;
+    }
+
     std::clog
         << "[server][INFO] central server started; "
         << "registered devices="
         << device_manager->RegisteredDeviceCount()
         << "; database="
         << server_config.database.path.string()
+        << "; http_upload="
+        << (server_config.http.enabled ? std::to_string(server_config.http.port) : std::string("disabled"))
         << '\n';
 
     while (stop_requested == 0) {
@@ -368,6 +544,7 @@ int Application::Run(int argc, char* argv[]) {
         );
     }
 
+    upload_server.Stop();
     mqtt_client.Stop();
 
     std::clog

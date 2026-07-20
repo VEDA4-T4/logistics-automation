@@ -152,6 +152,19 @@ std::optional<DeviceSnapshot> DeviceManager::FindDevice(std::string_view device_
     return iterator->second;
 }
 
+std::vector<DeviceSnapshot> DeviceManager::RegisteredDevices() const {
+    std::lock_guard lock(mutex_);
+    std::vector<DeviceSnapshot> output;
+    output.reserve(devices_.size());
+    for (const auto& [device_id, device] : devices_) {
+        static_cast<void>(device_id);
+        if (device.registered) {
+            output.push_back(device);
+        }
+    }
+    return output;
+}
+
 std::string DeviceManager::LastError() const {
     std::lock_guard lock(mutex_);
     return last_error_;

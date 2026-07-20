@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
@@ -48,6 +49,7 @@ public:
 
     [[nodiscard]] std::size_t RegisteredDeviceCount() const;
     [[nodiscard]] std::optional<DeviceSnapshot> FindDevice(std::string_view device_id) const;
+    [[nodiscard]] std::vector<DeviceSnapshot> RegisteredDevices() const;
     [[nodiscard]] std::string LastError() const;
 
 private:

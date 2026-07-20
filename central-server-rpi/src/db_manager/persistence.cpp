@@ -477,10 +477,24 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
     if (!status.ok())
         return Failure(status);
     if (duplicate) {
+        std::optional<std::string> duplicate_work_id = payload.work_id;
+        if (envelope.message_type == contracts::mqtt::MessageType::kBoxDetected) {
+            Statement existing_work;
+            status = database_.Prepare("SELECT work_id FROM work_history WHERE message_id=?", existing_work);
+            if (status.ok())
+                status = existing_work.Bind(1, envelope.message_id);
+            bool work_row = false;
+            if (status.ok())
+                status = existing_work.Step(work_row);
+            if (!status.ok())
+                return Failure(status);
+            if (work_row)
+                duplicate_work_id = existing_work.ColumnText(0);
+        }
         status = transaction.Commit();
         if (!status.ok())
             return Failure(status);
-        return { PersistenceStatus::kDuplicate, "message was already stored", payload.work_id };
+        return { PersistenceStatus::kDuplicate, "message was already stored", duplicate_work_id };
     }
 
     ProductRepository products(database_);
@@ -516,40 +530,38 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
             return reject(status);
     } else if (RequiresWorkId(envelope.message_type)) {
         if (envelope.message_type == contracts::mqtt::MessageType::kProductImage) {
-            if (!payload.image_mime_type || payload.image_bytes.empty())
-                return reject({ DatabaseStatusCode::kInvalidArgument, "PRODUCT_IMAGE requires MIME type and bytes" });
-            status = image_store_.Store(*work_id, *payload.image_mime_type, payload.image_bytes,
-                                        payload.captured_at_ms.value_or(metadata.received_at_ms), stored_image);
-            if (!status.ok())
-                return reject(status);
-            remove_image_on_failure = stored_image.created;
-            Statement image;
+            if (!payload.image_id || !payload.image_path || !payload.image_checksum ||
+                payload.image_upload_status != "UPLOADED") {
+                return reject({ DatabaseStatusCode::kInvalidArgument,
+                                "PRODUCT_IMAGE requires confirmed HTTP upload metadata" });
+            }
+            constexpr std::string_view upload_path_prefix = "/uploads/";
+            if (!payload.image_path->starts_with(upload_path_prefix)) {
+                return reject({ DatabaseStatusCode::kInvalidArgument, "PRODUCT_IMAGE path is not an upload path" });
+            }
+            Statement uploaded;
             status = database_.Prepare(
-                "INSERT INTO "
-                "image_file(work_id,message_id,relative_path,mime_type,byte_size,sha256,captured_at_ms,created_at_ms) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                image);
+                "SELECT count(*) FROM http_upload WHERE upload_id=? AND kind='IMAGE' AND work_id=? "
+                "AND relative_path=? AND sha256=? AND device_id=?",
+                uploaded);
             if (status.ok())
-                status = image.Bind(1, *work_id);
+                status = uploaded.Bind(1, *payload.image_id);
             if (status.ok())
-                status = image.Bind(2, envelope.message_id);
+                status = uploaded.Bind(2, *work_id);
             if (status.ok())
-                status = image.Bind(3, stored_image.relative_path.generic_string());
+                status = uploaded.Bind(3, payload.image_path->substr(upload_path_prefix.size()));
             if (status.ok())
-                status = image.Bind(4, *payload.image_mime_type);
+                status = uploaded.Bind(4, *payload.image_checksum);
             if (status.ok())
-                status = image.Bind(5, stored_image.byte_size);
-            if (status.ok())
-                status = image.Bind(6, stored_image.sha256);
-            if (status.ok())
-                status = image.Bind(7, payload.captured_at_ms.value_or(metadata.received_at_ms));
-            if (status.ok())
-                status = image.Bind(8, metadata.received_at_ms);
+                status = uploaded.Bind(5, envelope.source_id);
             bool row = false;
             if (status.ok())
-                status = image.Step(row);
-            if (!status.ok()) {
+                status = uploaded.Step(row);
+            if (!status.ok())
                 return reject(status);
+            if (!row || uploaded.ColumnInt(0) != 1) {
+                return reject({ DatabaseStatusCode::kNotFound,
+                                "PRODUCT_IMAGE does not match a confirmed HTTP upload" });
             }
         }
         if (!(status = products.ApplyEvent(*work_id, envelope.message_type, payload, metadata.received_at_ms)).ok() ||

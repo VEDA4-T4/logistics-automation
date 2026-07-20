@@ -1,4 +1,7 @@
 find_package(SQLite3 REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(MICROHTTPD REQUIRED IMPORTED_TARGET libmicrohttpd)
 
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ProjectWarnings.cmake")
 
@@ -9,6 +12,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ProjectWarnings.cmake")
 add_library(
     logistics_central_storage
     src/db_manager/database.cpp
+    src/http_upload/upload_service.cpp
     src/db_manager/persistence.cpp
 )
 add_library(logistics::central_storage ALIAS logistics_central_storage)
@@ -19,9 +23,23 @@ target_link_libraries(
     PUBLIC
         logistics::contracts
         SQLite::SQLite3
+        OpenSSL::Crypto
 )
 
 logistics_enable_warnings(logistics_central_storage)
+
+add_library(
+    logistics_central_http_upload_server
+    src/http_upload/http_upload_server.cpp
+)
+add_library(logistics::central_http_upload_server ALIAS logistics_central_http_upload_server)
+target_include_directories(logistics_central_http_upload_server PUBLIC include)
+target_link_libraries(
+    logistics_central_http_upload_server
+    PUBLIC logistics::central_storage
+    PRIVATE PkgConfig::MICROHTTPD
+)
+logistics_enable_warnings(logistics_central_http_upload_server)
 
 # ------------------------------------------------------------------------------
 # MQTT core
@@ -93,6 +111,7 @@ target_link_libraries(
     logistics_central_server_mqtt_handler
     PUBLIC
         logistics::central_server_device_manager
+        logistics::central_storage
         logistics::contracts
 )
 
@@ -189,6 +208,7 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         logistics_central_server
         PRIVATE
             logistics::central_storage
+            logistics::central_http_upload_server
             logistics::central_server_mosquitto
             logistics::central_server_mqtt_handler
             Threads::Threads
@@ -308,4 +328,13 @@ if(BUILD_TESTING)
             COMMAND central_storage_test
         )
     endif()
+
+    add_executable(central_upload_service_test tests/upload_service_test.cpp)
+    target_link_libraries(central_upload_service_test PRIVATE logistics::central_storage)
+    target_compile_definitions(
+        central_upload_service_test
+        PRIVATE LOGISTICS_TEST_MIGRATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/db/migrations"
+    )
+    logistics_enable_warnings(central_upload_service_test)
+    add_test(NAME central_upload_service_test COMMAND central_upload_service_test)
 endif()
