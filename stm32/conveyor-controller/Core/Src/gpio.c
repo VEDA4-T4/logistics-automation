@@ -53,6 +53,12 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
+  /* Keep both motor channels disabled until their drivers initialize. */
+  HAL_GPIO_WritePin(
+      GPIOB,
+      INPUT_MOTOR_AIN2_Pin|INPUT_MOTOR_AIN1_Pin|MOTOR_STBY_Pin,
+      GPIO_PIN_RESET);
+
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
@@ -65,6 +71,13 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : INPUT_MOTOR_AIN2_Pin INPUT_MOTOR_AIN1_Pin MOTOR_STBY_Pin */
+  GPIO_InitStruct.Pin = INPUT_MOTOR_AIN2_Pin|INPUT_MOTOR_AIN1_Pin|MOTOR_STBY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 }
 

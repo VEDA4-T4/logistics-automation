@@ -28,21 +28,25 @@ void TestInputPayloadValidation() {
     constexpr std::array<std::uint8_t, 1> kUnexpectedPayload{ 1U };
     constexpr std::array<std::uint8_t, 1> kSpeed100{ 100U };
     constexpr std::array<std::uint8_t, 1> kSpeed101{ 101U };
-    constexpr std::array<std::uint8_t, 5> kVisionResult{ 0x34U, 0x12U, UART_INPUT_VISION_DETECTED, 2U, 90U };
     constexpr std::array<std::uint8_t, 4> kInputSensorDetected{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_DETECTED, 10U, 0U };
     constexpr std::array<std::uint8_t, 4> kInvalidInputSensor{ 2U, UART_SENSOR_DETECTED, 10U, 0U };
+    constexpr std::array<std::uint8_t, 4> kInvalidInputSensorState{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_FAULT + 1U, 10U,
+                                                                    0U };
 
     assert(UART_IS_VALID_INPUT_COMMAND(UART_CMD_INPUT_CONVEYOR_START) != 0U);
+    assert(UART_IS_VALID_INPUT_COMMAND(0x15U) == 0U);
     assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_START, nullptr, 0U) != 0U);
     assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_START, kUnexpectedPayload.data(),
                                        kUnexpectedPayload.size()) == 0U);
     assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_SET_SPEED, kSpeed100.data(), kSpeed100.size()) != 0U);
     assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_SET_SPEED, kSpeed101.data(), kSpeed101.size()) == 0U);
     assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONTROL_RESET, nullptr, 0U) != 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_VISION_RESULT, kVisionResult.data(), kVisionResult.size()) != 0U);
-    assert(uart_input_vision_cycle_id(kVisionResult.data()) == 0x1234U);
+    assert(uart_input_sensor_id_is_valid(UART_INPUT_SENSOR_ID_1) != 0U);
+    assert(uart_input_sensor_id_is_valid(2U) == 0U);
     assert(uart_input_sensor_status_is_valid(kInputSensorDetected.data(), kInputSensorDetected.size()) != 0U);
     assert(uart_input_sensor_status_is_valid(kInvalidInputSensor.data(), kInvalidInputSensor.size()) == 0U);
+    assert(uart_input_sensor_status_is_valid(kInvalidInputSensorState.data(), kInvalidInputSensorState.size()) == 0U);
+    assert(uart_input_sensor_status_is_valid(nullptr, UART_SENSOR_STATUS_PAYLOAD_SIZE) == 0U);
     assert(UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
 }
 

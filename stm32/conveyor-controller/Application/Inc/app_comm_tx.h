@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "logistics/contracts/uart_protocol.h"
+#include "stm32f4xx_hal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,11 +40,13 @@ typedef enum {
     COMM_TX_CH_COUNT = 2U
 } comm_tx_channel_t;
 
-/* TX Queue 메시지. SEQUENCE는 CommTxTask가 채널별로 부여한다. */
+/* TX Queue 메시지. 일반 이벤트는 자동 SEQUENCE, 응답은 요청 SEQUENCE를 사용한다. */
 typedef struct {
     uint8_t channel; /* comm_tx_channel_t */
     uint8_t command; /* uart_command_t 또는 장치별 CMD */
     uint8_t length;  /* payload 길이 (0 ~ UART_MAX_PAYLOAD_SIZE) */
+    uint8_t sequence;
+    uint8_t use_provided_sequence;
     uint8_t payload[UART_MAX_PAYLOAD_SIZE];
 } comm_tx_msg_t;
 
@@ -86,7 +89,10 @@ typedef struct {
     uint32_t dropped_urgent_queue_full;    /* 긴급 큐 가득 참으로 드랍 */
     uint32_t dropped_invalid;              /* 채널/길이 오류로 드랍 */
     uint32_t dropped_encode_error;         /* 프레임 인코딩 실패로 드랍 */
-    uint32_t dropped_ring_full;            /* 채널 링버퍼 가득 참으로 드랍 */
+    uint32_t dropped_ring_full;            /* best-effort heartbeat 링 포화 드랍 */
+    uint32_t ring_full_waits;              /* 수락한 메시지가 링 자리를 기다린 횟수 */
+    uint32_t dropped_retry_exhausted;      /* DMA 재시도 소진 후 드랍 */
+    uint32_t init_failures;                /* TX Queue/QueueSet 초기화 실패 */
     uint32_t tx_error[COMM_TX_CH_COUNT];   /* HAL 송신 오류 수 */
     uint32_t tx_timeout[COMM_TX_CH_COUNT]; /* DMA 송신 timeout 수 */
     uint32_t tx_retry[COMM_TX_CH_COUNT];   /* timeout 후 재시도 수 */
@@ -104,27 +110,43 @@ typedef struct {
  */
 int32_t CommTx_Send(comm_tx_channel_t channel, uint8_t command, const uint8_t* payload, uint8_t length);
 
+/* 요청과 동일한 SEQUENCE를 보존해야 하는 RESPONSE/OPERATION_RESULT 전송. */
+int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command, const uint8_t* payload,
+                                uint8_t length);
+
 /*
  * 긴급 송신 요청. 비상정지, 안전 상태, 통신 오류 보고에 사용한다.
  * 일반 큐에 쌓인 메시지보다 항상 먼저 처리된다.
  */
 int32_t CommTx_SendUrgent(comm_tx_channel_t channel, uint8_t command, const uint8_t* payload, uint8_t length);
 
+/* 안전 명령 응답처럼 긴급성과 요청 SEQUENCE 보존이 모두 필요한 전송. */
+int32_t CommTx_SendUrgentWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command,
+                                      const uint8_t* payload, uint8_t length);
+
 /*
- * heartbeat에 실리는 장치 상태를 갱신한다.
- * SafetyTask(안전 상태 진입/해제)와 HealthTask(오류 감지)가 호출한다.
+ * Updates the device status included in heartbeat frames. CommTxTask owns the
+ * periodic transmission; SafetyTask
+ * and HealthTask only update this state.
  */
 void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code);
 
 /*
- * heartbeat에 실리는 공정별 센서 상태를 갱신한다. SensorTask가 호출한다.
- *
- * process: COMM_TX_CH_INPUT(투입) 또는 COMM_TX_CH_SORTING(분류)
+ * Updates the per-process sensor state included in heartbeat frames. The
+ * process must be COMM_TX_CH_INPUT or
+ * COMM_TX_CH_SORTING.
  */
 void CommTx_SetSensorState(comm_tx_channel_t process, uint8_t sensor_state);
 
 /* 송신 통계 조회 */
 const comm_tx_stats_t* CommTx_GetStats(void);
+
+/* 공용 HAL UART 오류 콜백에서 호출하는 TX 오류 처리 진입점. */
+void CommTx_HandleUartError(UART_HandleTypeDef* huart);
+
+/* CommTxTask 시작 및 호스트 단위 테스트에서 사용하는 lifecycle API. */
+int32_t CommTx_Init(void);
+void CommTx_ProcessOnce(void);
 
 #ifdef __cplusplus
 }

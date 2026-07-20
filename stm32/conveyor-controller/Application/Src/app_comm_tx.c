@@ -56,6 +56,9 @@
  */
 #define COMM_TX_TX_TIMEOUT_MS 50U
 
+/* HAL/DMA 시작 오류 후 같은 프레임을 다시 시도하기 전 최소 간격. */
+#define COMM_TX_RETRY_INTERVAL_MS UART_RETRY_INTERVAL_MS
+
 /* 큐가 비어 있어도 timeout·heartbeat 점검을 위해 최대 이만큼만 대기한다. */
 #define COMM_TX_MAX_WAIT_MS 20U
 
@@ -73,11 +76,19 @@ typedef struct {
     volatile uint8_t tail;  /* DMA가 송신 중/송신할 위치 */
     volatile uint8_t count; /* 링버퍼에 있는 프레임 수 */
     volatile uint8_t dma_busy;
+    volatile uint8_t restart_pending;
 } comm_tx_channel_state_t;
+
+typedef enum {
+    COMM_TX_ROUTE_OK = 0,
+    COMM_TX_ROUTE_BUSY,
+    COMM_TX_ROUTE_DROPPED
+} comm_tx_route_result_t;
 
 static QueueHandle_t comm_tx_normal_queue;
 static QueueHandle_t comm_tx_urgent_queue;
 static QueueSetHandle_t comm_tx_queue_set;
+static uint32_t comm_tx_next_heartbeat;
 
 static comm_tx_channel_state_t comm_tx_channels[COMM_TX_CH_COUNT];
 
@@ -115,24 +126,21 @@ static uint32_t comm_tx_channel_index(const comm_tx_channel_state_t* channel) {
  * 호출 조건: dma_busy를 1로 만든 뒤 호출하거나, ISR에서 count > 0일 때
  * 호출한다.
  */
-static void comm_tx_start_dma(comm_tx_channel_state_t* channel) {
+static uint8_t comm_tx_start_dma(comm_tx_channel_state_t* channel) {
     channel->tx_start_tick = HAL_GetTick();
 
     HAL_StatusTypeDef status =
         HAL_UART_Transmit_DMA(channel->huart, channel->frames[channel->tail], channel->frame_lengths[channel->tail]);
 
     if (status != HAL_OK) {
-        /*
-         * 시작 실패 시 해당 프레임을 버리고 채널이 멈추지 않게 한다.
-         * 다음 송신 요청이 들어오면 다시 시작된다.
-         */
         comm_tx_stats.tx_error[comm_tx_channel_index(channel)]++;
-
-        channel->tail = (uint8_t)((channel->tail + 1U) % COMM_TX_RING_DEPTH);
-        channel->count--;
-        channel->retry_count = 0U;
         channel->dma_busy = 0U;
+        channel->restart_pending = 1U;
+        return 0U;
     }
+
+    channel->restart_pending = 0U;
+    return 1U;
 }
 
 /*
@@ -143,10 +151,10 @@ static void comm_tx_start_dma(comm_tx_channel_state_t* channel) {
  *
  * CommTxTask 컨텍스트에서만 호출한다.
  */
-static void comm_tx_route(const comm_tx_msg_t* msg, uint8_t urgent) {
+static comm_tx_route_result_t comm_tx_route(const comm_tx_msg_t* msg, uint8_t urgent) {
     if (msg->channel >= (uint8_t)COMM_TX_CH_COUNT) {
         comm_tx_stats.dropped_invalid++;
-        return;
+        return COMM_TX_ROUTE_DROPPED;
     }
 
     comm_tx_channel_state_t* channel = &comm_tx_channels[msg->channel];
@@ -159,13 +167,12 @@ static void comm_tx_route(const comm_tx_msg_t* msg, uint8_t urgent) {
     uint8_t limit = (urgent != 0U) ? COMM_TX_RING_DEPTH : (COMM_TX_RING_DEPTH - 1U);
 
     if (channel->count >= limit) {
-        comm_tx_stats.dropped_ring_full++;
-        return;
+        return COMM_TX_ROUTE_BUSY;
     }
 
     uart_frame_t frame;
     frame.version = UART_PROTOCOL_VERSION;
-    frame.sequence = channel->sequence;
+    frame.sequence = (msg->use_provided_sequence != 0U) ? msg->sequence : channel->sequence;
     frame.command = msg->command;
     frame.length = msg->length;
 
@@ -179,11 +186,14 @@ static void comm_tx_route(const comm_tx_msg_t* msg, uint8_t urgent) {
 
     if (result != UART_CODEC_OK) {
         comm_tx_stats.dropped_encode_error++;
-        return;
+        return COMM_TX_ROUTE_DROPPED;
     }
 
     channel->frame_lengths[channel->head] = (uint16_t)encoded_length;
-    channel->sequence++;
+
+    if (msg->use_provided_sequence == 0U) {
+        channel->sequence++;
+    }
 
     /*
      * 링버퍼 갱신과 DMA 시작 판단은 송신 완료 ISR과 경합하므로
@@ -204,8 +214,10 @@ static void comm_tx_route(const comm_tx_msg_t* msg, uint8_t urgent) {
     taskEXIT_CRITICAL();
 
     if (start_needed != 0U) {
-        comm_tx_start_dma(channel);
+        (void)comm_tx_start_dma(channel);
     }
+
+    return COMM_TX_ROUTE_OK;
 }
 
 /*
@@ -218,6 +230,8 @@ static void comm_tx_send_heartbeat(void) {
     uint32_t uptime_seconds = HAL_GetTick() / 1000U;
 
     comm_tx_msg_t msg;
+    msg.sequence = 0U;
+    msg.use_provided_sequence = 0U;
     msg.command = (uint8_t)UART_CMD_EVENT;
     msg.length = APP_HEARTBEAT_PAYLOAD_SIZE;
     msg.payload[UART_EVENT_ID_INDEX] = APP_EVENT_HEARTBEAT;
@@ -232,8 +246,12 @@ static void comm_tx_send_heartbeat(void) {
 
     for (uint32_t i = 0U; i < COMM_TX_CH_COUNT; i++) {
         msg.channel = (uint8_t)i;
-        comm_tx_route(&msg, 0U);
-        comm_tx_stats.heartbeat_sent++;
+
+        if (comm_tx_route(&msg, 0U) == COMM_TX_ROUTE_OK) {
+            comm_tx_stats.heartbeat_sent++;
+        } else {
+            comm_tx_stats.dropped_ring_full++;
+        }
     }
 }
 
@@ -244,42 +262,74 @@ static void comm_tx_send_heartbeat(void) {
  * 채널별로 독립 판정하므로 한 채널의 timeout이 다른 채널을 막지 않는다.
  */
 static void comm_tx_check_timeouts(void) {
+    uint32_t now = HAL_GetTick();
+
     for (uint32_t i = 0U; i < COMM_TX_CH_COUNT; i++) {
         comm_tx_channel_state_t* channel = &comm_tx_channels[i];
 
         taskENTER_CRITICAL();
 
         if (channel->dma_busy != 0U && channel->count > 0U &&
-            (HAL_GetTick() - channel->tx_start_tick) > COMM_TX_TX_TIMEOUT_MS) {
+            (now - channel->tx_start_tick) > COMM_TX_TX_TIMEOUT_MS) {
             comm_tx_stats.tx_timeout[i]++;
 
             (void)HAL_UART_AbortTransmit(channel->huart);
-
-            if (channel->retry_count < UART_MAX_RETRY_COUNT) {
-                /* 같은 프레임 재시도 */
-                channel->retry_count++;
-                comm_tx_stats.tx_retry[i]++;
-                comm_tx_start_dma(channel);
-            } else {
-                /* 재시도 소진: 현재 프레임을 버리고 다음으로 넘어간다 */
-                channel->tail = (uint8_t)((channel->tail + 1U) % COMM_TX_RING_DEPTH);
-                channel->count--;
-                channel->retry_count = 0U;
-
-                if (channel->count > 0U) {
-                    comm_tx_start_dma(channel);
-                } else {
-                    channel->dma_busy = 0U;
-                }
-            }
+            channel->dma_busy = 0U;
+            channel->restart_pending = 1U;
+            channel->tx_start_tick = now;
         }
 
         taskEXIT_CRITICAL();
     }
 }
 
-static int32_t comm_tx_enqueue(QueueHandle_t queue, comm_tx_channel_t channel, uint8_t command, const uint8_t* payload,
-                               uint8_t length, uint8_t urgent) {
+static void comm_tx_service_restarts(void) {
+    uint32_t now = HAL_GetTick();
+
+    for (uint32_t i = 0U; i < COMM_TX_CH_COUNT; i++) {
+        comm_tx_channel_state_t* channel = &comm_tx_channels[i];
+        uint8_t start_needed = 0U;
+
+        taskENTER_CRITICAL();
+
+        if ((channel->dma_busy == 0U) && (channel->count > 0U)) {
+            if ((channel->restart_pending != 0U) &&
+                ((now - channel->tx_start_tick) < COMM_TX_RETRY_INTERVAL_MS)) {
+                taskEXIT_CRITICAL();
+                continue;
+            }
+
+            if (channel->restart_pending != 0U) {
+                if (channel->retry_count >= UART_MAX_RETRY_COUNT) {
+                    channel->tail = (uint8_t)((channel->tail + 1U) % COMM_TX_RING_DEPTH);
+                    channel->count--;
+                    channel->retry_count = 0U;
+                    channel->restart_pending = 0U;
+                    comm_tx_stats.dropped_retry_exhausted++;
+                } else {
+                    channel->retry_count++;
+                    channel->restart_pending = 0U;
+                    comm_tx_stats.tx_retry[i]++;
+                }
+            }
+
+            if (channel->count > 0U) {
+                channel->dma_busy = 1U;
+                start_needed = 1U;
+            }
+        }
+
+        taskEXIT_CRITICAL();
+
+        if (start_needed != 0U) {
+            (void)comm_tx_start_dma(channel);
+        }
+    }
+}
+
+static int32_t comm_tx_enqueue(QueueHandle_t queue, comm_tx_channel_t channel, uint8_t sequence,
+                               uint8_t use_provided_sequence, uint8_t command, const uint8_t* payload, uint8_t length,
+                               uint8_t urgent) {
     if (queue == (QueueHandle_t)0) {
         return -1;
     }
@@ -298,6 +348,8 @@ static int32_t comm_tx_enqueue(QueueHandle_t queue, comm_tx_channel_t channel, u
     msg.channel = (uint8_t)channel;
     msg.command = command;
     msg.length = length;
+    msg.sequence = sequence;
+    msg.use_provided_sequence = use_provided_sequence;
 
     if (length > 0U) {
         memcpy(msg.payload, payload, length);
@@ -323,11 +375,21 @@ static int32_t comm_tx_enqueue(QueueHandle_t queue, comm_tx_channel_t channel, u
 }
 
 int32_t CommTx_Send(comm_tx_channel_t channel, uint8_t command, const uint8_t* payload, uint8_t length) {
-    return comm_tx_enqueue(comm_tx_normal_queue, channel, command, payload, length, 0U);
+    return comm_tx_enqueue(comm_tx_normal_queue, channel, 0U, 0U, command, payload, length, 0U);
+}
+
+int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command, const uint8_t* payload,
+                                uint8_t length) {
+    return comm_tx_enqueue(comm_tx_normal_queue, channel, sequence, 1U, command, payload, length, 0U);
 }
 
 int32_t CommTx_SendUrgent(comm_tx_channel_t channel, uint8_t command, const uint8_t* payload, uint8_t length) {
-    return comm_tx_enqueue(comm_tx_urgent_queue, channel, command, payload, length, 1U);
+    return comm_tx_enqueue(comm_tx_urgent_queue, channel, 0U, 0U, command, payload, length, 1U);
+}
+
+int32_t CommTx_SendUrgentWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command,
+                                      const uint8_t* payload, uint8_t length) {
+    return comm_tx_enqueue(comm_tx_urgent_queue, channel, sequence, 1U, command, payload, length, 1U);
 }
 
 void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code) {
@@ -345,11 +407,41 @@ const comm_tx_stats_t* CommTx_GetStats(void) {
     return &comm_tx_stats;
 }
 
-/*
- * freertos.c의 __weak StartCommTxTask를 덮는 실제 구현.
- */
-void StartCommTxTask(void* argument) {
-    (void)argument;
+static void comm_tx_cleanup_queues(uint8_t urgent_added, uint8_t normal_added) {
+    if (comm_tx_queue_set != (QueueSetHandle_t)0) {
+        if ((urgent_added != 0U) && (comm_tx_urgent_queue != (QueueHandle_t)0)) {
+            (void)xQueueRemoveFromSet(comm_tx_urgent_queue, comm_tx_queue_set);
+        }
+
+        if ((normal_added != 0U) && (comm_tx_normal_queue != (QueueHandle_t)0)) {
+            (void)xQueueRemoveFromSet(comm_tx_normal_queue, comm_tx_queue_set);
+        }
+
+        vQueueDelete(comm_tx_queue_set);
+    }
+
+    if (comm_tx_urgent_queue != (QueueHandle_t)0) {
+        vQueueDelete(comm_tx_urgent_queue);
+    }
+
+    if (comm_tx_normal_queue != (QueueHandle_t)0) {
+        vQueueDelete(comm_tx_normal_queue);
+    }
+
+    comm_tx_queue_set = (QueueSetHandle_t)0;
+    comm_tx_urgent_queue = (QueueHandle_t)0;
+    comm_tx_normal_queue = (QueueHandle_t)0;
+}
+
+int32_t CommTx_Init(void) {
+    uint8_t urgent_added = 0U;
+
+    if ((comm_tx_urgent_queue != (QueueHandle_t)0) && (comm_tx_normal_queue != (QueueHandle_t)0) &&
+        (comm_tx_queue_set != (QueueSetHandle_t)0)) {
+        return 0;
+    }
+
+    memset(comm_tx_channels, 0, sizeof(comm_tx_channels));
 
     comm_tx_channels[COMM_TX_CH_INPUT].huart = &huart1;
     comm_tx_channels[COMM_TX_CH_SORTING].huart = &huart6;
@@ -357,58 +449,120 @@ void StartCommTxTask(void* argument) {
     comm_tx_urgent_queue = xQueueCreate(COMM_TX_URGENT_QUEUE_DEPTH, sizeof(comm_tx_msg_t));
     comm_tx_normal_queue = xQueueCreate(COMM_TX_NORMAL_QUEUE_DEPTH, sizeof(comm_tx_msg_t));
 
-    comm_tx_queue_set = xQueueCreateSet(COMM_TX_URGENT_QUEUE_DEPTH + COMM_TX_NORMAL_QUEUE_DEPTH);
-    xQueueAddToSet(comm_tx_urgent_queue, comm_tx_queue_set);
-    xQueueAddToSet(comm_tx_normal_queue, comm_tx_queue_set);
+    if ((comm_tx_urgent_queue == (QueueHandle_t)0) || (comm_tx_normal_queue == (QueueHandle_t)0)) {
+        comm_tx_stats.init_failures++;
+        comm_tx_cleanup_queues(0U, 0U);
+        return -1;
+    }
 
-    uint32_t next_heartbeat = osKernelGetTickCount() + COMM_TX_HEARTBEAT_PERIOD_MS;
+    comm_tx_queue_set = xQueueCreateSet(COMM_TX_URGENT_QUEUE_DEPTH + COMM_TX_NORMAL_QUEUE_DEPTH);
+
+    if (comm_tx_queue_set == (QueueSetHandle_t)0) {
+        comm_tx_stats.init_failures++;
+        comm_tx_cleanup_queues(0U, 0U);
+        return -1;
+    }
+
+    if (xQueueAddToSet(comm_tx_urgent_queue, comm_tx_queue_set) != pdPASS) {
+        comm_tx_stats.init_failures++;
+        comm_tx_cleanup_queues(0U, 0U);
+        return -2;
+    }
+
+    urgent_added = 1U;
+
+    if (xQueueAddToSet(comm_tx_normal_queue, comm_tx_queue_set) != pdPASS) {
+        comm_tx_stats.init_failures++;
+        comm_tx_cleanup_queues(urgent_added, 0U);
+        return -2;
+    }
+
+    comm_tx_next_heartbeat = osKernelGetTickCount() + COMM_TX_HEARTBEAT_PERIOD_MS;
+    return 0;
+}
+
+static uint8_t comm_tx_drain_queues(void) {
+    comm_tx_msg_t msg;
+    comm_tx_route_result_t result;
 
     for (;;) {
-        /*
-         * 다음 heartbeat까지 남은 시간만 대기하되, DMA timeout 점검을
-         * 위해 최대 COMM_TX_MAX_WAIT_MS로 제한한다.
-         */
-        uint32_t now = osKernelGetTickCount();
-        uint32_t wait = COMM_TX_MAX_WAIT_MS;
+        if (xQueuePeek(comm_tx_urgent_queue, &msg, 0U) == pdTRUE) {
+            result = comm_tx_route(&msg, 1U);
 
-        int32_t remaining = (int32_t)(next_heartbeat - now);
-        if (remaining <= 0) {
-            wait = 0U;
-        } else if ((uint32_t)remaining < wait) {
-            wait = (uint32_t)remaining;
-        }
-
-        (void)xQueueSelectFromSet(comm_tx_queue_set, wait);
-
-        /*
-         * 긴급 우선 처리: urgent 큐를 먼저 모두 비우고, normal은 한 개씩
-         * 처리하면서 매번 urgent 큐를 다시 확인한다.
-         *
-         * QueueSet 알림과 실제 수신이 어긋날 수 있으므로(빈 큐 수신 실패)
-         * 수신 결과로만 판단한다.
-         */
-        comm_tx_msg_t msg;
-
-        for (;;) {
-            while (xQueueReceive(comm_tx_urgent_queue, &msg, 0U) == pdTRUE) {
-                comm_tx_route(&msg, 1U);
+            if (result == COMM_TX_ROUTE_BUSY) {
+                comm_tx_stats.ring_full_waits++;
+                return 1U;
             }
 
-            if (xQueueReceive(comm_tx_normal_queue, &msg, 0U) != pdTRUE) {
-                break;
+            (void)xQueueReceive(comm_tx_urgent_queue, &msg, 0U);
+            continue;
+        }
+
+        if (xQueuePeek(comm_tx_normal_queue, &msg, 0U) == pdTRUE) {
+            result = comm_tx_route(&msg, 0U);
+
+            if (result == COMM_TX_ROUTE_BUSY) {
+                comm_tx_stats.ring_full_waits++;
+                return 1U;
             }
 
-            comm_tx_route(&msg, 0U);
+            (void)xQueueReceive(comm_tx_normal_queue, &msg, 0U);
+            continue;
         }
 
-        comm_tx_check_timeouts();
+        return 0U;
+    }
+}
 
-        now = osKernelGetTickCount();
+void CommTx_ProcessOnce(void) {
+    uint32_t now;
+    uint32_t wait = COMM_TX_MAX_WAIT_MS;
+    uint8_t ring_blocked;
 
-        if ((int32_t)(now - next_heartbeat) >= 0) {
-            comm_tx_send_heartbeat();
-            next_heartbeat += COMM_TX_HEARTBEAT_PERIOD_MS;
-        }
+    if (comm_tx_queue_set == (QueueSetHandle_t)0) {
+        osDelay(COMM_TX_RETRY_INTERVAL_MS);
+        return;
+    }
+
+    now = osKernelGetTickCount();
+
+    int32_t remaining = (int32_t)(comm_tx_next_heartbeat - now);
+    if (remaining <= 0) {
+        wait = 0U;
+    } else if ((uint32_t)remaining < wait) {
+        wait = (uint32_t)remaining;
+    }
+
+    (void)xQueueSelectFromSet(comm_tx_queue_set, wait);
+
+    comm_tx_check_timeouts();
+    comm_tx_service_restarts();
+    ring_blocked = comm_tx_drain_queues();
+
+    now = osKernelGetTickCount();
+
+    if ((int32_t)(now - comm_tx_next_heartbeat) >= 0) {
+        comm_tx_send_heartbeat();
+        comm_tx_next_heartbeat = now + COMM_TX_HEARTBEAT_PERIOD_MS;
+    }
+
+    if (ring_blocked != 0U) {
+        osDelay(1U);
+    }
+}
+
+/*
+ * freertos.c의 __weak StartCommTxTask를 덮는 실제 구현.
+ */
+void StartCommTxTask(void* argument) {
+    (void)argument;
+
+    while (CommTx_Init() != 0) {
+        osDelay(COMM_TX_RETRY_INTERVAL_MS);
+    }
+
+    for (;;) {
+        CommTx_ProcessOnce();
     }
 }
 
@@ -421,18 +575,19 @@ void StartCommTxTask(void* argument) {
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef* huart) {
     comm_tx_channel_state_t* channel = comm_tx_channel_from_huart(huart);
 
-    if (channel == (comm_tx_channel_state_t*)0) {
+    if ((channel == (comm_tx_channel_state_t*)0) || (channel->dma_busy == 0U) || (channel->count == 0U)) {
         return;
     }
 
     channel->tail = (uint8_t)((channel->tail + 1U) % COMM_TX_RING_DEPTH);
     channel->count--;
     channel->retry_count = 0U;
+    channel->restart_pending = 0U;
 
     comm_tx_stats.sent[comm_tx_channel_index(channel)]++;
 
     if (channel->count > 0U) {
-        comm_tx_start_dma(channel);
+        (void)comm_tx_start_dma(channel);
     } else {
         channel->dma_busy = 0U;
     }
@@ -441,30 +596,26 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef* huart) {
 /*
  * UART 오류 콜백.
  *
- * 송신 오류 시 현재 프레임을 버리고 다음 프레임으로 넘어가
- * 채널이 멈추지 않게 한다.
+ * 송신 오류 시 현재 프레임을 유지하고 task context에서 제한 횟수만큼
+ * 재시도한다.
  *
- * 주의: comm-rx-task 파트도 수신 오류 처리를 위해 이 콜백이 필요할 수
- * 있다. 머지 시 하나의 콜백에서 TX/RX 처리를 합치도록 조율한다.
+ * uart_rx.c의 단일 HAL_UART_ErrorCallback이 RX 오류를 기록한 뒤 이
+ * 함수를 호출한다. RX noise/overrun 오류로 정상 TX 프레임을 버리지 않도록
+ * 실제 TX DMA 오류일 때만 송신 링을 복구한다.
  */
-void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart) {
+void CommTx_HandleUartError(UART_HandleTypeDef* huart) {
     comm_tx_channel_state_t* channel = comm_tx_channel_from_huart(huart);
 
-    if (channel == (comm_tx_channel_state_t*)0) {
+    if ((channel == (comm_tx_channel_state_t*)0) || ((huart->ErrorCode & HAL_UART_ERROR_DMA) == 0U) ||
+        (huart->hdmatx == (DMA_HandleTypeDef*)0) || (huart->hdmatx->ErrorCode == HAL_DMA_ERROR_NONE)) {
         return;
     }
 
     comm_tx_stats.tx_error[comm_tx_channel_index(channel)]++;
 
     if (channel->dma_busy != 0U && channel->count > 0U) {
-        channel->tail = (uint8_t)((channel->tail + 1U) % COMM_TX_RING_DEPTH);
-        channel->count--;
-        channel->retry_count = 0U;
-
-        if (channel->count > 0U) {
-            comm_tx_start_dma(channel);
-        } else {
-            channel->dma_busy = 0U;
-        }
+        channel->dma_busy = 0U;
+        channel->restart_pending = 1U;
+        channel->tx_start_tick = HAL_GetTick();
     }
 }
