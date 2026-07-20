@@ -14,10 +14,12 @@ jobs:
       CC: gcc-10
       CXX: g++-10
       OPENCV_VERSION: 4.10.0
-      OPENCV_INSTALL_DIR: ${{ runner.tool_cache }}/opencv/4.10.0-gcc10
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Configure runner cache paths
+        run: echo "OPENCV_INSTALL_DIR=${RUNNER_TOOL_CACHE}/opencv/4.10.0-gcc10" >> "$GITHUB_ENV"
 
       - name: Install build tools
         run: |
