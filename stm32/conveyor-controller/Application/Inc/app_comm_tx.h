@@ -90,9 +90,9 @@ typedef struct {
     uint32_t dropped_invalid;              /* 채널/길이 오류로 드랍 */
     uint32_t dropped_encode_error;         /* 프레임 인코딩 실패로 드랍 */
     uint32_t dropped_ring_full;            /* best-effort heartbeat 링 포화 드랍 */
-    uint32_t ring_full_waits;               /* 수락한 메시지가 링 자리를 기다린 횟수 */
-    uint32_t dropped_retry_exhausted;       /* DMA 재시도 소진 후 드랍 */
-    uint32_t init_failures;                 /* TX Queue/QueueSet 초기화 실패 */
+    uint32_t ring_full_waits;              /* 수락한 메시지가 링 자리를 기다린 횟수 */
+    uint32_t dropped_retry_exhausted;      /* DMA 재시도 소진 후 드랍 */
+    uint32_t init_failures;                /* TX Queue/QueueSet 초기화 실패 */
     uint32_t tx_error[COMM_TX_CH_COUNT];   /* HAL 송신 오류 수 */
     uint32_t tx_timeout[COMM_TX_CH_COUNT]; /* DMA 송신 timeout 수 */
     uint32_t tx_retry[COMM_TX_CH_COUNT];   /* timeout 후 재시도 수 */
@@ -125,18 +125,16 @@ int32_t CommTx_SendUrgentWithSequence(comm_tx_channel_t channel, uint8_t sequenc
                                       const uint8_t* payload, uint8_t length);
 
 /*
- * heartbeat에 실리는 장치 상태를 갱신한다.
- * CommTxTask가 1초 주기 송신을 소유하므로 HealthTask는 polling 결과를
- * 이 setter로 갱신하고 별도의 heartbeat를 중복 송신하지 않는다.
- * SafetyTask(안전 상태 진입/해제)와 HealthTask(오류 감지)가 호출한다.
+ * Updates the device status included in heartbeat frames. CommTxTask owns the
+ * periodic transmission; SafetyTask
+ * and HealthTask only update this state.
  */
 void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code);
 
 /*
- * heartbeat에 실리는 공정별 센서 상태를 갱신한다. SensorTask 또는
- * SensorTask를 polling하는 HealthTask가 호출한다.
- *
- * process: COMM_TX_CH_INPUT(투입) 또는 COMM_TX_CH_SORTING(분류)
+ * Updates the per-process sensor state included in heartbeat frames. The
+ * process must be COMM_TX_CH_INPUT or
+ * COMM_TX_CH_SORTING.
  */
 void CommTx_SetSensorState(comm_tx_channel_t process, uint8_t sensor_state);
 

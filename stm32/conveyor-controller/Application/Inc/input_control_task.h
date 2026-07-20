@@ -42,8 +42,9 @@ uint8_t input_control_task_notify_safety_stop(void);
 
 /*
  * Release is accepted only after STOPPED synchronization. SafetyTask requests
- * release from every control task while the shared STBY latch remains LOW,
- * waits until every task reports RELEASED, and only then releases the latch.
+ * release from every control task
+ * while the shared STBY latch remains LOW and
+ * releases the latch only after every task reports RELEASED.
  */
 uint8_t input_control_task_notify_safety_release(void);
 
