@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "logistics/device/log_spool_uploader.hpp"
+
 namespace logistics::device {
 
 struct MqttNodeConfig final {
@@ -20,6 +22,8 @@ struct MqttNodeConfig final {
     std::uint32_t reconnect_min_delay_seconds{ 1 };
     std::uint32_t reconnect_max_delay_seconds{ 30 };
     bool clean_session{ true };
+    bool log_upload_enabled{ false };
+    LogSpoolConfig log_upload;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

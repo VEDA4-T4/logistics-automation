@@ -6,11 +6,25 @@ add_library(
 )
 add_library(logistics::device_mqtt_core ALIAS device_mqtt_core)
 
+find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(Threads REQUIRED)
+
+add_library(device_log_spool common/src/log_spool_uploader.cpp)
+add_library(logistics::device_log_spool ALIAS device_log_spool)
+target_include_directories(device_log_spool PUBLIC common/include)
+target_link_libraries(
+    device_log_spool
+    PUBLIC logistics::contracts
+    PRIVATE CURL::libcurl OpenSSL::Crypto Threads::Threads
+)
+
 target_include_directories(device_mqtt_core PUBLIC common/include)
 target_link_libraries(device_mqtt_core PUBLIC logistics::contracts)
 
 include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
 logistics_enable_warnings(device_mqtt_core)
+logistics_enable_warnings(device_log_spool)
 
 add_library(device_status common/device_status/device_status.cpp)
 add_library(logistics::device_status ALIAS device_status)
@@ -31,6 +45,7 @@ target_link_libraries(
     PRIVATE
         logistics::device_mqtt_core
         logistics::device_status
+        logistics::device_log_spool
 )
 
 logistics_enable_warnings(device_runtime)
@@ -115,6 +130,11 @@ if(BUILD_TESTING)
     target_link_libraries(device_status_test PRIVATE logistics::device_status)
     logistics_enable_warnings(device_status_test)
     add_test(NAME device_status_test COMMAND device_status_test)
+
+    add_executable(device_log_spool_test tests/log_spool_uploader_test.cpp)
+    target_link_libraries(device_log_spool_test PRIVATE logistics::device_log_spool)
+    logistics_enable_warnings(device_log_spool_test)
+    add_test(NAME device_log_spool_test COMMAND device_log_spool_test)
 endif()
 target_sources(
     logistics_vision_node

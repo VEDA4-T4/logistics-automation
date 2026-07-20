@@ -86,6 +86,26 @@ void TestHeartbeatEncoding() {
     assert(status->status == mqtt::ConnectionState::kOffline);
 }
 
+void TestWorkCreatedCommandDecoding() {
+    const mqtt::MqttMessage message{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "WORK-22a194c3-3e3c-410c-a329-7e8c4ebcac83",
+        .message_type = mqtt::MessageType::kWorkCreated,
+        .source_id = "central-server",
+        .timestamp = "2026-07-15T17:30:00+09:00",
+        .data = mqtt::WorkCreatedPayload{ .work_id = "22a194c3-3e3c-410c-a329-7e8c4ebcac83" },
+    };
+    const auto encoded = mqtt::SerializeMessage(message);
+    assert(encoded.IsSuccess());
+
+    device::MqttMessageProcessor processor("PI-01");
+    const auto decoded = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), encoded.payload);
+    assert(decoded.IsSuccess());
+    const auto* work = mqtt::GetPayload<mqtt::WorkCreatedPayload>(decoded.message);
+    assert(work != nullptr);
+    assert(work->work_id == "22a194c3-3e3c-410c-a329-7e8c4ebcac83");
+}
+
 void TestRegistrationAndOnlineStatusEncoding() {
     const device::MqttMessageProcessor processor("PI-01");
     const auto registration = processor.EncodeDeviceRegistration("MSG-REGISTER-01", "2026-07-15T17:30:00+09:00",
@@ -123,6 +143,7 @@ void TestRegistrationAndOnlineStatusEncoding() {
 int main() {
     TestCommandDecoding();
     TestHeartbeatEncoding();
+    TestWorkCreatedCommandDecoding();
     TestRegistrationAndOnlineStatusEncoding();
     return 0;
 }

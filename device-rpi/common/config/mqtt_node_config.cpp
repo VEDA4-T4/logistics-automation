@@ -97,13 +97,59 @@ void AssignMqttValue(MqttNodeConfig& config, const std::filesystem::path& path, 
     }
 }
 
+void AssignLogUploadValue(MqttNodeConfig& config, const std::filesystem::path& path, std::size_t line_number,
+                          std::string_view key, std::string_view value) {
+    auto& upload = config.log_upload;
+    if (key == "enabled") {
+        config.log_upload_enabled = ParseBoolean(path, line_number, key, value);
+    } else if (key == "endpoint_url") {
+        upload.endpoint_url = value;
+    } else if (key == "bearer_token") {
+        upload.bearer_token = value;
+    } else if (key == "ca_certificate") {
+        upload.ca_certificate = value;
+    } else if (key == "spool_directory") {
+        upload.spool_directory = value;
+    } else if (key == "rotate_bytes") {
+        upload.rotate_bytes = ParseInteger<std::size_t>(path, line_number, key, value, 1,
+                                                        std::numeric_limits<std::size_t>::max());
+    } else if (key == "rotate_interval_seconds") {
+        upload.rotate_interval = std::chrono::seconds(ParseInteger<std::int64_t>(
+            path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+    } else if (key == "maximum_spool_bytes") {
+        upload.maximum_spool_bytes = ParseInteger<std::size_t>(path, line_number, key, value, 1,
+                                                               std::numeric_limits<std::size_t>::max());
+    } else if (key == "request_timeout_seconds") {
+        upload.request_timeout = std::chrono::seconds(ParseInteger<std::int64_t>(
+            path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+    } else if (key == "maximum_attempts") {
+        upload.maximum_attempts = ParseInteger<int>(path, line_number, key, value, 1, std::numeric_limits<int>::max());
+    } else if (key == "initial_backoff_seconds") {
+        upload.initial_backoff = std::chrono::seconds(ParseInteger<std::int64_t>(
+            path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+    } else if (key == "maximum_backoff_seconds") {
+        upload.maximum_backoff = std::chrono::seconds(ParseInteger<std::int64_t>(
+            path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+    } else if (key == "allow_insecure_http") {
+        upload.allow_insecure_http = ParseBoolean(path, line_number, key, value);
+    } else {
+        ThrowLineError(path, line_number, "unknown [log_upload] setting: " + std::string(key));
+    }
+}
+
 }  // namespace
 
 bool MqttNodeConfig::IsValid() const noexcept {
+    const bool valid_log_upload = !log_upload_enabled ||
+                                  (!log_upload.endpoint_url.empty() && !log_upload.spool_directory.empty() &&
+                                   log_upload.rotate_bytes != 0 && log_upload.maximum_spool_bytes >= log_upload.rotate_bytes &&
+                                   log_upload.rotate_interval.count() > 0 && log_upload.request_timeout.count() > 0 &&
+                                   log_upload.maximum_attempts > 0 && log_upload.initial_backoff.count() > 0 &&
+                                   log_upload.maximum_backoff >= log_upload.initial_backoff);
     return contracts::mqtt::IsValidTopicLevel(device_id) && !node_name.empty() && !ip_address.empty() &&
            !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
            reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
-           (password.empty() || !username.empty());
+           (password.empty() || !username.empty()) && valid_log_upload;
 }
 
 MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
@@ -136,7 +182,7 @@ MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
             found_mqtt_section = found_mqtt_section || section == "mqtt";
             continue;
         }
-        if (section != "device" && section != "mqtt") {
+        if (section != "device" && section != "mqtt" && section != "log_upload") {
             continue;
         }
 
@@ -153,11 +199,14 @@ MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
 
         if (section == "device") {
             AssignDeviceValue(config, path, line_number, key, value);
-        } else {
+        } else if (section == "mqtt") {
             AssignMqttValue(config, path, line_number, key, value);
+        } else {
+            AssignLogUploadValue(config, path, line_number, key, value);
         }
     }
 
+    config.log_upload.device_id = config.device_id;
     if (!found_device_section || !found_mqtt_section || !config.IsValid()) {
         throw NodeConfigError("invalid device MQTT configuration in " + path.string());
     }

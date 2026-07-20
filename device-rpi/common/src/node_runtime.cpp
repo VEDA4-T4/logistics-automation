@@ -12,8 +12,9 @@
 #include <utility>
 
 #ifdef LOGISTICS_DEVICE_MQTT_ENABLED
-#include "logistics/contracts/mqtt_message.hpp"
+#include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/device/device_status.hpp"
+#include "logistics/device/log_spool_uploader.hpp"
 #include "logistics/device/mqtt_node_client.hpp"
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
@@ -61,13 +62,35 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
     }
 
     const std::string device_id = config.device_id;
+    std::unique_ptr<LogSpoolUploader> log_uploader;
+    if (config.log_upload_enabled) {
+        log_uploader = std::make_unique<LogSpoolUploader>(config.log_upload);
+        if (!log_uploader->Start()) {
+            std::cerr << "[device][ERROR] unable to start HTTP log spool uploader\n";
+            return 1;
+        }
+        static_cast<void>(log_uploader->Append("device node starting"));
+    }
     auto device_status = std::make_shared<DeviceStatus>(device_id);
     MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(role_)), device_status);
-    mqtt_client.SetCommandHandler([](const contracts::mqtt::MqttMessage& message) {
+    mqtt_client.SetCommandHandler([uploader = log_uploader.get(), device_status](
+                                      const contracts::mqtt::MqttMessage& message) {
         std::clog << "[device][INFO] MQTT command received: " << contracts::mqtt::ToString(message.message_type)
                   << '\n';
+        if (uploader != nullptr) {
+            static_cast<void>(uploader->Append("MQTT command received: " +
+                                               std::string(contracts::mqtt::ToString(message.message_type))));
+        }
+        if (const auto* work_created =
+                contracts::mqtt::GetPayload<contracts::mqtt::WorkCreatedPayload>(message)) {
+            device_status->SetJobId(work_created->work_id);
+            device_status->SetCurrentState("WORK_ASSIGNED");
+        }
     });
     if (!mqtt_client.Start()) {
+        if (log_uploader != nullptr) {
+            log_uploader->Stop();
+        }
         return 1;
     }
 
@@ -93,6 +116,12 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
     }
 
     mqtt_client.Stop();
+    if (log_uploader != nullptr) {
+        static_cast<void>(log_uploader->Append("device node stopped"));
+        static_cast<void>(log_uploader->RotateNow());
+        static_cast<void>(log_uploader->ProcessPendingOnce());
+        log_uploader->Stop();
+    }
     std::clog << "[device][INFO] device node stopped\n";
     return 0;
 #else

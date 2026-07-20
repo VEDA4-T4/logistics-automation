@@ -39,6 +39,21 @@ keep_alive_seconds=45
 reconnect_min_delay_seconds=2
 reconnect_max_delay_seconds=20
 clean_session=yes
+
+[log_upload]
+enabled=true
+endpoint_url=https://server.example/api/v1/uploads/logs
+bearer_token=device-token
+ca_certificate=/etc/logistics/ca.crt
+spool_directory=/var/lib/logistics/log-spool
+rotate_bytes=1024
+rotate_interval_seconds=60
+maximum_spool_bytes=8192
+request_timeout_seconds=15
+maximum_attempts=4
+initial_backoff_seconds=2
+maximum_backoff_seconds=30
+allow_insecure_http=false
 )ini";
     }
 
@@ -53,6 +68,12 @@ clean_session=yes
     assert(config.reconnect_min_delay_seconds == 2);
     assert(config.reconnect_max_delay_seconds == 20);
     assert(config.clean_session);
+    assert(config.log_upload_enabled);
+    assert(config.log_upload.device_id == "PI-01");
+    assert(config.log_upload.endpoint_url == "https://server.example/api/v1/uploads/logs");
+    assert(config.log_upload.rotate_bytes == 1024);
+    assert(config.log_upload.rotate_interval == std::chrono::seconds(60));
+    assert(config.log_upload.maximum_attempts == 4);
     assert(config.IsValid());
 
     const std::string timestamp = device::CurrentIso8601Timestamp();
