@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "app_comm_tx.h"
 #include "app_queues.h"
 #include "usart.h"
 
@@ -283,4 +284,6 @@ void HAL_UART_ErrorCallback(
             APP_UART_CHANNEL_6,
             huart->ErrorCode);
     }
+
+    CommTx_HandleUartError(huart);
 }
