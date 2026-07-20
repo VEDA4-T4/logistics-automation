@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_comm_tx_dummy.h"
+#include "app_queues.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -143,6 +144,10 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
+  if (app_queues_init() != osOK)
+  {
+    Error_Handler();
+  }
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
