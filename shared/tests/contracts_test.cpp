@@ -124,10 +124,10 @@ void TestAllMqttMessageRoundTrips() {
             mqtt::MessageType::kProductImage,
             mqtt::ProductImagePayload{
                 .work_id = std::string(kTestWorkId),
-                .image_id = "IMAGE-0001",
+                .image_id = "8cd62467-5b68-4ea0-8946-b979495ea71c",
                 .image_url = {},
-                .image_path = "images/JOB-0001.jpg",
-                .checksum = "abc123",
+                .image_path = "/uploads/images/8cd62467-5b68-4ea0-8946-b979495ea71c.jpg",
+                .checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 .upload_status = "UPLOADED",
             }
         )

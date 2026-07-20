@@ -35,12 +35,13 @@ MQTT topic, payload, QoS, retain, Last Will 규칙을 중앙에서 관리하는 
 
 - `BARCODE_DETECTED`: `workId`, `recognitionStatus`, 선택적인 `barcode`, `confidence`, `message`
 - `PRODUCT_INFO`: `workId`, `recognitionStatus`, 선택적인 `barcode`, `productId`, `productName`, `destination`, `image`
-- `PRODUCT_IMAGE`: `workId`, `imageId`, `imageUrl` 또는 `imagePath`, `checksum`, `uploadStatus`
+- `PRODUCT_IMAGE`: `workId`, `imageId`, `imagePath`, `checksum`, `uploadStatus`
 - `DESTINATION_SET`: `workId`, `destination`
 - `WORK_COMPLETED`: `workId`, `result`, 선택적인 `message`
 
 `recognitionStatus`는 `SUCCESS`, `FAILED`, `MISSING_DATA` 중 하나를 사용합니다. `image` object에는
-`imageId`, `url` 또는 `path`, `checksum`, `uploadStatus`를 사용할 수 있습니다. 이미지 경로는 HTTP(S)
+`imageId`, `url` 또는 `path`, `checksum`, `uploadStatus`를 사용할 수 있습니다. `PRODUCT_IMAGE`의
+`imagePath`는 HTTP 업로드 응답의 `/uploads/images/...` 경로를 그대로 사용합니다. 이미지 경로는 HTTP(S)
 절대 URL 또는 Qt 설정의 `http/image_base_url`을 기준으로 하는 상대 경로이며 이미지 바이너리는 MQTT에
 포함하지 않습니다.
 

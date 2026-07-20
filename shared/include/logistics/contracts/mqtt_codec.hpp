@@ -11,6 +11,8 @@
 #include <utility>
 #include <variant>
 
+#include "logistics/contracts/http_upload.hpp"
+#include "logistics/contracts/identifier.hpp"
 #include "logistics/contracts/mqtt_message.hpp"
 
 namespace logistics::contracts::mqtt {
@@ -114,24 +116,8 @@ struct DecodeResult {
     }
 };
 
-[[nodiscard]] constexpr bool IsHexDigit(char value) noexcept {
-    return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F');
-}
-
 [[nodiscard]] constexpr bool IsValidUuid(std::string_view value) noexcept {
-    if (value.size() != 36U || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-') {
-        return false;
-    }
-
-    for (std::size_t index = 0; index < value.size(); ++index) {
-        if (index == 8U || index == 13U || index == 18U || index == 23U) {
-            continue;
-        }
-        if (!IsHexDigit(value[index])) {
-            return false;
-        }
-    }
-    return true;
+    return ::logistics::contracts::IsValidUuid(value);
 }
 
 struct DeviceRegisterPayload {
@@ -228,8 +214,8 @@ struct ProductImagePayload {
     std::string upload_status;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidUuid(work_id) && !image_id.empty() && (!image_url.empty() || !image_path.empty()) &&
-               !checksum.empty() && !upload_status.empty();
+        return IsValidUuid(work_id) && IsValidUuid(image_id) && image_path.starts_with("/uploads/images/") &&
+               http::IsSha256(checksum) && upload_status == "UPLOADED";
     }
 };
 

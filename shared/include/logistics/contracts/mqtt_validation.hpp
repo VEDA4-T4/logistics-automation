@@ -80,7 +80,7 @@ namespace validation_detail {
             return type == MessageType::kDeviceRegister;
         case TopicKind::kDeviceCommand:
             return type == MessageType::kControlCommand || type == MessageType::kDestinationSet ||
-                   type == MessageType::kEmergencyStop;
+                   type == MessageType::kEmergencyStop || type == MessageType::kWorkCreated;
         case TopicKind::kDeviceResponse:
             return type == MessageType::kCommandResponse;
         case TopicKind::kDeviceStatus:
@@ -148,7 +148,7 @@ namespace validation_detail {
                                              "sourceId does not match the MQTT topic endpoint");
     }
 
-    if (parsed_topic.kind == TopicKind::kDeviceCommand &&
+    if (parsed_topic.kind == TopicKind::kDeviceCommand && message.message_type != MessageType::kWorkCreated &&
         validation_detail::TargetDeviceId(message) != parsed_topic.endpoint_id) {
         return validation_detail::MakeStatus(TopicMessageError::kTargetDeviceIdMismatch,
                                              "targetDeviceId does not match the device command topic");
