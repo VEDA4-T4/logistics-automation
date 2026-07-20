@@ -30,16 +30,19 @@ typedef enum {
     APP_CONTROL_COMMAND_RESUME_DRIVE,
     APP_CONTROL_COMMAND_MANUAL_UNLOAD,
     APP_CONTROL_COMMAND_RESET_SYSTEM,
-	APP_CONTROL_COMMAND_STATUS_REQUEST
+    APP_CONTROL_COMMAND_STATUS_REQUEST
 } app_control_command_type_t;
 
 typedef struct {
     app_control_command_type_t type;
     uint32_t received_at_ms;
     uint16_t job_id;
+    uint16_t original_payload_crc;
     uart_linetracer_route_t route_id;
     uart_linetracer_position_t position;
     uint8_t sequence;
+    uint8_t original_command;
+    uint8_t original_payload_length;
 } app_control_command_t;
 
 typedef enum {
@@ -84,10 +87,33 @@ typedef struct {
     app_safety_event_type_t type;
     uint32_t occurred_at_ms;
     linetracer_stop_reason_t reason;
+    uint16_t original_payload_crc;
     app_task_id_t source_task;
     uint8_t error_code;
     uint8_t active;
+    uint8_t request_sequence;
+    uint8_t original_command;
+    uint8_t original_payload_length;
 } app_safety_event_t;
+
+/* SafetyTask is the single producer; ControlTask is the single consumer. */
+typedef enum {
+    APP_CONTROL_SAFETY_NONE = 0,
+    APP_CONTROL_SAFETY_LATCHED,
+    APP_CONTROL_SAFETY_RESET_APPROVED,
+    APP_CONTROL_SAFETY_RESET_REJECTED
+} app_control_safety_event_type_t;
+
+typedef struct {
+    app_control_safety_event_type_t type;
+    uint32_t occurred_at_ms;
+    linetracer_stop_reason_t reason;
+    uint16_t original_payload_crc;
+    uint8_t error_code;
+    uint8_t request_sequence;
+    uint8_t original_command;
+    uint8_t original_payload_length;
+} app_control_safety_event_t;
 
 typedef enum {
     APP_UNLOAD_COMMAND_NONE = 0,
@@ -115,17 +141,54 @@ typedef enum {
     APP_TX_EVENT_FAULT
 } app_tx_event_type_t;
 
+typedef enum {
+    APP_TX_PRIORITY_TELEMETRY = 0,
+    APP_TX_PRIORITY_EVENT = 1,
+    APP_TX_PRIORITY_RESPONSE = 2,
+    APP_TX_PRIORITY_SAFETY = 3
+} app_tx_priority_t;
+
 typedef struct {
     app_tx_event_type_t type;
     uint32_t created_at_ms;
     uint16_t job_id;
+    uint16_t original_payload_crc;
     uart_linetracer_route_t route_id;
     uart_linetracer_state_t state;
+    uart_linetracer_load_state_t load_state;
     uint8_t request_sequence;
     uint8_t original_command;
+    uint8_t original_payload_length;
     uint8_t status;
     uint8_t error_code;
+    uint8_t retry_count;
 } app_tx_event_t;
+
+static inline uint8_t app_tx_event_is_response(app_tx_event_type_t type) {
+    return (type == APP_TX_EVENT_COMMAND_ACK || type == APP_TX_EVENT_STATUS) ? 1U : 0U;
+}
+
+static inline uint8_t app_tx_event_priority(app_tx_event_type_t type) {
+    switch (type) {
+        case APP_TX_EVENT_COMMAND_ACK:
+        case APP_TX_EVENT_STATUS:
+            return APP_TX_PRIORITY_RESPONSE;
+
+        case APP_TX_EVENT_FAULT:
+            return APP_TX_PRIORITY_SAFETY;
+
+        case APP_TX_EVENT_ARRIVED:
+        case APP_TX_EVENT_LOAD_DETECTED:
+        case APP_TX_EVENT_UNLOAD_COMPLETE:
+        case APP_TX_EVENT_STATE_CHANGED:
+            return APP_TX_PRIORITY_EVENT;
+
+        case APP_TX_EVENT_HEARTBEAT:
+        case APP_TX_EVENT_NONE:
+        default:
+            return APP_TX_PRIORITY_TELEMETRY;
+    }
+}
 
 typedef enum {
     APP_HEALTH_EVENT_NONE = 0,
