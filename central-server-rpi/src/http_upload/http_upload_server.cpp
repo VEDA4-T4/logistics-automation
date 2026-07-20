@@ -22,6 +22,7 @@ namespace logistics::central_server {
 namespace {
 
 namespace contract = contracts::http;
+using MhdResult = decltype(MHD_queue_response(nullptr, 0U, nullptr));
 
 std::string ReadTextFile(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
@@ -93,19 +94,19 @@ std::string ResultJson(const UploadResult& result) {
            "\",\"duplicate\":" + (result.status == UploadStatus::kDuplicate ? "true" : "false") + "}";
 }
 
-MHD_Result QueueJson(MHD_Connection* connection, unsigned int status, const std::string& body) {
+MhdResult QueueJson(MHD_Connection* connection, unsigned int status, const std::string& body) {
     MHD_Response* response =
         MHD_create_response_from_buffer(body.size(), const_cast<char*>(body.data()), MHD_RESPMEM_MUST_COPY);
     if (response == nullptr) {
         return MHD_NO;
     }
     static_cast<void>(MHD_add_response_header(response, MHD_HTTP_HEADER_CONTENT_TYPE, "application/json"));
-    const MHD_Result result = MHD_queue_response(connection, status, response);
+    const MhdResult result = MHD_queue_response(connection, status, response);
     MHD_destroy_response(response);
     return result;
 }
 
-MHD_Result QueueImage(MHD_Connection* connection, const std::filesystem::path& path, std::string_view content_type) {
+MhdResult QueueImage(MHD_Connection* connection, const std::filesystem::path& path, std::string_view content_type) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
         return QueueJson(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
@@ -123,13 +124,13 @@ MHD_Result QueueImage(MHD_Connection* connection, const std::filesystem::path& p
     static_cast<void>(MHD_add_response_header(response, MHD_HTTP_HEADER_CONTENT_TYPE, content_type.data()));
     static_cast<void>(
         MHD_add_response_header(response, MHD_HTTP_HEADER_CACHE_CONTROL, "public, max-age=31536000, immutable"));
-    const MHD_Result result = MHD_queue_response(connection, MHD_HTTP_OK, response);
+    const MhdResult result = MHD_queue_response(connection, MHD_HTTP_OK, response);
     MHD_destroy_response(response);
     return result;
 }
 
-MHD_Result ServeUploadedImage(MHD_Connection* connection, const std::filesystem::path& upload_root,
-                              std::string_view url) {
+MhdResult ServeUploadedImage(MHD_Connection* connection, const std::filesystem::path& upload_root,
+                             std::string_view url) {
     constexpr std::string_view prefix = "/uploads/images/";
     if (!url.starts_with(prefix)) {
         return QueueJson(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"NOT_FOUND\",\"message\":\"unknown endpoint\"}");
@@ -192,8 +193,8 @@ std::string* TextField(ConnectionContext& context, std::string_view key) {
     return nullptr;
 }
 
-MHD_Result ProcessPart(void* context_pointer, MHD_ValueKind, const char* key, const char*, const char* content_type,
-                       const char*, const char* data, std::uint64_t offset, std::size_t size) {
+MhdResult ProcessPart(void* context_pointer, MHD_ValueKind, const char* key, const char*, const char* content_type,
+                      const char*, const char* data, std::uint64_t offset, std::size_t size) {
     auto& context = *static_cast<ConnectionContext*>(context_pointer);
     if (key == nullptr) {
         return MHD_YES;
@@ -276,9 +277,9 @@ public:
     }
 
 private:
-    static MHD_Result HandleRequest(void* server_pointer, MHD_Connection* connection, const char* url,
-                                    const char* method, const char*, const char* upload_data,
-                                    std::size_t* upload_data_size, void** context_pointer) {
+    static MhdResult HandleRequest(void* server_pointer, MHD_Connection* connection, const char* url,
+                                   const char* method, const char*, const char* upload_data,
+                                   std::size_t* upload_data_size, void** context_pointer) {
         auto& server = *static_cast<Impl*>(server_pointer);
         if (std::string_view(method) == MHD_HTTP_METHOD_GET) {
             return ServeUploadedImage(connection, server.config_.upload_root, url);
