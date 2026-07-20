@@ -5,9 +5,14 @@
 
 #define CONTROL_TASK_MAX_COMMANDS_PER_CYCLE 4U
 #define CONTROL_TASK_ALIVE_INTERVAL_MS APP_TIMING_HEALTH_PERIOD_MS
+#define CONTROL_TASK_PENDING_RESPONSE_CAPACITY APP_TX_RESPONSE_QUEUE_DEPTH
 
 #if CONTROL_TASK_MAX_COMMANDS_PER_CYCLE == 0U
 #error "ControlTask must process at least one command per cycle"
+#endif
+
+#if CONTROL_TASK_PENDING_RESPONSE_CAPACITY == 0U
+#error "ControlTask pending response capacity must be greater than zero"
 #endif
 
 #endif /* CONTROL_CONFIG_H */

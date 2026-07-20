@@ -80,6 +80,31 @@ static uint8_t ControlLogic_CommandTimedOut(const app_control_command_t* command
     return ((uint32_t)(now_ms - command->received_at_ms) > UART_COMMAND_TIMEOUT_MS) ? 1U : 0U;
 }
 
+static uart_error_t ControlLogic_SafetyError(const control_context_t* context) {
+    if (context->safety_error_code != UART_ERROR_NONE) {
+        return (uart_error_t)context->safety_error_code;
+    }
+
+    if (context->stop_reason == LINETRACER_STOP_REASON_EMERGENCY) {
+        return UART_ERROR_EMERGENCY_STOP;
+    }
+
+    return UART_ERROR_BUSY;
+}
+
+static linetracer_control_state_t ControlLogic_SafetyState(linetracer_stop_reason_t reason) {
+    switch (reason) {
+        case LINETRACER_STOP_REASON_EMERGENCY:
+            return LINETRACER_CONTROL_EMERGENCY_STOPPED;
+
+        case LINETRACER_STOP_REASON_OBSTACLE:
+            return LINETRACER_CONTROL_OBSTACLE_STOP;
+
+        default:
+            return LINETRACER_CONTROL_ERROR;
+    }
+}
+
 uint8_t ControlLogic_StateCanResume(linetracer_control_state_t state) {
     switch (state) {
         case LINETRACER_CONTROL_TURNING_FROM_DEST:
@@ -199,6 +224,47 @@ void ControlLogic_Init(control_context_t* context, uint32_t now_ms) {
     context->active_job_id = UART_LINETRACER_JOB_ID_NONE;
     context->route_active = 0U;
     context->resume_valid = 0U;
+    context->safety_latched = 0U;
+    context->safety_error_code = UART_ERROR_NONE;
+}
+
+uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_control_safety_event_t* event,
+                                      uint32_t now_ms) {
+    linetracer_stop_reason_t reason;
+
+    if (context == NULL || event == NULL) {
+        return 0U;
+    }
+
+    switch (event->type) {
+        case APP_CONTROL_SAFETY_LATCHED:
+        case APP_CONTROL_SAFETY_RESET_REJECTED:
+            reason = event->reason;
+            if (reason == LINETRACER_STOP_REASON_NONE) {
+                reason = context->stop_reason;
+            }
+
+            context->safety_latched = 1U;
+            context->stop_reason = reason;
+            context->resume_valid = 0U;
+            if (event->error_code != UART_ERROR_NONE) {
+                context->safety_error_code = event->error_code;
+            } else if (reason == LINETRACER_STOP_REASON_EMERGENCY) {
+                context->safety_error_code = UART_ERROR_EMERGENCY_STOP;
+            } else {
+                context->safety_error_code = UART_ERROR_BUSY;
+            }
+
+            return ControlLogic_Transition(context, ControlLogic_SafetyState(reason), now_ms);
+
+        case APP_CONTROL_SAFETY_RESET_APPROVED:
+            ControlLogic_Init(context, now_ms);
+            return 1U;
+
+        case APP_CONTROL_SAFETY_NONE:
+        default:
+            return 0U;
+    }
 }
 
 uint8_t ControlLogic_CommandToUartCommand(app_control_command_type_t command) {
@@ -337,6 +403,11 @@ static void ControlLogic_HandleReset(control_context_t* context, uint32_t now_ms
     uint16_t previous_job_id = context->active_job_id;
     uart_linetracer_route_t previous_route_id = context->active_route;
 
+    if (context->safety_latched != 0U) {
+        ControlLogic_Reject(result, UART_STATUS_NACK, ControlLogic_SafetyError(context));
+        return;
+    }
+
     if (context->state == LINETRACER_CONTROL_EMERGENCY_STOPPED) {
         ControlLogic_Reject(result, UART_STATUS_ERROR, UART_ERROR_EMERGENCY_STOP);
         return;
@@ -371,6 +442,12 @@ control_command_result_t ControlLogic_HandleCommand(control_context_t* context, 
 
     if (ControlLogic_CommandTimedOut(command, now_ms) != 0U) {
         ControlLogic_Reject(&result, UART_STATUS_ERROR, UART_ERROR_TIMEOUT);
+        return result;
+    }
+
+    if (context->safety_latched != 0U &&
+        (command->type == APP_CONTROL_COMMAND_ASSIGN_ROUTE || command->type == APP_CONTROL_COMMAND_RESUME_DRIVE)) {
+        ControlLogic_Reject(&result, UART_STATUS_NACK, ControlLogic_SafetyError(context));
         return result;
     }
 

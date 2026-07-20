@@ -20,6 +20,8 @@ typedef struct {
     uint16_t active_job_id;
     uint8_t route_active;
     uint8_t resume_valid;
+    uint8_t safety_latched;
+    uint8_t safety_error_code;
 } control_context_t;
 
 typedef struct {
@@ -46,6 +48,8 @@ void ControlLogic_Init(control_context_t* context, uint32_t now_ms);
 uint8_t ControlLogic_Transition(control_context_t* context, linetracer_control_state_t next_state, uint32_t now_ms);
 uint8_t ControlLogic_StateCanResume(linetracer_control_state_t state);
 uint8_t ControlLogic_CommandToUartCommand(app_control_command_type_t command);
+uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_control_safety_event_t* event,
+                                      uint32_t now_ms);
 control_command_result_t ControlLogic_HandleCommand(control_context_t* context, const app_control_command_t* command,
                                                     uint32_t now_ms);
 control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, uint32_t now_ms);
