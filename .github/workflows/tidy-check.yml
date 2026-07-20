@@ -85,4 +85,7 @@ jobs:
             -not -path "./.git/*" \
             -not -path "./.opencv/*" \
             -not -path "./control-center/*" \
-            -print0 | xargs -0 clang-tidy -p build
+            -not -path "./device-rpi/kernel/*" \
+            -not -path "./stm32/*" \
+            -not -path "./tmp/*" \
+            -print0 | xargs -0 clang-tidy --quiet -p build
