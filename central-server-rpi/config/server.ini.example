@@ -1,7 +1,17 @@
 [mqtt]
-host=0.0.0.0
+host=127.0.0.1
 port=1883
 client_id=central-server
+username=
+password=
+keep_alive_seconds=30
+reconnect_min_delay_seconds=1
+reconnect_max_delay_seconds=30
+clean_session=true
+
+[device_registry]
+# Relative paths are resolved from this server.ini file.
+path=devices.json
 
 [database]
 path=/var/lib/logistics/logistics.db
@@ -17,3 +27,16 @@ device_status_retention_days=30
 error_retention_days=180
 security_retention_days=180
 image_retention_days=30
+
+[http]
+enabled=true
+port=8080
+tls_enabled=false
+tls_certificate=/etc/logistics/tls/server.crt
+tls_private_key=/etc/logistics/tls/server.key
+bearer_token=replace-with-a-device-upload-token
+upload_root=/var/lib/logistics/uploads
+
+[routing]
+# Must match control-center [mqtt] client_id.
+qt_client_id=control-center

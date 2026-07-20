@@ -47,6 +47,9 @@ username=
 password=
 reconnect_interval_ms=3000
 keep_alive_seconds=30
+
+[http]
+image_base_url=http://127.0.0.1:8080/
 ```
 
 연결되면 QoS 1로 중앙 서버 및 해당 클라이언트 토픽을 구독합니다. 연결이 끊기면

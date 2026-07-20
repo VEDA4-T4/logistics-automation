@@ -14,6 +14,10 @@ keep_alive_seconds=30
 ; The central server resolves this logical target to the appropriate devices.
 target_device_id=SYSTEM
 
+[http]
+; Relative image paths from MQTT are resolved against this central-server URL.
+image_base_url=http://127.0.0.1:8080/
+
 [rtsp]
 ; Supported channel count: 1-16
 channel_count=4

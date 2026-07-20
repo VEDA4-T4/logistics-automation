@@ -75,6 +75,7 @@ Testing/
 *.db-journal
 *.sqlite
 *.sqlite3
+central-server-rpi/config/devices.json
 logs/
 images/
 

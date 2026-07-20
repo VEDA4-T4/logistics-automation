@@ -15,7 +15,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     )
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Mqtt Multimedia MultimediaWidgets Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Mqtt Multimedia MultimediaWidgets Network Widgets)
 
 qt_standard_project_setup()
 
@@ -24,13 +24,17 @@ qt_add_executable(
     src/main.cpp
     src/main_window.cpp
     src/command_response.cpp
+    src/current_product_state.cpp
     src/mqtt_client.cpp
     src/mqtt_message_validator.cpp
+    src/product_result_panel.cpp
     src/process_control_panel.cpp
     include/logistics/control_center/main_window.hpp
     include/logistics/control_center/command_response.hpp
+    include/logistics/control_center/current_product_state.hpp
     include/logistics/control_center/mqtt_client.hpp
     include/logistics/control_center/mqtt_message_validator.hpp
+    include/logistics/control_center/product_result_panel.hpp
     include/logistics/control_center/process_control_panel.hpp
     include/logistics/control_center/process_control_state.hpp
 )
@@ -54,6 +58,7 @@ target_link_libraries(
         Qt6::Mqtt
         Qt6::Multimedia
         Qt6::MultimediaWidgets
+        Qt6::Network
         Qt6::Widgets
         logistics::contracts
 )
@@ -83,6 +88,17 @@ if(BUILD_TESTING)
     target_link_libraries(control_center_command_response_test PRIVATE Qt6::Core logistics::contracts)
     logistics_enable_warnings(control_center_command_response_test)
     add_test(NAME control_center_command_response_test COMMAND control_center_command_response_test)
+
+    add_executable(
+        control_center_current_product_state_test
+        tests/current_product_state_test.cpp
+        src/current_product_state.cpp
+        include/logistics/control_center/current_product_state.hpp
+    )
+    target_include_directories(control_center_current_product_state_test PRIVATE include)
+    target_link_libraries(control_center_current_product_state_test PRIVATE Qt6::Core logistics::contracts)
+    logistics_enable_warnings(control_center_current_product_state_test)
+    add_test(NAME control_center_current_product_state_test COMMAND control_center_current_product_state_test)
 
     add_executable(
         control_center_process_control_state_test

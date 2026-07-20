@@ -47,6 +47,10 @@ struct EventPayload {
     std::vector<std::uint8_t> image_bytes;
     std::optional<std::string> image_mime_type;
     std::optional<std::int64_t> captured_at_ms;
+    std::optional<std::string> image_id;
+    std::optional<std::string> image_path;
+    std::optional<std::string> image_checksum;
+    std::optional<std::string> image_upload_status;
 };
 
 enum class PersistenceStatus : std::uint8_t { kStored, kDuplicate, kRetryableError, kPermanentError };

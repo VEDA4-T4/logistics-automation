@@ -9,7 +9,7 @@ on:
 jobs:
   clang-tidy:
     name: clang-tidy
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     env:
       OPENCV_VERSION: 4.10.0
       OPENCV_INSTALL_DIR: ${{ github.workspace }}/.opencv/4.10.0
@@ -20,7 +20,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-tidy cmake curl g++ ninja-build
+          sudo apt-get install -y clang-tidy cmake curl g++ ninja-build libcurl4-openssl-dev libmicrohttpd-dev libmosquitto-dev libssl-dev nlohmann-json3-dev
 
       - name: Cache OpenCV
         id: cache-opencv
