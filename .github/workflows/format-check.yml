@@ -9,7 +9,7 @@ on:
 jobs:
   clang-format:
     name: clang-format
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: self-hosted
 
     steps:
       - name: Checkout repository

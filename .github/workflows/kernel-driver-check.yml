@@ -15,7 +15,7 @@ on:
 jobs:
   build:
     name: Build vedauart module and overlay
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: self-hosted
 
     steps:
       - name: Checkout repository
