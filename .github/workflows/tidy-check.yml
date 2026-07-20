@@ -9,7 +9,7 @@ on:
 jobs:
   clang-tidy:
     name: clang-tidy
-    runs-on: [self-hosted, linux, x64]
+    runs-on: [self-hosted, linux, arm64]
     env:
       OPENCV_VERSION: 4.10.0
       OPENCV_INSTALL_DIR: ${{ github.workspace }}/.opencv/4.10.0
