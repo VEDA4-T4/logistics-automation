@@ -1,7 +1,7 @@
 add_library(logistics_contracts INTERFACE)
 add_library(logistics::contracts ALIAS logistics_contracts)
 
-if(WIN32 AND NOT DEFINED nlohmann_json_DIR)
+if(WIN32 AND (NOT DEFINED nlohmann_json_DIR OR NOT nlohmann_json_DIR))
     if(DEFINED VCPKG_TARGET_TRIPLET)
         set(LOGISTICS_VCPKG_TRIPLET "${VCPKG_TARGET_TRIPLET}")
     else()
@@ -10,7 +10,7 @@ if(WIN32 AND NOT DEFINED nlohmann_json_DIR)
 
     set(
         LOGISTICS_NLOHMANN_JSON_DIR
-        "${CMAKE_SOURCE_DIR}/vcpkg_installed/${LOGISTICS_VCPKG_TRIPLET}/share/nlohmann_json"
+        "${CMAKE_CURRENT_LIST_DIR}/../vcpkg_installed/${LOGISTICS_VCPKG_TRIPLET}/share/nlohmann_json"
     )
     if(EXISTS "${LOGISTICS_NLOHMANN_JSON_DIR}/nlohmann_jsonConfig.cmake")
         set(nlohmann_json_DIR "${LOGISTICS_NLOHMANN_JSON_DIR}")

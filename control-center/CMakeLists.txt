@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(logistics_control_center_project LANGUAGES CXX)
+    project(logistics_control_center_project LANGUAGES C CXX)
 
     set(CMAKE_CXX_STANDARD 20)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
