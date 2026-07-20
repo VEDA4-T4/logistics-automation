@@ -108,8 +108,7 @@ MHD_Result QueueJson(MHD_Connection* connection, unsigned int status, const std:
 MHD_Result QueueImage(MHD_Connection* connection, const std::filesystem::path& path, std::string_view content_type) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
-        return QueueJson(connection, MHD_HTTP_NOT_FOUND,
-                         "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
+        return QueueJson(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
     }
     std::string body((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     if (!input.eof()) {
@@ -122,8 +121,8 @@ MHD_Result QueueImage(MHD_Connection* connection, const std::filesystem::path& p
         return MHD_NO;
     }
     static_cast<void>(MHD_add_response_header(response, MHD_HTTP_HEADER_CONTENT_TYPE, content_type.data()));
-    static_cast<void>(MHD_add_response_header(response, MHD_HTTP_HEADER_CACHE_CONTROL,
-                                               "public, max-age=31536000, immutable"));
+    static_cast<void>(
+        MHD_add_response_header(response, MHD_HTTP_HEADER_CACHE_CONTROL, "public, max-age=31536000, immutable"));
     const MHD_Result result = MHD_queue_response(connection, MHD_HTTP_OK, response);
     MHD_destroy_response(response);
     return result;
@@ -133,15 +132,12 @@ MHD_Result ServeUploadedImage(MHD_Connection* connection, const std::filesystem:
                               std::string_view url) {
     constexpr std::string_view prefix = "/uploads/images/";
     if (!url.starts_with(prefix)) {
-        return QueueJson(connection, MHD_HTTP_NOT_FOUND,
-                         "{\"error\":\"NOT_FOUND\",\"message\":\"unknown endpoint\"}");
+        return QueueJson(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"NOT_FOUND\",\"message\":\"unknown endpoint\"}");
     }
     const std::string_view filename = url.substr(prefix.size());
     const auto extension_offset = filename.rfind('.');
-    if (extension_offset == std::string_view::npos ||
-        !contracts::IsValidUuid(filename.substr(0, extension_offset))) {
-        return QueueJson(connection, MHD_HTTP_NOT_FOUND,
-                         "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
+    if (extension_offset == std::string_view::npos || !contracts::IsValidUuid(filename.substr(0, extension_offset))) {
+        return QueueJson(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
     }
     const std::string_view extension = filename.substr(extension_offset);
     if (extension == ".jpg") {
@@ -150,8 +146,7 @@ MHD_Result ServeUploadedImage(MHD_Connection* connection, const std::filesystem:
     if (extension == ".png") {
         return QueueImage(connection, upload_root / "images" / std::string(filename), "image/png");
     }
-    return QueueJson(connection, MHD_HTTP_NOT_FOUND,
-                     "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
+    return QueueJson(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
 }
 
 bool ParseSize(std::string_view text, std::size_t& output) {

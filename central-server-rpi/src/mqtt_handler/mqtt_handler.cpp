@@ -180,13 +180,12 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             Log(MqttHandlerLogLevel::kError, "MQTT persistence failed: " + result.message);
             return false;
         }
-        if (decoded.value.message_type == mqtt::MessageType::kBoxDetected && result.work_id &&
-            work_created_handler_ && !work_created_handler_(decoded.value.source_id, *result.work_id)) {
+        if (decoded.value.message_type == mqtt::MessageType::kBoxDetected && result.work_id && work_created_handler_ &&
+            !work_created_handler_(decoded.value.source_id, *result.work_id)) {
             Log(MqttHandlerLogLevel::kError, "WORK_CREATED publish failed for workId=" + *result.work_id);
             return false;
         }
-        if (IsQtProductEvent(decoded.value.message_type) && qt_event_handler_ &&
-            !qt_event_handler_(decoded.value)) {
+        if (IsQtProductEvent(decoded.value.message_type) && qt_event_handler_ && !qt_event_handler_(decoded.value)) {
             Log(MqttHandlerLogLevel::kError, "Qt product event publish failed");
             return false;
         }

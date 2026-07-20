@@ -76,9 +76,7 @@ bool ParseInteger(std::string_view text, int& output) {
     const auto* end = begin + text.size();
     const auto result = std::from_chars(begin, end, output);
 
-    return result.ec == std::errc{} &&
-           result.ptr == end &&
-           output >= 0;
+    return result.ec == std::errc{} && result.ptr == end && output >= 0;
 }
 
 bool ParseBoolean(std::string_view text, bool& output) {
@@ -93,14 +91,9 @@ bool ParseBoolean(std::string_view text, bool& output) {
     return false;
 }
 
-bool ResolveConfigPath(
-    int argc,
-    char* argv[],
-    std::filesystem::path& config_path
-) {
+bool ResolveConfigPath(int argc, char* argv[], std::filesystem::path& config_path) {
     if (argc == 1) {
-        if (const char* environment_path =
-                std::getenv("LOGISTICS_CENTRAL_SERVER_CONFIG");
+        if (const char* environment_path = std::getenv("LOGISTICS_CENTRAL_SERVER_CONFIG");
             environment_path != nullptr && *environment_path != '\0') {
             config_path = environment_path;
         } else {
@@ -114,9 +107,7 @@ bool ResolveConfigPath(
         const std::string_view argument{ argv[1] };
 
         if (argument.starts_with("--config=")) {
-            const auto value = argument.substr(
-                std::string_view("--config=").size()
-            );
+            const auto value = argument.substr(std::string_view("--config=").size());
 
             if (value.empty()) {
                 return false;
@@ -134,10 +125,7 @@ bool ResolveConfigPath(
         return false;
     }
 
-    if (argc == 3 &&
-        argv[1] != nullptr &&
-        argv[2] != nullptr &&
-        std::string_view(argv[1]) == "--config" &&
+    if (argc == 3 && argv[1] != nullptr && argv[2] != nullptr && std::string_view(argv[1]) == "--config" &&
         std::string_view(argv[2]).size() != 0) {
         config_path = argv[2];
         return true;
@@ -146,10 +134,7 @@ bool ResolveConfigPath(
     return false;
 }
 
-DatabaseStatus LoadServerConfig(
-    const std::filesystem::path& path,
-    ServerConfig& config
-) {
+DatabaseStatus LoadServerConfig(const std::filesystem::path& path, ServerConfig& config) {
     std::ifstream input(path);
     if (!input) {
         return {
@@ -194,8 +179,7 @@ DatabaseStatus LoadServerConfig(
         if (key.empty()) {
             return {
                 DatabaseStatusCode::kInvalidArgument,
-                "empty config key at line " +
-                    std::to_string(line_number),
+                "empty config key at line " + std::to_string(line_number),
             };
         }
 
@@ -258,17 +242,14 @@ DatabaseStatus LoadServerConfig(
             continue;
         }
 
-        const bool recognized_integer =
-            (section == "database" && key == "busy_timeout_ms") ||
-            (section == "storage" && key == "cleanup_interval_hours") ||
-            (section == "storage" && key == "mqtt_retention_days") ||
-            (section == "storage" &&
-             key == "device_status_retention_days") ||
-            (section == "storage" && key == "error_retention_days") ||
-            (section == "storage" &&
-             key == "security_retention_days") ||
-            (section == "storage" && key == "image_retention_days") ||
-            (section == "http" && key == "port");
+        const bool recognized_integer = (section == "database" && key == "busy_timeout_ms") ||
+                                        (section == "storage" && key == "cleanup_interval_hours") ||
+                                        (section == "storage" && key == "mqtt_retention_days") ||
+                                        (section == "storage" && key == "device_status_retention_days") ||
+                                        (section == "storage" && key == "error_retention_days") ||
+                                        (section == "storage" && key == "security_retention_days") ||
+                                        (section == "storage" && key == "image_retention_days") ||
+                                        (section == "http" && key == "port");
 
         if (!recognized_integer) {
             // 다른 기능이 추가한 설정과 병합 가능하도록
@@ -280,8 +261,7 @@ DatabaseStatus LoadServerConfig(
         if (!ParseInteger(value, parsed)) {
             return {
                 DatabaseStatusCode::kInvalidArgument,
-                "invalid integer at config line " +
-                    std::to_string(line_number),
+                "invalid integer at config line " + std::to_string(line_number),
             };
         }
 
@@ -313,10 +293,9 @@ int Application::Run(int argc, char* argv[]) {
     std::filesystem::path config_path;
 
     if (!ResolveConfigPath(argc, argv, config_path)) {
-        std::cerr
-            << "usage: logistics_central_server [server.ini]\n"
-            << "   or: logistics_central_server --config <server.ini>\n"
-            << "   or: logistics_central_server --config=<server.ini>\n";
+        std::cerr << "usage: logistics_central_server [server.ini]\n"
+                  << "   or: logistics_central_server --config <server.ini>\n"
+                  << "   or: logistics_central_server --config=<server.ini>\n";
         return 2;
     }
 
@@ -325,24 +304,15 @@ int Application::Run(int argc, char* argv[]) {
     try {
         mqtt_config = LoadMqttConfig(config_path);
     } catch (const ConfigError& error) {
-        std::cerr
-            << "[server][ERROR] MQTT configuration failed: "
-            << error.what()
-            << '\n';
+        std::cerr << "[server][ERROR] MQTT configuration failed: " << error.what() << '\n';
         return 2;
     }
 
     ServerConfig server_config;
-    auto database_status = LoadServerConfig(
-        config_path,
-        server_config
-    );
+    auto database_status = LoadServerConfig(config_path, server_config);
 
     if (!database_status.ok()) {
-        std::cerr
-            << "[server][ERROR] server configuration failed: "
-            << database_status.message
-            << '\n';
+        std::cerr << "[server][ERROR] server configuration failed: " << database_status.message << '\n';
         return 2;
     }
 
@@ -350,68 +320,43 @@ int Application::Run(int argc, char* argv[]) {
 
     database_status = database.Open(server_config.database);
     if (!database_status.ok()) {
-        std::cerr
-            << "[server][ERROR] database open failed: "
-            << database_status.message
-            << '\n';
+        std::cerr << "[server][ERROR] database open failed: " << database_status.message << '\n';
         return 3;
     }
 
-    database_status = MigrationRunner::Apply(
-        database,
-        server_config.database.migration_dir
-    );
+    database_status = MigrationRunner::Apply(database, server_config.database.migration_dir);
     if (!database_status.ok()) {
-        std::cerr
-            << "[server][ERROR] database migration failed: "
-            << database_status.message
-            << '\n';
+        std::cerr << "[server][ERROR] database migration failed: " << database_status.message << '\n';
         return 3;
     }
 
     database_status = database.IntegrityCheck();
     if (!database_status.ok()) {
-        std::cerr
-            << "[server][ERROR] database integrity check failed: "
-            << database_status.message
-            << '\n';
+        std::cerr << "[server][ERROR] database integrity check failed: " << database_status.message << '\n';
         return 3;
     }
 
     RetentionService retention(database, server_config.storage);
-    database_status = retention.RunOnce(
-        CurrentUnixTimeMilliseconds()
-    );
+    database_status = retention.RunOnce(CurrentUnixTimeMilliseconds());
 
     if (!database_status.ok()) {
-        std::cerr
-            << "[server][ERROR] retention cleanup failed: "
-            << database_status.message
-            << '\n';
+        std::cerr << "[server][ERROR] retention cleanup failed: " << database_status.message << '\n';
         return 4;
     }
 
     std::unique_ptr<DeviceManager> device_manager;
 
     try {
-        device_manager = std::make_unique<DeviceManager>(
-            mqtt_config.device_registry_path
-        );
+        device_manager = std::make_unique<DeviceManager>(mqtt_config.device_registry_path);
     } catch (const DeviceRegistryError& error) {
-        std::cerr
-            << "[server][ERROR] device registry failed: "
-            << error.what()
-            << '\n';
+        std::cerr << "[server][ERROR] device registry failed: " << error.what() << '\n';
         return 5;
     }
 
     PersistenceService persistence(database, server_config.storage);
     MqttHandler mqtt_handler(*device_manager, {}, &persistence);
 
-    MqttClient mqtt_client(
-        std::move(mqtt_config),
-        CreateMosquittoTransport()
-    );
+    MqttClient mqtt_client(std::move(mqtt_config), CreateMosquittoTransport());
 
     mqtt_handler.SetWorkCreatedHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
                                            std::string_view device_id, std::string_view work_id) {
@@ -429,28 +374,27 @@ int Application::Run(int argc, char* argv[]) {
                                                            contracts::mqtt::Qos::kAtLeastOnce);
         return sent_to_device && sent_to_qt;
     });
-    mqtt_handler.SetQtEventHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
-                                       const contracts::mqtt::MqttMessage& message) {
-        return mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
-                                          contracts::mqtt::Qos::kAtLeastOnce);
-    });
-    mqtt_handler.SetQtResponseHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
-                                          const contracts::mqtt::MqttMessage& message) {
-        return mqtt_client.PublishMessage(contracts::mqtt::QtResponseTopic(qt_client_id), message,
-                                          contracts::mqtt::Qos::kAtLeastOnce);
-    });
-    mqtt_handler.SetQtStatusHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
-                                        const contracts::mqtt::MqttMessage& message) {
-        return mqtt_client.PublishMessage(contracts::mqtt::QtStatusTopic(qt_client_id), message,
-                                          contracts::mqtt::Qos::kAtLeastOnce);
-    });
-    mqtt_handler.SetQtErrorHandler([&mqtt_client, qt_client_id = server_config.qt_client_id](
-                                       const contracts::mqtt::MqttMessage& message) {
-        return mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(qt_client_id), message,
-                                          contracts::mqtt::Qos::kAtLeastOnce);
-    });
-    mqtt_handler.SetCommandRouteHandler([&mqtt_client, &device_manager](
-                                             const contracts::mqtt::MqttMessage& message) {
+    mqtt_handler.SetQtEventHandler(
+        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+            return mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
+                                              contracts::mqtt::Qos::kAtLeastOnce);
+        });
+    mqtt_handler.SetQtResponseHandler(
+        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+            return mqtt_client.PublishMessage(contracts::mqtt::QtResponseTopic(qt_client_id), message,
+                                              contracts::mqtt::Qos::kAtLeastOnce);
+        });
+    mqtt_handler.SetQtStatusHandler(
+        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+            return mqtt_client.PublishMessage(contracts::mqtt::QtStatusTopic(qt_client_id), message,
+                                              contracts::mqtt::Qos::kAtLeastOnce);
+        });
+    mqtt_handler.SetQtErrorHandler(
+        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+            return mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(qt_client_id), message,
+                                              contracts::mqtt::Qos::kAtLeastOnce);
+        });
+    mqtt_handler.SetCommandRouteHandler([&mqtt_client, &device_manager](const contracts::mqtt::MqttMessage& message) {
         if (contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(message) != nullptr) {
             auto forwarded = message;
             auto* payload = contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(forwarded);
@@ -499,24 +443,16 @@ int Application::Run(int argc, char* argv[]) {
         return attempted && all_published;
     });
 
-    mqtt_client.SetMessageHandler(
-        [&mqtt_handler](
-            std::string_view topic,
-            std::string_view payload
-        ) {
-            static_cast<void>(
-                mqtt_handler.Handle(topic, payload)
-            );
-        }
-    );
+    mqtt_client.SetMessageHandler([&mqtt_handler](std::string_view topic, std::string_view payload) {
+        static_cast<void>(mqtt_handler.Handle(topic, payload));
+    });
 
     stop_requested = 0;
     std::signal(SIGINT, HandleSignal);
     std::signal(SIGTERM, HandleSignal);
 
     if (!mqtt_client.Start()) {
-        std::cerr
-            << "[server][ERROR] MQTT client startup failed\n";
+        std::cerr << "[server][ERROR] MQTT client startup failed\n";
         return 6;
     }
 
@@ -528,27 +464,20 @@ int Application::Run(int argc, char* argv[]) {
         return 7;
     }
 
-    std::clog
-        << "[server][INFO] central server started; "
-        << "registered devices="
-        << device_manager->RegisteredDeviceCount()
-        << "; database="
-        << server_config.database.path.string()
-        << "; http_upload="
-        << (server_config.http.enabled ? std::to_string(server_config.http.port) : std::string("disabled"))
-        << '\n';
+    std::clog << "[server][INFO] central server started; "
+              << "registered devices=" << device_manager->RegisteredDeviceCount()
+              << "; database=" << server_config.database.path.string() << "; http_upload="
+              << (server_config.http.enabled ? std::to_string(server_config.http.port) : std::string("disabled"))
+              << '\n';
 
     while (stop_requested == 0) {
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(200)
-        );
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
     upload_server.Stop();
     mqtt_client.Stop();
 
-    std::clog
-        << "[server][INFO] central server stopped\n";
+    std::clog << "[server][INFO] central server stopped\n";
 
     return 0;
 }

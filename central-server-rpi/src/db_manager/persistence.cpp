@@ -532,8 +532,8 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
         if (envelope.message_type == contracts::mqtt::MessageType::kProductImage) {
             if (!payload.image_id || !payload.image_path || !payload.image_checksum ||
                 payload.image_upload_status != "UPLOADED") {
-                return reject({ DatabaseStatusCode::kInvalidArgument,
-                                "PRODUCT_IMAGE requires confirmed HTTP upload metadata" });
+                return reject(
+                    { DatabaseStatusCode::kInvalidArgument, "PRODUCT_IMAGE requires confirmed HTTP upload metadata" });
             }
             constexpr std::string_view upload_path_prefix = "/uploads/";
             if (!payload.image_path->starts_with(upload_path_prefix)) {
@@ -560,8 +560,8 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
             if (!status.ok())
                 return reject(status);
             if (!row || uploaded.ColumnInt(0) != 1) {
-                return reject({ DatabaseStatusCode::kNotFound,
-                                "PRODUCT_IMAGE does not match a confirmed HTTP upload" });
+                return reject(
+                    { DatabaseStatusCode::kNotFound, "PRODUCT_IMAGE does not match a confirmed HTTP upload" });
             }
         }
         if (!(status = products.ApplyEvent(*work_id, envelope.message_type, payload, metadata.received_at_ms)).ok() ||

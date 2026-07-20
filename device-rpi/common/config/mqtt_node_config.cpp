@@ -111,25 +111,25 @@ void AssignLogUploadValue(MqttNodeConfig& config, const std::filesystem::path& p
     } else if (key == "spool_directory") {
         upload.spool_directory = value;
     } else if (key == "rotate_bytes") {
-        upload.rotate_bytes = ParseInteger<std::size_t>(path, line_number, key, value, 1,
-                                                        std::numeric_limits<std::size_t>::max());
+        upload.rotate_bytes =
+            ParseInteger<std::size_t>(path, line_number, key, value, 1, std::numeric_limits<std::size_t>::max());
     } else if (key == "rotate_interval_seconds") {
-        upload.rotate_interval = std::chrono::seconds(ParseInteger<std::int64_t>(
-            path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+        upload.rotate_interval = std::chrono::seconds(
+            ParseInteger<std::int64_t>(path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
     } else if (key == "maximum_spool_bytes") {
-        upload.maximum_spool_bytes = ParseInteger<std::size_t>(path, line_number, key, value, 1,
-                                                               std::numeric_limits<std::size_t>::max());
+        upload.maximum_spool_bytes =
+            ParseInteger<std::size_t>(path, line_number, key, value, 1, std::numeric_limits<std::size_t>::max());
     } else if (key == "request_timeout_seconds") {
-        upload.request_timeout = std::chrono::seconds(ParseInteger<std::int64_t>(
-            path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+        upload.request_timeout = std::chrono::seconds(
+            ParseInteger<std::int64_t>(path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
     } else if (key == "maximum_attempts") {
         upload.maximum_attempts = ParseInteger<int>(path, line_number, key, value, 1, std::numeric_limits<int>::max());
     } else if (key == "initial_backoff_seconds") {
-        upload.initial_backoff = std::chrono::seconds(ParseInteger<std::int64_t>(
-            path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+        upload.initial_backoff = std::chrono::seconds(
+            ParseInteger<std::int64_t>(path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
     } else if (key == "maximum_backoff_seconds") {
-        upload.maximum_backoff = std::chrono::seconds(ParseInteger<std::int64_t>(
-            path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+        upload.maximum_backoff = std::chrono::seconds(
+            ParseInteger<std::int64_t>(path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
     } else if (key == "allow_insecure_http") {
         upload.allow_insecure_http = ParseBoolean(path, line_number, key, value);
     } else {
@@ -140,12 +140,12 @@ void AssignLogUploadValue(MqttNodeConfig& config, const std::filesystem::path& p
 }  // namespace
 
 bool MqttNodeConfig::IsValid() const noexcept {
-    const bool valid_log_upload = !log_upload_enabled ||
-                                  (!log_upload.endpoint_url.empty() && !log_upload.spool_directory.empty() &&
-                                   log_upload.rotate_bytes != 0 && log_upload.maximum_spool_bytes >= log_upload.rotate_bytes &&
-                                   log_upload.rotate_interval.count() > 0 && log_upload.request_timeout.count() > 0 &&
-                                   log_upload.maximum_attempts > 0 && log_upload.initial_backoff.count() > 0 &&
-                                   log_upload.maximum_backoff >= log_upload.initial_backoff);
+    const bool valid_log_upload =
+        !log_upload_enabled ||
+        (!log_upload.endpoint_url.empty() && !log_upload.spool_directory.empty() && log_upload.rotate_bytes != 0 &&
+         log_upload.maximum_spool_bytes >= log_upload.rotate_bytes && log_upload.rotate_interval.count() > 0 &&
+         log_upload.request_timeout.count() > 0 && log_upload.maximum_attempts > 0 &&
+         log_upload.initial_backoff.count() > 0 && log_upload.maximum_backoff >= log_upload.initial_backoff);
     return contracts::mqtt::IsValidTopicLevel(device_id) && !node_name.empty() && !ip_address.empty() &&
            !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
            reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&

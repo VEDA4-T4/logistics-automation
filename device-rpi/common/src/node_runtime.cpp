@@ -73,20 +73,19 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
     }
     auto device_status = std::make_shared<DeviceStatus>(device_id);
     MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(role_)), device_status);
-    mqtt_client.SetCommandHandler([uploader = log_uploader.get(), device_status](
-                                      const contracts::mqtt::MqttMessage& message) {
-        std::clog << "[device][INFO] MQTT command received: " << contracts::mqtt::ToString(message.message_type)
-                  << '\n';
-        if (uploader != nullptr) {
-            static_cast<void>(uploader->Append("MQTT command received: " +
-                                               std::string(contracts::mqtt::ToString(message.message_type))));
-        }
-        if (const auto* work_created =
-                contracts::mqtt::GetPayload<contracts::mqtt::WorkCreatedPayload>(message)) {
-            device_status->SetJobId(work_created->work_id);
-            device_status->SetCurrentState("WORK_ASSIGNED");
-        }
-    });
+    mqtt_client.SetCommandHandler(
+        [uploader = log_uploader.get(), device_status](const contracts::mqtt::MqttMessage& message) {
+            std::clog << "[device][INFO] MQTT command received: " << contracts::mqtt::ToString(message.message_type)
+                      << '\n';
+            if (uploader != nullptr) {
+                static_cast<void>(uploader->Append("MQTT command received: " +
+                                                   std::string(contracts::mqtt::ToString(message.message_type))));
+            }
+            if (const auto* work_created = contracts::mqtt::GetPayload<contracts::mqtt::WorkCreatedPayload>(message)) {
+                device_status->SetJobId(work_created->work_id);
+                device_status->SetCurrentState("WORK_ASSIGNED");
+            }
+        });
     if (!mqtt_client.Start()) {
         if (log_uploader != nullptr) {
             log_uploader->Stop();

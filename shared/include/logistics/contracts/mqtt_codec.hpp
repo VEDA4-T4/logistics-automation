@@ -247,11 +247,9 @@ struct DestinationSetPayload {
 
     [[nodiscard]] bool IsValid() const noexcept {
         const bool is_event = request_id.empty() && target_device_id.empty();
-        const bool is_command = CommandRequestView{ .request_id = request_id,
-                                                    .command = command,
-                                                    .target_device = target_device_id,
-                                                    .component_id = {} }
-                                    .IsValid();
+        const bool is_command = CommandRequestView{
+            .request_id = request_id, .command = command, .target_device = target_device_id, .component_id = {}
+        }.IsValid();
         return command == ControlCommand::kDestinationSet && (is_event || is_command) && IsValidUuid(work_id) &&
                IsValidTopicLevel(destination);
     }
@@ -1042,7 +1040,8 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
         { std::string(kWorkIdField), payload.work_id },
         { std::string(kRecognitionStatusField), payload.recognition_status },
     };
-    if (!payload.barcode.empty()) data[std::string(kBarcodeField)] = payload.barcode;
+    if (!payload.barcode.empty())
+        data[std::string(kBarcodeField)] = payload.barcode;
     WriteOptionalDouble(data, kConfidenceField, payload.confidence);
     WriteOptionalString(data, kMessageField, payload.message);
     return data;
@@ -1050,12 +1049,9 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
 
 [[nodiscard]] inline Json SerializePayload(const ProductImagePayload& payload) {
     return {
-        { std::string(kWorkIdField), payload.work_id },
-        { std::string(kImageIdField), payload.image_id },
-        { std::string(kImageUrlField), payload.image_url },
-        { std::string(kImagePathField), payload.image_path },
-        { std::string(kChecksumField), payload.checksum },
-        { std::string(kUploadStatusField), payload.upload_status },
+        { std::string(kWorkIdField), payload.work_id },     { std::string(kImageIdField), payload.image_id },
+        { std::string(kImageUrlField), payload.image_url }, { std::string(kImagePathField), payload.image_path },
+        { std::string(kChecksumField), payload.checksum },  { std::string(kUploadStatusField), payload.upload_status },
     };
 }
 
@@ -1064,11 +1060,16 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
         { std::string(kWorkIdField), payload.work_id },
         { std::string(kRecognitionStatusField), payload.recognition_status },
     };
-    if (!payload.barcode.empty()) data[std::string(kBarcodeField)] = payload.barcode;
-    if (!payload.product_id.empty()) data[std::string(kProductIdField)] = payload.product_id;
-    if (!payload.product_name.empty()) data[std::string(kProductNameField)] = payload.product_name;
-    if (!payload.destination.empty()) data[std::string(kDestinationField)] = payload.destination;
-    if (!payload.image.is_null()) data[std::string(kImageField)] = payload.image;
+    if (!payload.barcode.empty())
+        data[std::string(kBarcodeField)] = payload.barcode;
+    if (!payload.product_id.empty())
+        data[std::string(kProductIdField)] = payload.product_id;
+    if (!payload.product_name.empty())
+        data[std::string(kProductNameField)] = payload.product_name;
+    if (!payload.destination.empty())
+        data[std::string(kDestinationField)] = payload.destination;
+    if (!payload.image.is_null())
+        data[std::string(kImageField)] = payload.image;
     WriteOptionalDouble(data, kConfidenceField, payload.confidence);
     WriteOptionalString(data, kMessageField, payload.message);
     return data;

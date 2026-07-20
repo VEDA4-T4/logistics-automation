@@ -34,8 +34,7 @@ public:
     void SetQtStatusHandler(MessageRouteHandler handler);
     void SetQtErrorHandler(MessageRouteHandler handler);
 
-    [[nodiscard]] bool Handle(std::string_view topic, std::string_view payload,
-                              std::string_view received_at = {});
+    [[nodiscard]] bool Handle(std::string_view topic, std::string_view payload, std::string_view received_at = {});
 
 private:
     void Log(MqttHandlerLogLevel level, std::string_view message) const;

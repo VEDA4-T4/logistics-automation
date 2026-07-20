@@ -119,19 +119,15 @@ void TestAllMqttMessageRoundTrips() {
                                                               }));
 
     AssertRoundTrip<mqtt::ProductImagePayload>(
-        MakeMessage(
-            "MSG-0006",
-            mqtt::MessageType::kProductImage,
-            mqtt::ProductImagePayload{
-                .work_id = std::string(kTestWorkId),
-                .image_id = "8cd62467-5b68-4ea0-8946-b979495ea71c",
-                .image_url = {},
-                .image_path = "/uploads/images/8cd62467-5b68-4ea0-8946-b979495ea71c.jpg",
-                .checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                .upload_status = "UPLOADED",
-            }
-        )
-    );
+        MakeMessage("MSG-0006", mqtt::MessageType::kProductImage,
+                    mqtt::ProductImagePayload{
+                        .work_id = std::string(kTestWorkId),
+                        .image_id = "8cd62467-5b68-4ea0-8946-b979495ea71c",
+                        .image_url = {},
+                        .image_path = "/uploads/images/8cd62467-5b68-4ea0-8946-b979495ea71c.jpg",
+                        .checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                        .upload_status = "UPLOADED",
+                    }));
 
     AssertRoundTrip<mqtt::ProductInfoPayload>(MakeMessage("MSG-0007", mqtt::MessageType::kProductInfo,
                                                           mqtt::ProductInfoPayload{
@@ -521,18 +517,17 @@ void TestMqttTopicMessageValidation() {
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", work_completed).IsSuccess());
 
     const auto work_created = MakeMessage("MSG-TOPIC-05", mqtt::MessageType::kWorkCreated,
-                                          mqtt::WorkCreatedPayload{ .work_id = std::string(kTestWorkId) },
-                                          "SERVER-01");
+                                          mqtt::WorkCreatedPayload{ .work_id = std::string(kTestWorkId) }, "SERVER-01");
     assert(mqtt::ValidateTopicMessage("qt/QT-01/event", work_created).IsSuccess());
 
-    const auto destination_event = MakeMessage(
-        "MSG-TOPIC-06", mqtt::MessageType::kDestinationSet,
-        mqtt::DestinationSetPayload{ .request_id = {},
-                                     .work_id = std::string(kTestWorkId),
-                                     .command = mqtt::ControlCommand::kDestinationSet,
-                                     .target_device_id = {},
-                                     .destination = "DEST-01" },
-        "SERVER-01");
+    const auto destination_event =
+        MakeMessage("MSG-TOPIC-06", mqtt::MessageType::kDestinationSet,
+                    mqtt::DestinationSetPayload{ .request_id = {},
+                                                 .work_id = std::string(kTestWorkId),
+                                                 .command = mqtt::ControlCommand::kDestinationSet,
+                                                 .target_device_id = {},
+                                                 .destination = "DEST-01" },
+                    "SERVER-01");
     assert(mqtt::ValidateTopicMessage("qt/QT-01/event", destination_event).IsSuccess());
 }
 }  // namespace
