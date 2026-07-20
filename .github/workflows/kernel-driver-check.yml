@@ -15,7 +15,7 @@ on:
 jobs:
   build:
     name: Build vedauart module and overlay
-    runs-on: [self-hosted, linux, arm64]
+    runs-on: self-hosted
 
     steps:
       - name: Checkout repository
@@ -24,7 +24,15 @@ jobs:
       - name: Install kernel headers and Device Tree Compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y linux-headers-generic device-tree-compiler
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            device-tree-compiler \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            linux-headers-generic
 
       - name: Locate kernel headers
         id: kernel

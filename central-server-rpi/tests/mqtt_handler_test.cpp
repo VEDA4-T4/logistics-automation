@@ -46,10 +46,10 @@ struct LogEntry final {
 void TestRegistrationIsDecodedValidatedAndRouted() {
     central_server::DeviceManager device_manager;
     std::vector<LogEntry> logs;
-    central_server::MqttHandler handler(
-        device_manager, [&logs](central_server::MqttHandlerLogLevel level, std::string_view message) {
-            logs.push_back({ .level = level, .message = std::string(message) });
-        });
+    central_server::MqttHandler handler(device_manager,
+                                        [&logs](central_server::MqttHandlerLogLevel level, std::string_view message) {
+                                            logs.push_back({ .level = level, .message = std::string(message) });
+                                        });
 
     assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:01Z"));
     assert(device_manager.RegisteredDeviceCount() == 1);
@@ -68,10 +68,10 @@ void TestRegistrationIsDecodedValidatedAndRouted() {
 void TestMalformedJsonIsRejected() {
     central_server::DeviceManager device_manager;
     std::vector<LogEntry> logs;
-    central_server::MqttHandler handler(
-        device_manager, [&logs](central_server::MqttHandlerLogLevel level, std::string_view message) {
-            logs.push_back({ .level = level, .message = std::string(message) });
-        });
+    central_server::MqttHandler handler(device_manager,
+                                        [&logs](central_server::MqttHandlerLogLevel level, std::string_view message) {
+                                            logs.push_back({ .level = level, .message = std::string(message) });
+                                        });
 
     assert(!handler.Handle("device/PI-01/register", "{"));
     assert(device_manager.RegisteredDeviceCount() == 0);
@@ -83,10 +83,10 @@ void TestMalformedJsonIsRejected() {
 void TestTopicMessageMismatchIsRejected() {
     central_server::DeviceManager device_manager;
     std::vector<LogEntry> logs;
-    central_server::MqttHandler handler(
-        device_manager, [&logs](central_server::MqttHandlerLogLevel level, std::string_view message) {
-            logs.push_back({ .level = level, .message = std::string(message) });
-        });
+    central_server::MqttHandler handler(device_manager,
+                                        [&logs](central_server::MqttHandlerLogLevel level, std::string_view message) {
+                                            logs.push_back({ .level = level, .message = std::string(message) });
+                                        });
 
     assert(!handler.Handle("device/PI-02/register", Encode(MakeRegistration("PI-01"))));
     assert(device_manager.RegisteredDeviceCount() == 0);

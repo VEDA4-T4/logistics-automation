@@ -233,7 +233,9 @@ ProductUpdateResult CurrentProductState::applyEnvelope(const QJsonObject& envelo
     return result;
 }
 
-const CurrentProduct& CurrentProductState::product() const noexcept { return product_; }
+const CurrentProduct& CurrentProductState::product() const noexcept {
+    return product_;
+}
 
 void CurrentProductState::resetForWork(const QString& work_id) {
     product_ = {};
