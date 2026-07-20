@@ -181,17 +181,15 @@ typedef enum {
  *
  * UNEXPECTED_SENSOR:
  *   현재 목적지와 다른 위치의 센서가 물품을 감지했음
- *
- * FAULT:
- *   센서 timeout, 센서 오류 또는 서보 오류가 발생했음
  */
 typedef enum {
     UART_SORTING_EVENT_ITEM_DETECTED = 0x01U,
     UART_SORTING_EVENT_CYCLE_COMPLETE = 0x02U,
-    UART_SORTING_EVENT_UNEXPECTED_SENSOR = 0x03U,
-    UART_SORTING_EVENT_FAULT = 0x04U
+    UART_SORTING_EVENT_UNEXPECTED_SENSOR = 0x03U
 
 } uart_sorting_event_t;
+
+/* Fault reporting: HealthTask -> UART_CMD_DEVICE_STATUS. */
 
 /* ITEM_DETECTED / CYCLE_COMPLETE */
 #define UART_SORTING_EVENT_CYCLE_ID_LOW_INDEX UART_EVENT_HEADER_SIZE
@@ -205,12 +203,6 @@ typedef enum {
 #define UART_SORTING_UNEXPECTED_DETECTED_SENSOR_INDEX (UART_EVENT_HEADER_SIZE + 3U)
 #define UART_SORTING_UNEXPECTED_EVENT_DATA_SIZE 4U
 #define UART_SORTING_UNEXPECTED_EVENT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_SORTING_UNEXPECTED_EVENT_DATA_SIZE)
-
-/* FAULT */
-#define UART_SORTING_FAULT_DESTINATION_INDEX (UART_EVENT_HEADER_SIZE + 2U)
-#define UART_SORTING_FAULT_ERROR_INDEX (UART_EVENT_HEADER_SIZE + 3U)
-#define UART_SORTING_FAULT_EVENT_DATA_SIZE 4U
-#define UART_SORTING_FAULT_EVENT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_SORTING_FAULT_EVENT_DATA_SIZE)
 
 /*
  * ============================================================================
@@ -273,21 +265,6 @@ static inline uint8_t uart_sorting_event_is_valid(uint32_t event_id) {
         case UART_SORTING_EVENT_ITEM_DETECTED:
         case UART_SORTING_EVENT_CYCLE_COMPLETE:
         case UART_SORTING_EVENT_UNEXPECTED_SENSOR:
-        case UART_SORTING_EVENT_FAULT:
-            return 1U;
-
-        default:
-            return 0U;
-    }
-}
-
-static inline uint8_t uart_sorting_fault_error_is_valid(uint32_t error) {
-    switch (error) {
-        case UART_ERROR_TIMEOUT:
-        case UART_ERROR_SENSOR:
-        case UART_ERROR_SERVO:
-        case UART_ERROR_EMERGENCY_STOP:
-        case UART_ERROR_INTERNAL:
             return 1U;
 
         default:
@@ -393,17 +370,6 @@ static inline uint8_t uart_sorting_event_payload_is_valid(const uint8_t* payload
                        payload[UART_SORTING_UNEXPECTED_EXPECTED_DESTINATION_INDEX]) == 0U
                        ? 1U
                        : 0U;
-
-        case UART_SORTING_EVENT_FAULT:
-            if (length != UART_SORTING_FAULT_EVENT_PAYLOAD_SIZE) {
-                return 0U;
-            }
-
-            if (uart_sorting_status_destination_is_valid(payload[UART_SORTING_FAULT_DESTINATION_INDEX]) == 0U) {
-                return 0U;
-            }
-
-            return uart_sorting_fault_error_is_valid(payload[UART_SORTING_FAULT_ERROR_INDEX]);
 
         default:
             return 0U;
