@@ -25,6 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "app_comm_tx_dummy.h"
 #include "app_queues.h"
 /* USER CODE END Includes */
 
@@ -195,6 +196,9 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  /* 개발 플랜 1단계: CommTxTask dummy 송신기. 반환하지 않는다. */
+  CommTxDummy_Run();
+
   /* Infinite loop */
   for(;;)
   {
