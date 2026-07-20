@@ -43,8 +43,8 @@ int main() {
         { QStringLiteral("destination"), QStringLiteral("ZONE-A") },
         { QStringLiteral("confidence"), 0.98 },
         { QStringLiteral("image"), QJsonObject{ { QStringLiteral("imageId"), QStringLiteral("IMAGE-A") },
-                                                 { QStringLiteral("path"), QStringLiteral("images/WORK-A.jpg") },
-                                                 { QStringLiteral("checksum"), QStringLiteral("abc123") } } },
+                                                { QStringLiteral("path"), QStringLiteral("images/WORK-A.jpg") },
+                                                { QStringLiteral("checksum"), QStringLiteral("abc123") } } },
     };
     result = state.applyEnvelope(Envelope("MSG-A-2", "PRODUCT_INFO", "WORK-A", product_a));
     assert(result.applied);
@@ -64,21 +64,20 @@ int main() {
                                           QStringLiteral("2026-07-16T01:01:01.000Z")));
     assert(result.handled && !result.applied);
 
-    result = state.applyEnvelope(Envelope(
-        "MSG-B-2", "BARCODE_DETECTED", "WORK-B",
-        { { QStringLiteral("recognitionStatus"), QStringLiteral("FAILED") },
-          { QStringLiteral("message"), QStringLiteral("바코드를 찾지 못했습니다.") } },
-        QStringLiteral("2026-07-16T01:01:01.000Z")));
+    result =
+        state.applyEnvelope(Envelope("MSG-B-2", "BARCODE_DETECTED", "WORK-B",
+                                     { { QStringLiteral("recognitionStatus"), QStringLiteral("FAILED") },
+                                       { QStringLiteral("message"), QStringLiteral("바코드를 찾지 못했습니다.") } },
+                                     QStringLiteral("2026-07-16T01:01:01.000Z")));
     assert(result.applied);
     assert(state.product().recognition_state == ProductRecognitionState::RecognitionFailed);
 
-    result = state.applyEnvelope(Envelope(
-        "MSG-B-3", "PRODUCT_INFO", "WORK-B",
-        { { QStringLiteral("recognitionStatus"), QStringLiteral("SUCCESS") },
-          { QStringLiteral("barcode"), QStringLiteral("880000000002") },
-          { QStringLiteral("productId"), QStringLiteral("PRODUCT-B") },
-          { QStringLiteral("productName"), QStringLiteral("테스트 상품 B") } },
-        QStringLiteral("2026-07-16T01:01:02.000Z")));
+    result = state.applyEnvelope(Envelope("MSG-B-3", "PRODUCT_INFO", "WORK-B",
+                                          { { QStringLiteral("recognitionStatus"), QStringLiteral("SUCCESS") },
+                                            { QStringLiteral("barcode"), QStringLiteral("880000000002") },
+                                            { QStringLiteral("productId"), QStringLiteral("PRODUCT-B") },
+                                            { QStringLiteral("productName"), QStringLiteral("테스트 상품 B") } },
+                                          QStringLiteral("2026-07-16T01:01:02.000Z")));
     assert(result.applied);
     assert(state.product().recognition_state == ProductRecognitionState::MissingData);
 

@@ -158,8 +158,8 @@ public:
         bool offline_queued = false;
         if (was_connected) {
             try {
-                const auto offline = processor_.EncodeOfflineStatus(
-                    LifecycleMessageId("OFFLINE", connection_generation_), timestamp);
+                const auto offline =
+                    processor_.EncodeOfflineStatus(LifecycleMessageId("OFFLINE", connection_generation_), timestamp);
                 offline_queued =
                     PublishEncoded(mqtt::DeviceStatusTopic(config_.device_id), offline, 1, true, "offline status");
                 if (offline_queued) {
@@ -229,16 +229,14 @@ private:
         const auto generation = ++connection_generation_;
         const auto status = device_status_->Snapshot();
 
-        const auto online =
-            processor_.EncodeOnlineStatus(LifecycleMessageId("STATUS", generation), std::string(timestamp),
-                                          status.current_state);
+        const auto online = processor_.EncodeOnlineStatus(LifecycleMessageId("STATUS", generation),
+                                                          std::string(timestamp), status.current_state);
         const bool online_published =
             PublishEncoded(mqtt::DeviceStatusTopic(config_.device_id), online, 1, true, "online status");
 
-        const auto registration =
-            processor_.EncodeDeviceRegistration(LifecycleMessageId("REGISTER", generation), std::string(timestamp),
-                                                device_type_, config_.node_name, config_.ip_address,
-                                                status.uart_connected);
+        const auto registration = processor_.EncodeDeviceRegistration(
+            LifecycleMessageId("REGISTER", generation), std::string(timestamp), device_type_, config_.node_name,
+            config_.ip_address, status.uart_connected);
         const bool registration_published =
             PublishEncoded(mqtt::DeviceRegisterTopic(config_.device_id), registration, 1, false, "device registration");
         return online_published && registration_published;

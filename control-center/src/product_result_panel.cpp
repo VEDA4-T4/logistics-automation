@@ -28,10 +28,14 @@ QLabel* AddValueRow(QGridLayout* layout, int row, const QString& title, QWidget*
 
 QString ProcessingText(ProductProcessingResult result) {
     switch (result) {
-        case ProductProcessingResult::Pending: return QStringLiteral("처리 대기");
-        case ProductProcessingResult::Processing: return QStringLiteral("처리 중");
-        case ProductProcessingResult::Success: return QStringLiteral("처리 완료");
-        case ProductProcessingResult::Failed: return QStringLiteral("처리 실패");
+        case ProductProcessingResult::Pending:
+            return QStringLiteral("처리 대기");
+        case ProductProcessingResult::Processing:
+            return QStringLiteral("처리 중");
+        case ProductProcessingResult::Success:
+            return QStringLiteral("처리 완료");
+        case ProductProcessingResult::Failed:
+            return QStringLiteral("처리 실패");
     }
     return QStringLiteral("처리 상태 없음");
 }
@@ -44,8 +48,9 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     setMinimumWidth(300);
     setMaximumWidth(320);
     setMinimumHeight(300);
-    setStyleSheet("#productResultPanel { background-color: #111827; border-left: 1px solid #374151;"
-                  "border-bottom: 1px solid #374151; } QLabel { color: #e5e7eb; }");
+    setStyleSheet(
+        "#productResultPanel { background-color: #111827; border-left: 1px solid #374151;"
+        "border-bottom: 1px solid #374151; } QLabel { color: #e5e7eb; }");
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(12, 10, 12, 10);
@@ -98,7 +103,8 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
     if (current_work_id_ != product.work_id) {
         current_work_id_ = product.work_id;
         current_image_path_.clear();
-        if (active_image_reply_ != nullptr) active_image_reply_->abort();
+        if (active_image_reply_ != nullptr)
+            active_image_reply_->abort();
         setImagePlaceholder(QStringLiteral("상품 이미지 대기 중"));
     }
 
@@ -128,7 +134,7 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
     processing_status_->setText(ProcessingText(product.processing_result));
     const bool failed = product.processing_result == ProductProcessingResult::Failed;
     const bool succeeded = product.processing_result == ProductProcessingResult::Success;
-    processing_status_->setStyleSheet(failed ? "background:#450a0a;color:#fca5a5;padding:5px;"
+    processing_status_->setStyleSheet(failed      ? "background:#450a0a;color:#fca5a5;padding:5px;"
                                       : succeeded ? "background:#052e16;color:#86efac;padding:5px;"
                                                   : "background:#1e3a5f;color:#93c5fd;padding:5px;");
     setValue(work_id_value_, product.work_id);
@@ -136,9 +142,8 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
     setValue(product_id_value_, product.product_id);
     setValue(product_name_value_, product.product_name);
     setValue(destination_value_, product.destination);
-    setValue(confidence_value_, product.confidence >= 0.0
-                                    ? QStringLiteral("%1%").arg(product.confidence * 100.0, 0, 'f', 1)
-                                    : QString{});
+    setValue(confidence_value_,
+             product.confidence >= 0.0 ? QStringLiteral("%1%").arg(product.confidence * 100.0, 0, 'f', 1) : QString{});
     setValue(updated_at_value_, product.updated_at.isValid()
                                     ? product.updated_at.toLocalTime().toString(QStringLiteral("MM-dd HH:mm:ss"))
                                     : QString{});
@@ -169,13 +174,15 @@ void ProductResultPanel::setImagePlaceholder(const QString& text, bool is_error)
 }
 
 void ProductResultPanel::loadImage(const CurrentProduct& product) {
-    if (active_image_reply_ != nullptr) active_image_reply_->abort();
+    if (active_image_reply_ != nullptr)
+        active_image_reply_->abort();
     if (product.image_path.isEmpty()) {
         setImagePlaceholder(QStringLiteral("상품 이미지 없음"));
         return;
     }
     QUrl image_url(product.image_path);
-    if (image_url.isRelative()) image_url = image_base_url_.resolved(image_url);
+    if (image_url.isRelative())
+        image_url = image_base_url_.resolved(image_url);
     if (!image_url.isValid() || (image_url.scheme().compare(QStringLiteral("http"), Qt::CaseInsensitive) != 0 &&
                                  image_url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) != 0)) {
         setImagePlaceholder(QStringLiteral("이미지 경로 오류"), true);
@@ -189,17 +196,21 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
     active_image_reply_ = reply;
     const auto requested_work_id = product.work_id;
     connect(reply, &QNetworkReply::downloadProgress, this, [reply](qint64 received, qint64 total) {
-        if (received > kMaximumProductImageBytes || total > kMaximumProductImageBytes) reply->abort();
+        if (received > kMaximumProductImageBytes || total > kMaximumProductImageBytes)
+            reply->abort();
     });
     const QPointer<QNetworkReply> guarded_reply(reply);
     QTimer::singleShot(5000, this, [guarded_reply]() {
-        if (guarded_reply != nullptr && guarded_reply->isRunning()) guarded_reply->abort();
+        if (guarded_reply != nullptr && guarded_reply->isRunning())
+            guarded_reply->abort();
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, requested_work_id]() {
         const bool active = active_image_reply_ == reply;
-        if (active) active_image_reply_ = nullptr;
+        if (active)
+            active_image_reply_ = nullptr;
         reply->deleteLater();
-        if (!active || requested_work_id != current_work_id_) return;
+        if (!active || requested_work_id != current_work_id_)
+            return;
         if (reply->error() != QNetworkReply::NoError) {
             setImagePlaceholder(QStringLiteral("상품 이미지 불러오기 실패"), true);
             image_label_->setToolTip(reply->errorString());
