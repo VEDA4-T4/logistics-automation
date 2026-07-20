@@ -5,6 +5,7 @@
 #include "input_motor_tb6612.h"
 
 #include <assert.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "conveyor_motor_power.h"
