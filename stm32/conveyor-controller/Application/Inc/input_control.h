@@ -15,7 +15,10 @@ typedef enum {
     INPUT_CONTROL_INVALID_PAYLOAD,
     INPUT_CONTROL_SPEED_NOT_CONFIGURED,
     INPUT_CONTROL_FAULT_LATCHED,
-    INPUT_CONTROL_MOTOR_ERROR
+    INPUT_CONTROL_MOTOR_ERROR,
+    INPUT_CONTROL_STALE_COMMAND,
+    INPUT_CONTROL_SEQUENCE_CONFLICT,
+    INPUT_CONTROL_TX_BUSY
 } input_control_result_t;
 
 typedef struct {
@@ -28,11 +31,16 @@ typedef struct {
     input_control_state_t state;
     input_motor_port_t motor;
     uint8_t motorInitialized;
+    uint8_t safetyStopLatched;
 } input_control_t;
 
 input_control_result_t input_control_init(input_control_t* controller, const input_motor_port_t* motor);
 
 input_control_result_t input_control_process_command(input_control_t* controller, const control_command_t* message);
+
+input_control_result_t input_control_handle_safety_stop(input_control_t* controller);
+
+input_control_result_t input_control_handle_safety_release(input_control_t* controller);
 
 void input_control_build_status_payload(const input_control_state_t* state,
                                         uint8_t payload[UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE]);

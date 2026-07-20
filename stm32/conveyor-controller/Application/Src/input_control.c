@@ -8,6 +8,11 @@ static void input_control_set_motor_fault(input_control_t* controller) {
     controller->motorInitialized = 0U;
 }
 
+static void input_control_set_emergency_stop_fault(input_control_t* controller) {
+    controller->state.conveyorState = UART_INPUT_CONVEYOR_FAULT;
+    controller->state.lastError = UART_ERROR_EMERGENCY_STOP;
+}
+
 static input_control_result_t input_control_apply_state(input_control_t* controller,
                                                         const input_control_state_t* candidate) {
     uint8_t running;
@@ -27,6 +32,10 @@ static input_control_result_t input_control_apply_state(input_control_t* control
 
 static input_control_result_t input_control_reset(input_control_t* controller) {
     input_control_state_t candidate;
+
+    if (controller->safetyStopLatched != 0U) {
+        return INPUT_CONTROL_FAULT_LATCHED;
+    }
 
     if (controller->motorInitialized == 0U) {
         if (controller->motor.initialize(controller->motor.context) != INPUT_MOTOR_OK) {
@@ -95,7 +104,7 @@ input_control_result_t input_control_process_command(input_control_t* controller
 
     switch (frame->command) {
         case UART_CMD_INPUT_CONVEYOR_START:
-            if (candidate.conveyorState == UART_INPUT_CONVEYOR_FAULT) {
+            if ((controller->safetyStopLatched != 0U) || (candidate.conveyorState == UART_INPUT_CONVEYOR_FAULT)) {
                 return INPUT_CONTROL_FAULT_LATCHED;
             }
 
@@ -107,7 +116,7 @@ input_control_result_t input_control_process_command(input_control_t* controller
             return input_control_apply_state(controller, &candidate);
 
         case UART_CMD_INPUT_CONVEYOR_STOP:
-            if (candidate.conveyorState == UART_INPUT_CONVEYOR_FAULT) {
+            if ((controller->safetyStopLatched != 0U) || (candidate.conveyorState == UART_INPUT_CONVEYOR_FAULT)) {
                 (void)controller->motor.apply(controller->motor.context, 0U, 0U);
                 return INPUT_CONTROL_FAULT_LATCHED;
             }
@@ -116,7 +125,7 @@ input_control_result_t input_control_process_command(input_control_t* controller
             return input_control_apply_state(controller, &candidate);
 
         case UART_CMD_INPUT_CONVEYOR_SET_SPEED:
-            if (candidate.conveyorState == UART_INPUT_CONVEYOR_FAULT) {
+            if ((controller->safetyStopLatched != 0U) || (candidate.conveyorState == UART_INPUT_CONVEYOR_FAULT)) {
                 return INPUT_CONTROL_FAULT_LATCHED;
             }
 
@@ -137,6 +146,64 @@ input_control_result_t input_control_process_command(input_control_t* controller
         default:
             return INPUT_CONTROL_UNSUPPORTED_COMMAND;
     }
+}
+
+input_control_result_t input_control_handle_safety_stop(input_control_t* controller) {
+    input_motor_result_t motorResult;
+
+    if ((controller == NULL) || (controller->motor.initialize == NULL) || (controller->motor.apply == NULL)) {
+        return INPUT_CONTROL_INVALID_ARGUMENT;
+    }
+
+    controller->safetyStopLatched = 1U;
+
+    if (controller->motorInitialized == 0U) {
+        if (controller->motor.initialize(controller->motor.context) != INPUT_MOTOR_OK) {
+            input_control_set_motor_fault(controller);
+            return INPUT_CONTROL_MOTOR_ERROR;
+        }
+
+        controller->motorInitialized = 1U;
+    }
+
+    motorResult = controller->motor.apply(controller->motor.context, 0U, 0U);
+
+    if (motorResult != INPUT_MOTOR_OK) {
+        input_control_set_motor_fault(controller);
+        return INPUT_CONTROL_MOTOR_ERROR;
+    }
+
+    input_control_set_emergency_stop_fault(controller);
+    return INPUT_CONTROL_OK;
+}
+
+input_control_result_t input_control_handle_safety_release(input_control_t* controller) {
+    if ((controller == NULL) || (controller->motor.initialize == NULL) || (controller->motor.apply == NULL)) {
+        return INPUT_CONTROL_INVALID_ARGUMENT;
+    }
+
+    if (controller->safetyStopLatched == 0U) {
+        return INPUT_CONTROL_OK;
+    }
+
+    if (controller->motorInitialized == 0U) {
+        if (controller->motor.initialize(controller->motor.context) != INPUT_MOTOR_OK) {
+            input_control_set_motor_fault(controller);
+            return INPUT_CONTROL_MOTOR_ERROR;
+        }
+
+        controller->motorInitialized = 1U;
+    }
+
+    if (controller->motor.apply(controller->motor.context, 0U, 0U) != INPUT_MOTOR_OK) {
+        input_control_set_motor_fault(controller);
+        return INPUT_CONTROL_MOTOR_ERROR;
+    }
+
+    controller->state.conveyorState = UART_INPUT_CONVEYOR_STOPPED;
+    controller->state.lastError = UART_ERROR_NONE;
+    controller->safetyStopLatched = 0U;
+    return INPUT_CONTROL_OK;
 }
 
 void input_control_build_status_payload(const input_control_state_t* state,

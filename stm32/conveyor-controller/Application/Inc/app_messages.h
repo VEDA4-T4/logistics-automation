@@ -16,10 +16,18 @@ typedef struct {
     uint8_t data[UART_RX_CHUNK_SIZE];
 } uart_rx_chunk_t;
 
+typedef enum {
+    APP_CONTROL_MESSAGE_UART_COMMAND = 0,
+    APP_CONTROL_MESSAGE_SAFETY_STOP,
+    APP_CONTROL_MESSAGE_SAFETY_RELEASE
+} app_control_message_kind_t;
+
 /* CommRxTask에서 각 제어 태스크로 전달하는 명령 */
 typedef struct {
     app_uart_channel_t source;
     uart_frame_t frame;
+    app_control_message_kind_t kind;
+    uint32_t safetyEpoch;
 } control_command_t;
 
 #endif /* APP_MESSAGES_H */

@@ -83,6 +83,7 @@ static void initialize_controller(input_control_t* controller, fake_motor_t* mot
     assert(controller->state.conveyorState == UART_INPUT_CONVEYOR_STOPPED);
     assert(controller->state.speed == 0U);
     assert(controller->state.lastError == UART_ERROR_NONE);
+    assert(controller->safetyStopLatched == 0U);
 }
 
 static void test_speed_start_stop(void) {
@@ -285,6 +286,101 @@ static void test_initialization_failure_can_recover(void) {
     assert(controller.state.conveyorState == UART_INPUT_CONVEYOR_STOPPED);
 }
 
+static void test_safety_stop_requires_safety_release(void) {
+    input_control_t controller;
+    fake_motor_t motor;
+    control_command_t message;
+    uint8_t payload[UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE];
+    uint32_t applyCalls;
+    const uint8_t speed[] = { 60U };
+    const uint8_t replacementSpeed[] = { 30U };
+
+    initialize_controller(&controller, &motor);
+
+    message = command_message(APP_UART_CHANNEL_1, UART_CMD_INPUT_CONVEYOR_SET_SPEED, speed, sizeof(speed));
+    assert(input_control_process_command(&controller, &message) == INPUT_CONTROL_OK);
+    message = command_message(APP_UART_CHANNEL_1, UART_CMD_INPUT_CONVEYOR_START, NULL, 0U);
+    assert(input_control_process_command(&controller, &message) == INPUT_CONTROL_OK);
+    assert(motor.running == 1U);
+
+    assert(input_control_handle_safety_stop(&controller) == INPUT_CONTROL_OK);
+    assert(controller.safetyStopLatched == 1U);
+    assert(controller.state.conveyorState == UART_INPUT_CONVEYOR_FAULT);
+    assert(controller.state.speed == 60U);
+    assert(controller.state.lastError == UART_ERROR_EMERGENCY_STOP);
+    assert(motor.running == 0U);
+    assert(motor.speed == 0U);
+
+    message = command_message(APP_UART_CHANNEL_1, UART_CMD_INPUT_CONVEYOR_START, NULL, 0U);
+    assert(input_control_process_command(&controller, &message) == INPUT_CONTROL_FAULT_LATCHED);
+    message = command_message(APP_UART_CHANNEL_1, UART_CMD_INPUT_CONVEYOR_SET_SPEED, replacementSpeed,
+                              sizeof(replacementSpeed));
+    assert(input_control_process_command(&controller, &message) == INPUT_CONTROL_FAULT_LATCHED);
+    message = command_message(APP_UART_CHANNEL_1, UART_CMD_INPUT_CONTROL_RESET, NULL, 0U);
+    assert(input_control_process_command(&controller, &message) == INPUT_CONTROL_FAULT_LATCHED);
+    assert(controller.state.speed == 60U);
+
+    message = command_message(APP_UART_CHANNEL_1, UART_CMD_INPUT_CONVEYOR_GET_STATUS, NULL, 0U);
+    assert(input_control_process_command(&controller, &message) == INPUT_CONTROL_OK);
+    input_control_build_status_payload(&controller.state, payload);
+    assert(payload[UART_RESPONSE_STATUS_INDEX] == UART_STATUS_ERROR);
+    assert(payload[UART_RESPONSE_ERROR_INDEX] == UART_ERROR_EMERGENCY_STOP);
+    assert(payload[UART_INPUT_CONVEYOR_STATUS_STATE_INDEX] == UART_INPUT_CONVEYOR_FAULT);
+    assert(payload[UART_INPUT_CONVEYOR_STATUS_SPEED_INDEX] == 60U);
+
+    assert(input_control_handle_safety_release(&controller) == INPUT_CONTROL_OK);
+    assert(controller.safetyStopLatched == 0U);
+    assert(controller.state.conveyorState == UART_INPUT_CONVEYOR_STOPPED);
+    assert(controller.state.speed == 60U);
+    assert(controller.state.lastError == UART_ERROR_NONE);
+    assert(motor.running == 0U);
+
+    message = command_message(APP_UART_CHANNEL_1, UART_CMD_INPUT_CONVEYOR_START, NULL, 0U);
+    assert(input_control_process_command(&controller, &message) == INPUT_CONTROL_OK);
+    assert(motor.running == 1U);
+    assert(motor.speed == 60U);
+
+    applyCalls = motor.applyCalls;
+    assert(input_control_handle_safety_release(&controller) == INPUT_CONTROL_OK);
+    assert(motor.applyCalls == applyCalls);
+    assert(motor.running == 1U);
+}
+
+static void test_safety_failures_keep_emergency_latched(void) {
+    input_control_t controller;
+    fake_motor_t motor;
+
+    initialize_controller(&controller, &motor);
+    controller.state.speed = 55U;
+    motor.failNextApply = 1U;
+
+    assert(input_control_handle_safety_stop(&controller) == INPUT_CONTROL_MOTOR_ERROR);
+    assert(controller.safetyStopLatched == 1U);
+    assert(controller.motorInitialized == 0U);
+    assert(controller.state.conveyorState == UART_INPUT_CONVEYOR_FAULT);
+    assert(controller.state.lastError == UART_ERROR_MOTOR);
+    assert(controller.state.speed == 55U);
+
+    motor.failInitialize = 1U;
+    assert(input_control_handle_safety_release(&controller) == INPUT_CONTROL_MOTOR_ERROR);
+    assert(controller.safetyStopLatched == 1U);
+    assert(controller.state.lastError == UART_ERROR_MOTOR);
+
+    motor.failInitialize = 0U;
+    motor.failNextApply = 1U;
+    assert(input_control_handle_safety_release(&controller) == INPUT_CONTROL_MOTOR_ERROR);
+    assert(controller.safetyStopLatched == 1U);
+    assert(controller.motorInitialized == 0U);
+    assert(controller.state.lastError == UART_ERROR_MOTOR);
+
+    assert(input_control_handle_safety_release(&controller) == INPUT_CONTROL_OK);
+    assert(controller.safetyStopLatched == 0U);
+    assert(controller.state.conveyorState == UART_INPUT_CONVEYOR_STOPPED);
+    assert(controller.state.lastError == UART_ERROR_NONE);
+    assert(controller.state.speed == 55U);
+    assert(motor.running == 0U);
+}
+
 static void test_invalid_arguments(void) {
     input_control_t controller;
     fake_motor_t motor;
@@ -299,6 +395,8 @@ static void test_invalid_arguments(void) {
     assert(input_control_init(&controller, NULL) == INPUT_CONTROL_INVALID_ARGUMENT);
     assert(input_control_process_command(NULL, &message) == INPUT_CONTROL_INVALID_ARGUMENT);
     assert(input_control_process_command(&controller, NULL) == INPUT_CONTROL_INVALID_ARGUMENT);
+    assert(input_control_handle_safety_stop(NULL) == INPUT_CONTROL_INVALID_ARGUMENT);
+    assert(input_control_handle_safety_release(NULL) == INPUT_CONTROL_INVALID_ARGUMENT);
 }
 
 int main(void) {
@@ -309,6 +407,8 @@ int main(void) {
     test_running_reset_stops_and_preserves_speed();
     test_motor_failure_status_and_recovery();
     test_initialization_failure_can_recover();
+    test_safety_stop_requires_safety_release();
+    test_safety_failures_keep_emergency_latched();
     test_invalid_arguments();
     return 0;
 }
