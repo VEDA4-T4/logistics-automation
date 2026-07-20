@@ -29,6 +29,158 @@ typedef enum {
     TRANSACTION_IO_ERROR
 } transaction_result_t;
 
+typedef struct {
+    uint32_t tx_frames;
+    uint32_t rx_frames;
+    uint32_t retries;
+    uint32_t timeouts;
+    uint32_t busy_responses;
+    uint32_t parser_errors;
+    uint32_t ignored_frames;
+    uint32_t sequence_mismatches;
+} roundtrip_stats_t;
+
+typedef enum {
+    STEP_NOT_RUN = 0,
+    STEP_PASS,
+    STEP_FAIL
+} step_result_t;
+
+#define INPUT_ROUNDTRIP_STEP_COUNT 6U
+
+static const char* command_name(uint8_t command) {
+    switch (command) {
+        case UART_CMD_INPUT_CONVEYOR_START:
+            return "INPUT_CONVEYOR_START";
+        case UART_CMD_INPUT_CONVEYOR_STOP:
+            return "INPUT_CONVEYOR_STOP";
+        case UART_CMD_INPUT_CONVEYOR_SET_SPEED:
+            return "INPUT_CONVEYOR_SET_SPEED";
+        case UART_CMD_INPUT_CONVEYOR_GET_STATUS:
+            return "INPUT_CONVEYOR_GET_STATUS";
+        case UART_CMD_INPUT_CONTROL_RESET:
+            return "INPUT_CONTROL_RESET";
+        case UART_CMD_SORTING_ROUTE_ITEM:
+            return "SORTING_ROUTE_ITEM";
+        case UART_CMD_SORTING_CONVEYOR_START:
+            return "SORTING_CONVEYOR_START";
+        case UART_CMD_SORTING_CONVEYOR_STOP:
+            return "SORTING_CONVEYOR_STOP";
+        case UART_CMD_SORTING_CONVEYOR_SET_SPEED:
+            return "SORTING_CONVEYOR_SET_SPEED";
+        case UART_CMD_SENSOR_STATUS:
+            return "SENSOR_STATUS";
+        case UART_CMD_OPERATION_RESULT:
+            return "OPERATION_RESULT";
+        case UART_CMD_RESPONSE:
+            return "RESPONSE";
+        case UART_CMD_RESET_DEVICE:
+            return "RESET_DEVICE";
+        case UART_CMD_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
+        default:
+            return "UNKNOWN_COMMAND";
+    }
+}
+
+static const char* status_name(uint8_t status) {
+    switch (status) {
+        case UART_STATUS_ACK:
+            return "ACK";
+        case UART_STATUS_NACK:
+            return "NACK";
+        case UART_STATUS_BUSY:
+            return "BUSY";
+        case UART_STATUS_SUCCESS:
+            return "SUCCESS";
+        case UART_STATUS_ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN_STATUS";
+    }
+}
+
+static const char* error_name(uint8_t error) {
+    switch (error) {
+        case UART_ERROR_NONE:
+            return "NONE";
+        case UART_ERROR_INVALID_VERSION:
+            return "INVALID_VERSION";
+        case UART_ERROR_INVALID_COMMAND:
+            return "INVALID_COMMAND";
+        case UART_ERROR_INVALID_LENGTH:
+            return "INVALID_LENGTH";
+        case UART_ERROR_CRC_MISMATCH:
+            return "CRC_MISMATCH";
+        case UART_ERROR_SEQUENCE:
+            return "SEQUENCE";
+        case UART_ERROR_TIMEOUT:
+            return "TIMEOUT";
+        case UART_ERROR_BUSY:
+            return "BUSY";
+        case UART_ERROR_SENSOR:
+            return "SENSOR";
+        case UART_ERROR_MOTOR:
+            return "MOTOR";
+        case UART_ERROR_SERVO:
+            return "SERVO";
+        case UART_ERROR_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
+        case UART_ERROR_UNSUPPORTED_COMMAND:
+            return "UNSUPPORTED_COMMAND";
+        case UART_ERROR_INVALID_PAYLOAD:
+            return "INVALID_PAYLOAD";
+        case UART_ERROR_INTERNAL:
+            return "INTERNAL";
+        default:
+            return "UNKNOWN_ERROR";
+    }
+}
+
+static const char* conveyor_state_name(uint8_t state) {
+    switch (state) {
+        case UART_INPUT_CONVEYOR_STOPPED:
+            return "STOPPED";
+        case UART_INPUT_CONVEYOR_RUNNING:
+            return "RUNNING";
+        case UART_INPUT_CONVEYOR_FAULT:
+            return "FAULT";
+        default:
+            return "UNKNOWN_STATE";
+    }
+}
+
+static const char* transaction_result_name(transaction_result_t result) {
+    switch (result) {
+        case TRANSACTION_OK:
+            return "SUCCESS";
+        case TRANSACTION_TIMEOUT:
+            return "TIMEOUT";
+        case TRANSACTION_BUSY:
+            return "BUSY";
+        case TRANSACTION_SEQUENCE_CONFLICT:
+            return "SEQUENCE_CONFLICT";
+        case TRANSACTION_REMOTE_ERROR:
+            return "REMOTE_ERROR";
+        case TRANSACTION_IO_ERROR:
+            return "IO_ERROR";
+        default:
+            return "UNKNOWN_RESULT";
+    }
+}
+
+static const char* step_result_name(step_result_t result) {
+    switch (result) {
+        case STEP_PASS:
+            return "PASS";
+        case STEP_FAIL:
+            return "FAIL";
+        case STEP_NOT_RUN:
+        default:
+            return "NOT RUN";
+    }
+}
+
 static void print_usage(const char* program) {
     fprintf(stderr,
             "Usage:\n"
@@ -162,14 +314,34 @@ static int write_all(int descriptor, const uint8_t* data, size_t length) {
     return 0;
 }
 
-static void print_frame(const uint8_t* data, size_t length) {
+static void print_frame(const char* label, const uint8_t* data, size_t length) {
     size_t index;
 
-    printf("TX (%zu bytes):", length);
+    printf("  %-12s (%zu bytes):", label, length);
     for (index = 0U; index < length; ++index) {
         printf(" %02X", data[index]);
     }
     putchar('\n');
+}
+
+static void print_step_header(uint32_t step, const char* title, const uart_frame_t* request) {
+    printf("\n============================================================\n");
+    printf("[STEP %u/%u] %s\n", step, INPUT_ROUNDTRIP_STEP_COUNT, title);
+    printf("------------------------------------------------------------\n");
+    printf("  Request      : %s (0x%02X)\n", command_name(request->command), request->command);
+    printf("  Sequence     : %u\n", request->sequence);
+    if (request->length == 0U) {
+        printf("  Payload      : none\n");
+    } else if ((request->command == UART_CMD_INPUT_CONVEYOR_SET_SPEED) &&
+               (request->length == UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE)) {
+        printf("  Payload      : speed=%u%%\n", request->payload[UART_INPUT_CONVEYOR_SPEED_VALUE_INDEX]);
+    } else {
+        printf("  Payload size : %u byte(s)\n", request->length);
+    }
+}
+
+static void print_transaction_result(transaction_result_t result) {
+    printf("  Transaction  : %s\n", transaction_result_name(result));
 }
 
 static int64_t monotonic_milliseconds(void) {
@@ -214,7 +386,7 @@ static void initialize_frame(uart_frame_t* frame, uint8_t sequence, uint8_t comm
     frame->command = command;
 }
 
-static int send_frame(int descriptor, const uart_frame_t* frame) {
+static int send_frame(int descriptor, const uart_frame_t* frame, roundtrip_stats_t* stats) {
     uint8_t encoded[UART_MAX_FRAME_SIZE];
     size_t encodedLength = 0U;
     uart_codec_result_t result;
@@ -225,19 +397,37 @@ static int send_frame(int descriptor, const uart_frame_t* frame) {
         return -1;
     }
 
-    print_frame(encoded, encodedLength);
+    print_frame("TX FRAME", encoded, encodedLength);
+    fflush(stdout);
 
     if (write_all(descriptor, encoded, encodedLength) != 0) {
         fprintf(stderr, "write failed: %s\n", strerror(errno));
         return -1;
     }
 
+    stats->tx_frames++;
+
     return 0;
 }
 
-static void print_received_response(const uart_frame_t* frame, uint8_t status, uint8_t error) {
-    printf("RX: sequence=%u command=0x%02X status=0x%02X error=0x%02X length=%u\n", frame->sequence,
-           frame->command, status, error, frame->length);
+static void print_received_response(const uart_frame_t* request, const uart_frame_t* response, uint8_t status,
+                                    uint8_t error) {
+    uint8_t encoded[UART_MAX_FRAME_SIZE];
+    size_t encodedLength = 0U;
+
+    if (uart_encode_frame(response, encoded, sizeof(encoded), &encodedLength) == UART_CODEC_OK) {
+        print_frame("RX FRAME", encoded, encodedLength);
+    }
+
+    printf("  Response     : %s (0x%02X)\n", command_name(response->command), response->command);
+    printf("  Sequence     : %u (%s)\n", response->sequence,
+           (response->sequence == request->sequence) ? "MATCH" : "MISMATCH");
+    if (response->command == UART_CMD_RESPONSE) {
+        uint8_t originalCommand = response->payload[UART_RESPONSE_COMMAND_INDEX];
+        printf("  Original cmd : %s (0x%02X)\n", command_name(originalCommand), originalCommand);
+    }
+    printf("  Status       : %s (0x%02X)\n", status_name(status), status);
+    printf("  Error        : %s (0x%02X)\n", error_name(error), error);
 }
 
 static transaction_result_t classify_response(const uart_frame_t* request, const uart_frame_t* response) {
@@ -268,7 +458,7 @@ static transaction_result_t classify_response(const uart_frame_t* request, const
         return TRANSACTION_REMOTE_ERROR;
     }
 
-    print_received_response(response, status, error);
+    print_received_response(request, response, status, error);
 
     if ((status == UART_STATUS_SUCCESS) && (error == UART_ERROR_NONE)) {
         return TRANSACTION_OK;
@@ -286,7 +476,7 @@ static transaction_result_t classify_response(const uart_frame_t* request, const
 }
 
 static transaction_result_t wait_for_response(int descriptor, uart_parser_t* parser, const uart_frame_t* request,
-                                              uart_frame_t* matchedResponse) {
+                                              uart_frame_t* matchedResponse, roundtrip_stats_t* stats) {
     int64_t deadline;
     uint8_t buffer[RESPONSE_BUFFER_SIZE];
 
@@ -355,11 +545,19 @@ static transaction_result_t wait_for_response(int descriptor, uart_parser_t* par
             uart_parser_result_t parserResult = uart_parser_feed(parser, buffer[index], &response);
 
             if (parserResult == UART_PARSER_FRAME_READY) {
+                stats->rx_frames++;
                 if (response.sequence != request->sequence) {
+                    stats->sequence_mismatches++;
+                    stats->ignored_frames++;
+                    printf("  Ignored RX   : sequence=%u, expected=%u, command=%s (0x%02X)\n", response.sequence,
+                           request->sequence, command_name(response.command), response.command);
                     continue;
                 }
 
                 if ((response.command != UART_CMD_OPERATION_RESULT) && (response.command != UART_CMD_RESPONSE)) {
+                    stats->ignored_frames++;
+                    printf("  Ignored RX   : unexpected command=%s (0x%02X)\n", command_name(response.command),
+                           response.command);
                     continue;
                 }
 
@@ -368,6 +566,7 @@ static transaction_result_t wait_for_response(int descriptor, uart_parser_t* par
             }
 
             if (parserResult < UART_PARSER_NO_FRAME) {
+                stats->parser_errors++;
                 fprintf(stderr, "discarded malformed response byte stream: parser result %d\n", parserResult);
             }
         }
@@ -375,23 +574,29 @@ static transaction_result_t wait_for_response(int descriptor, uart_parser_t* par
 }
 
 static transaction_result_t transact(int descriptor, uart_parser_t* parser, const uart_frame_t* request,
-                                     uart_frame_t* response) {
+                                     uart_frame_t* response, roundtrip_stats_t* stats) {
     transaction_result_t result = TRANSACTION_IO_ERROR;
 
     for (uint32_t attempt = 0U; attempt <= UART_MAX_RETRY_COUNT; attempt++) {
-        if (send_frame(descriptor, request) != 0) {
+        if (send_frame(descriptor, request, stats) != 0) {
             return TRANSACTION_IO_ERROR;
         }
 
-        result = wait_for_response(descriptor, parser, request, response);
+        result = wait_for_response(descriptor, parser, request, response, stats);
+        if (result == TRANSACTION_TIMEOUT) {
+            stats->timeouts++;
+        } else if (result == TRANSACTION_BUSY) {
+            stats->busy_responses++;
+        }
         if (result == TRANSACTION_OK || result == TRANSACTION_SEQUENCE_CONFLICT ||
             result == TRANSACTION_REMOTE_ERROR || result == TRANSACTION_IO_ERROR) {
             return result;
         }
 
         if (attempt < UART_MAX_RETRY_COUNT) {
-            printf("Retrying sequence=%u after %s (%u/%u)\n", request->sequence,
-                   (result == TRANSACTION_BUSY) ? "BUSY" : "timeout", attempt + 1U, UART_MAX_RETRY_COUNT);
+            stats->retries++;
+            printf("  Retry        : sequence=%u, reason=%s, retry=%u/%u\n", request->sequence,
+                   (result == TRANSACTION_BUSY) ? "BUSY" : "TIMEOUT", attempt + 1U, UART_MAX_RETRY_COUNT);
             if (sleep_milliseconds(UART_RETRY_INTERVAL_MS) != 0) {
                 fprintf(stderr, "retry delay failed: %s\n", strerror(errno));
                 return TRANSACTION_IO_ERROR;
@@ -403,20 +608,74 @@ static transaction_result_t transact(int descriptor, uart_parser_t* parser, cons
 }
 
 static int verify_input_status(const uart_frame_t* response, uint8_t expectedState, uint8_t expectedSpeed) {
+    uint8_t actualState;
+    uint8_t actualSpeed;
+
     if ((response->command != UART_CMD_RESPONSE) ||
         (response->length != UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE) ||
         (response->payload[UART_RESPONSE_COMMAND_INDEX] != UART_CMD_INPUT_CONVEYOR_GET_STATUS) ||
         (response->payload[UART_RESPONSE_STATUS_INDEX] != UART_STATUS_SUCCESS) ||
-        (response->payload[UART_RESPONSE_ERROR_INDEX] != UART_ERROR_NONE) ||
-        (response->payload[UART_INPUT_CONVEYOR_STATUS_STATE_INDEX] != expectedState) ||
-        (response->payload[UART_INPUT_CONVEYOR_STATUS_SPEED_INDEX] != expectedSpeed)) {
-        fprintf(stderr, "unexpected input status: state=%u speed=%u\n",
-                response->payload[UART_INPUT_CONVEYOR_STATUS_STATE_INDEX],
-                response->payload[UART_INPUT_CONVEYOR_STATUS_SPEED_INDEX]);
+        (response->payload[UART_RESPONSE_ERROR_INDEX] != UART_ERROR_NONE)) {
+        fprintf(stderr, "  Status data  : invalid GET_STATUS response format\n");
         return -1;
     }
 
+    actualState = response->payload[UART_INPUT_CONVEYOR_STATUS_STATE_INDEX];
+    actualSpeed = response->payload[UART_INPUT_CONVEYOR_STATUS_SPEED_INDEX];
+    printf("  Device state : %s (0x%02X)\n", conveyor_state_name(actualState), actualState);
+    printf("  Device speed : %u%%\n", actualSpeed);
+    printf("  Expected     : state=%s, speed=%u%%\n", conveyor_state_name(expectedState), expectedSpeed);
+
+    if ((actualState != expectedState) || (actualSpeed != expectedSpeed)) {
+        fprintf(stderr, "  Status check : MISMATCH\n");
+        return -1;
+    }
+
+    printf("  Status check : MATCH\n");
+
     return 0;
+}
+
+static int print_roundtrip_summary(const roundtrip_stats_t* stats, const step_result_t* stepResults, uint8_t speed,
+                                   uint8_t startSequence) {
+    static const char* const stepNames[INPUT_ROUNDTRIP_STEP_COUNT] = {
+        "SET_SPEED command",
+        "START command",
+        "Duplicate START cached-response replay",
+        "GET_STATUS reports RUNNING",
+        "STOP command",
+        "GET_STATUS reports STOPPED",
+    };
+    uint32_t passedSteps = 0U;
+
+    printf("\n============================================================\n");
+    printf("INPUT UART ROUND-TRIP SUMMARY\n");
+    printf("============================================================\n");
+    printf("  Device       : %s\n", VEDAUART_DEVICE_PATH);
+    printf("  Test speed   : %u%%\n", speed);
+    printf("  Initial seq  : %u\n", startSequence);
+    printf("------------------------------------------------------------\n");
+    for (uint32_t index = 0U; index < INPUT_ROUNDTRIP_STEP_COUNT; index++) {
+        printf("  [%u] %-39s : %s\n", index + 1U, stepNames[index], step_result_name(stepResults[index]));
+        if (stepResults[index] == STEP_PASS) {
+            passedSteps++;
+        }
+    }
+    printf("------------------------------------------------------------\n");
+    printf("  TX frames            : %u\n", stats->tx_frames);
+    printf("  RX valid frames      : %u\n", stats->rx_frames);
+    printf("  Retries              : %u\n", stats->retries);
+    printf("  Timeouts             : %u\n", stats->timeouts);
+    printf("  BUSY responses       : %u\n", stats->busy_responses);
+    printf("  Parser errors        : %u\n", stats->parser_errors);
+    printf("  Ignored frames       : %u\n", stats->ignored_frames);
+    printf("  Sequence mismatches  : %u\n", stats->sequence_mismatches);
+    printf("  Passed steps         : %u/%u\n", passedSteps, INPUT_ROUNDTRIP_STEP_COUNT);
+    printf("============================================================\n");
+    printf("FINAL RESULT: %s\n", (passedSteps == INPUT_ROUNDTRIP_STEP_COUNT) ? "PASS" : "FAIL");
+    printf("============================================================\n");
+
+    return (passedSteps == INPUT_ROUNDTRIP_STEP_COUNT) ? 0 : -1;
 }
 
 static int run_input_roundtrip(int descriptor, uint8_t speed, uint8_t startSequence) {
@@ -425,83 +684,131 @@ static int run_input_roundtrip(int descriptor, uint8_t speed, uint8_t startSeque
     uart_frame_t response;
     uart_frame_t firstStartResponse;
     transaction_result_t result;
+    roundtrip_stats_t stats;
+    step_result_t stepResults[INPUT_ROUNDTRIP_STEP_COUNT];
     uint8_t sequence = startSequence;
     uint8_t startAttempted = 0U;
-    int passed = 0;
 
     uart_parser_init(&parser);
-    printf("Starting input round-trip test: speed=%u initial_sequence=%u\n", speed, sequence);
+    memset(&stats, 0, sizeof(stats));
+    memset(stepResults, 0, sizeof(stepResults));
+
+    printf("============================================================\n");
+    printf("INPUT UART ROUND-TRIP TEST\n");
+    printf("============================================================\n");
+    printf("  Device       : %s\n", VEDAUART_DEVICE_PATH);
+    printf("  Speed        : %u%%\n", speed);
+    printf("  Initial seq  : %u\n", sequence);
+    printf("  ACK timeout  : %u ms\n", UART_ACK_TIMEOUT_MS);
+    printf("  Max retries  : %u\n", UART_MAX_RETRY_COUNT);
 
     for (uint32_t collision = 0U; collision < 256U; collision++) {
         initialize_frame(&request, sequence, UART_CMD_INPUT_CONVEYOR_SET_SPEED);
         request.length = UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
         request.payload[UART_INPUT_CONVEYOR_SPEED_VALUE_INDEX] = speed;
-        result = transact(descriptor, &parser, &request, &response);
+        if (collision == 0U) {
+            print_step_header(1U, "Set conveyor speed", &request);
+        } else {
+            printf("  New sequence : %u (retrying SET_SPEED after cache collision)\n", sequence);
+        }
+        result = transact(descriptor, &parser, &request, &response, &stats);
 
         if (result != TRANSACTION_SEQUENCE_CONFLICT) {
             break;
         }
 
         sequence++;
-        printf("Sequence was already cached with another command; trying sequence=%u\n", sequence);
+        printf("  Cache result : sequence already belongs to another command\n");
     }
 
+    print_transaction_result(result);
     if (result != TRANSACTION_OK) {
-        fprintf(stderr, "SET_SPEED transaction failed: %d\n", result);
+        stepResults[0] = STEP_FAIL;
+        printf("  Step result  : FAIL\n");
         goto cleanup;
     }
+    stepResults[0] = STEP_PASS;
+    printf("  Step result  : PASS\n");
 
     sequence++;
     initialize_frame(&request, sequence, UART_CMD_INPUT_CONVEYOR_START);
+    print_step_header(2U, "Start input conveyor", &request);
     startAttempted = 1U;
-    result = transact(descriptor, &parser, &request, &firstStartResponse);
+    result = transact(descriptor, &parser, &request, &firstStartResponse, &stats);
+    print_transaction_result(result);
     if (result != TRANSACTION_OK) {
-        fprintf(stderr, "START transaction failed: %d\n", result);
+        stepResults[1] = STEP_FAIL;
+        printf("  Step result  : FAIL\n");
         goto cleanup;
     }
+    stepResults[1] = STEP_PASS;
+    printf("  Step result  : PASS\n");
 
-    printf("Re-sending the same START sequence to verify cached-response replay\n");
-    result = transact(descriptor, &parser, &request, &response);
-    if ((result != TRANSACTION_OK) || (response.command != firstStartResponse.command) ||
-        (response.length != firstStartResponse.length) ||
-        (memcmp(response.payload, firstStartResponse.payload, response.length) != 0)) {
-        fprintf(stderr, "duplicate START response did not match the cached result\n");
+    print_step_header(3U, "Replay duplicate START sequence", &request);
+    printf("  Purpose      : verify cached response and prevent duplicate motor execution\n");
+    result = transact(descriptor, &parser, &request, &response, &stats);
+    print_transaction_result(result);
+    if (result != TRANSACTION_OK) {
+        stepResults[2] = STEP_FAIL;
+        printf("  Cache replay : not received\n");
+        printf("  Step result  : FAIL\n");
         goto cleanup;
     }
+    if ((response.command != firstStartResponse.command) || (response.length != firstStartResponse.length) ||
+        (memcmp(response.payload, firstStartResponse.payload, response.length) != 0)) {
+        stepResults[2] = STEP_FAIL;
+        printf("  Cache replay : MISMATCH\n");
+        printf("  Step result  : FAIL\n");
+        goto cleanup;
+    }
+    stepResults[2] = STEP_PASS;
+    printf("  Cache replay : MATCH\n");
+    printf("  Step result  : PASS\n");
 
     sequence++;
     initialize_frame(&request, sequence, UART_CMD_INPUT_CONVEYOR_GET_STATUS);
-    result = transact(descriptor, &parser, &request, &response);
-    if ((result != TRANSACTION_OK) ||
-        (verify_input_status(&response, UART_INPUT_CONVEYOR_RUNNING, speed) != 0)) {
-        fprintf(stderr, "RUNNING status verification failed\n");
+    print_step_header(4U, "Verify RUNNING status", &request);
+    result = transact(descriptor, &parser, &request, &response, &stats);
+    print_transaction_result(result);
+    if ((result != TRANSACTION_OK) || (verify_input_status(&response, UART_INPUT_CONVEYOR_RUNNING, speed) != 0)) {
+        stepResults[3] = STEP_FAIL;
+        printf("  Step result  : FAIL\n");
         goto cleanup;
     }
-
-    passed = 1;
+    stepResults[3] = STEP_PASS;
+    printf("  Step result  : PASS\n");
 
 cleanup:
     if (startAttempted != 0U) {
         sequence++;
         initialize_frame(&request, sequence, UART_CMD_INPUT_CONVEYOR_STOP);
-        result = transact(descriptor, &parser, &request, &response);
+        print_step_header(5U, "Stop input conveyor", &request);
+        result = transact(descriptor, &parser, &request, &response, &stats);
+        print_transaction_result(result);
         if (result != TRANSACTION_OK) {
-            fprintf(stderr, "STOP cleanup transaction failed: %d\n", result);
-            passed = 0;
+            stepResults[4] = STEP_FAIL;
+            printf("  Step result  : FAIL\n");
         } else {
+            stepResults[4] = STEP_PASS;
+            printf("  Step result  : PASS\n");
+
             sequence++;
             initialize_frame(&request, sequence, UART_CMD_INPUT_CONVEYOR_GET_STATUS);
-            result = transact(descriptor, &parser, &request, &response);
+            print_step_header(6U, "Verify STOPPED status", &request);
+            result = transact(descriptor, &parser, &request, &response, &stats);
+            print_transaction_result(result);
             if ((result != TRANSACTION_OK) ||
                 (verify_input_status(&response, UART_INPUT_CONVEYOR_STOPPED, speed) != 0)) {
-                fprintf(stderr, "STOPPED status verification failed\n");
-                passed = 0;
+                stepResults[5] = STEP_FAIL;
+                printf("  Step result  : FAIL\n");
+            } else {
+                stepResults[5] = STEP_PASS;
+                printf("  Step result  : PASS\n");
             }
         }
     }
 
-    printf("Input round-trip test: %s\n", (passed != 0) ? "PASS" : "FAIL");
-    return (passed != 0) ? 0 : -1;
+    return print_roundtrip_summary(&stats, stepResults, speed, startSequence);
 }
 
 int main(int argc, char** argv) {
@@ -566,7 +873,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    print_frame(encoded, encoded_length);
+    print_frame("TX FRAME", encoded, encoded_length);
 
     if (write_all(descriptor, encoded, encoded_length) != 0) {
         fprintf(stderr, "write failed: %s\n", strerror(errno));
@@ -579,6 +886,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    printf("Sent command 0x%02X through %s\n", frame.command, VEDAUART_DEVICE_PATH);
+    printf("Sent %s (0x%02X), sequence=%u through %s\n", command_name(frame.command), frame.command, frame.sequence,
+           VEDAUART_DEVICE_PATH);
     return EXIT_SUCCESS;
 }
