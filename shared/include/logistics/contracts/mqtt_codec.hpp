@@ -29,6 +29,11 @@ inline constexpr std::string_view kErrorCodeField = "errorCode";
 inline constexpr std::string_view kDetectedField = "detected";
 inline constexpr std::string_view kImageNameField = "imageName";
 inline constexpr std::string_view kImagePathField = "imagePath";
+inline constexpr std::string_view kImageUrlField = "imageUrl";
+inline constexpr std::string_view kImageIdField = "imageId";
+inline constexpr std::string_view kImageField = "image";
+inline constexpr std::string_view kChecksumField = "checksum";
+inline constexpr std::string_view kUploadStatusField = "uploadStatus";
 inline constexpr std::string_view kMetadataField = "metadata";
 inline constexpr std::string_view kBoxXField = "boxX";
 inline constexpr std::string_view kBoxYField = "boxY";
@@ -40,7 +45,11 @@ inline constexpr std::string_view kOffsetXField = "offsetX";
 inline constexpr std::string_view kOffsetYField = "offsetY";
 inline constexpr std::string_view kPositionStatusField = "positionStatus";
 inline constexpr std::string_view kBarcodeField = "barcode";
+inline constexpr std::string_view kRecognitionStatusField = "recognitionStatus";
+inline constexpr std::string_view kConfidenceField = "confidence";
 inline constexpr std::string_view kResultField = "result";
+inline constexpr std::string_view kProcessingResultField = "processingResult";
+inline constexpr std::string_view kProductIdField = "productId";
 inline constexpr std::string_view kProductNameField = "productName";
 inline constexpr std::string_view kCategoryField = "category";
 inline constexpr std::string_view kDestinationField = "destination";
@@ -52,6 +61,10 @@ inline constexpr std::string_view kDistanceField = "distance";
 
 [[nodiscard]] constexpr bool IsValidErrorLevel(std::string_view value) noexcept {
     return value == "INFO" || value == "WARNING" || value == "ERROR" || value == "CRITICAL";
+}
+
+[[nodiscard]] constexpr bool IsValidRecognitionStatus(std::string_view value) noexcept {
+    return value == "SUCCESS" || value == "FAILED" || value == "MISSING_DATA";
 }
 
 enum class CodecError : std::uint8_t {
@@ -165,9 +178,11 @@ struct WorkCreatedPayload {
 
 struct WorkCompletedPayload {
     std::string work_id;
+    std::string result;
+    std::optional<std::string> message;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidUuid(work_id);
+        return IsValidUuid(work_id) && !result.empty() && (!message.has_value() || !message->empty());
     }
 };
 
@@ -191,41 +206,49 @@ struct PositionDetectedPayload {
 
 struct BarcodeDetectedPayload {
     std::string work_id;
+    std::string recognition_status;
     std::string barcode;
-    std::int32_t center_x{ 0 };
-    std::int32_t center_y{ 0 };
-    std::string image_name;
-    std::string image_path;
-    std::string result;
+    std::optional<double> confidence;
+    std::optional<std::string> message;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidUuid(work_id) && !barcode.empty() && center_x >= 0 && center_y >= 0 && !image_name.empty() &&
-               !image_path.empty() && !result.empty();
+        return IsValidUuid(work_id) && IsValidRecognitionStatus(recognition_status) &&
+               (recognition_status != "SUCCESS" || !barcode.empty()) &&
+               (!confidence.has_value() || (*confidence >= 0.0 && *confidence <= 1.0)) &&
+               (!message.has_value() || !message->empty());
     }
 };
 
 struct ProductImagePayload {
     std::string work_id;
-    std::string image_name;
+    std::string image_id;
+    std::string image_url;
     std::string image_path;
-    Json metadata{ Json::object() };
+    std::string checksum;
+    std::string upload_status;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidUuid(work_id) && !image_name.empty() && !image_path.empty() && metadata.is_object();
+        return IsValidUuid(work_id) && !image_id.empty() && (!image_url.empty() || !image_path.empty()) &&
+               !checksum.empty() && !upload_status.empty();
     }
 };
 
 struct ProductInfoPayload {
     std::string work_id;
+    std::string recognition_status;
     std::string barcode;
+    std::string product_id;
     std::string product_name;
-    std::string category;
     std::string destination;
-    std::string image_path;
+    Json image{ nullptr };
+    std::optional<double> confidence;
+    std::optional<std::string> message;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return IsValidUuid(work_id) && !barcode.empty() && !product_name.empty() && !category.empty() &&
-               !destination.empty() && !image_path.empty();
+        return IsValidUuid(work_id) && IsValidRecognitionStatus(recognition_status) &&
+               (image.is_null() || image.is_object()) &&
+               (!confidence.has_value() || (*confidence >= 0.0 && *confidence <= 1.0)) &&
+               (!message.has_value() || !message->empty());
     }
 };
 
@@ -237,14 +260,13 @@ struct DestinationSetPayload {
     std::string destination;
 
     [[nodiscard]] bool IsValid() const noexcept {
-        const CommandRequestView request{
-            .request_id = request_id,
-            .command = command,
-            .target_device = target_device_id,
-            .component_id = {},
-        };
-
-        return command == ControlCommand::kDestinationSet && request.IsValid() && IsValidUuid(work_id) &&
+        const bool is_event = request_id.empty() && target_device_id.empty();
+        const bool is_command = CommandRequestView{ .request_id = request_id,
+                                                    .command = command,
+                                                    .target_device = target_device_id,
+                                                    .component_id = {} }
+                                    .IsValid();
+        return command == ControlCommand::kDestinationSet && (is_event || is_command) && IsValidUuid(work_id) &&
                IsValidTopicLevel(destination);
     }
 };
@@ -743,6 +765,35 @@ namespace codec_detail {
     return true;
 }
 
+[[nodiscard]] inline bool ReadOptionalStringValue(const Json& object, std::string_view field, std::string& output,
+                                                  CodecStatus& status) {
+    std::optional<std::string> value;
+    if (!ReadOptionalString(object, field, value, status)) {
+        return false;
+    }
+    output = value.value_or(std::string{});
+    return true;
+}
+
+[[nodiscard]] inline bool ReadOptionalDouble(const Json& object, std::string_view field, std::optional<double>& output,
+                                             CodecStatus& status) {
+    const auto iterator = object.find(std::string(field));
+    if (iterator == object.end() || iterator->is_null()) {
+        output.reset();
+        return true;
+    }
+    if (!iterator->is_number()) {
+        status = MakeError(CodecError::kInvalidFieldType, field, "JSON field must be a number or null");
+        return false;
+    }
+    output = iterator->get<double>();
+    if (*output < 0.0 || *output > 1.0) {
+        status = MakeError(CodecError::kInvalidFieldValue, field, "Number must be between 0 and 1");
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] inline bool ReadRequiredUnsignedInteger(const Json& object, std::string_view field, std::uint64_t& output,
                                                       CodecStatus& status) {
     const auto iterator = object.find(std::string(field));
@@ -825,6 +876,12 @@ namespace codec_detail {
 
 inline void WriteOptionalString(Json& object, std::string_view field, const std::optional<std::string>& value) {
     object[std::string(field)] = value.has_value() ? Json(*value) : Json(nullptr);
+}
+
+inline void WriteOptionalDouble(Json& object, std::string_view field, const std::optional<double>& value) {
+    if (value.has_value()) {
+        object[std::string(field)] = *value;
+    }
 }
 
 [[nodiscard]] inline bool ReadConnectionState(const Json& object, std::string_view field, ConnectionState& output,
@@ -971,9 +1028,12 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline Json SerializePayload(const WorkCompletedPayload& payload) {
-    return {
+    Json data = {
         { std::string(kWorkIdField), payload.work_id },
+        { std::string(kResultField), payload.result },
     };
+    WriteOptionalString(data, kMessageField, payload.message);
+    return data;
 }
 
 [[nodiscard]] inline Json SerializePayload(const PositionDetectedPayload& payload) {
@@ -992,39 +1052,53 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline Json SerializePayload(const BarcodeDetectedPayload& payload) {
-    return {
-        { std::string(kWorkIdField), payload.work_id },       { std::string(kBarcodeField), payload.barcode },
-        { std::string(kCenterXField), payload.center_x },     { std::string(kCenterYField), payload.center_y },
-        { std::string(kImageNameField), payload.image_name }, { std::string(kImagePathField), payload.image_path },
-        { std::string(kResultField), payload.result },
+    Json data = {
+        { std::string(kWorkIdField), payload.work_id },
+        { std::string(kRecognitionStatusField), payload.recognition_status },
     };
+    if (!payload.barcode.empty()) data[std::string(kBarcodeField)] = payload.barcode;
+    WriteOptionalDouble(data, kConfidenceField, payload.confidence);
+    WriteOptionalString(data, kMessageField, payload.message);
+    return data;
 }
 
 [[nodiscard]] inline Json SerializePayload(const ProductImagePayload& payload) {
     return {
         { std::string(kWorkIdField), payload.work_id },
-        { std::string(kImageNameField), payload.image_name },
+        { std::string(kImageIdField), payload.image_id },
+        { std::string(kImageUrlField), payload.image_url },
         { std::string(kImagePathField), payload.image_path },
-        { std::string(kMetadataField), payload.metadata },
+        { std::string(kChecksumField), payload.checksum },
+        { std::string(kUploadStatusField), payload.upload_status },
     };
 }
 
 [[nodiscard]] inline Json SerializePayload(const ProductInfoPayload& payload) {
-    return {
-        { std::string(kWorkIdField), payload.work_id },           { std::string(kBarcodeField), payload.barcode },
-        { std::string(kProductNameField), payload.product_name }, { std::string(kCategoryField), payload.category },
-        { std::string(kDestinationField), payload.destination },  { std::string(kImagePathField), payload.image_path },
+    Json data = {
+        { std::string(kWorkIdField), payload.work_id },
+        { std::string(kRecognitionStatusField), payload.recognition_status },
     };
+    if (!payload.barcode.empty()) data[std::string(kBarcodeField)] = payload.barcode;
+    if (!payload.product_id.empty()) data[std::string(kProductIdField)] = payload.product_id;
+    if (!payload.product_name.empty()) data[std::string(kProductNameField)] = payload.product_name;
+    if (!payload.destination.empty()) data[std::string(kDestinationField)] = payload.destination;
+    if (!payload.image.is_null()) data[std::string(kImageField)] = payload.image;
+    WriteOptionalDouble(data, kConfidenceField, payload.confidence);
+    WriteOptionalString(data, kMessageField, payload.message);
+    return data;
 }
 
 [[nodiscard]] inline Json SerializePayload(const DestinationSetPayload& payload) {
-    return {
-        { std::string(kRequestIdField), payload.request_id },
+    Json data = {
         { std::string(kWorkIdField), payload.work_id },
-        { std::string(kCommandField), std::string(ToString(payload.command)) },
-        { std::string(kTargetDeviceIdField), payload.target_device_id },
         { std::string(kDestinationField), payload.destination },
     };
+    if (!payload.request_id.empty()) {
+        data[std::string(kRequestIdField)] = payload.request_id;
+        data[std::string(kCommandField)] = std::string(ToString(payload.command));
+        data[std::string(kTargetDeviceIdField)] = payload.target_device_id;
+    }
+    return data;
 }
 
 [[nodiscard]] inline Json SerializePayload(const DeviceStatusPayload& payload) {
@@ -1112,7 +1186,9 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, WorkCompletedPayload& payload, CodecStatus& status) {
-    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status);
+    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
+           ReadRequiredString(data, kResultField, payload.result, status) &&
+           ReadOptionalString(data, kMessageField, payload.message, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, PositionDetectedPayload& payload, CodecStatus& status) {
@@ -1130,36 +1206,45 @@ inline void WriteOptionalString(Json& object, std::string_view field, const std:
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, BarcodeDetectedPayload& payload, CodecStatus& status) {
     return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
-           ReadRequiredString(data, kBarcodeField, payload.barcode, status) &&
-           ReadRequiredSignedInteger(data, kCenterXField, payload.center_x, status) &&
-           ReadRequiredSignedInteger(data, kCenterYField, payload.center_y, status) &&
-           ReadRequiredString(data, kImageNameField, payload.image_name, status) &&
-           ReadRequiredString(data, kImagePathField, payload.image_path, status) &&
-           ReadRequiredString(data, kResultField, payload.result, status);
+           ReadRequiredString(data, kRecognitionStatusField, payload.recognition_status, status) &&
+           ReadOptionalStringValue(data, kBarcodeField, payload.barcode, status) &&
+           ReadOptionalDouble(data, kConfidenceField, payload.confidence, status) &&
+           ReadOptionalString(data, kMessageField, payload.message, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ProductImagePayload& payload, CodecStatus& status) {
     return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
-           ReadRequiredString(data, kImageNameField, payload.image_name, status) &&
-           ReadRequiredString(data, kImagePathField, payload.image_path, status) &&
-           ReadOptionalObjectValue(data, kMetadataField, payload.metadata, status);
+           ReadRequiredString(data, kImageIdField, payload.image_id, status) &&
+           ReadOptionalStringValue(data, kImageUrlField, payload.image_url, status) &&
+           ReadOptionalStringValue(data, kImagePathField, payload.image_path, status) &&
+           ReadRequiredString(data, kChecksumField, payload.checksum, status) &&
+           ReadRequiredString(data, kUploadStatusField, payload.upload_status, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ProductInfoPayload& payload, CodecStatus& status) {
     return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
-           ReadRequiredString(data, kBarcodeField, payload.barcode, status) &&
-           ReadRequiredString(data, kProductNameField, payload.product_name, status) &&
-           ReadRequiredString(data, kCategoryField, payload.category, status) &&
-           ReadRequiredString(data, kDestinationField, payload.destination, status) &&
-           ReadRequiredString(data, kImagePathField, payload.image_path, status);
+           ReadRequiredString(data, kRecognitionStatusField, payload.recognition_status, status) &&
+           ReadOptionalStringValue(data, kBarcodeField, payload.barcode, status) &&
+           ReadOptionalStringValue(data, kProductIdField, payload.product_id, status) &&
+           ReadOptionalStringValue(data, kProductNameField, payload.product_name, status) &&
+           ReadOptionalStringValue(data, kDestinationField, payload.destination, status) &&
+           ReadOptionalObjectValue(data, kImageField, payload.image, status) &&
+           ReadOptionalDouble(data, kConfidenceField, payload.confidence, status) &&
+           ReadOptionalString(data, kMessageField, payload.message, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, DestinationSetPayload& payload, CodecStatus& status) {
-    return ReadRequiredString(data, kRequestIdField, payload.request_id, status) &&
-           ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
-           ReadControlCommand(data, kCommandField, payload.command, status) &&
-           ReadRequiredString(data, kTargetDeviceIdField, payload.target_device_id, status) &&
-           ReadRequiredString(data, kDestinationField, payload.destination, status);
+    if (!ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) ||
+        !ReadRequiredString(data, kDestinationField, payload.destination, status) ||
+        !ReadOptionalStringValue(data, kRequestIdField, payload.request_id, status) ||
+        !ReadOptionalStringValue(data, kTargetDeviceIdField, payload.target_device_id, status)) {
+        return false;
+    }
+    if (payload.request_id.empty() && payload.target_device_id.empty()) {
+        payload.command = ControlCommand::kDestinationSet;
+        return true;
+    }
+    return ReadControlCommand(data, kCommandField, payload.command, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, DeviceStatusPayload& payload, CodecStatus& status) {

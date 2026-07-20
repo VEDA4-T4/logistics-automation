@@ -91,6 +91,8 @@ void TestAllMqttMessageRoundTrips() {
     AssertRoundTrip<mqtt::WorkCompletedPayload>(MakeMessage("MSG-0003-B", mqtt::MessageType::kWorkCompleted,
                                                             mqtt::WorkCompletedPayload{
                                                                 .work_id = std::string(kTestWorkId),
+                                                                .result = "SUCCESS",
+                                                                .message = std::string("sorting completed"),
                                                             }));
 
     AssertRoundTrip<mqtt::PositionDetectedPayload>(MakeMessage("MSG-0004", mqtt::MessageType::kPositionDetected,
@@ -110,12 +112,10 @@ void TestAllMqttMessageRoundTrips() {
     AssertRoundTrip<mqtt::BarcodeDetectedPayload>(MakeMessage("MSG-0005", mqtt::MessageType::kBarcodeDetected,
                                                               mqtt::BarcodeDetectedPayload{
                                                                   .work_id = std::string(kTestWorkId),
+                                                                  .recognition_status = "SUCCESS",
                                                                   .barcode = "8801234567890",
-                                                                  .center_x = 315,
-                                                                  .center_y = 226,
-                                                                  .image_name = "JOB-0001.jpg",
-                                                                  .image_path = "/data/images/JOB-0001.jpg",
-                                                                  .result = "SUCCESS",
+                                                                  .confidence = 0.98,
+                                                                  .message = std::nullopt,
                                                               }));
 
     AssertRoundTrip<mqtt::ProductImagePayload>(
@@ -124,15 +124,11 @@ void TestAllMqttMessageRoundTrips() {
             mqtt::MessageType::kProductImage,
             mqtt::ProductImagePayload{
                 .work_id = std::string(kTestWorkId),
-                .image_name = "JOB-0001.jpg",
-                .image_path = "/data/images/JOB-0001.jpg",
-                .metadata =
-                    {
-                        {"format", "JPEG"},
-                        {"width", 1920},
-                        {"height", 1080},
-                        {"fileSize", 183742},
-                    },
+                .image_id = "IMAGE-0001",
+                .image_url = {},
+                .image_path = "images/JOB-0001.jpg",
+                .checksum = "abc123",
+                .upload_status = "UPLOADED",
             }
         )
     );
@@ -140,11 +136,19 @@ void TestAllMqttMessageRoundTrips() {
     AssertRoundTrip<mqtt::ProductInfoPayload>(MakeMessage("MSG-0007", mqtt::MessageType::kProductInfo,
                                                           mqtt::ProductInfoPayload{
                                                               .work_id = std::string(kTestWorkId),
+                                                              .recognition_status = "SUCCESS",
                                                               .barcode = "8801234567890",
+                                                              .product_id = "PRODUCT-01",
                                                               .product_name = "Sample Product",
-                                                              .category = "A",
                                                               .destination = "DEST-01",
-                                                              .image_path = "/data/images/JOB-0001.jpg",
+                                                              .image = {
+                                                                  { "imageId", "IMAGE-0001" },
+                                                                  { "path", "images/JOB-0001.jpg" },
+                                                                  { "checksum", "abc123" },
+                                                                  { "uploadStatus", "UPLOADED" },
+                                                              },
+                                                              .confidence = 0.98,
+                                                              .message = std::nullopt,
                                                           },
                                                           "SERVER-01"));
 
@@ -366,7 +370,7 @@ void TestMqttCodecInvalidInputs() {
             "messageType": "WORK_COMPLETED",
             "sourceId": "PI-01",
             "timestamp": "2026-08-20T14:31:30+09:00",
-            "data": { "workId": "JOB-0001" }
+            "data": { "workId": "JOB-0001", "result": "SUCCESS" }
         }
     )json");
     assert(!invalid_work_id.IsSuccess());
@@ -376,6 +380,8 @@ void TestMqttCodecInvalidInputs() {
     const auto invalid_work_message = MakeMessage("MSG-BAD-WORK-02", mqtt::MessageType::kWorkCompleted,
                                                   mqtt::WorkCompletedPayload{
                                                       .work_id = "JOB-0001",
+                                                      .result = "SUCCESS",
+                                                      .message = std::nullopt,
                                                   });
     const auto invalid_work_encoded = mqtt::SerializeMessage(invalid_work_message);
     assert(!invalid_work_encoded.IsSuccess());
@@ -509,8 +515,25 @@ void TestMqttTopicMessageValidation() {
     const auto work_completed = MakeMessage("MSG-TOPIC-04", mqtt::MessageType::kWorkCompleted,
                                             mqtt::WorkCompletedPayload{
                                                 .work_id = std::string(kTestWorkId),
+                                                .result = "SUCCESS",
+                                                .message = std::nullopt,
                                             });
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", work_completed).IsSuccess());
+
+    const auto work_created = MakeMessage("MSG-TOPIC-05", mqtt::MessageType::kWorkCreated,
+                                          mqtt::WorkCreatedPayload{ .work_id = std::string(kTestWorkId) },
+                                          "SERVER-01");
+    assert(mqtt::ValidateTopicMessage("qt/QT-01/event", work_created).IsSuccess());
+
+    const auto destination_event = MakeMessage(
+        "MSG-TOPIC-06", mqtt::MessageType::kDestinationSet,
+        mqtt::DestinationSetPayload{ .request_id = {},
+                                     .work_id = std::string(kTestWorkId),
+                                     .command = mqtt::ControlCommand::kDestinationSet,
+                                     .target_device_id = {},
+                                     .destination = "DEST-01" },
+        "SERVER-01");
+    assert(mqtt::ValidateTopicMessage("qt/QT-01/event", destination_event).IsSuccess());
 }
 }  // namespace
 

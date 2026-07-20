@@ -55,6 +55,12 @@ namespace validation_detail {
            type == MessageType::kProductImage;
 }
 
+[[nodiscard]] constexpr bool IsQtProductMessage(MessageType type) noexcept {
+    return type == MessageType::kWorkCreated || type == MessageType::kBarcodeDetected ||
+           type == MessageType::kProductImage || type == MessageType::kProductInfo ||
+           type == MessageType::kDestinationSet || type == MessageType::kWorkCompleted;
+}
+
 [[nodiscard]] constexpr bool IsMessageTypeAllowed(TopicKind kind, MessageType type) noexcept {
     switch (kind) {
         case TopicKind::kQtRequest:
@@ -64,6 +70,7 @@ namespace validation_detail {
         case TopicKind::kQtStatus:
             return type == MessageType::kProductInfo || type == MessageType::kDeviceStatus;
         case TopicKind::kQtEvent:
+            return IsQtProductMessage(type);
         case TopicKind::kDeviceEvent:
             return IsDeviceEventMessage(type);
         case TopicKind::kQtError:
