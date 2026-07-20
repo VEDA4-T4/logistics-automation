@@ -196,8 +196,7 @@ static inline uint8_t uart_linetracer_fault_error_is_valid(uint32_t error) {
     }
 }
 
-static inline uint16_t uart_linetracer_read_job_id(const uint8_t* payload, uint32_t low_index,
-                                                    uint32_t high_index) {
+static inline uint16_t uart_linetracer_read_job_id(const uint8_t* payload, uint32_t low_index, uint32_t high_index) {
     if (payload == NULL) {
         return UART_LINETRACER_JOB_ID_NONE;
     }

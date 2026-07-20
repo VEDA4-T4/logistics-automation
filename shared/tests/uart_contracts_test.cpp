@@ -119,8 +119,7 @@ void TestLineTracerPayloadValidation() {
     constexpr std::array<std::uint8_t, 4> kArrivedEvent{ UART_LINETRACER_EVENT_ARRIVED, 0x34U, 0x12U,
                                                          UART_LINETRACER_ROUTE_B };
     constexpr std::array<std::uint8_t, 5> kStateEvent{ UART_LINETRACER_EVENT_STATE_CHANGED, 0x34U, 0x12U,
-                                                       UART_LINETRACER_ROUTE_B,
-                                                       UART_LINETRACER_STATE_FOLLOWING_LINE };
+                                                       UART_LINETRACER_ROUTE_B, UART_LINETRACER_STATE_FOLLOWING_LINE };
     constexpr std::array<std::uint8_t, 5> kFaultEvent{ UART_LINETRACER_EVENT_FAULT, 0x34U, 0x12U,
                                                        UART_LINETRACER_ROUTE_B, UART_ERROR_MOTOR };
 
