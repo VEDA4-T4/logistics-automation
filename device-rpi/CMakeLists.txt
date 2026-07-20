@@ -17,6 +17,12 @@ add_device_node(logistics_vision_node vision-node/main.cpp)
 add_device_node(logistics_sorting_node sorting-node/main.cpp)
 add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(vedauart_cli_test common/uart_bridge/vedauart_cli_test.c)
+    target_link_libraries(vedauart_cli_test PRIVATE logistics::uart)
+    logistics_enable_warnings(vedauart_cli_test)
+endif()
+
 target_sources(
     logistics_vision_node
     PRIVATE
