@@ -28,6 +28,8 @@ logistics-automation/
 │   │   ├── uart_bridge/
 │   │   ├── device_status/
 │   │   └── config/
+│   ├── kernel/
+│   │   └── vedauart/               # serdev 드라이버/Device Tree Overlay
 │   ├── input-node/                # 투입/컨베이어
 │   ├── vision-node/               # 영상 수신/상품 검출/좌표·바코드 인식
 │   ├── sorting-node/              # 분류 장치 중계
@@ -38,11 +40,16 @@ logistics-automation/
 │   ├── rotation-controller/
 │   ├── sorting-controller/
 │   ├── linetracer-controller/
-│   └── common/                    # UART codec/안전/공통 드라이버
+│   └── common/                    # UART HAL 연동/안전 처리/공통 드라이버
 ├── shared/
-│   ├── include/                   # 공통 C++ 도메인 타입
+│   ├── include/                   # 공통 도메인 타입과 공개 헤더
+│   │   └── logistics/contracts/
+│   │       ├── uart_protocol.h    # UART 공통 Frame/상태/응답 규격
+│   │       └── uart/              # 장치별 CMD/Payload 계약
+│   │           ├── input_commands.h
+│   │           └── sorting_commands.h
 │   ├── contracts/mqtt/            # Topic/Payload schema
-│   ├── contracts/uart/            # Packet/Command/Result 정의
+│   ├── contracts/uart/            # UART codec/CRC/parser 구현
 │   └── tests/
 ├── deploy/
 │   ├── mosquitto/

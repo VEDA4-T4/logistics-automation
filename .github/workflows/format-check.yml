@@ -32,6 +32,7 @@ jobs:
               -name "*.hh" \
             \) \
             -not -path "./build/*" \
+            -not -path "./device-rpi/kernel/*" \
             -not -path "./.git/*")
 
           if [ -z "$FILES" ]; then

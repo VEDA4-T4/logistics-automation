@@ -9,19 +9,41 @@ on:
 jobs:
   clang-tidy:
     name: clang-tidy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      OPENCV_VERSION: 4.10.0
+      OPENCV_INSTALL_DIR: ${{ github.workspace }}/.opencv/4.10.0
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install clang-tidy
+      - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-tidy cmake g++ libmosquitto-dev nlohmann-json3-dev
+          sudo apt-get install -y clang-tidy cmake curl g++ ninja-build libmosquitto-dev nlohmann-json3-dev
+
+      - name: Cache OpenCV
+        id: cache-opencv
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENCV_INSTALL_DIR }}
+          key: opencv-${{ env.OPENCV_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v2
+
+      - name: Build OpenCV
+        if: steps.cache-opencv.outputs.cache-hit != 'true'
+        run: bash .github/scripts/install-opencv.sh "${OPENCV_VERSION}" "${OPENCV_INSTALL_DIR}"
+
+      - name: Verify OpenCV installation
+        run: |
+          config_dir="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
+          test -f "${config_dir}/OpenCVConfig.cmake"
+          test -f "${config_dir}/OpenCVConfig-version.cmake"
 
       - name: Configure
         run: |
-          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake -S . -B build \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DOpenCV_DIR:PATH="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
 
       - name: Run clang-tidy
         run: |
@@ -33,5 +55,6 @@ jobs:
             \) \
             -not -path "./build/*" \
             -not -path "./.git/*" \
+            -not -path "./.opencv/*" \
             -not -path "./control-center/*" \
             -print0 | xargs -0 clang-tidy -p build

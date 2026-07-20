@@ -116,3 +116,13 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_status_test)
     add_test(NAME device_status_test COMMAND device_status_test)
 endif()
+target_sources(
+    logistics_vision_node
+    PRIVATE
+        vision-node/detection.cpp
+        vision-node/detection.hpp
+)
+
+find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgproc objdetect videoio)
+target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})

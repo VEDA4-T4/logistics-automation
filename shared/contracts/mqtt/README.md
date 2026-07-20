@@ -44,6 +44,9 @@ MQTT topic, payload, QoS, retain, Last Will 규칙을 중앙에서 관리하는 
 절대 URL 또는 Qt 설정의 `http/image_base_url`을 기준으로 하는 상대 경로이며 이미지 바이너리는 MQTT에
 포함하지 않습니다.
 
+`BOX_DETECTED`를 저장하면 중앙 서버는 UUID형 `workId`를 발급해 `WORK_CREATED`로 응답합니다. 이후의 위치,
+이미지, 바코드, 상품 정보, 목적지 및 `WORK_COMPLETED` payload는 같은 `workId`를 포함해야 합니다.
+
 - heartbeat: QoS 0, retain 미사용, 5초 간격
 - 장치 상태: QoS 0 또는 1, 최신 상태 retain 가능
 - 제어·목적지·응답: QoS 1, retain 미사용
