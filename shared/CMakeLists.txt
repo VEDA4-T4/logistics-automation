@@ -25,7 +25,7 @@ target_include_directories(
 if(BUILD_TESTING)
     add_executable(contracts_test tests/contracts_test.cpp)
     target_link_libraries(contracts_test PRIVATE logistics::contracts)
-    include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
+    include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ProjectWarnings.cmake")
     logistics_enable_warnings(contracts_test)
     add_test(NAME contracts_test COMMAND contracts_test)
 endif()
