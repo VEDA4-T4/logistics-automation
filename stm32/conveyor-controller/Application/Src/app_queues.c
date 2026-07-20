@@ -1,5 +1,7 @@
 #include "app_queues.h"
 
+#include <stddef.h>
+
 #include "app_messages.h"
 
 #define UART_RX_QUEUE_DEPTH          8U

@@ -61,12 +61,20 @@ void Error_Handler(void);
 #define B1_GPIO_Port GPIOC
 #define LD2_Pin GPIO_PIN_5
 #define LD2_GPIO_Port GPIOA
+#define INPUT_MOTOR_PWMA_Pin GPIO_PIN_8
+#define INPUT_MOTOR_PWMA_GPIO_Port GPIOA
 #define TMS_Pin GPIO_PIN_13
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
 #define TCK_GPIO_Port GPIOA
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
+#define INPUT_MOTOR_AIN2_Pin GPIO_PIN_4
+#define INPUT_MOTOR_AIN2_GPIO_Port GPIOB
+#define INPUT_MOTOR_AIN1_Pin GPIO_PIN_5
+#define INPUT_MOTOR_AIN1_GPIO_Port GPIOB
+#define MOTOR_STBY_Pin GPIO_PIN_6
+#define MOTOR_STBY_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
