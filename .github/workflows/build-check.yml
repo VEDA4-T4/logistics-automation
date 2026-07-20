@@ -40,8 +40,8 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build \
+          /snap/bin/cmake -S . -B build \
             -DOpenCV_DIR:PATH="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
 
       - name: Build
-        run: cmake --build build --parallel 2
+        run: /snap/bin/cmake --build build --parallel 2

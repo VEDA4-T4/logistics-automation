@@ -41,7 +41,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build \
+          /snap/bin/cmake -S . -B build \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DOpenCV_DIR:PATH="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
 
