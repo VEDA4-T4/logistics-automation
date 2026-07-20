@@ -19,7 +19,27 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake curl g++ ninja-build libcurl4-openssl-dev libmicrohttpd-dev libmosquitto-dev libsqlite3-dev libssl-dev make nlohmann-json3-dev
+          sudo apt-get install -y \
+            build-essential \
+            ca-certificates \
+            curl \
+            git \
+            gzip \
+            libcurl4-openssl-dev \
+            libmicrohttpd-dev \
+            libmosquitto-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            ninja-build \
+            nlohmann-json3-dev \
+            pkg-config \
+            tar
+
+      - name: Configure CMake
+        run: |
+          test -x /snap/bin/cmake
+          echo "/snap/bin" >> "$GITHUB_PATH"
+          /snap/bin/cmake --version
 
       - name: Cache OpenCV
         id: cache-opencv
@@ -40,8 +60,8 @@ jobs:
 
       - name: Configure
         run: |
-          /snap/bin/cmake -S . -B build \
+          cmake -S . -B build \
             -DOpenCV_DIR:PATH="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
 
       - name: Build
-        run: /snap/bin/cmake --build build --parallel 2
+        run: cmake --build build --parallel 2
