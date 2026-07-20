@@ -10,8 +10,10 @@ jobs:
   build:
     runs-on: self-hosted
     env:
+      CC: gcc-10
+      CXX: g++-10
       OPENCV_VERSION: 4.10.0
-      OPENCV_INSTALL_DIR: ${{ github.workspace }}/.opencv/4.10.0
+      OPENCV_INSTALL_DIR: ${{ runner.tool_cache }}/opencv/4.10.0-gcc10
 
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +25,8 @@ jobs:
             build-essential \
             ca-certificates \
             curl \
+            g++-10 \
+            gcc-10 \
             git \
             gzip \
             libcurl4-openssl-dev \
@@ -40,17 +44,18 @@ jobs:
           test -x /snap/bin/cmake
           echo "/snap/bin" >> "$GITHUB_PATH"
           /snap/bin/cmake --version
+          "$CC" --version
+          "$CXX" --version
 
-      - name: Cache OpenCV
-        id: cache-opencv
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.OPENCV_INSTALL_DIR }}
-          key: opencv-${{ env.OPENCV_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v2
-
-      - name: Build OpenCV
-        if: steps.cache-opencv.outputs.cache-hit != 'true'
-        run: bash .github/scripts/install-opencv.sh "${OPENCV_VERSION}" "${OPENCV_INSTALL_DIR}"
+      - name: Prepare runner OpenCV cache
+        run: |
+          config_dir="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
+          if [[ -f "${config_dir}/OpenCVConfig.cmake" && \
+                -f "${config_dir}/OpenCVConfig-version.cmake" ]]; then
+            echo "Using runner-cached OpenCV ${OPENCV_VERSION} from ${OPENCV_INSTALL_DIR}"
+          else
+            bash .github/scripts/install-opencv.sh "${OPENCV_VERSION}" "${OPENCV_INSTALL_DIR}"
+          fi
 
       - name: Verify OpenCV installation
         run: |
