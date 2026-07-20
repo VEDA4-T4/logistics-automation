@@ -1,6 +1,22 @@
 add_library(logistics_contracts INTERFACE)
 add_library(logistics::contracts ALIAS logistics_contracts)
 
+if(WIN32 AND (NOT DEFINED nlohmann_json_DIR OR NOT nlohmann_json_DIR))
+    if(DEFINED VCPKG_TARGET_TRIPLET)
+        set(LOGISTICS_VCPKG_TRIPLET "${VCPKG_TARGET_TRIPLET}")
+    else()
+        set(LOGISTICS_VCPKG_TRIPLET "x64-windows")
+    endif()
+
+    set(
+        LOGISTICS_NLOHMANN_JSON_DIR
+        "${CMAKE_CURRENT_LIST_DIR}/../vcpkg_installed/${LOGISTICS_VCPKG_TRIPLET}/share/nlohmann_json"
+    )
+    if(EXISTS "${LOGISTICS_NLOHMANN_JSON_DIR}/nlohmann_jsonConfig.cmake")
+        set(nlohmann_json_DIR "${LOGISTICS_NLOHMANN_JSON_DIR}")
+    endif()
+endif()
+
 find_package(nlohmann_json 3.11 QUIET)
 
 if(TARGET nlohmann_json::nlohmann_json)
@@ -10,10 +26,17 @@ else()
     check_include_file_cxx(nlohmann/json.hpp LOGISTICS_HAVE_NLOHMANN_JSON)
 
     if(NOT LOGISTICS_HAVE_NLOHMANN_JSON)
-        message(
-            FATAL_ERROR
-                "nlohmann/json.hpp was not found. Install nlohmann-json3-dev on Ubuntu/Raspberry Pi."
-        )
+        if(WIN32)
+            message(
+                FATAL_ERROR
+                    "nlohmann/json.hpp was not found. Install the vcpkg manifest dependencies from the project root."
+            )
+        else()
+            message(
+                FATAL_ERROR
+                    "nlohmann/json.hpp was not found. Install nlohmann-json3-dev on Ubuntu/Raspberry Pi."
+            )
+        endif()
     endif()
 endif()
 

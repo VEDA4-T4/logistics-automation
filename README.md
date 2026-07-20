@@ -31,6 +31,48 @@ Qt 6가 설치된 환경에서 중앙관제를 함께 빌드하려면 다음 옵
 cmake -S . -B build -DLOGISTICS_BUILD_CONTROL_CENTER=ON
 ```
 
+### Windows Qt 빌드 의존성 (vcpkg)
+
+중앙관제도 `shared`의 MQTT JSON 계약을 사용하므로 `nlohmann-json`이 필요합니다. Windows에서는 저장소
+루트의 `vcpkg.json` manifest를 사용해 설치합니다. Visual Studio 2022에 포함된 vcpkg가 PATH에 없다면
+다음과 같이 실행합니다.
+
+```powershell
+cd C:\programming\workspace\logistics-automation
+
+$VcpkgExe = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\vcpkg\vcpkg.exe"
+& $VcpkgExe install --triplet x64-windows
+```
+
+설치 결과는 `vcpkg_installed/x64-windows`에 생성되며 Git에는 포함되지 않습니다. 프로젝트 CMake는 이
+경로의 `nlohmann_json` 패키지를 자동으로 탐색하므로 Qt Creator에 `CMAKE_TOOLCHAIN_FILE`이나
+`nlohmann_json_DIR`를 별도로 지정할 필요가 없습니다.
+
+Qt Creator에서는 `control-center/CMakeLists.txt`를 열고 `Desktop Qt 6.11.1 MinGW 64-bit`와 같이 설치된
+Qt 버전에 맞는 kit를 선택합니다. 기존에 의존성 탐색이 실패한 빌드 디렉터리는 실패 결과가 캐시되어 있을
+수 있으므로 다음 순서로 다시 구성합니다.
+
+1. **Build > Clear CMake Configuration**
+2. **Build > Run CMake**
+3. **Build > Build Project**
+
+명령줄에서 동일한 구성을 확인하려면 Qt의 CMake와 기존 Qt Creator 빌드 디렉터리를 사용할 수 있습니다.
+
+```powershell
+$QtCMake = "C:\Qt\Tools\CMake_64\bin\cmake.exe"
+$BuildDir = "control-center\build\Desktop_Qt_6_11_1_MinGW_64_bit_Debug"
+
+& $QtCMake -S control-center -B $BuildDir
+& $QtCMake --build $BuildDir --parallel 4
+```
+
+Ubuntu/Raspberry Pi에서는 vcpkg 대신 시스템 패키지를 설치합니다.
+
+```sh
+sudo apt update
+sudo apt install nlohmann-json3-dev
+```
+
 ### 중앙관제 MQTT 설정
 
 `control-center/config/control-centor.ini.example`을 `control-centor.ini`로 복사한 뒤 브로커 값을 입력합니다.
