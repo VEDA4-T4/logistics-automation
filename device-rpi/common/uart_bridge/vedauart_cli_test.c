@@ -62,12 +62,22 @@ static const char* command_name(uint8_t command) {
             return "INPUT_CONTROL_RESET";
         case UART_CMD_SORTING_ROUTE_ITEM:
             return "SORTING_ROUTE_ITEM";
+        case UART_CMD_SORTING_GET_STATUS:
+            return "SORTING_GET_STATUS";
+        case UART_CMD_SORTING_CANCEL:
+            return "SORTING_CANCEL";
+        case UART_CMD_SORTING_RESET:
+            return "SORTING_RESET";
         case UART_CMD_SORTING_CONVEYOR_START:
             return "SORTING_CONVEYOR_START";
         case UART_CMD_SORTING_CONVEYOR_STOP:
             return "SORTING_CONVEYOR_STOP";
         case UART_CMD_SORTING_CONVEYOR_SET_SPEED:
             return "SORTING_CONVEYOR_SET_SPEED";
+        case UART_CMD_SORTING_CONVEYOR_GET_STATUS:
+            return "SORTING_CONVEYOR_GET_STATUS";
+        case UART_CMD_SORTING_RETURN_HOME:
+            return "SORTING_RETURN_HOME";
         case UART_CMD_SENSOR_STATUS:
             return "SENSOR_STATUS";
         case UART_CMD_OPERATION_RESULT:
@@ -191,10 +201,16 @@ static void print_usage(const char* program) {
             "  %s sorting-start\n"
             "  %s sorting-stop\n"
             "  %s sorting-speed <0..100>\n"
-            "  %s sorting-route <cycle_id:0..65535> <destination:1..3>\n"
+            "  %s sorting-conveyor-status\n"
+            "  %s sorting-route <cycle_id:1..65535> <destination:1..3>\n"
+            "  %s sorting-return-home <cycle_id:1..65535>\n"
+            "  %s sorting-cancel <cycle_id:1..65535>\n"
+            "  %s sorting-status\n"
+            "  %s sorting-reset\n"
             "  %s reset-device\n"
             "  %s estop\n",
-            program, program, program, program, program, program, program, program, program, program);
+            program, program, program, program, program, program, program, program, program, program, program, program,
+            program, program, program);
 }
 
 static int parse_u32(const char* text, uint32_t maximum, uint32_t* value) {
@@ -251,14 +267,31 @@ static int build_frame(int argc, char** argv, uart_frame_t* frame) {
         frame->command = UART_CMD_SORTING_CONVEYOR_SET_SPEED;
         frame->length = UART_SORTING_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
         frame->payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] = (uint8_t)first;
+    } else if ((strcmp(argv[1], "sorting-conveyor-status") == 0) && (argc == 2)) {
+        frame->command = UART_CMD_SORTING_CONVEYOR_GET_STATUS;
     } else if ((strcmp(argv[1], "sorting-route") == 0) && (argc == 4) &&
                (parse_u32(argv[2], UINT16_MAX, &first) == 0) &&
+               (first >= UART_SORTING_CYCLE_ID_MIN) &&
                (parse_u32(argv[3], UART_SORTING_DESTINATION_MAX, &second) == 0) &&
                (second >= UART_SORTING_DESTINATION_MIN)) {
         frame->command = UART_CMD_SORTING_ROUTE_ITEM;
         frame->length = UART_SORTING_ROUTE_PAYLOAD_SIZE;
         put_u16_le(frame->payload, UART_SORTING_ROUTE_CYCLE_ID_LOW_INDEX, (uint16_t)first);
         frame->payload[UART_SORTING_ROUTE_DESTINATION_INDEX] = (uint8_t)second;
+    } else if ((strcmp(argv[1], "sorting-return-home") == 0) && (argc == 3) &&
+               (parse_u32(argv[2], UINT16_MAX, &first) == 0) && (first >= UART_SORTING_CYCLE_ID_MIN)) {
+        frame->command = UART_CMD_SORTING_RETURN_HOME;
+        frame->length = UART_SORTING_RETURN_HOME_PAYLOAD_SIZE;
+        put_u16_le(frame->payload, UART_SORTING_RETURN_HOME_CYCLE_ID_LOW_INDEX, (uint16_t)first);
+    } else if ((strcmp(argv[1], "sorting-cancel") == 0) && (argc == 3) &&
+               (parse_u32(argv[2], UINT16_MAX, &first) == 0) && (first >= UART_SORTING_CYCLE_ID_MIN)) {
+        frame->command = UART_CMD_SORTING_CANCEL;
+        frame->length = UART_SORTING_CANCEL_PAYLOAD_SIZE;
+        put_u16_le(frame->payload, UART_SORTING_CANCEL_CYCLE_ID_LOW_INDEX, (uint16_t)first);
+    } else if ((strcmp(argv[1], "sorting-status") == 0) && (argc == 2)) {
+        frame->command = UART_CMD_SORTING_GET_STATUS;
+    } else if ((strcmp(argv[1], "sorting-reset") == 0) && (argc == 2)) {
+        frame->command = UART_CMD_SORTING_RESET;
     } else if ((strcmp(argv[1], "reset-device") == 0) && (argc == 2)) {
         frame->command = UART_CMD_RESET_DEVICE;
     } else if ((strcmp(argv[1], "estop") == 0) && (argc == 2)) {
