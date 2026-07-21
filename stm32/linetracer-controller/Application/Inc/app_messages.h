@@ -53,48 +53,12 @@ typedef enum {
     APP_SENSOR_EVENT_LOAD_ON = (1U << 3U),
     APP_SENSOR_EVENT_LOAD_OFF = (1U << 4U),
     APP_SENSOR_EVENT_OVERLOAD = (1U << 5U),
-    APP_SENSOR_EVENT_OBSTACLE = (1U << 6U),
-    APP_SENSOR_EVENT_SENSOR_FAULT = (1U << 7U),
-    APP_SENSOR_EVENT_SENSOR_RECOVERED = (1U << 8U)
+    APP_SENSOR_EVENT_OBSTACLE = (1U << 6U)
 } app_sensor_event_flags_t;
-
-typedef enum {
-    APP_SENSOR_VALID_NONE = 0U,
-    APP_SENSOR_VALID_LINE = (1U << 0U),
-    APP_SENSOR_VALID_FSR = (1U << 1U),
-    APP_SENSOR_VALID_ULTRASONIC_FRONT = (1U << 2U),
-    APP_SENSOR_VALID_ULTRASONIC_REAR = (1U << 3U),
-    APP_SENSOR_VALID_ULTRASONIC_LEFT = (1U << 4U),
-    APP_SENSOR_VALID_ULTRASONIC_RIGHT = (1U << 5U)
-} app_sensor_valid_flags_t;
-
-typedef enum {
-    APP_SENSOR_ERROR_NONE = 0U,
-    APP_SENSOR_ERROR_FSR_ADC = (1U << 0U),
-    APP_SENSOR_ERROR_FSR_TIMEOUT = (1U << 1U),
-    APP_SENSOR_ERROR_ULTRASONIC_FRONT = (1U << 2U),
-    APP_SENSOR_ERROR_ULTRASONIC_REAR = (1U << 3U),
-    APP_SENSOR_ERROR_ULTRASONIC_LEFT = (1U << 4U),
-    APP_SENSOR_ERROR_ULTRASONIC_RIGHT = (1U << 5U)
-} app_sensor_error_flags_t;
-
-typedef enum {
-    APP_SENSOR_DIRECTION_NONE = 0U,
-    APP_SENSOR_DIRECTION_FRONT = (1U << 0U),
-    APP_SENSOR_DIRECTION_REAR = (1U << 1U),
-    APP_SENSOR_DIRECTION_LEFT = (1U << 2U),
-    APP_SENSOR_DIRECTION_RIGHT = (1U << 3U)
-} app_sensor_direction_flags_t;
 
 typedef struct {
     uint32_t sampled_at_ms;
     uint32_t event_flags;
-    uint32_t valid_flags;
-    uint32_t error_flags;
-    uint32_t line_changed_at_ms;
-    uint32_t load_changed_at_ms;
-    uint32_t obstacle_changed_at_ms;
-    uint32_t error_changed_at_ms;
     uint16_t fsr_raw;
     uint16_t ultrasonic_front_mm;
     uint16_t ultrasonic_rear_mm;
@@ -104,8 +68,6 @@ typedef struct {
     uart_linetracer_load_state_t load_state;
     uint8_t line_left;
     uint8_t line_right;
-    uint8_t obstacle_mask;
-    uint8_t overload_active;
 } app_sensor_snapshot_t;
 
 typedef enum {
