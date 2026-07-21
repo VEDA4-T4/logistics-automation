@@ -78,6 +78,16 @@ std::optional<AssignedVisionWork> VisionMqttWorkflow::TakeAssignedWork() {
     return AssignedVisionWork{ .work_id = *work_id_, .observation = *observation_ };
 }
 
+void VisionMqttWorkflow::CancelPendingWork() {
+    std::lock_guard lock(mutex_);
+    if (phase_ == Phase::kAwaitingWork) {
+        phase_ = Phase::kIdle;
+        detected_frames_ = 0;
+        observation_.reset();
+        work_id_.reset();
+    }
+}
+
 void VisionMqttWorkflow::CompleteWork() {
     std::lock_guard lock(mutex_);
     if (phase_ == Phase::kProcessing || phase_ == Phase::kAssigned) {

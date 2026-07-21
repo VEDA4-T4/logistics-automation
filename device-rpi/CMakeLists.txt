@@ -157,3 +157,12 @@ target_sources(
 find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgproc objdetect videoio)
 target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
+target_link_libraries(logistics_vision_node PRIVATE logistics::vision_mqtt_workflow)
+
+if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+    target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)
+    target_link_libraries(
+        logistics_vision_node
+        PRIVATE logistics::device_mqtt_mosquitto logistics::device_status
+    )
+endif()

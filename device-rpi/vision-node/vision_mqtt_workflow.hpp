@@ -34,6 +34,7 @@ public:
                                                                       std::string message_id, std::string timestamp);
     [[nodiscard]] bool AssignWork(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] std::optional<AssignedVisionWork> TakeAssignedWork();
+    void CancelPendingWork();
     void CompleteWork();
 
 private:

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -15,6 +16,15 @@
 #include <unordered_set>
 
 #include "detection.hpp"
+#include "vision_mqtt_workflow.hpp"
+
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+#include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/device/device_status.hpp"
+#include "logistics/device/mqtt_node_client.hpp"
+#include "logistics/device/mqtt_node_config.hpp"
+#include "logistics/device/mqtt_time.hpp"
+#endif
 
 namespace {
 
@@ -38,6 +48,7 @@ struct CameraSettings {
     int width = 1280;
     int height = 720;
     int fps = 30;
+    std::string config_path = "device-rpi/config/node.ini";
 };
 
 enum class ParseStatus {
@@ -80,8 +91,8 @@ private:
 };
 
 void PrintUsage(const char* executable) {
-    std::cout << "Usage: " << executable << " [--width N] [--height N] [--fps N]\n"
-              << "Defaults: --width 1280 --height 720 --fps 30\n";
+    std::cout << "Usage: " << executable << " [--width N] [--height N] [--fps N] [--config node.ini]\n"
+              << "Defaults: --width 1280 --height 720 --fps 30 --config device-rpi/config/node.ini\n";
 }
 
 bool ParsePositiveInteger(const std::string_view value, int& output) {
@@ -101,6 +112,15 @@ ParseStatus ParseArguments(const int argc, char* argv[], CameraSettings& setting
         if (argument == "--help" || argument == "-h") {
             PrintUsage(argv[0]);
             return ParseStatus::kHelp;
+        }
+
+        if (argument == "--config") {
+            if (index + 1 >= argc || std::string_view(argv[index + 1]).empty()) {
+                std::cerr << "Missing value for --config\n";
+                return ParseStatus::kError;
+            }
+            settings.config_path = argv[++index];
+            continue;
         }
 
         if (argument != "--width" && argument != "--height" && argument != "--fps") {
@@ -223,6 +243,49 @@ void DrawLatency(cv::Mat& frame, const LatencyMetrics& latency) {
     cv::putText(frame, text.str(), cv::Point(20, frame.rows - 20), cv::FONT_HERSHEY_SIMPLEX, 0.6, kTextColor, 2);
 }
 
+logistics::vision::VisionObservation MakeObservation(const cv::Mat& frame,
+                                                     const logistics::vision::DetectionResult& result,
+                                                     std::string image_name) {
+    const cv::Rect& box = result.box->roi;
+    std::optional<std::string> barcode;
+    if (!result.barcodes.empty()) {
+        barcode = result.barcodes.front().value;
+    }
+    return {
+        .image_name = std::move(image_name),
+        .box_x = box.x,
+        .box_y = box.y,
+        .box_width = box.width,
+        .box_height = box.height,
+        .frame_width = frame.cols,
+        .frame_height = frame.rows,
+        .barcode = std::move(barcode),
+    };
+}
+
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+logistics::contracts::mqtt::MqttMessage MakeCameraError(std::string_view device_id, std::string message_id,
+                                                        std::string timestamp, std::string message) {
+    namespace mqtt = logistics::contracts::mqtt;
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = std::move(message_id),
+        .message_type = mqtt::MessageType::kErrorOccurred,
+        .source_id = std::string(device_id),
+        .timestamp = std::move(timestamp),
+        .data =
+            mqtt::ErrorOccurredPayload{
+                .job_id = std::nullopt,
+                .error_code = "CAMERA_DISCONNECTED",
+                .error_level = "ERROR",
+                .current_state = "CAMERA_ERROR",
+                .message = std::move(message),
+                .distance = std::nullopt,
+            },
+    };
+}
+#endif
+
 }  // namespace
 
 int main(const int argc, char* argv[]) {
@@ -234,6 +297,37 @@ int main(const int argc, char* argv[]) {
     if (parse_status == ParseStatus::kError) {
         return 2;
     }
+
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+    logistics::device::MqttNodeConfig mqtt_config;
+    try {
+        mqtt_config = logistics::device::LoadMqttNodeConfig(settings.config_path);
+    } catch (const logistics::device::NodeConfigError& error) {
+        std::cerr << "[vision][ERROR] " << error.what() << '\n';
+        return 2;
+    }
+    const std::string device_id = mqtt_config.device_id;
+    auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
+    logistics::vision::VisionMqttWorkflow mqtt_workflow(device_id);
+    logistics::device::MqttNodeClient mqtt_client(std::move(mqtt_config), "vision", device_status);
+    mqtt_client.SetCommandHandler(
+        [&mqtt_workflow, device_status](const logistics::contracts::mqtt::MqttMessage& message) {
+            if (mqtt_workflow.AssignWork(message)) {
+                const auto* work =
+                    logistics::contracts::mqtt::GetPayload<logistics::contracts::mqtt::WorkCreatedPayload>(message);
+                device_status->SetJobId(work->work_id);
+                device_status->SetCurrentState("WORK_ASSIGNED");
+            }
+        });
+    if (!mqtt_client.Start()) {
+        return 1;
+    }
+    const std::string mqtt_session_id = logistics::device::GenerateMessageSessionId();
+    std::uint64_t mqtt_sequence = 1;
+    auto next_heartbeat = Clock::now();
+    cv::Mat pending_capture;
+    bool camera_error_reported = false;
+#endif
 
     constexpr char kWindowName[] = "vision-node camera";
     cv::namedWindow(kWindowName, cv::WINDOW_AUTOSIZE);
@@ -255,6 +349,15 @@ int main(const int argc, char* argv[]) {
         if (!camera.isOpened()) {
             if (!OpenCamera(camera, settings)) {
                 std::cerr << "Failed to open camera. Retrying in " << kReconnectIntervalMs << " ms.\n";
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+                if (!camera_error_reported && mqtt_client.IsConnected()) {
+                    camera_error_reported = mqtt_client.PublishError(MakeCameraError(
+                        device_id, logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
+                        logistics::device::CurrentIso8601Timestamp(), "failed to open camera"));
+                    device_status->SetCurrentState("CAMERA_ERROR");
+                    device_status->SetErrorCode("CAMERA_DISCONNECTED");
+                }
+#endif
                 ShowCameraError(settings, "CAMERA: disconnected", kWindowName);
                 should_exit = WaitForReconnectOrExit();
                 continue;
@@ -262,7 +365,22 @@ int main(const int argc, char* argv[]) {
 
             consecutive_frame_errors = 0;
             std::cout << "Camera connected.\n";
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+            camera_error_reported = false;
+            device_status->SetCurrentState("IDLE");
+            device_status->SetErrorCode(std::nullopt);
+#endif
         }
+
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+        const auto loop_now = Clock::now();
+        if (mqtt_client.IsConnected() && loop_now >= next_heartbeat) {
+            static_cast<void>(mqtt_client.PublishHeartbeat(
+                logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
+                logistics::device::CurrentIso8601Timestamp()));
+            next_heartbeat = loop_now + logistics::contracts::mqtt::kHeartbeatInterval;
+        }
+#endif
 
         const auto capture_started = Clock::now();
         if (!camera.read(frame) || frame.empty()) {
@@ -290,6 +408,43 @@ int main(const int argc, char* argv[]) {
         };
         latency_tracker.Update(current_latency);
 
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+        std::optional<logistics::vision::VisionObservation> observation;
+        if (detection_result.box.has_value()) {
+            observation = MakeObservation(frame, detection_result,
+                                          "capture-" + mqtt_session_id + '-' + std::to_string(mqtt_sequence) + ".jpg");
+        }
+        auto box_event = mqtt_workflow.Observe(
+            std::move(observation), logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
+            logistics::device::CurrentIso8601Timestamp());
+        if (box_event.has_value()) {
+            if (mqtt_client.PublishEvent(*box_event)) {
+                pending_capture = frame.clone();
+                device_status->SetCurrentState("AWAITING_WORK_ID");
+            } else {
+                mqtt_workflow.CancelPendingWork();
+            }
+        }
+
+        if (auto work = mqtt_workflow.TakeAssignedWork(); work.has_value()) {
+            const std::string timestamp = logistics::device::CurrentIso8601Timestamp();
+            const auto position = logistics::vision::MakePositionDetectedMessage(
+                device_id, *work, logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
+                timestamp);
+            const auto barcode = logistics::vision::MakeBarcodeDetectedMessage(
+                device_id, *work, logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
+                timestamp);
+            const bool position_published = mqtt_client.PublishEvent(position);
+            const bool barcode_published = mqtt_client.PublishEvent(barcode);
+            device_status->SetCurrentState(position_published && barcode_published ? "VISION_REPORTED" : "MQTT_ERROR");
+            if (!position_published || !barcode_published) {
+                device_status->SetErrorCode("VISION_EVENT_PUBLISH_FAILED");
+            }
+            mqtt_workflow.CompleteWork();
+            pending_capture.release();
+        }
+#endif
+
         DrawDetectionResult(frame, detection_result);
         DrawLatency(frame, latency_tracker.average());
 
@@ -312,5 +467,8 @@ int main(const int argc, char* argv[]) {
 
     camera.release();
     cv::destroyAllWindows();
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+    mqtt_client.Stop();
+#endif
     return exit_code;
 }
