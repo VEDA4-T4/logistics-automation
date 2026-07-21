@@ -56,6 +56,11 @@ void TestDetectionAssignmentAndResultMessages() {
         vision::MakeBarcodeDetectedMessage("PI-VISION-01", *assigned, "MSG-BARCODE-01", "2026-07-21T11:00:02Z");
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), position).IsSuccess());
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), barcode).IsSuccess());
+    const auto image = vision::MakeProductImageMessage(
+        "PI-VISION-01", kWorkId, "42f8e6f1-1277-4748-9e5e-c41c7bf605f7",
+        "/uploads/images/42f8e6f1-1277-4748-9e5e-c41c7bf605f7.jpg",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "MSG-IMAGE-01", "2026-07-21T11:00:02Z");
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), image).IsSuccess());
 
     workflow.CompleteWork();
     assert(!workflow.Observe(std::nullopt, "IGNORED", "2026-07-21T11:00:03Z").has_value());

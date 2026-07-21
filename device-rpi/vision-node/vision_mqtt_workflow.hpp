@@ -57,5 +57,10 @@ private:
 [[nodiscard]] contracts::mqtt::MqttMessage MakeBarcodeDetectedMessage(std::string_view device_id,
                                                                       const AssignedVisionWork& work,
                                                                       std::string message_id, std::string timestamp);
+[[nodiscard]] contracts::mqtt::MqttMessage MakeProductImageMessage(std::string_view device_id, std::string_view work_id,
+                                                                   std::string_view image_id,
+                                                                   std::string_view image_path,
+                                                                   std::string_view checksum, std::string message_id,
+                                                                   std::string timestamp);
 
 }  // namespace logistics::vision

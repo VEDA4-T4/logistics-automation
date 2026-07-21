@@ -54,6 +54,17 @@ maximum_attempts=4
 initial_backoff_seconds=2
 maximum_backoff_seconds=30
 allow_insecure_http=false
+
+[image_upload]
+enabled=true
+endpoint_url=https://server.example/api/v1/uploads/images
+bearer_token=device-token
+ca_certificate=/etc/logistics/ca.crt
+request_timeout_seconds=20
+maximum_attempts=3
+initial_backoff_seconds=1
+maximum_backoff_seconds=10
+allow_insecure_http=false
 )ini";
     }
 
@@ -74,6 +85,10 @@ allow_insecure_http=false
     assert(config.log_upload.rotate_bytes == 1024);
     assert(config.log_upload.rotate_interval == std::chrono::seconds(60));
     assert(config.log_upload.maximum_attempts == 4);
+    assert(config.image_upload_enabled);
+    assert(config.image_upload.endpoint_url == "https://server.example/api/v1/uploads/images");
+    assert(config.image_upload.request_timeout == std::chrono::seconds(20));
+    assert(config.image_upload.maximum_attempts == 3);
     assert(config.IsValid());
 
     const std::string timestamp = device::CurrentIso8601Timestamp();

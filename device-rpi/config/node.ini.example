@@ -28,3 +28,14 @@ maximum_attempts=5
 initial_backoff_seconds=1
 maximum_backoff_seconds=60
 allow_insecure_http=true
+
+[image_upload]
+enabled=true
+endpoint_url=http://127.0.0.1:8080/api/v1/uploads/images
+bearer_token=replace-with-a-device-upload-token
+ca_certificate=/etc/logistics/tls/ca.crt
+request_timeout_seconds=30
+maximum_attempts=5
+initial_backoff_seconds=1
+maximum_backoff_seconds=60
+allow_insecure_http=true

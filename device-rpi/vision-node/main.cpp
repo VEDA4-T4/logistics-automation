@@ -7,6 +7,7 @@
 #include <memory>
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 #include <sstream>
@@ -21,6 +22,7 @@
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/device/device_status.hpp"
+#include "logistics/device/image_uploader.hpp"
 #include "logistics/device/mqtt_node_client.hpp"
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
@@ -264,8 +266,10 @@ logistics::vision::VisionObservation MakeObservation(const cv::Mat& frame,
 }
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
-logistics::contracts::mqtt::MqttMessage MakeCameraError(std::string_view device_id, std::string message_id,
-                                                        std::string timestamp, std::string message) {
+logistics::contracts::mqtt::MqttMessage MakeVisionError(std::string_view device_id, std::string message_id,
+                                                        std::string timestamp, std::string error_code,
+                                                        std::string current_state, std::string message,
+                                                        std::optional<std::string> work_id = std::nullopt) {
     namespace mqtt = logistics::contracts::mqtt;
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
@@ -275,10 +279,10 @@ logistics::contracts::mqtt::MqttMessage MakeCameraError(std::string_view device_
         .timestamp = std::move(timestamp),
         .data =
             mqtt::ErrorOccurredPayload{
-                .job_id = std::nullopt,
-                .error_code = "CAMERA_DISCONNECTED",
+                .job_id = std::move(work_id),
+                .error_code = std::move(error_code),
                 .error_level = "ERROR",
-                .current_state = "CAMERA_ERROR",
+                .current_state = std::move(current_state),
                 .message = std::move(message),
                 .distance = std::nullopt,
             },
@@ -307,6 +311,10 @@ int main(const int argc, char* argv[]) {
         return 2;
     }
     const std::string device_id = mqtt_config.device_id;
+    std::unique_ptr<logistics::device::ImageUploader> image_uploader;
+    if (mqtt_config.image_upload_enabled) {
+        image_uploader = std::make_unique<logistics::device::ImageUploader>(mqtt_config.image_upload);
+    }
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
     logistics::vision::VisionMqttWorkflow mqtt_workflow(device_id);
     logistics::device::MqttNodeClient mqtt_client(std::move(mqtt_config), "vision", device_status);
@@ -351,9 +359,10 @@ int main(const int argc, char* argv[]) {
                 std::cerr << "Failed to open camera. Retrying in " << kReconnectIntervalMs << " ms.\n";
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
                 if (!camera_error_reported && mqtt_client.IsConnected()) {
-                    camera_error_reported = mqtt_client.PublishError(MakeCameraError(
+                    camera_error_reported = mqtt_client.PublishError(MakeVisionError(
                         device_id, logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
-                        logistics::device::CurrentIso8601Timestamp(), "failed to open camera"));
+                        logistics::device::CurrentIso8601Timestamp(), "CAMERA_DISCONNECTED", "CAMERA_ERROR",
+                        "failed to open camera"));
                     device_status->SetCurrentState("CAMERA_ERROR");
                     device_status->SetErrorCode("CAMERA_DISCONNECTED");
                 }
@@ -436,9 +445,39 @@ int main(const int argc, char* argv[]) {
                 timestamp);
             const bool position_published = mqtt_client.PublishEvent(position);
             const bool barcode_published = mqtt_client.PublishEvent(barcode);
-            device_status->SetCurrentState(position_published && barcode_published ? "VISION_REPORTED" : "MQTT_ERROR");
-            if (!position_published || !barcode_published) {
+            bool image_published = image_uploader == nullptr;
+            if (image_uploader != nullptr && !pending_capture.empty()) {
+                std::vector<std::uint8_t> jpeg;
+                if (cv::imencode(".jpg", pending_capture, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 })) {
+                    const std::string upload_message_id =
+                        logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++);
+                    const std::string captured_at = logistics::device::CurrentIso8601Timestamp();
+                    const auto uploaded =
+                        image_uploader->Upload(device_id, work->work_id, upload_message_id, captured_at,
+                                               work->observation.image_name, "image/jpeg", jpeg);
+                    if (uploaded.IsConfirmed()) {
+                        const auto image = logistics::vision::MakeProductImageMessage(
+                            device_id, work->work_id, uploaded.upload_id, uploaded.path, uploaded.checksum,
+                            logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++), captured_at);
+                        image_published = mqtt_client.PublishEvent(image);
+                    } else {
+                        static_cast<void>(mqtt_client.PublishError(MakeVisionError(
+                            device_id, logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
+                            captured_at, "IMAGE_UPLOAD_FAILED", "UPLOAD_ERROR", uploaded.error, work->work_id)));
+                    }
+                } else {
+                    static_cast<void>(mqtt_client.PublishError(MakeVisionError(
+                        device_id, logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
+                        logistics::device::CurrentIso8601Timestamp(), "IMAGE_ENCODING_FAILED", "VISION_ERROR",
+                        "failed to encode the captured frame as JPEG", work->work_id)));
+                }
+            }
+            const bool all_published = position_published && barcode_published && image_published;
+            device_status->SetCurrentState(all_published ? "VISION_REPORTED" : "VISION_ERROR");
+            if (!all_published) {
                 device_status->SetErrorCode("VISION_EVENT_PUBLISH_FAILED");
+            } else {
+                device_status->SetErrorCode(std::nullopt);
             }
             mqtt_workflow.CompleteWork();
             pending_capture.release();

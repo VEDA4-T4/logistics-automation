@@ -143,4 +143,25 @@ mqtt::MqttMessage MakeBarcodeDetectedMessage(std::string_view device_id, const A
     };
 }
 
+mqtt::MqttMessage MakeProductImageMessage(std::string_view device_id, std::string_view work_id,
+                                          std::string_view image_id, std::string_view image_path,
+                                          std::string_view checksum, std::string message_id, std::string timestamp) {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = std::move(message_id),
+        .message_type = mqtt::MessageType::kProductImage,
+        .source_id = std::string(device_id),
+        .timestamp = std::move(timestamp),
+        .data =
+            mqtt::ProductImagePayload{
+                .work_id = std::string(work_id),
+                .image_id = std::string(image_id),
+                .image_url = {},
+                .image_path = std::string(image_path),
+                .checksum = std::string(checksum),
+                .upload_status = "UPLOADED",
+            },
+    };
+}
+
 }  // namespace logistics::vision
