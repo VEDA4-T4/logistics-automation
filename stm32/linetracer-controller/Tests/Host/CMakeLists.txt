@@ -1,14 +1,3 @@
-cmake_minimum_required(VERSION 3.16)
-
-project(linetracer_sensor_logic_tests LANGUAGES C CXX)
-
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
 add_executable(sensor_logic_test
     sensor_logic_test.cpp
     ../../Application/Src/sensor_logic.c
@@ -30,5 +19,55 @@ else()
     )
 endif()
 
-enable_testing()
 add_test(NAME sensor_logic_test COMMAND sensor_logic_test)
+
+add_executable(
+    linetracer_control_logic_test
+    control_logic_test.cpp
+    motor_control_logic_test.cpp
+    ../../Application/Src/control_logic.c
+    ../../Application/Src/motor_control_logic.c
+    ../../Application/Src/route_planner.c
+)
+
+target_include_directories(
+    linetracer_control_logic_test
+    PRIVATE ../../Application/Inc
+)
+
+target_link_libraries(linetracer_control_logic_test PRIVATE logistics::contracts)
+
+if(WIN32)
+    get_filename_component(LOGISTICS_CONTROL_TEST_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    add_test(
+        NAME linetracer_control_logic_test
+        COMMAND ${CMAKE_COMMAND} -E env "PATH=${LOGISTICS_CONTROL_TEST_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:linetracer_control_logic_test>
+    )
+else()
+    add_test(NAME linetracer_control_logic_test COMMAND linetracer_control_logic_test)
+endif()
+
+add_executable(
+    linetracer_route_planner_test
+    route_planner_test.cpp
+    ../../Application/Src/route_planner.c
+)
+
+target_include_directories(
+    linetracer_route_planner_test
+    PRIVATE ../../Application/Inc
+)
+
+target_link_libraries(linetracer_route_planner_test PRIVATE logistics::contracts)
+
+if(WIN32)
+    get_filename_component(LOGISTICS_ROUTE_TEST_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    add_test(
+        NAME linetracer_route_planner_test
+        COMMAND ${CMAKE_COMMAND} -E env "PATH=${LOGISTICS_ROUTE_TEST_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:linetracer_route_planner_test>
+    )
+else()
+    add_test(NAME linetracer_route_planner_test COMMAND linetracer_route_planner_test)
+endif()
