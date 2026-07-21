@@ -30,7 +30,7 @@ namespace {
 template <typename Integer>
 [[nodiscard]] Integer ParseInteger(const std::filesystem::path& path, std::size_t line_number, std::string_view key,
                                    std::string_view value, Integer minimum, Integer maximum) {
-    unsigned long long parsed{};
+    Integer parsed{};
     const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
     if (error != std::errc{} || end != value.data() + value.size() || parsed < minimum || parsed > maximum) {
         ThrowLineError(path, line_number, std::string(key) + " is outside the allowed range");
