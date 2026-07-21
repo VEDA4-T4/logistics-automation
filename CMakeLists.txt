@@ -15,6 +15,7 @@ option(LOGISTICS_BUILD_DEVICE_NODES "Build Raspberry Pi device nodes" ON)
 add_subdirectory(shared)
 
 if(BUILD_TESTING)
+    add_subdirectory(stm32/linetracer-controller/Tests/CommRx)
     add_subdirectory(stm32/linetracer-controller/Tests/Host)
 endif()
 
