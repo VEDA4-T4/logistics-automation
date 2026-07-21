@@ -312,6 +312,31 @@ shared/contracts/uart/uart_parser.c
 | `UART_CMD_SORTING_GET_STATUS` | `0x31` |
 | `UART_CMD_SORTING_CANCEL` | `0x32` |
 | `UART_CMD_SORTING_RESET` | `0x33` |
+| `UART_CMD_SORTING_CONVEYOR_START` | `0x34` |
+| `UART_CMD_SORTING_CONVEYOR_STOP` | `0x35` |
+| `UART_CMD_SORTING_CONVEYOR_SET_SPEED` | `0x36` |
+| `UART_CMD_SORTING_CONVEYOR_GET_STATUS` | `0x37` |
+| `UART_CMD_SORTING_RETURN_HOME` | `0x38` |
+
+정상 분류 cycle의 게이트 명령 계약은 다음과 같다.
+
+```text
+SORTING_ROUTE_ITEM payload = [cycle_id_low, cycle_id_high, destination_id]
+SORTING_RETURN_HOME payload = [cycle_id_low, cycle_id_high]
+
+서버/Raspberry Pi → ROUTE_ITEM(cycleId, destination)
+STM32             → 목적지에 대응하는 게이트 위치로 이동
+서버/Raspberry Pi → 물품 통과 판정
+서버/Raspberry Pi → RETURN_HOME(cycleId)
+STM32             → Home 복귀 후 CYCLE_COMPLETE(cycleId, destination) 송신
+```
+
+`cycleId`는 `1..65535` 범위를 사용하며 `0`은 활성 cycle이 없음을 나타내는 예약값이다.
+
+`RETURN_HOME`은 정상 공정 완료용이고 `CANCEL`은 비정상 중단용이다. 명령은 UART
+계약과 RX 검증·큐 라우팅을 거쳐 `SortingControlTask`에서 처리한다.
+`RETURN_HOME`의 `OPERATION_RESULT/SUCCESS`는 Home 이동 명령이 수락되었다는 뜻이며,
+실제 서보 정착 완료는 이후 `CYCLE_COMPLETE` 이벤트로 확정한다.
 
 공통 명령에는 `UART_CMD_PING`(`0x01`)과 `UART_CMD_EMERGENCY_STOP`(`0xF0`) 등이 있다.
 

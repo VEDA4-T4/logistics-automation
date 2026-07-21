@@ -152,11 +152,14 @@ TB6612FNG 모터 드라이버를 기준으로 한 핀 구성이다.
 - 컨베이어 1의 `PWMA`는 `TIM1_CH1`에서 20 kHz PWM으로 구동한다.
 - 컨베이어 2의 `PWMB`는 `TIM11_CH1`에서 20 kHz PWM으로 구동한다.
 - MG90S 게이트는 `TIM3_CH2`의 50 Hz PWM으로 구동하며, 실제 펄스 범위는 기구물 조립 후 안전 각도를 기준으로 보정한다.
+- MG90S 기본 펄스는 Home 1500 us, 목적지 1/2/3은 각각 1000/1500/2000 us이며 `sorting_gate_mg90s.h`의 설정값으로 보정한다.
+- MG90S 명령 후 기본 500 ms 동안 Task를 블로킹하지 않고 정착을 확인한다. `CYCLE_COMPLETE`는 Home 정착이 끝난 뒤에만 송신한다.
 - MG90S의 전원은 별도 5 V / 3 A 어댑터에서 공급한다. 어댑터의 5 V 양극은 서보 VCC에만 연결하고, 어댑터 GND는 STM32 및 JMOD-MOTOR-1의 GND와 공통으로 연결한다.
 - 컨베이어 정방향은 `AIN1=HIGH`, `AIN2=LOW`로 정의한다. 실제 기구 방향이 반대면 코드 대신 `AO1`과 `AO2` 배선을 서로 바꾼다.
+- 분류 컨베이어 정방향은 `BIN1=HIGH`, `BIN2=LOW`로 정의한다. 실제 기구 방향이 반대면 `BO1`과 `BO2` 배선을 서로 바꾼다.
 - 정지 시 PWM을 0%로 내리고 `AIN1=LOW`, `AIN2=LOW`로 둔다.
 - 부팅·초기화·일반 STOP에서는 공용 `STBY`를 올리지 않는다. 실제 START에서만 활성화를 요청하며, 한 채널의 STOP은 다른 채널을 멈추지 않도록 `STBY`를 내리지 않는다.
-- 향후 SafetyTask는 비상 정지 시 `conveyor_motor_power_latch_disable()`로 공용 `STBY`를 LOW로 내리고, 양 채널의 PWM·방향이 안전 상태인지 확인한 뒤에만 latch를 해제해야 한다. 현재 InputControlTask 구현만으로 E-Stop 연동이 완료된 것은 아니며 `CONTROL_RESET`만으로 latch를 해제하지 않는다.
+- SafetyTask는 비상 정지 시 `conveyor_motor_power_latch_disable()`로 공용 `STBY`를 LOW로 내린 뒤 Input·Sorting ControlTask의 stop notify API를 호출해야 한다. 두 태스크가 모두 안전 출력을 확인한 뒤에만 release notify와 latch 해제를 진행하며 일반 RESET 명령으로 latch를 해제하지 않는다.
 - 현재 조달 조건에서는 별도 레벨 시프터 없이 STM32의 3.3 V GPIO를 JMOD-MOTOR-1 제어 입력에 직접 연결한다. JMOD-MOTOR-1이 Raspberry Pi 연결을 지원한다고 안내하지만, TB6612FNG 로직 전원이 5 V일 때 3.3 V HIGH는 데이터시트상 보장 범위보다 낮으므로 실제 모터를 무부하 상태에서 검증해야 한다. 기동 실패·떨림·간헐 정지가 발생하면 펌웨어보다 로직 전압 호환 문제를 먼저 확인한다.
 - STM32, JMOD-MOTOR-1, 모터 전원은 GND를 공통으로 연결한다.
 
@@ -395,12 +398,13 @@ Normal < Normal1 < ... < Normal7 < AboveNormal
 
 #### SortingControlTask
 
-- 서버 처리 결과로 생성된 분류 장치 제어 명령 처리
-- 분류 게이트 위치 설정
-- 컨베이어 2 시작·정지·방향·속도 제어
-- 분류 완료 결과 생성
-
-태스크 간 Queue와 Event Flags는 UART 메시지 형식과 상태 머신 이벤트가 확정된 후 추가한다.
+- `sortingControlQueue`에서 서버 처리 결과로 생성된 제어 명령 소비
+- 컨베이어 2 시작·정지·속도 제어와 상태 응답 생성
+- `ROUTE_ITEM(cycleId, destination)`을 목적지별 MG90S PWM으로 변환
+- `RETURN_HOME(cycleId)` 일치 검증 후 비블로킹 Home 복귀
+- Home 정착 완료 후 `CYCLE_COMPLETE(cycleId, destination)` 송신
+- 동일 sequence 응답 캐시, 중복 실행 방지와 TX 큐 재시도
+- Safety epoch를 이용한 E-Stop 이전 명령 폐기와 게이트 Home 동기화
 
 ---
 
