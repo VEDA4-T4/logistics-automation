@@ -1,3 +1,26 @@
+add_executable(sensor_logic_test
+    sensor_logic_test.cpp
+    ../../Application/Src/sensor_logic.c
+)
+
+target_include_directories(sensor_logic_test PRIVATE
+    ../../Application/Inc
+    ../../../../shared/include
+)
+
+if(MSVC)
+    target_compile_options(sensor_logic_test PRIVATE /W4 /WX)
+else()
+    target_compile_options(sensor_logic_test PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+    )
+endif()
+
+add_test(NAME sensor_logic_test COMMAND sensor_logic_test)
+
 add_executable(
     linetracer_control_logic_test
     control_logic_test.cpp
