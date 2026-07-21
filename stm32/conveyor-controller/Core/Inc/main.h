@@ -65,6 +65,10 @@ void Error_Handler(void);
 #define US2_TRIG_GPIO_Port GPIOC
 #define LD2_Pin GPIO_PIN_5
 #define LD2_GPIO_Port GPIOA
+#define SORTING_MOTOR_BIN2_Pin GPIO_PIN_6
+#define SORTING_MOTOR_BIN2_GPIO_Port GPIOA
+#define SORTING_MOTOR_BIN1_Pin GPIO_PIN_7
+#define SORTING_MOTOR_BIN1_GPIO_Port GPIOA
 #define US3_TRIG_Pin GPIO_PIN_4
 #define US3_TRIG_GPIO_Port GPIOC
 #define US4_TRIG_Pin GPIO_PIN_5
@@ -83,6 +87,10 @@ void Error_Handler(void);
 #define INPUT_MOTOR_AIN1_GPIO_Port GPIOB
 #define MOTOR_STBY_Pin GPIO_PIN_6
 #define MOTOR_STBY_GPIO_Port GPIOB
+#define SORTING_MOTOR_PWMB_Pin GPIO_PIN_9
+#define SORTING_MOTOR_PWMB_GPIO_Port GPIOB
+#define SORTING_GATE_PWM_Pin GPIO_PIN_7
+#define SORTING_GATE_PWM_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
 

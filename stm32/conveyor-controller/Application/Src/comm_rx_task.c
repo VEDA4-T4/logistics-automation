@@ -6,6 +6,7 @@
 #include "app_messages.h"
 #include "app_queues.h"
 #include "input_control_task.h"
+#include "sorting_control_task.h"
 #include "uart_rx.h"
 
 #include "cmsis_os2.h"
@@ -273,6 +274,9 @@ void comm_rx_process_frame(
                 UART_ERROR_INVALID_PAYLOAD);
             return;
         }
+
+        message.safetyEpoch =
+            sorting_control_task_capture_command_epoch();
 
         if (comm_rx_forward_command(
                 sortingControlQueueHandle,

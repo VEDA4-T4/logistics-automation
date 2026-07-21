@@ -1,6 +1,7 @@
 #ifndef LOGISTICS_CONTRACTS_UART_SORTING_COMMANDS_H
 #define LOGISTICS_CONTRACTS_UART_SORTING_COMMANDS_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "logistics/contracts/uart_protocol.h"
@@ -35,7 +36,8 @@ typedef enum {
     UART_CMD_SORTING_CONVEYOR_START = 0x34U,
     UART_CMD_SORTING_CONVEYOR_STOP = 0x35U,
     UART_CMD_SORTING_CONVEYOR_SET_SPEED = 0x36U,
-    UART_CMD_SORTING_CONVEYOR_GET_STATUS = 0x37U
+    UART_CMD_SORTING_CONVEYOR_GET_STATUS = 0x37U,
+    UART_CMD_SORTING_RETURN_HOME = 0x38U
 
 } uart_sorting_command_t;
 
@@ -54,6 +56,10 @@ typedef enum {
     UART_SORTING_DESTINATION_3 = 0x03U
 
 } uart_sorting_destination_t;
+
+#define UART_SORTING_CYCLE_ID_NONE 0U
+#define UART_SORTING_CYCLE_ID_MIN 1U
+#define UART_SORTING_CYCLE_ID_MAX UINT16_MAX
 
 #define UART_SORTING_DESTINATION_MIN UART_SORTING_DESTINATION_1
 #define UART_SORTING_DESTINATION_MAX UART_SORTING_DESTINATION_3
@@ -99,8 +105,9 @@ typedef enum {
  *   [1] cycle_id_high
  *   [2] destination_id
  *
- * cycle_id는 little-endian uint16_t이다. 게이트가 Home으로 복귀하여
- * 분류 완료 이벤트를 송신할 때까지 같은 cycle_id를 유지한다.
+ * cycle_id는 little-endian uint16_t이다. 게이트가 목적지 위치로 이동한 뒤
+ * SORTING_RETURN_HOME을 처리하고 분류 완료 이벤트를 송신할 때까지 같은
+ * cycle_id를 유지한다.
  */
 #define UART_SORTING_ROUTE_CYCLE_ID_LOW_INDEX 0U
 #define UART_SORTING_ROUTE_CYCLE_ID_HIGH_INDEX 1U
@@ -125,6 +132,20 @@ typedef enum {
 #define UART_SORTING_CANCEL_CYCLE_ID_LOW_INDEX 0U
 #define UART_SORTING_CANCEL_CYCLE_ID_HIGH_INDEX 1U
 #define UART_SORTING_CANCEL_PAYLOAD_SIZE 2U
+
+/*
+ * SORTING_RETURN_HOME Payload
+ *
+ *   [0] cycle_id_low
+ *   [1] cycle_id_high
+ *
+ * 서버/Raspberry Pi가 물품 통과를 판정한 뒤 현재 cycle의 게이트를 Home으로
+ * 복귀시키기 위해 전송한다. 현재 처리 중인 cycle_id와 일치할 때만 처리한다.
+ * 정상 공정 완료용 명령이며, 비정상 중단에는 SORTING_CANCEL을 사용한다.
+ */
+#define UART_SORTING_RETURN_HOME_CYCLE_ID_LOW_INDEX 0U
+#define UART_SORTING_RETURN_HOME_CYCLE_ID_HIGH_INDEX 1U
+#define UART_SORTING_RETURN_HOME_PAYLOAD_SIZE 2U
 
 /*
  * SORTING_RESET
@@ -207,6 +228,7 @@ static inline uint8_t uart_sorting_command_is_valid(uint32_t command) {
         case UART_CMD_SORTING_CONVEYOR_STOP:
         case UART_CMD_SORTING_CONVEYOR_SET_SPEED:
         case UART_CMD_SORTING_CONVEYOR_GET_STATUS:
+        case UART_CMD_SORTING_RETURN_HOME:
             return 1U;
 
         default:
@@ -218,6 +240,10 @@ static inline uint8_t uart_sorting_command_is_valid(uint32_t command) {
 
 static inline uint8_t uart_sorting_destination_is_valid(uint32_t destination_id) {
     return (destination_id >= UART_SORTING_DESTINATION_MIN && destination_id <= UART_SORTING_DESTINATION_MAX) ? 1U : 0U;
+}
+
+static inline uint8_t uart_sorting_cycle_id_is_valid(uint32_t cycle_id) {
+    return (cycle_id >= UART_SORTING_CYCLE_ID_MIN && cycle_id <= UART_SORTING_CYCLE_ID_MAX) ? 1U : 0U;
 }
 
 static inline uint8_t uart_sorting_status_destination_is_valid(uint32_t destination_id) {
@@ -268,6 +294,15 @@ static inline uint16_t uart_sorting_cancel_cycle_id(const uint8_t* payload) {
                       ((uint16_t)payload[UART_SORTING_CANCEL_CYCLE_ID_HIGH_INDEX] << 8U));
 }
 
+static inline uint16_t uart_sorting_return_home_cycle_id(const uint8_t* payload) {
+    if (payload == NULL) {
+        return 0U;
+    }
+
+    return (uint16_t)((uint16_t)payload[UART_SORTING_RETURN_HOME_CYCLE_ID_LOW_INDEX] |
+                      ((uint16_t)payload[UART_SORTING_RETURN_HOME_CYCLE_ID_HIGH_INDEX] << 8U));
+}
+
 /* CMD별 Payload 길이와 값 범위를 검증한다. */
 static inline uint8_t uart_sorting_payload_is_valid(uint32_t command, const uint8_t* payload, uint32_t length) {
     if (uart_sorting_command_is_valid(command) == 0U || length > UART_MAX_PAYLOAD_SIZE) {
@@ -298,10 +333,22 @@ static inline uint8_t uart_sorting_payload_is_valid(uint32_t command, const uint
                 return 0U;
             }
 
-            return uart_sorting_destination_is_valid(payload[UART_SORTING_ROUTE_DESTINATION_INDEX]);
+            return ((uart_sorting_cycle_id_is_valid(uart_sorting_route_cycle_id(payload)) != 0U) &&
+                    (uart_sorting_destination_is_valid(payload[UART_SORTING_ROUTE_DESTINATION_INDEX]) != 0U))
+                       ? 1U
+                       : 0U;
 
         case UART_CMD_SORTING_CANCEL:
-            return (length == UART_SORTING_CANCEL_PAYLOAD_SIZE && payload != NULL) ? 1U : 0U;
+            return ((length == UART_SORTING_CANCEL_PAYLOAD_SIZE) && (payload != NULL) &&
+                    (uart_sorting_cycle_id_is_valid(uart_sorting_cancel_cycle_id(payload)) != 0U))
+                       ? 1U
+                       : 0U;
+
+        case UART_CMD_SORTING_RETURN_HOME:
+            return ((length == UART_SORTING_RETURN_HOME_PAYLOAD_SIZE) && (payload != NULL) &&
+                    (uart_sorting_cycle_id_is_valid(uart_sorting_return_home_cycle_id(payload)) != 0U))
+                       ? 1U
+                       : 0U;
 
         default:
             return 0U;
