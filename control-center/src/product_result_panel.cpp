@@ -106,7 +106,6 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
         current_image_path_.clear();
         if (active_image_reply_ != nullptr)
             active_image_reply_->abort();
-        setImagePlaceholder(QStringLiteral("상품 이미지 대기 중"));
     }
 
     switch (product.recognition_state) {
@@ -152,12 +151,9 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
     detail_value_->setToolTip(QStringLiteral("messageId: %1\nimageId: %2\nchecksum: %3")
                                   .arg(product.message_id, product.image_id, product.image_checksum));
 
-    if (current_image_path_ != product.image_path) {
+    if (!product.image_path.isEmpty() && current_image_path_ != product.image_path) {
         current_image_path_ = product.image_path;
         loadImage(product);
-    } else if (product.image_path.isEmpty() && product.recognition_state != ProductRecognitionState::Processing &&
-               product.recognition_state != ProductRecognitionState::Waiting) {
-        setImagePlaceholder(QStringLiteral("상품 이미지 없음"));
     }
 }
 
@@ -177,20 +173,19 @@ void ProductResultPanel::setImagePlaceholder(const QString& text, bool is_error)
 void ProductResultPanel::loadImage(const CurrentProduct& product) {
     if (active_image_reply_ != nullptr)
         active_image_reply_->abort();
-    if (product.image_path.isEmpty()) {
-        setImagePlaceholder(QStringLiteral("상품 이미지 없음"));
+    if (product.image_path.isEmpty())
         return;
-    }
     QUrl image_url(product.image_path);
     if (image_url.isRelative())
         image_url = image_base_url_.resolved(image_url);
     if (!image_url.isValid() || (image_url.scheme().compare(QStringLiteral("http"), Qt::CaseInsensitive) != 0 &&
                                  image_url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) != 0)) {
-        setImagePlaceholder(QStringLiteral("이미지 경로 오류"), true);
+        const QString detail = QStringLiteral("이미지 경로 오류: %1").arg(product.image_path);
+        qWarning().noquote() << "[control-center][http] image download failed:" << detail;
+        image_label_->setToolTip(detail);
         return;
     }
 
-    setImagePlaceholder(QStringLiteral("상품 이미지 불러오는 중…"));
     QNetworkRequest request(image_url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     auto* reply = network_manager_->get(request);
@@ -219,14 +214,15 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
                                        .arg(http_status == 0 ? QStringLiteral("N/A") : QString::number(http_status))
                                        .arg(reply->errorString());
             qWarning().noquote() << "[control-center][http] image download failed:" << detail;
-            setImagePlaceholder(QStringLiteral("상품 이미지 불러오기 실패"), true);
             image_label_->setToolTip(detail);
             return;
         }
         const auto payload = reply->readAll();
         QPixmap image;
         if (payload.size() > kMaximumProductImageBytes || !image.loadFromData(payload)) {
-            setImagePlaceholder(QStringLiteral("상품 이미지 형식 오류"), true);
+            const QString detail = QStringLiteral("이미지 형식 오류: %1").arg(reply->url().toString());
+            qWarning().noquote() << "[control-center][http] image decode failed:" << detail;
+            image_label_->setToolTip(detail);
             return;
         }
         image_label_->setText({});
