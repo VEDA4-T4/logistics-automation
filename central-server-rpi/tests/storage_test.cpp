@@ -55,7 +55,7 @@ int main() {
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(database.IntegrityCheck().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 2);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 3);
 
     server::StorageConfig storage;
     storage.image_root = root / "images";
@@ -108,6 +108,14 @@ int main() {
                "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BAD-WORK' AND processing_state='REJECTED'") ==
         1);
 
+    server::EventPayload barcode_failure;
+    barcode_failure.work_id = work_id;
+    barcode_failure.process_state = "FAILED";
+    result = persistence.PersistValidatedEvent(Envelope("MSG-BARCODE-FAIL", mqtt::MessageType::kBarcodeDetected),
+                                               barcode_failure, Metadata(base_time + 4));
+    assert(result.status == server::PersistenceStatus::kStored);
+    assert(Scalar(database, "SELECT count(*) FROM product WHERE barcode='8801234567890'") == 1);
+
     server::UploadService upload_service(database, root / "uploads");
     const std::vector<std::uint8_t> image_bytes{ 0xff, 0xd8, 0xff, 0xd9 };
     const server::UploadRequest image_upload{
@@ -156,13 +164,16 @@ int main() {
     server::EventPayload device;
     device.device_role = "input";
     device.connection_state = "ONLINE";
+    device.process_state = "AWAITING_WORK_ID";
     result = persistence.PersistValidatedEvent(Envelope("MSG-STATUS-OLD", mqtt::MessageType::kDeviceStatus), device,
                                                Metadata(base_time, "device/PI-INPUT-01/status"));
     assert(result.ok());
     device.connection_state = "OFFLINE";
+    device.process_state = "VISION_REPORTED";
     result = persistence.PersistValidatedEvent(Envelope("MSG-STATUS-NEW", mqtt::MessageType::kDeviceStatus), device,
                                                Metadata(base_time + 40 * 86'400'000LL, "device/PI-INPUT-01/status"));
     assert(result.ok());
+    assert(Scalar(database, "SELECT count(*) FROM device_status WHERE process_state='VISION_REPORTED'") == 1);
 
     server::RetentionService retention(database, storage);
     assert(retention.RunOnce(base_time + 40 * 86'400'000LL).ok());

@@ -307,10 +307,17 @@ DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts
                                              const EventPayload& payload, std::int64_t now_ms) {
     std::string sql;
     using contracts::mqtt::MessageType;
+    bool update_barcode = false;
     if (type == MessageType::kBarcodeDetected) {
-        if (!payload.barcode || payload.barcode->empty())
-            return { DatabaseStatusCode::kInvalidArgument, "BARCODE_DETECTED requires barcode" };
-        sql = "UPDATE product SET barcode=?,lifecycle_state='IDENTIFIED',updated_at_ms=? WHERE work_id=?";
+        update_barcode = payload.barcode.has_value() && !payload.barcode->empty();
+        if (update_barcode) {
+            sql = "UPDATE product SET barcode=?,lifecycle_state='IDENTIFIED',updated_at_ms=? WHERE work_id=?";
+        } else if (payload.process_state == "FAILED") {
+            sql = "UPDATE product SET updated_at_ms=? WHERE work_id=?";
+        } else {
+            return { DatabaseStatusCode::kInvalidArgument,
+                     "BARCODE_DETECTED requires barcode unless recognitionStatus is FAILED" };
+        }
     } else if (type == MessageType::kProductInfo) {
         if (!payload.product_name || payload.product_name->empty())
             return { DatabaseStatusCode::kInvalidArgument, "PRODUCT_INFO requires product_name" };
@@ -331,7 +338,7 @@ DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts
     if (!status.ok())
         return status;
     int index = 1;
-    if (type == MessageType::kBarcodeDetected)
+    if (update_barcode)
         status = statement.Bind(index++, *payload.barcode);
     if (type == MessageType::kProductInfo)
         status = statement.Bind(index++, *payload.product_name);
