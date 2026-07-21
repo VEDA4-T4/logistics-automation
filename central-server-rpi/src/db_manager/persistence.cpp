@@ -308,6 +308,7 @@ DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts
     std::string sql;
     using contracts::mqtt::MessageType;
     bool update_barcode = false;
+    bool update_product_info = false;
     if (type == MessageType::kBarcodeDetected) {
         update_barcode = payload.barcode.has_value() && !payload.barcode->empty();
         if (update_barcode) {
@@ -321,7 +322,12 @@ DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts
     } else if (type == MessageType::kProductInfo) {
         if (!payload.product_name || payload.product_name->empty())
             return { DatabaseStatusCode::kInvalidArgument, "PRODUCT_INFO requires product_name" };
-        sql = "UPDATE product SET product_name=?,lifecycle_state='IDENTIFIED',updated_at_ms=? WHERE work_id=?";
+        update_product_info = true;
+        sql =
+            "UPDATE product SET barcode=COALESCE(NULLIF(?,''),barcode),"
+            "product_id=COALESCE(NULLIF(?,''),product_id),product_name=?,"
+            "destination=COALESCE(NULLIF(?,''),destination),"
+            "lifecycle_state='IDENTIFIED',updated_at_ms=? WHERE work_id=?";
     } else if (type == MessageType::kDestinationSet) {
         if (!payload.destination || payload.destination->empty())
             return { DatabaseStatusCode::kInvalidArgument, "DESTINATION_SET requires destination" };
@@ -340,8 +346,15 @@ DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts
     int index = 1;
     if (update_barcode)
         status = statement.Bind(index++, *payload.barcode);
-    if (type == MessageType::kProductInfo)
-        status = statement.Bind(index++, *payload.product_name);
+    if (update_product_info) {
+        status = statement.Bind(index++, payload.barcode.value_or(""));
+        if (status.ok())
+            status = statement.Bind(index++, payload.product_id.value_or(""));
+        if (status.ok())
+            status = statement.Bind(index++, *payload.product_name);
+        if (status.ok())
+            status = statement.Bind(index++, payload.destination.value_or(""));
+    }
     if (type == MessageType::kDestinationSet)
         status = statement.Bind(index++, *payload.destination);
     if (!status.ok() || !(status = statement.Bind(index++, now_ms)).ok())
@@ -443,6 +456,29 @@ PersistenceService::PersistenceService(Database& database, StorageConfig storage
       image_store_(storage_config_.image_root),
       next_cleanup_at_ms_(CurrentUnixTimeMilliseconds() +
                           std::max(1, storage_config_.cleanup_interval_hours) * 3'600'000LL) {}
+
+DatabaseStatus PersistenceService::FindActiveProductByBarcode(std::string_view barcode,
+                                                              std::optional<CatalogProduct>& output) {
+    output.reset();
+    Statement statement;
+    auto status = database_.Prepare(
+        "SELECT barcode,product_id,product_name,destination FROM product_catalog "
+        "WHERE barcode=? AND active=1",
+        statement);
+    if (!status.ok() || !(status = statement.Bind(1, barcode)).ok())
+        return status;
+    bool has_row = false;
+    status = statement.Step(has_row);
+    if (!status.ok() || !has_row)
+        return status;
+    output = CatalogProduct{
+        .barcode = statement.ColumnText(0),
+        .product_id = statement.ColumnText(1),
+        .product_name = statement.ColumnText(2),
+        .destination = statement.ColumnText(3),
+    };
+    return DatabaseStatus::Ok();
+}
 
 DatabaseStatus PersistenceService::RunRetentionIfDue(std::int64_t now_ms) {
     if (now_ms < next_cleanup_at_ms_)

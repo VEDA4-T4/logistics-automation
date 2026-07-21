@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -85,6 +86,7 @@ void DefaultLog(MqttHandlerLogLevel level, std::string_view message) {
     } else if (const auto* value = mqtt::GetPayload<mqtt::ProductInfoPayload>(message)) {
         output.work_id = value->work_id;
         output.barcode = value->barcode;
+        output.product_id = value->product_id;
         output.product_name = value->product_name;
         output.destination = value->destination;
         output.process_state = value->recognition_status;
@@ -180,6 +182,71 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             Log(MqttHandlerLogLevel::kError, "MQTT persistence failed: " + result.message);
             return false;
         }
+
+        std::optional<mqtt::MqttMessage> catalog_product_message;
+        if (const auto* barcode = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(decoded.value);
+            barcode != nullptr && barcode->recognition_status == "SUCCESS") {
+            std::optional<CatalogProduct> catalog_product;
+            const auto lookup_status =
+                persistence_service_->FindActiveProductByBarcode(barcode->barcode, catalog_product);
+            if (!lookup_status.ok()) {
+                Log(MqttHandlerLogLevel::kError, "product catalog lookup failed: " + lookup_status.message);
+                return false;
+            }
+            if (catalog_product) {
+                catalog_product_message = mqtt::MqttMessage{
+                    .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+                    .message_id = "CATALOG-" + decoded.value.message_id,
+                    .message_type = mqtt::MessageType::kProductInfo,
+                    .source_id = "central-server",
+                    .timestamp = decoded.value.timestamp,
+                    .data =
+                        mqtt::ProductInfoPayload{
+                            .work_id = barcode->work_id,
+                            .recognition_status = "SUCCESS",
+                            .barcode = catalog_product->barcode,
+                            .product_id = catalog_product->product_id,
+                            .product_name = catalog_product->product_name,
+                            .destination = catalog_product->destination,
+                            .image = nullptr,
+                            .confidence = barcode->confidence,
+                            .message = std::nullopt,
+                        },
+                };
+                const auto encoded_product = mqtt::SerializeMessage(*catalog_product_message);
+                if (!encoded_product.IsSuccess()) {
+                    Log(MqttHandlerLogLevel::kError, "catalog PRODUCT_INFO serialization failed");
+                    return false;
+                }
+                const auto product_root = mqtt::Json::parse(encoded_product.payload);
+                const std::string product_details = product_root.at(std::string(mqtt::kDataField)).dump();
+                const mqtt::EnvelopeView product_envelope{
+                    .protocol_version = catalog_product_message->protocol_version,
+                    .message_id = catalog_product_message->message_id,
+                    .message_type = catalog_product_message->message_type,
+                    .source_id = catalog_product_message->source_id,
+                    .timestamp = catalog_product_message->timestamp,
+                    .data_json = product_details,
+                };
+                const TransportMetadata product_transport{
+                    .topic = "internal/product-catalog",
+                    .qos = 1,
+                    .retained = false,
+                    .received_at_ms = CurrentUnixTimeMilliseconds(),
+                    .source_address = "central-server",
+                    .raw_payload = encoded_product.payload,
+                };
+                const auto product_result = persistence_service_->PersistValidatedEvent(
+                    product_envelope, MakeEventPayload(*catalog_product_message, product_details), product_transport);
+                if (!product_result.ok()) {
+                    Log(MqttHandlerLogLevel::kError,
+                        "catalog PRODUCT_INFO persistence failed: " + product_result.message);
+                    return false;
+                }
+            } else {
+                Log(MqttHandlerLogLevel::kInfo, "product catalog miss for barcode=" + barcode->barcode);
+            }
+        }
         if (decoded.value.message_type == mqtt::MessageType::kBoxDetected && result.work_id && work_created_handler_ &&
             !work_created_handler_(decoded.value.source_id, *result.work_id)) {
             Log(MqttHandlerLogLevel::kError, "WORK_CREATED publish failed for workId=" + *result.work_id);
@@ -187,6 +254,10 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
         }
         if (IsQtProductEvent(decoded.value.message_type) && qt_event_handler_ && !qt_event_handler_(decoded.value)) {
             Log(MqttHandlerLogLevel::kError, "Qt product event publish failed");
+            return false;
+        }
+        if (catalog_product_message && qt_event_handler_ && !qt_event_handler_(*catalog_product_message)) {
+            Log(MqttHandlerLogLevel::kError, "catalog PRODUCT_INFO publish failed");
             return false;
         }
         bool route_succeeded = true;

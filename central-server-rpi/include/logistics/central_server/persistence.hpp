@@ -34,6 +34,7 @@ struct TransportMetadata {
 struct EventPayload {
     std::optional<std::string> work_id;
     std::optional<std::string> barcode;
+    std::optional<std::string> product_id;
     std::optional<std::string> product_name;
     std::optional<std::string> destination;
     std::optional<std::string> device_role;
@@ -51,6 +52,13 @@ struct EventPayload {
     std::optional<std::string> image_path;
     std::optional<std::string> image_checksum;
     std::optional<std::string> image_upload_status;
+};
+
+struct CatalogProduct {
+    std::string barcode;
+    std::string product_id;
+    std::string product_name;
+    std::string destination;
 };
 
 enum class PersistenceStatus : std::uint8_t { kStored, kDuplicate, kRetryableError, kPermanentError };
@@ -140,6 +148,8 @@ public:
     [[nodiscard]] PersistenceResult PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                           const EventPayload& payload,
                                                           const TransportMetadata& metadata);
+    [[nodiscard]] DatabaseStatus FindActiveProductByBarcode(std::string_view barcode,
+                                                            std::optional<CatalogProduct>& output);
 
 private:
     [[nodiscard]] DatabaseStatus RunRetentionIfDue(std::int64_t now_ms);

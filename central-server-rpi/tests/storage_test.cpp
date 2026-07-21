@@ -2,6 +2,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 
 #include "logistics/central_server/database.hpp"
@@ -55,11 +56,19 @@ int main() {
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(database.IntegrityCheck().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 3);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 4);
+    assert(Scalar(database,
+                  "SELECT count(*) FROM product_catalog WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
+                  "product_name='VEDA107 기본 상품' AND destination='1' AND active=1") == 1);
 
     server::StorageConfig storage;
     storage.image_root = root / "images";
     server::PersistenceService persistence(database, storage);
+    std::optional<server::CatalogProduct> catalog_product;
+    assert(persistence.FindActiveProductByBarcode("5901234123457", catalog_product).ok());
+    assert(catalog_product && catalog_product->product_id == "VEDA107" && catalog_product->destination == "1");
+    assert(persistence.FindActiveProductByBarcode("0000000000000", catalog_product).ok());
+    assert(!catalog_product);
     constexpr std::int64_t base_time = 1'700'000'000'000;
 
     server::Database lock_holder;
@@ -97,11 +106,24 @@ int main() {
                                                Metadata(base_time + 2));
     assert(result.status == server::PersistenceStatus::kStored);
 
+    server::EventPayload product_info;
+    product_info.work_id = work_id;
+    product_info.barcode = "5901234123457";
+    product_info.product_id = "VEDA107";
+    product_info.product_name = "VEDA107 기본 상품";
+    product_info.destination = "1";
+    result = persistence.PersistValidatedEvent(Envelope("MSG-PRODUCT-1", mqtt::MessageType::kProductInfo), product_info,
+                                               Metadata(base_time + 3));
+    assert(result.status == server::PersistenceStatus::kStored);
+    assert(Scalar(database,
+                  "SELECT count(*) FROM product WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
+                  "product_name='VEDA107 기본 상품' AND destination='1'") == 1);
+
     server::EventPayload missing_work;
     missing_work.work_id = "00000000-0000-4000-8000-000000000000";
     missing_work.destination = "A-01";
     result = persistence.PersistValidatedEvent(Envelope("MSG-BAD-WORK", mqtt::MessageType::kDestinationSet),
-                                               missing_work, Metadata(base_time + 3));
+                                               missing_work, Metadata(base_time + 4));
     assert(result.status == server::PersistenceStatus::kPermanentError);
     assert(
         Scalar(database,
@@ -112,7 +134,7 @@ int main() {
     barcode_failure.work_id = work_id;
     barcode_failure.process_state = "FAILED";
     result = persistence.PersistValidatedEvent(Envelope("MSG-BARCODE-FAIL", mqtt::MessageType::kBarcodeDetected),
-                                               barcode_failure, Metadata(base_time + 4));
+                                               barcode_failure, Metadata(base_time + 5));
     assert(result.status == server::PersistenceStatus::kStored);
     assert(Scalar(database, "SELECT count(*) FROM product WHERE barcode='8801234567890'") == 1);
 
@@ -141,7 +163,7 @@ int main() {
     image.image_upload_status = "UPLOADED";
     result =
         persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-1", mqtt::MessageType::kProductImage, "PI-VISION-01"),
-                                          image, Metadata(base_time + 4, "device/PI-VISION-01/event"));
+                                          image, Metadata(base_time + 6, "device/PI-VISION-01/event"));
     assert(result.status == server::PersistenceStatus::kStored);
     assert(Scalar(database, "SELECT count(*) FROM http_upload WHERE kind='IMAGE'") == 1);
     assert(Scalar(database, "SELECT count(*) FROM product WHERE lifecycle_state='IMAGED'") == 1);
