@@ -42,7 +42,7 @@ integration network.
 ## Run
 
 ```sh
-./logistics_vision_node --config /etc/logistics/vision-node.ini --camera 0
+./logistics_vision_node --config runtime/vision-node/vision-node.ini
 ```
 
 The runtime sequence is:

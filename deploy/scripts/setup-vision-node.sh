@@ -107,4 +107,4 @@ cmake --build "${build_dir}" --target logistics_vision_node
 
 echo
 echo "Vision node setup complete."
-echo "Run: ${build_dir}/device-rpi/logistics_vision_node --config ${config_path} --camera 0"
+echo "Run: ${build_dir}/device-rpi/logistics_vision_node --config ${config_path}"
