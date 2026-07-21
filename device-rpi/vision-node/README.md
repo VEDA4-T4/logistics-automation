@@ -42,8 +42,11 @@ integration network.
 ## Run
 
 ```sh
-./logistics_vision_node --config runtime/vision-node/vision-node.ini
+./logistics_vision_node --headless --config runtime/vision-node/vision-node.ini
 ```
+
+`--headless` disables the OpenCV preview window for SSH and systemd operation. Without this option, the node also
+switches to headless mode automatically when neither `DISPLAY` nor `WAYLAND_DISPLAY` is available.
 
 The runtime sequence is:
 

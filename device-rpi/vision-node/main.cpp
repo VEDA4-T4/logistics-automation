@@ -2,6 +2,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -14,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <unordered_set>
 
 #include "detection.hpp"
@@ -50,6 +52,7 @@ struct CameraSettings {
     int width = 1280;
     int height = 720;
     int fps = 30;
+    bool headless = false;
     std::string config_path = "device-rpi/config/node.ini";
 };
 
@@ -93,8 +96,14 @@ private:
 };
 
 void PrintUsage(const char* executable) {
-    std::cout << "Usage: " << executable << " [--width N] [--height N] [--fps N] [--config node.ini]\n"
+    std::cout << "Usage: " << executable << " [--width N] [--height N] [--fps N] [--headless] [--config node.ini]\n"
               << "Defaults: --width 1280 --height 720 --fps 30 --config device-rpi/config/node.ini\n";
+}
+
+bool HasGraphicalDisplay() {
+    const char* display = std::getenv("DISPLAY");
+    const char* wayland_display = std::getenv("WAYLAND_DISPLAY");
+    return (display != nullptr && *display != '\0') || (wayland_display != nullptr && *wayland_display != '\0');
 }
 
 bool ParsePositiveInteger(const std::string_view value, int& output) {
@@ -122,6 +131,11 @@ ParseStatus ParseArguments(const int argc, char* argv[], CameraSettings& setting
                 return ParseStatus::kError;
             }
             settings.config_path = argv[++index];
+            continue;
+        }
+
+        if (argument == "--headless") {
+            settings.headless = true;
             continue;
         }
 
@@ -183,7 +197,11 @@ bool IsExitKey(const int key) {
     return normalized_key == 'q' || normalized_key == kEscapeKey;
 }
 
-bool WaitForReconnectOrExit() {
+bool WaitForReconnectOrExit(const bool headless) {
+    if (headless) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kReconnectIntervalMs));
+        return false;
+    }
     int elapsed_ms = 0;
     while (elapsed_ms < kReconnectIntervalMs) {
         const int wait_ms = std::min(kReconnectPollIntervalMs, kReconnectIntervalMs - elapsed_ms);
@@ -301,6 +319,10 @@ int main(const int argc, char* argv[]) {
     if (parse_status == ParseStatus::kError) {
         return 2;
     }
+    if (!settings.headless && !HasGraphicalDisplay()) {
+        settings.headless = true;
+        std::clog << "No graphical display detected; running in headless mode.\n";
+    }
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
     logistics::device::MqttNodeConfig mqtt_config;
@@ -338,7 +360,9 @@ int main(const int argc, char* argv[]) {
 #endif
 
     constexpr char kWindowName[] = "vision-node camera";
-    cv::namedWindow(kWindowName, cv::WINDOW_AUTOSIZE);
+    if (!settings.headless) {
+        cv::namedWindow(kWindowName, cv::WINDOW_AUTOSIZE);
+    }
 
     cv::VideoCapture camera;
     logistics::vision::DetectionModule detection_module;
@@ -349,8 +373,12 @@ int main(const int argc, char* argv[]) {
     int exit_code = 0;
     auto last_latency_log = Clock::now();
 
-    std::cout << "Camera settings: " << settings.width << 'x' << settings.height << " @ " << settings.fps << " FPS\n"
-              << "Press q or Esc to exit.\n";
+    std::cout << "Camera settings: " << settings.width << 'x' << settings.height << " @ " << settings.fps << " FPS\n";
+    if (settings.headless) {
+        std::cout << "Headless mode enabled; stop with Ctrl+C or SIGTERM.\n";
+    } else {
+        std::cout << "Press q or Esc to exit.\n";
+    }
 
     bool should_exit = false;
     while (!should_exit) {
@@ -367,8 +395,10 @@ int main(const int argc, char* argv[]) {
                     device_status->SetErrorCode("CAMERA_DISCONNECTED");
                 }
 #endif
-                ShowCameraError(settings, "CAMERA: disconnected", kWindowName);
-                should_exit = WaitForReconnectOrExit();
+                if (!settings.headless) {
+                    ShowCameraError(settings, "CAMERA: disconnected", kWindowName);
+                }
+                should_exit = WaitForReconnectOrExit(settings.headless);
                 continue;
             }
 
@@ -399,8 +429,10 @@ int main(const int argc, char* argv[]) {
 
             if (consecutive_frame_errors >= kMaximumConsecutiveFrameErrors) {
                 camera.release();
-                ShowCameraError(settings, "CAMERA: frame stream lost", kWindowName);
-                should_exit = WaitForReconnectOrExit();
+                if (!settings.headless) {
+                    ShowCameraError(settings, "CAMERA: frame stream lost", kWindowName);
+                }
+                should_exit = WaitForReconnectOrExit(settings.headless);
             }
             continue;
         }
@@ -484,8 +516,10 @@ int main(const int argc, char* argv[]) {
         }
 #endif
 
-        DrawDetectionResult(frame, detection_result);
-        DrawLatency(frame, latency_tracker.average());
+        if (!settings.headless) {
+            DrawDetectionResult(frame, detection_result);
+            DrawLatency(frame, latency_tracker.average());
+        }
 
         for (const logistics::vision::DetectedBarcode& barcode : detection_result.barcodes) {
             if (reported_barcodes.insert(barcode.value).second) {
@@ -500,12 +534,16 @@ int main(const int argc, char* argv[]) {
             last_latency_log = processing_finished;
         }
 
-        cv::imshow(kWindowName, frame);
-        should_exit = IsExitKey(cv::waitKey(kWaitKeyDelayMs));
+        if (!settings.headless) {
+            cv::imshow(kWindowName, frame);
+            should_exit = IsExitKey(cv::waitKey(kWaitKeyDelayMs));
+        }
     }
 
     camera.release();
-    cv::destroyAllWindows();
+    if (!settings.headless) {
+        cv::destroyAllWindows();
+    }
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
     mqtt_client.Stop();
 #endif
