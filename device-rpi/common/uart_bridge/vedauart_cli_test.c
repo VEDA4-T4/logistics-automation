@@ -192,11 +192,9 @@ static void print_usage(const char* program) {
             "  %s sorting-stop\n"
             "  %s sorting-speed <0..100>\n"
             "  %s sorting-route <cycle_id:0..65535> <destination:1..3>\n"
-            "  %s sorting-sensor <sensor:1..3> <state:0..2> "
-            "<distance_mm:0..65535>\n"
             "  %s reset-device\n"
             "  %s estop\n",
-            program, program, program, program, program, program, program, program, program, program, program);
+            program, program, program, program, program, program, program, program, program, program);
 }
 
 static int parse_u32(const char* text, uint32_t maximum, uint32_t* value) {
@@ -226,7 +224,6 @@ static void put_u16_le(uint8_t* payload, uint32_t low_index, uint16_t value) {
 static int build_frame(int argc, char** argv, uart_frame_t* frame) {
     uint32_t first;
     uint32_t second;
-    uint32_t third;
 
     if ((argc < 2) || (argv == NULL) || (frame == NULL)) {
         return -1;
@@ -262,14 +259,6 @@ static int build_frame(int argc, char** argv, uart_frame_t* frame) {
         frame->length = UART_SORTING_ROUTE_PAYLOAD_SIZE;
         put_u16_le(frame->payload, UART_SORTING_ROUTE_CYCLE_ID_LOW_INDEX, (uint16_t)first);
         frame->payload[UART_SORTING_ROUTE_DESTINATION_INDEX] = (uint8_t)second;
-    } else if ((strcmp(argv[1], "sorting-sensor") == 0) && (argc == 5) &&
-               (parse_u32(argv[2], UART_SORTING_SENSOR_ID_MAX, &first) == 0) && (first >= UART_SORTING_SENSOR_ID_MIN) &&
-               (parse_u32(argv[3], UART_SENSOR_FAULT, &second) == 0) && (parse_u32(argv[4], UINT16_MAX, &third) == 0)) {
-        frame->command = UART_CMD_SENSOR_STATUS;
-        frame->length = UART_SENSOR_STATUS_PAYLOAD_SIZE;
-        frame->payload[UART_SENSOR_ID_INDEX] = (uint8_t)first;
-        frame->payload[UART_SENSOR_STATE_INDEX] = (uint8_t)second;
-        put_u16_le(frame->payload, UART_SENSOR_DISTANCE_LOW_INDEX, (uint16_t)third);
     } else if ((strcmp(argv[1], "reset-device") == 0) && (argc == 2)) {
         frame->command = UART_CMD_RESET_DEVICE;
     } else if ((strcmp(argv[1], "estop") == 0) && (argc == 2)) {
@@ -284,10 +273,6 @@ static int build_frame(int argc, char** argv, uart_frame_t* frame) {
 
     if (UART_IS_VALID_SORTING_COMMAND(frame->command) != 0U) {
         return UART_IS_VALID_SORTING_PAYLOAD(frame->command, frame->payload, frame->length) ? 0 : -1;
-    }
-
-    if (frame->command == UART_CMD_SENSOR_STATUS) {
-        return 0;
     }
 
     return UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(frame->command, frame->length) ? 0 : -1;
