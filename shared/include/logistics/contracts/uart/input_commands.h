@@ -33,7 +33,7 @@ typedef enum {
  * 투입 초음파 센서 ID
  *
  * SENSOR_STATUS는 STM32 -> Raspberry Pi 방향의 상태 보고이며,
- * 투입 센서는 ID 1을 사용한다.
+ * 투입 센서는 ID 1을 사용하고 거리값은 cm 단위로 전송한다.
  * Raspberry Pi -> STM32 수신 명령이 아니다.
  */
 typedef enum {
