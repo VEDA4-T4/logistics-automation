@@ -182,3 +182,6 @@ Module.symvers
 
 # STM32CubeIDE per-user debug view state
 **/.settings/com.st.stm32cube.ide.mcu.sfrview.prefs
+
+# Personal learning notes (not for team sharing)
+stm32/conveyor-controller/docs/
