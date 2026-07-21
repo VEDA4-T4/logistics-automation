@@ -198,7 +198,7 @@ typedef enum {
      * 상태 및 처리 결과 보고
      *
      * SENSOR_STATUS:
-     *   초음파, 포토센서, 라인센서 등의 상태 보고
+     *   STM32에서 Raspberry Pi로 보내는 센서 상태 보고
      *
      * DEVICE_STATUS:
      *   STM32 장치의 현재 상태 보고
@@ -337,16 +337,22 @@ typedef enum {
  *
  *   [0] sensor_id
  *   [1] sensor_state
- *   [2] distance_low
- *   [3] distance_high
+ *   [2] distance_cm_low
+ *   [3] distance_cm_high
  *
- * 초음파센서 거리를 사용하지 않는 경우
- * distance 값에 UART_SENSOR_DISTANCE_UNKNOWN을 사용할 수 있다.
+ * 전송 방향은 STM32 -> Raspberry Pi이며, Raspberry Pi -> STM32 제어 명령으로
+ * 사용하지 않는다. distance_cm은 little-endian uint16_t이고 단위는 cm이다.
+ * 거리가 아직 확정되지 않았거나 측정할 수 없으면
+ * UART_SENSOR_DISTANCE_UNKNOWN을 사용한다.
  */
 #define UART_SENSOR_ID_INDEX 0U
 #define UART_SENSOR_STATE_INDEX 1U
-#define UART_SENSOR_DISTANCE_LOW_INDEX 2U
-#define UART_SENSOR_DISTANCE_HIGH_INDEX 3U
+#define UART_SENSOR_DISTANCE_CM_LOW_INDEX 2U
+#define UART_SENSOR_DISTANCE_CM_HIGH_INDEX 3U
+
+/* 기존 호출부와의 호환을 위한 별칭. 신규 코드는 단위가 명시된 이름을 사용한다. */
+#define UART_SENSOR_DISTANCE_LOW_INDEX UART_SENSOR_DISTANCE_CM_LOW_INDEX
+#define UART_SENSOR_DISTANCE_HIGH_INDEX UART_SENSOR_DISTANCE_CM_HIGH_INDEX
 
 #define UART_SENSOR_STATUS_PAYLOAD_SIZE 4U
 

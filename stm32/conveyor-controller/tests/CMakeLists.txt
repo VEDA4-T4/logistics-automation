@@ -18,6 +18,31 @@ add_executable(
 )
 
 add_executable(
+    sorting_control_test
+    sorting_control_test.c
+    ../Application/Src/sorting_control.c
+)
+
+add_executable(
+    sorting_motor_tb6612_test
+    sorting_motor_tb6612_test.c
+    ../Application/Src/sorting_motor_tb6612.c
+)
+
+add_executable(
+    sorting_gate_mg90s_test
+    sorting_gate_mg90s_test.c
+    ../Application/Src/sorting_gate_mg90s.c
+)
+
+add_executable(
+    sorting_control_task_test
+    sorting_control_task_test.c
+    ../Application/Src/sorting_control.c
+    ../Application/Src/sorting_control_task.c
+)
+
+add_executable(
     app_queues_test
     app_queues_test.c
     ../Application/Src/app_queues.c
@@ -73,6 +98,32 @@ target_include_directories(
 )
 
 target_include_directories(
+    sorting_control_test
+    PRIVATE ../Application/Inc
+)
+
+target_include_directories(
+    sorting_motor_tb6612_test
+    PRIVATE
+        fakes
+        ../Application/Inc
+)
+
+target_include_directories(
+    sorting_gate_mg90s_test
+    PRIVATE
+        fakes
+        ../Application/Inc
+)
+
+target_include_directories(
+    sorting_control_task_test
+    PRIVATE
+        fakes
+        ../Application/Inc
+)
+
+target_include_directories(
     app_queues_test
     PRIVATE
         fakes
@@ -130,6 +181,38 @@ set_target_properties(
 
 set_target_properties(
     input_control_task_test
+    PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+)
+
+set_target_properties(
+    sorting_control_test
+    PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+)
+
+set_target_properties(
+    sorting_motor_tb6612_test
+    PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+)
+
+set_target_properties(
+    sorting_gate_mg90s_test
+    PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+)
+
+set_target_properties(
+    sorting_control_task_test
     PROPERTIES
         C_STANDARD 11
         C_STANDARD_REQUIRED ON
@@ -189,6 +272,10 @@ target_link_libraries(sensor_filter_test PRIVATE logistics::contracts)
 target_link_libraries(safety_task_test PRIVATE logistics::contracts)
 target_link_libraries(input_motor_tb6612_test PRIVATE logistics::contracts)
 target_link_libraries(input_control_task_test PRIVATE logistics::contracts)
+target_link_libraries(sorting_control_test PRIVATE logistics::contracts)
+target_link_libraries(sorting_motor_tb6612_test PRIVATE logistics::contracts)
+target_link_libraries(sorting_gate_mg90s_test PRIVATE logistics::contracts)
+target_link_libraries(sorting_control_task_test PRIVATE logistics::contracts)
 target_link_libraries(app_queues_test PRIVATE logistics::contracts)
 target_link_libraries(comm_rx_routing_test PRIVATE logistics::uart)
 target_link_libraries(app_comm_tx_test PRIVATE logistics::uart)
@@ -212,6 +299,30 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E env
                 "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
                 $<TARGET_FILE:input_control_task_test>
+    )
+    add_test(
+        NAME sorting_control_test
+        COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:sorting_control_test>
+    )
+    add_test(
+        NAME sorting_motor_tb6612_test
+        COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:sorting_motor_tb6612_test>
+    )
+    add_test(
+        NAME sorting_gate_mg90s_test
+        COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:sorting_gate_mg90s_test>
+    )
+    add_test(
+        NAME sorting_control_task_test
+        COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:sorting_control_task_test>
     )
     add_test(
         NAME app_queues_test
@@ -253,6 +364,10 @@ else()
     add_test(NAME input_control_test COMMAND input_control_test)
     add_test(NAME input_motor_tb6612_test COMMAND input_motor_tb6612_test)
     add_test(NAME input_control_task_test COMMAND input_control_task_test)
+    add_test(NAME sorting_control_test COMMAND sorting_control_test)
+    add_test(NAME sorting_motor_tb6612_test COMMAND sorting_motor_tb6612_test)
+    add_test(NAME sorting_gate_mg90s_test COMMAND sorting_gate_mg90s_test)
+    add_test(NAME sorting_control_task_test COMMAND sorting_control_task_test)
     add_test(NAME app_queues_test COMMAND app_queues_test)
     add_test(NAME comm_rx_routing_test COMMAND comm_rx_routing_test)
     add_test(NAME app_comm_tx_test COMMAND app_comm_tx_test)

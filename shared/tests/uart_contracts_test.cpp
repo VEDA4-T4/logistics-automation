@@ -28,7 +28,8 @@ void TestInputPayloadValidation() {
     constexpr std::array<std::uint8_t, 1> kUnexpectedPayload{ 1U };
     constexpr std::array<std::uint8_t, 1> kSpeed100{ 100U };
     constexpr std::array<std::uint8_t, 1> kSpeed101{ 101U };
-    constexpr std::array<std::uint8_t, 4> kInputSensorDetected{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_DETECTED, 10U, 0U };
+    constexpr std::array<std::uint8_t, 4> kInputSensorDetected{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_DETECTED, 0x34U,
+                                                                0x12U };
     constexpr std::array<std::uint8_t, 4> kInvalidInputSensor{ 2U, UART_SENSOR_DETECTED, 10U, 0U };
     constexpr std::array<std::uint8_t, 4> kInvalidInputSensorState{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_FAULT + 1U, 10U,
                                                                     0U };
@@ -47,26 +48,29 @@ void TestInputPayloadValidation() {
     assert(uart_input_sensor_status_is_valid(kInvalidInputSensor.data(), kInvalidInputSensor.size()) == 0U);
     assert(uart_input_sensor_status_is_valid(kInvalidInputSensorState.data(), kInvalidInputSensorState.size()) == 0U);
     assert(uart_input_sensor_status_is_valid(nullptr, UART_SENSOR_STATUS_PAYLOAD_SIZE) == 0U);
+    assert(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_LOW_INDEX] == 0x34U);
+    assert(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_HIGH_INDEX] == 0x12U);
+    assert((static_cast<std::uint16_t>(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_LOW_INDEX]) |
+            (static_cast<std::uint16_t>(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_HIGH_INDEX]) << 8U)) == 0x1234U);
     assert(UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
 }
 
 void TestSortingPayloadValidation() {
     constexpr std::array<std::uint8_t, 3> kRouteDestination2{ 0x34U, 0x12U, UART_SORTING_DESTINATION_2 };
     constexpr std::array<std::uint8_t, 3> kInvalidDestination{ 0x34U, 0x12U, 4U };
+    constexpr std::array<std::uint8_t, 3> kZeroCycleRoute{ 0U, 0U, UART_SORTING_DESTINATION_1 };
     constexpr std::array<std::uint8_t, 2> kCancelCycle{ 0x34U, 0x12U };
+    constexpr std::array<std::uint8_t, 2> kZeroCycle{ 0U, 0U };
+    constexpr std::array<std::uint8_t, 2> kReturnHomeCycle{ 0x34U, 0x12U };
+    constexpr std::array<std::uint8_t, 1> kShortReturnHomeCycle{ 0x34U };
     constexpr std::array<std::uint8_t, 1> kSortingSpeed100{ 100U };
     constexpr std::array<std::uint8_t, 1> kSortingSpeed101{ 101U };
     constexpr std::array<std::uint8_t, 4> kSensorDetected{ UART_SORTING_SENSOR_ID_2, UART_SENSOR_DETECTED, 10U, 0U };
     constexpr std::array<std::uint8_t, 4> kCompleteEvent{ UART_SORTING_EVENT_CYCLE_COMPLETE, 0x34U, 0x12U,
                                                           UART_SORTING_DESTINATION_2 };
-    constexpr std::array<std::uint8_t, 5> kUnexpectedSensorEvent{ UART_SORTING_EVENT_UNEXPECTED_SENSOR, 0x34U, 0x12U,
-                                                                  UART_SORTING_DESTINATION_2,
-                                                                  UART_SORTING_SENSOR_ID_1 };
-    constexpr std::array<std::uint8_t, 5> kInvalidUnexpectedSensorEvent{ UART_SORTING_EVENT_UNEXPECTED_SENSOR, 0x34U,
-                                                                         0x12U, UART_SORTING_DESTINATION_2,
-                                                                         UART_SORTING_SENSOR_ID_2 };
 
     assert(UART_IS_VALID_SORTING_COMMAND(UART_CMD_SORTING_ROUTE_ITEM) != 0U);
+    assert(UART_IS_VALID_SORTING_COMMAND(UART_CMD_SORTING_RETURN_HOME) != 0U);
     assert(UART_IS_VALID_SORTING_COMMAND(UART_CMD_SORTING_MAX) == 0U);
     assert(UART_IS_VALID_SORTING_COMMAND(0x130U) == 0U);
 
@@ -74,8 +78,17 @@ void TestSortingPayloadValidation() {
                                          kRouteDestination2.size()) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_ROUTE_ITEM, kInvalidDestination.data(),
                                          kInvalidDestination.size()) == 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_ROUTE_ITEM, kZeroCycleRoute.data(), kZeroCycleRoute.size()) ==
+           0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CANCEL, kCancelCycle.data(), kCancelCycle.size()) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CANCEL, nullptr, kCancelCycle.size()) == 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CANCEL, kZeroCycle.data(), kZeroCycle.size()) == 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RETURN_HOME, kReturnHomeCycle.data(),
+                                         kReturnHomeCycle.size()) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RETURN_HOME, nullptr, kReturnHomeCycle.size()) == 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RETURN_HOME, kShortReturnHomeCycle.data(),
+                                         kShortReturnHomeCycle.size()) == 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RETURN_HOME, kZeroCycle.data(), kZeroCycle.size()) == 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_GET_STATUS, nullptr, 0U) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RESET, nullptr, 0U) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RESET, nullptr, 256U) == 0U);
@@ -89,22 +102,20 @@ void TestSortingPayloadValidation() {
 
     assert(uart_sorting_route_cycle_id(kRouteDestination2.data()) == 0x1234U);
     assert(uart_sorting_cancel_cycle_id(kCancelCycle.data()) == 0x1234U);
+    assert(uart_sorting_return_home_cycle_id(kReturnHomeCycle.data()) == 0x1234U);
+    assert(uart_sorting_return_home_cycle_id(nullptr) == 0U);
     assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_1) != 0U);
     assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_2) != 0U);
     assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_3) != 0U);
     assert(uart_sorting_sensor_id_is_valid(4U) == 0U);
-    assert(uart_sorting_sensor_matches_destination(UART_SORTING_SENSOR_ID_2, UART_SORTING_DESTINATION_2) != 0U);
-    assert(uart_sorting_sensor_matches_destination(UART_SORTING_SENSOR_ID_1, UART_SORTING_DESTINATION_2) == 0U);
     assert(uart_sorting_sensor_status_is_valid(kSensorDetected.data(), kSensorDetected.size()) != 0U);
     assert(UART_IS_VALID_SORTING_EVENT_PAYLOAD(kCompleteEvent.data(), kCompleteEvent.size()) != 0U);
-    assert(UART_IS_VALID_SORTING_EVENT_PAYLOAD(kUnexpectedSensorEvent.data(), kUnexpectedSensorEvent.size()) != 0U);
-    assert(UART_IS_VALID_SORTING_EVENT_PAYLOAD(kInvalidUnexpectedSensorEvent.data(),
-                                               kInvalidUnexpectedSensorEvent.size()) == 0U);
+    assert(uart_sorting_event_is_valid(0x01U) == 0U);
+    assert(uart_sorting_event_is_valid(0x03U) == 0U);
     assert(uart_sorting_event_is_valid(0x04U) == 0U);
     assert(UART_SORTING_STATUS_PAYLOAD_SIZE == 7U);
     assert(UART_SORTING_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
     assert(UART_SORTING_CYCLE_EVENT_PAYLOAD_SIZE == 4U);
-    assert(UART_SORTING_UNEXPECTED_EVENT_PAYLOAD_SIZE == 5U);
 }
 
 void TestCodecAndParserRoundTrip() {

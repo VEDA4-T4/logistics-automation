@@ -1,15 +1,13 @@
 /*
  * ============================================================================
- * CommTxTask 1단계 dummy 송신 수신 검증 프로그램 (Raspberry Pi / Linux)
+ * CommTxTask/SensorTask 송신 수신 검증 프로그램 (Raspberry Pi / Linux)
  * ============================================================================
  *
  * STM32 CommTxTask가 보내는 UART 프레임을 수신해서 다음을 검증한다.
  *
  *   1. 프레임 구조·CRC16-CCITT (shared 계약 파서 재사용)
- *   2. 채널 라우팅: SENSOR_STATUS의 sensor_id가 이 채널 값과 일치
+ *   2. 채널 라우팅: 투입 sensor_id=1, 분류 sensor_id=1~3
  *   3. heartbeat: EVENT(id 0x01) 주기 1.0±0.5초, 장치 상태·오류·uptime 포함
- *   4. 긴급 우선순위: burst 시험에서 urgent EVENT(id 0x03)가 같은 burst의
- *      normal EVENT(id 0x02)보다 먼저 도착
  *
  * 프레임 파싱과 CRC 검증은 shared의 계약 구현(uart_parser.c, uart_crc16.c)을
  * 그대로 재사용한다. 이 검증을 통과하면 STM32 송신부와 shared 계약 코드가
@@ -39,7 +37,6 @@
  *   - CRC/버전/명령어/길이 오류 0
  *   - 라우팅 오류(sensor_id 불일치) 0
  *   - heartbeat 2회 이상, 주기 1.0±0.5초 유지
- *   - 긴급 우선순위 위반 0 (burst 시험이 관측된 경우)
  *
  * 초기 동기화:
  *   STM32가 계속 송신 중인 스트림에 프레임 중간부터 접속하면 payload 안의
@@ -58,20 +55,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "logistics/contracts/uart/input_commands.h"
+#include "logistics/contracts/uart/sorting_commands.h"
 #include "logistics/contracts/uart_parser.h"
 #include "logistics/contracts/uart_protocol.h"
 
-/* dummy 송신기와 약속된 채널별 sensor_id (투입=0, 분류=1) */
-#define EXPECTED_SENSOR_ID_INPUT 0U
-#define EXPECTED_SENSOR_ID_SORTING 1U
-
-/*
- * 애플리케이션 EVENT ID
- * (펌웨어 Application/Inc/app_comm_tx.h, app_comm_tx_dummy.h와 값을 맞춘다)
- */
+/* 애플리케이션 EVENT ID (펌웨어 Application/Inc/app_comm_tx.h와 동일) */
 #define APP_EVENT_HEARTBEAT 0x01U
-#define APP_EVENT_DUMMY_BURST 0x02U
-#define APP_EVENT_DUMMY_URGENT 0x03U
 
 /* heartbeat payload 인덱스 (app_comm_tx.h와 동일) */
 #define APP_HEARTBEAT_STATE_INDEX 1U
@@ -100,10 +90,6 @@ typedef struct {
     uint32_t heartbeat;
     uint32_t heartbeat_bad_size;
     uint32_t heartbeat_gap_bad;
-    uint32_t burst_normal;
-    uint32_t burst_urgent;
-    uint32_t priority_ok;
-    uint32_t priority_fail;
     uint32_t other;
     uint32_t seq_gap;
     uint32_t sync_discard;
@@ -220,11 +206,11 @@ int main(int argc, char** argv) {
     const char* channel = argv[2];
     double duration = (argc >= 4) ? atof(argv[3]) : DEFAULT_DURATION_S;
 
-    uint8_t expected_sensor_id;
+    uint8_t input_channel;
     if (strcmp(channel, "input") == 0) {
-        expected_sensor_id = EXPECTED_SENSOR_ID_INPUT;
+        input_channel = 1U;
     } else if (strcmp(channel, "sorting") == 0) {
-        expected_sensor_id = EXPECTED_SENSOR_ID_SORTING;
+        input_channel = 0U;
     } else {
         fprintf(stderr, "채널은 input 또는 sorting이어야 합니다: %s\n", channel);
         return 2;
@@ -249,10 +235,6 @@ int main(int argc, char** argv) {
 
     /* 첫 정상 프레임 수신 전에는 파서 오류를 동기화 아티팩트로 무시한다 */
     int synced = 0;
-
-    /* 현재 관측 중인 burst의 우선순위 판정 상태 */
-    int burst_active_id = -1;
-    uint32_t burst_normals_seen = 0U;
 
     printf("[%s] %s @ 115200 수신 시작 (%.0f초)...\n", channel, port, duration);
 
@@ -342,16 +324,23 @@ int main(int argc, char** argv) {
                 stats.sensor_status++;
 
                 uint8_t sensor_id = frame.payload[UART_SENSOR_ID_INDEX];
-                uint16_t distance = (uint16_t)(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX] |
-                                               (frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX] << 8U));
+                uint8_t state = frame.payload[UART_SENSOR_STATE_INDEX];
+                uint16_t distance_cm =
+                    (uint16_t)(frame.payload[UART_SENSOR_DISTANCE_CM_LOW_INDEX] |
+                               ((uint16_t)frame.payload[UART_SENSOR_DISTANCE_CM_HIGH_INDEX] << 8U));
+                uint8_t sensor_id_is_valid =
+                    input_channel != 0U ? uart_input_sensor_id_is_valid(sensor_id)
+                                        : uart_sorting_sensor_id_is_valid(sensor_id);
 
-                if (sensor_id != expected_sensor_id) {
+                if (sensor_id_is_valid == 0U) {
                     stats.wrong_channel++;
-                    printf("  라우팅 오류! sensor_id=%u (기대값 %u)\n", sensor_id, expected_sensor_id);
+                    printf("  라우팅 오류! sensor_id=%u (기대값 %s)\n", sensor_id,
+                           input_channel != 0U ? "1" : "1~3");
                 }
 
                 if (stats.sensor_status % 25U == 1U) {
-                    printf("  SENSOR_STATUS: seq=%u sensor_id=%u distance=%umm\n", frame.sequence, sensor_id, distance);
+                    printf("  SENSOR_STATUS: seq=%u sensor_id=%u state=%u distance=%ucm\n", frame.sequence, sensor_id,
+                           state, distance_cm);
                 }
             } else if (frame.command == UART_CMD_EVENT) {
                 uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
@@ -386,37 +375,6 @@ int main(int argc, char** argv) {
                         }
                     }
                     last_heartbeat_time = now;
-                } else if (event_id == APP_EVENT_DUMMY_URGENT) {
-                    stats.burst_urgent++;
-
-                    uint8_t burst_id = frame.payload[1];
-
-                    /*
-                     * 긴급 우선순위 판정: urgent는 dummy 송신기가 burst의
-                     * 마지막에 등록하지만, CommTxTask가 우선 처리하므로
-                     * 같은 burst의 normal보다 먼저 도착해야 한다.
-                     */
-                    if (burst_active_id == (int)burst_id && burst_normals_seen > 0U) {
-                        stats.priority_fail++;
-                        printf("  우선순위 위반! burst=%u에서 normal %u개가 urgent보다 먼저 도착\n", burst_id,
-                               burst_normals_seen);
-                    } else {
-                        stats.priority_ok++;
-                        printf("  긴급 우선 확인: burst=%u urgent가 먼저 도착\n", burst_id);
-                    }
-
-                    burst_active_id = (int)burst_id;
-                } else if (event_id == APP_EVENT_DUMMY_BURST) {
-                    stats.burst_normal++;
-
-                    uint8_t burst_id = frame.payload[1];
-
-                    if (burst_active_id != (int)burst_id) {
-                        /* 새 burst의 normal을 urgent보다 먼저 봤다 */
-                        burst_active_id = (int)burst_id;
-                        burst_normals_seen = 0U;
-                    }
-                    burst_normals_seen++;
                 } else {
                     stats.other++;
                     printf("  알 수 없는 EVENT id=0x%02X seq=%u\n", event_id, frame.sequence);
@@ -436,8 +394,6 @@ int main(int argc, char** argv) {
     printf("  총 프레임          : %u\n", stats.frames);
     printf("  SENSOR_STATUS      : %u\n", stats.sensor_status);
     printf("  heartbeat          : %u\n", stats.heartbeat);
-    printf("  burst normal       : %u\n", stats.burst_normal);
-    printf("  burst urgent       : %u\n", stats.burst_urgent);
     printf("  기타               : %u\n", stats.other);
     printf("  CRC 오류           : %u\n", stats.crc_error);
     printf("  버전 오류          : %u\n", stats.version_error);
@@ -449,19 +405,13 @@ int main(int argc, char** argv) {
     printf("  SEQ 끊김           : %u\n", stats.seq_gap);
     printf("  heartbeat 크기 오류: %u\n", stats.heartbeat_bad_size);
     printf("  heartbeat 주기 이탈: %u\n", stats.heartbeat_gap_bad);
-    printf("  긴급 우선 확인     : %u\n", stats.priority_ok);
-    printf("  긴급 우선 위반     : %u\n", stats.priority_fail);
 
     int pass = (stats.frames > 0U) && (stats.crc_error == 0U) && (stats.version_error == 0U) &&
                (stats.command_error == 0U) && (stats.length_error == 0U) && (stats.wrong_channel == 0U) &&
-               (stats.heartbeat >= 2U) && (stats.heartbeat_bad_size == 0U) && (stats.heartbeat_gap_bad == 0U) &&
-               (stats.priority_fail == 0U);
+               (stats.sensor_status > 0U) && (stats.heartbeat >= 2U) && (stats.heartbeat_bad_size == 0U) &&
+               (stats.heartbeat_gap_bad == 0U);
 
     printf("\n판정: %s\n", pass ? "PASS" : "FAIL");
-
-    if (stats.burst_urgent == 0U) {
-        printf("참고: burst 시험이 관측되지 않았습니다. 우선순위 검증에는 %.0f초 이상 수신이 필요합니다.\n", 6.0 * 2.0);
-    }
 
     return pass ? 0 : 1;
 }
