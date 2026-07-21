@@ -35,7 +35,7 @@ std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<Visio
     }
 
     clear_frames_ = 0;
-    if (phase_ == Phase::kAwaitingWork && observation->barcode.has_value()) {
+    if ((phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && observation->barcode.has_value()) {
         observation_->barcode = std::move(observation->barcode);
     }
     if (phase_ != Phase::kIdle) {
@@ -67,6 +67,12 @@ bool VisionMqttWorkflow::AssignWork(const mqtt::MqttMessage& message) {
     work_id_ = work->work_id;
     phase_ = Phase::kAssigned;
     return true;
+}
+
+bool VisionMqttWorkflow::HasPendingBarcode() const {
+    std::lock_guard lock(mutex_);
+    return (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && observation_.has_value() &&
+           observation_->barcode.has_value();
 }
 
 std::optional<AssignedVisionWork> VisionMqttWorkflow::TakeAssignedWork() {

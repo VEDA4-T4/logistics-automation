@@ -44,8 +44,11 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(box.has_value());
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), *box).IsSuccess());
 
-    assert(!workflow.Observe(Observation(std::string("8801234567893")), "IGNORED", "2026-07-21T11:00:01Z").has_value());
+    assert(!workflow.HasPendingBarcode());
     assert(workflow.AssignWork(WorkCreated()));
+    assert(!workflow.HasPendingBarcode());
+    assert(!workflow.Observe(Observation(std::string("8801234567893")), "IGNORED", "2026-07-21T11:00:01Z").has_value());
+    assert(workflow.HasPendingBarcode());
     const auto assigned = workflow.TakeAssignedWork();
     assert(assigned.has_value());
     assert(assigned->observation.barcode == "8801234567893");
@@ -72,6 +75,7 @@ void TestDetectionAssignmentAndResultMessages() {
 void TestMissingBarcodeProducesFailedResult() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
     assert(workflow.Observe(Observation(), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
+    assert(!workflow.HasPendingBarcode());
     assert(workflow.AssignWork(WorkCreated()));
     const auto work = workflow.TakeAssignedWork();
     assert(work.has_value());

@@ -459,12 +459,16 @@ int main(const int argc, char* argv[]) {
             std::move(observation), logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
             logistics::device::CurrentIso8601Timestamp());
         if (box_event.has_value()) {
+            pending_capture.release();
             if (mqtt_client.PublishEvent(*box_event)) {
-                pending_capture = frame.clone();
                 device_status->SetCurrentState("AWAITING_WORK_ID");
             } else {
                 mqtt_workflow.CancelPendingWork();
             }
+        }
+        if (detection_result.box.has_value() && !detection_result.barcodes.empty() &&
+            mqtt_workflow.HasPendingBarcode()) {
+            pending_capture = frame.clone();
         }
 
         if (auto work = mqtt_workflow.TakeAssignedWork(); work.has_value()) {
@@ -477,8 +481,9 @@ int main(const int argc, char* argv[]) {
                 timestamp);
             const bool position_published = mqtt_client.PublishEvent(position);
             const bool barcode_published = mqtt_client.PublishEvent(barcode);
-            bool image_published = image_uploader == nullptr;
-            if (image_uploader != nullptr && !pending_capture.empty()) {
+            const bool barcode_detected = work->observation.barcode.has_value();
+            bool image_published = !barcode_detected || image_uploader == nullptr;
+            if (barcode_detected && image_uploader != nullptr && !pending_capture.empty()) {
                 std::vector<std::uint8_t> jpeg;
                 if (cv::imencode(".jpg", pending_capture, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 })) {
                     const std::string upload_message_id =
@@ -493,6 +498,7 @@ int main(const int argc, char* argv[]) {
                             logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++), captured_at);
                         image_published = mqtt_client.PublishEvent(image);
                     } else {
+                        std::cerr << "[vision][ERROR] image upload failed: " << uploaded.error << '\n';
                         static_cast<void>(mqtt_client.PublishError(MakeVisionError(
                             device_id, logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
                             captured_at, "IMAGE_UPLOAD_FAILED", "UPLOAD_ERROR", uploaded.error, work->work_id)));
@@ -503,6 +509,12 @@ int main(const int argc, char* argv[]) {
                         logistics::device::CurrentIso8601Timestamp(), "IMAGE_ENCODING_FAILED", "VISION_ERROR",
                         "failed to encode the captured frame as JPEG", work->work_id)));
                 }
+            } else if (barcode_detected && image_uploader != nullptr) {
+                std::cerr << "[vision][ERROR] barcode was detected without a captured frame\n";
+                static_cast<void>(mqtt_client.PublishError(MakeVisionError(
+                    device_id, logistics::device::MakeMessageId(device_id, mqtt_session_id, mqtt_sequence++),
+                    logistics::device::CurrentIso8601Timestamp(), "IMAGE_CAPTURE_MISSING", "VISION_ERROR",
+                    "barcode was detected without a captured frame", work->work_id)));
             }
             const bool all_published = position_published && barcode_published && image_published;
             device_status->SetCurrentState(all_published ? "VISION_REPORTED" : "VISION_ERROR");

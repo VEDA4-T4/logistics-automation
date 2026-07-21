@@ -33,6 +33,7 @@ public:
     [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> Observe(std::optional<VisionObservation> observation,
                                                                       std::string message_id, std::string timestamp);
     [[nodiscard]] bool AssignWork(const contracts::mqtt::MqttMessage& message);
+    [[nodiscard]] bool HasPendingBarcode() const;
     [[nodiscard]] std::optional<AssignedVisionWork> TakeAssignedWork();
     void CancelPendingWork();
     void CompleteWork();
@@ -43,7 +44,7 @@ private:
     std::string device_id_;
     std::size_t detection_confirm_frames_;
     std::size_t clear_confirm_frames_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     Phase phase_{ Phase::kIdle };
     std::size_t detected_frames_{};
     std::size_t clear_frames_{};
