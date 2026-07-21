@@ -1,6 +1,7 @@
 #include "logistics/control_center/process_control_panel.hpp"
 
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
@@ -52,41 +53,42 @@ QString ResultLabel(mqtt::CommandResult result) {
 
 ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("processControlPanel"));
-    setMinimumWidth(310);
-    setMaximumWidth(360);
+    setMinimumWidth(360);
+    setMaximumWidth(390);
+    setMinimumHeight(205);
+    setMaximumHeight(225);
     setStyleSheet(
-        "#processControlPanel{background-color:#0b1220;border:1px solid #243247;border-radius:12px;}"
-        "QLabel{color:#e2e8f0;}"
-        "QPushButton{min-height:42px;border:1px solid #334155;border-radius:8px;background-color:#1e293b;"
-        "color:#f8fafc;font-size:14px;font-weight:700;padding:6px 12px;}"
-        "QPushButton:hover:enabled{background-color:#334155;border-color:#475569;}"
-        "QPushButton:pressed:enabled{background-color:#0f172a;}"
-        "QPushButton:disabled{background-color:#111827;color:#64748b;border-color:#1e293b;}"
-        "QPushButton#startButton{background-color:#075985;border-color:#0284c7;}"
-        "QPushButton#startButton:hover:enabled{background-color:#0369a1;}"
-        "QPushButton#stopButton{background-color:#3b2a0d;border-color:#92400e;color:#fde68a;}"
-        "QPushButton#stopButton:hover:enabled{background-color:#4a310b;}"
-        "QPushButton#emergencyStopButton{min-height:72px;background-color:#991b1b;color:#fff1f2;"
-        "font-size:18px;border:1px solid #ef4444;}"
-        "QPushButton#emergencyStopButton:hover:enabled{background-color:#b91c1c;}");
+        "#processControlPanel{background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
+        "QLabel{color:#cccccc;}"
+        "QPushButton{min-height:32px;border:1px solid #3c3c3c;border-radius:4px;background-color:#2d2d2d;"
+        "color:#f0f0f0;font-size:12px;font-weight:600;padding:3px 8px;}"
+        "QPushButton:hover:enabled{background-color:#3c3c3c;border-color:#4d4d4d;}"
+        "QPushButton:pressed:enabled{background-color:#252526;}"
+        "QPushButton:disabled{background-color:#1f1f1f;color:#6e6e6e;border-color:#2b2b2b;}"
+        "QPushButton#startButton{background-color:#0e639c;border-color:#1177bb;}"
+        "QPushButton#startButton:hover:enabled{background-color:#1177bb;}"
+        "QPushButton#stopButton{color:#cca700;}"
+        "QPushButton#emergencyStopButton{min-height:42px;background-color:#a1260d;color:#ffffff;"
+        "font-size:13px;border:1px solid #c42b1c;}"
+        "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(16, 16, 16, 16);
-    layout->setSpacing(10);
+    layout->setContentsMargins(12, 9, 12, 9);
+    layout->setSpacing(6);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
-    title->setStyleSheet("color:#f8fafc;font-size:20px;font-weight:800;");
+    title->setStyleSheet("color:#f0f0f0;font-size:16px;font-weight:700;");
     connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
     connection_hint_->setWordWrap(true);
-    connection_hint_->setStyleSheet("color:#94a3b8;font-size:11px;");
+    connection_hint_->setStyleSheet("color:#9d9d9d;font-size:10px;");
 
     command_status_ = new QLabel(QStringLiteral("대기 중"), this);
     command_status_->setObjectName(QStringLiteral("commandStatus"));
-    command_status_->setMinimumHeight(72);
+    command_status_->setMinimumHeight(34);
     command_status_->setAlignment(Qt::AlignCenter);
     command_status_->setWordWrap(true);
     command_status_->setStyleSheet(
-        "background-color: #1f2937; color: #d1d5db; border: 1px solid #374151; border-radius: 6px; padding: 8px;");
+        "background-color:#1f1f1f;color:#cccccc;border:1px solid #2b2b2b;border-radius:4px;padding:4px;");
 
     start_button_ = new QPushButton(QStringLiteral("시작"), this);
     start_button_->setObjectName(QStringLiteral("startButton"));
@@ -108,17 +110,18 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
 
     layout->addWidget(title);
     layout->addWidget(connection_hint_);
-    layout->addSpacing(8);
     layout->addWidget(command_status_);
-    layout->addSpacing(8);
-    layout->addWidget(start_button_);
-    layout->addWidget(stop_button_);
-    layout->addWidget(restart_button_);
-    layout->addStretch();
+    auto* normal_commands = new QHBoxLayout();
+    normal_commands->setContentsMargins(0, 0, 0, 0);
+    normal_commands->setSpacing(6);
+    normal_commands->addWidget(start_button_);
+    normal_commands->addWidget(stop_button_);
+    normal_commands->addWidget(restart_button_);
+    layout->addLayout(normal_commands);
 
     auto* divider = new QFrame(this);
     divider->setFrameShape(QFrame::HLine);
-    divider->setStyleSheet("color: #4b5563;");
+    divider->setStyleSheet("color:#2b2b2b;");
     layout->addWidget(divider);
     layout->addWidget(emergency_stop_button_);
 
@@ -132,11 +135,11 @@ void ProcessControlPanel::setMqttConnected(bool connected) {
     if (connected && !control_state_.isCommandPending()) {
         command_status_->setText(QStringLiteral("대기 중"));
         command_status_->setStyleSheet(
-            "background-color: #1f2937; color: #d1d5db; border: 1px solid #374151; border-radius: 6px; padding: 8px;");
+            "background-color:#1f1f1f;color:#cccccc;border:1px solid #2b2b2b;border-radius:4px;padding:4px;");
     } else if (!connected) {
         command_status_->setText(QStringLiteral("MQTT 연결 끊김"));
         command_status_->setStyleSheet(
-            "background-color: #1f2937; color: #fca5a5; border: 1px solid #7f1d1d; border-radius: 6px; padding: 8px;");
+            "background-color:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;padding:4px;");
     }
     updateButtonStates();
 }
@@ -145,7 +148,7 @@ void ProcessControlPanel::setCommandPending(mqtt::ControlCommand command) {
     control_state_.setCommandPending();
     command_status_->setText(QStringLiteral("%1 명령 전송됨\n응답 대기 중").arg(CommandLabel(command)));
     command_status_->setStyleSheet(
-        "background-color: #1f2937; color: #fbbf24; border: 1px solid #92400e; border-radius: 6px; padding: 8px;");
+        "background-color:#3a3000;color:#cca700;border:1px solid #6b5d00;border-radius:4px;padding:4px;");
     updateButtonStates();
 }
 
@@ -158,7 +161,7 @@ void ProcessControlPanel::setCommandProgress(mqtt::ControlCommand command, mqtt:
     }
     command_status_->setText(text);
     command_status_->setStyleSheet(
-        "background-color: #1f2937; color: #93c5fd; border: 1px solid #1d4ed8; border-radius: 6px; padding: 8px;");
+        "background-color:#182c3a;color:#4daafc;border:1px solid #264f78;border-radius:4px;padding:4px;");
     updateButtonStates();
 }
 
@@ -173,10 +176,8 @@ void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt:
 
     const bool succeeded = result == mqtt::CommandResult::kSuccess;
     command_status_->setStyleSheet(
-        succeeded
-            ? "background-color: #052e16; color: #86efac; border: 1px solid #15803d; border-radius: 6px; padding: 8px;"
-            : "background-color: #450a0a; color: #fca5a5; border: 1px solid #b91c1c; border-radius: 6px; padding: "
-              "8px;");
+        succeeded ? "background-color:#1f3325;color:#89d185;border:1px solid #385a40;border-radius:4px;padding:4px;"
+                  : "background-color:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;padding:4px;");
     updateButtonStates();
 }
 
