@@ -3,6 +3,8 @@
 #include <cassert>
 #include <cstdint>
 
+void RunMotorControlLogicTests();
+
 namespace {
 
 app_control_command_t MakeCommand(app_control_command_type_t type, std::uint32_t received_at_ms,
@@ -395,6 +397,7 @@ void TestLoadOffDuringReturnIsFault() {
 }  // namespace
 
 int main() {
+    RunMotorControlLogicTests();
     TestInitializationAndPosition();
     TestSafetyLatchRejectsDriveUntilApprovedReset();
     TestObstacleSafetyState();

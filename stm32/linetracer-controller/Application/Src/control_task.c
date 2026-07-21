@@ -6,9 +6,12 @@
 #include "cmsis_os2.h"
 #include "control_config.h"
 #include "control_logic.h"
+#include "motor_control.h"
 
 static control_context_t controlTaskContext;
 static uart_linetracer_load_state_t controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
+static linetracer_line_state_t controlTaskLineState = LINETRACER_LINE_UNKNOWN;
+static uint8_t controlTaskMotorReady;
 
 typedef struct {
     app_tx_event_t event;
@@ -149,11 +152,59 @@ static void ControlTask_ProcessSafetyEvents(void) {
            osMessageQueueGet(controlSafetyQueue, &event, NULL, 0U) == osOK) {
         uint32_t now_ms = osKernelGetTickCount();
 
+        MotorControl_ForceStop();
         if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
             ControlTask_PublishSafetyResetResult(&event, now_ms);
         }
         ++processed;
     }
+}
+
+static void ControlTask_ApplyMotorOutput(const motor_output_t* output, uint32_t now_ms) {
+    if (controlTaskMotorReady == 0U) {
+        MotorControl_ForceStop();
+        return;
+    }
+
+    if (MotorControl_Apply(output) == 0U) {
+        controlTaskMotorReady = 0U;
+        MotorControl_ForceStop();
+        ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR, CONTROL_HEALTH_MOTOR_OUTPUT_FAILED, now_ms);
+    }
+}
+
+static void ControlTask_ApplyRouteActionMotor(route_action_t action, uint32_t now_ms) {
+    motor_output_t output;
+
+    if (MotorControlLogic_ComputeRouteAction(action, &output) != 0U) {
+        ControlTask_ApplyMotorOutput(&output, now_ms);
+    }
+}
+
+static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
+    motor_output_t output;
+
+    if (controlTaskMotorReady == 0U) {
+        MotorControl_ForceStop();
+        return;
+    }
+
+    if (MotorControlLogic_ComputeControlOutput(controlTaskContext.state, controlTaskContext.pending_route_action,
+                                               controlTaskLineState, controlTaskContext.route_active,
+                                               controlTaskContext.safety_latched, &output) != 0U) {
+        ControlTask_ApplyMotorOutput(&output, now_ms);
+    }
+}
+
+static uint8_t ControlTask_RouteSensorEventsEnabled(void) {
+    if (controlTaskContext.safety_latched != 0U || controlTaskContext.state == LINETRACER_CONTROL_STOPPED ||
+        controlTaskContext.state == LINETRACER_CONTROL_OBSTACLE_STOP ||
+        controlTaskContext.state == LINETRACER_CONTROL_ERROR ||
+        controlTaskContext.state == LINETRACER_CONTROL_EMERGENCY_STOPPED) {
+        return 0U;
+    }
+
+    return 1U;
 }
 
 static void ControlTask_PublishLifecycleEvent(app_tx_event_type_t type, uint16_t job_id,
@@ -220,6 +271,8 @@ static void ControlTask_StartUnload(uint32_t now_ms) {
 
 static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_control_state_t previous_state,
                                            const control_job_completion_t* completion, uint32_t now_ms) {
+    ControlTask_ApplyRouteActionMotor(action, now_ms);
+
     if (previous_state != controlTaskContext.state && action != ROUTE_ACTION_JOB_COMPLETE) {
         ControlTask_PublishStateChanged(now_ms);
     }
@@ -276,8 +329,17 @@ static void ControlTask_ProcessSensorSnapshots(void) {
            osMessageQueueGet(sensorSnapshotQueue, &snapshot, NULL, 0U) == osOK) {
         uint32_t now_ms = osKernelGetTickCount();
 
+        if (snapshot.line_state <= LINETRACER_LINE_WHITE_GAP) {
+            controlTaskLineState = snapshot.line_state;
+        }
+
         if (uart_linetracer_load_state_is_valid(snapshot.load_state) != 0U) {
             controlTaskLoadState = snapshot.load_state;
+        }
+
+        if (ControlTask_RouteSensorEventsEnabled() == 0U) {
+            ++processed;
+            continue;
         }
 
         if ((snapshot.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U &&
@@ -378,6 +440,19 @@ void StartControlTask(void* argument) {
     last_alive_tick = next_wake_tick;
     ControlLogic_Init(&controlTaskContext, next_wake_tick);
     controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
+    controlTaskLineState = LINETRACER_LINE_UNKNOWN;
+    controlTaskMotorReady = MotorControl_Init();
+    if (controlTaskMotorReady == 0U) {
+        app_control_safety_event_t motor_fault = { 0 };
+
+        motor_fault.type = APP_CONTROL_SAFETY_LATCHED;
+        motor_fault.reason = LINETRACER_STOP_REASON_EMERGENCY;
+        motor_fault.occurred_at_ms = next_wake_tick;
+        motor_fault.error_code = UART_ERROR_INTERNAL;
+        (void)ControlLogic_ApplySafetyEvent(&controlTaskContext, &motor_fault, next_wake_tick);
+        ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR, CONTROL_HEALTH_MOTOR_INIT_FAILED,
+                                       next_wake_tick);
+    }
 
     for (;;) {
         uint32_t now_ms;
@@ -388,6 +463,7 @@ void StartControlTask(void* argument) {
         ControlTask_ProcessSensorSnapshots();
         ControlTask_ProcessCommands();
         now_ms = osKernelGetTickCount();
+        ControlTask_UpdateMotorOutput(now_ms);
 
         if ((uint32_t)(now_ms - last_alive_tick) >= CONTROL_TASK_ALIVE_INTERVAL_MS) {
             ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_TASK_ALIVE, (uint32_t)controlTaskContext.state, now_ms);

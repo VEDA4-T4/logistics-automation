@@ -1,7 +1,9 @@
 add_executable(
     linetracer_control_logic_test
     control_logic_test.cpp
+    motor_control_logic_test.cpp
     ../../Application/Src/control_logic.c
+    ../../Application/Src/motor_control_logic.c
     ../../Application/Src/route_planner.c
 )
 
