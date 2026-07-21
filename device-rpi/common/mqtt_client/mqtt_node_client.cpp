@@ -200,6 +200,22 @@ public:
         return published;
     }
 
+    [[nodiscard]] bool PublishEvent(const mqtt::MqttMessage& message) {
+        if (!connected_ || client_ == nullptr) {
+            return false;
+        }
+        return PublishEncoded(mqtt::DeviceEventTopic(config_.device_id), processor_.EncodeDeviceEvent(message), 1,
+                              false, "device event");
+    }
+
+    [[nodiscard]] bool PublishError(const mqtt::MqttMessage& message) {
+        if (!connected_ || client_ == nullptr) {
+            return false;
+        }
+        return PublishEncoded(mqtt::DeviceErrorTopic(config_.device_id), processor_.EncodeDeviceError(message), 1, true,
+                              "device error");
+    }
+
 private:
     [[nodiscard]] std::string LifecycleMessageId(std::string_view kind, std::uint64_t sequence) const {
         return std::string(kind) + '-' + MakeMessageId(config_.device_id, message_session_id_, sequence);
@@ -376,6 +392,14 @@ bool MqttNodeClient::IsConnected() const noexcept {
 
 bool MqttNodeClient::PublishHeartbeat(std::string message_id, std::string timestamp) {
     return impl_->PublishHeartbeat(std::move(message_id), std::move(timestamp));
+}
+
+bool MqttNodeClient::PublishEvent(const contracts::mqtt::MqttMessage& message) {
+    return impl_->PublishEvent(message);
+}
+
+bool MqttNodeClient::PublishError(const contracts::mqtt::MqttMessage& message) {
+    return impl_->PublishError(message);
 }
 
 }  // namespace logistics::device
