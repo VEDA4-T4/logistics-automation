@@ -1,5 +1,6 @@
 #include "logistics/control_center/product_result_panel.hpp"
 
+#include <QDebug>
 #include <QGridLayout>
 #include <QLabel>
 #include <QNetworkAccessManager>
@@ -212,8 +213,14 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
         if (!active || requested_work_id != current_work_id_)
             return;
         if (reply->error() != QNetworkReply::NoError) {
+            const int http_status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            const QString detail = QStringLiteral("URL: %1\nHTTP: %2\nError: %3")
+                                       .arg(reply->url().toString())
+                                       .arg(http_status == 0 ? QStringLiteral("N/A") : QString::number(http_status))
+                                       .arg(reply->errorString());
+            qWarning().noquote() << "[control-center][http] image download failed:" << detail;
             setImagePlaceholder(QStringLiteral("상품 이미지 불러오기 실패"), true);
-            image_label_->setToolTip(reply->errorString());
+            image_label_->setToolTip(detail);
             return;
         }
         const auto payload = reply->readAll();
