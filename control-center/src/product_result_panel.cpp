@@ -29,7 +29,7 @@ QString StatusPillStyle(const char* background, const char* foreground, const ch
 QLabel* AddValueRow(QGridLayout* layout, int row, const QString& title, QWidget* parent) {
     auto* title_label = new QLabel(title, parent);
     title_label->setMinimumWidth(58);
-    title_label->setStyleSheet("color:#64748b;font-size:11px;font-weight:700;");
+    title_label->setStyleSheet("color:#94a3b8;font-size:11px;font-weight:700;");
     auto* value_label = new QLabel(QStringLiteral("데이터 없음"), parent);
     value_label->setWordWrap(true);
     layout->addWidget(title_label, row, 0, Qt::AlignTop);
@@ -57,12 +57,11 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     : QWidget(parent), image_base_url_(std::move(image_base_url)), network_manager_(new QNetworkAccessManager(this)) {
     setObjectName(QStringLiteral("productResultPanel"));
     setMinimumWidth(310);
-    setMaximumWidth(340);
+    setMaximumWidth(360);
     setMinimumHeight(420);
     setStyleSheet(
-        "#productResultPanel{background-color:#0b1220;border-left:1px solid #1e293b;"
-        "border-bottom:1px solid #1e293b;}"
-        "#productInfoCard,#productDetailCard{background-color:#111827;border:1px solid #1e293b;"
+        "#productResultPanel{background-color:#0b1220;border:1px solid #243247;border-radius:12px;}"
+        "#productInfoCard,#productDetailCard{background-color:#111827;border:1px solid #2b3a50;"
         "border-radius:10px;}"
         "QLabel{color:#e2e8f0;}");
 
@@ -81,7 +80,7 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     auto* title = new QLabel(QStringLiteral("현재 상품"), this);
     title->setStyleSheet("color:#f8fafc;font-size:20px;font-weight:800;");
     auto* subtitle = new QLabel(QStringLiteral("실시간 인식 및 공정 결과"), this);
-    subtitle->setStyleSheet("color:#64748b;font-size:11px;");
+    subtitle->setStyleSheet("color:#94a3b8;font-size:11px;");
     header_text_layout->addWidget(eyebrow);
     header_text_layout->addWidget(title);
     header_text_layout->addWidget(subtitle);
@@ -114,7 +113,7 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     info_layout->setContentsMargins(12, 11, 12, 11);
     info_layout->setSpacing(8);
     auto* info_title = new QLabel(QStringLiteral("상품 정보"), info_card);
-    info_title->setStyleSheet("color:#94a3b8;font-size:11px;font-weight:800;");
+    info_title->setStyleSheet("color:#cbd5e1;font-size:11px;font-weight:800;");
     auto* fields = new QGridLayout();
     fields->setHorizontalSpacing(10);
     fields->setVerticalSpacing(6);
@@ -135,10 +134,10 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     detail_layout->setContentsMargins(11, 9, 11, 9);
     detail_layout->setSpacing(3);
     auto* detail_title = new QLabel(QStringLiteral("처리 메시지"), detail_card);
-    detail_title->setStyleSheet("color:#64748b;font-size:10px;font-weight:800;");
+    detail_title->setStyleSheet("color:#94a3b8;font-size:10px;font-weight:800;");
     detail_value_ = new QLabel(QStringLiteral("MQTT 상품 메시지를 기다리고 있습니다."), detail_card);
     detail_value_->setWordWrap(true);
-    detail_value_->setStyleSheet("color:#94a3b8;font-size:11px;");
+    detail_value_->setStyleSheet("color:#cbd5e1;font-size:11px;");
     detail_layout->addWidget(detail_title);
     detail_layout->addWidget(detail_value_);
 
@@ -218,7 +217,7 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
 
 void ProductResultPanel::setValue(QLabel* label, const QString& value) {
     label->setText(value.isEmpty() ? QStringLiteral("데이터 없음") : value);
-    label->setStyleSheet(value.isEmpty() ? "color:#d97706;font-size:12px;font-weight:700;"
+    label->setStyleSheet(value.isEmpty() ? "color:#fbbf24;font-size:12px;font-weight:700;"
                                          : "color:#f1f5f9;font-size:12px;font-weight:600;");
 }
 

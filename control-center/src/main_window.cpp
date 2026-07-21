@@ -4,12 +4,14 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMediaPlayer>
 #include <QMessageBox>
+#include <QScrollArea>
 #include <QSettings>
 #include <QStackedLayout>
 #include <QStatusBar>
@@ -244,6 +246,10 @@ ControlCenterConfig loadControlCenterConfig() {
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Smart Logistics Control Center");
     setMinimumSize(1280, 720);
+    setStyleSheet(
+        "QMainWindow{background:#070b13;}"
+        "QStatusBar{background:#0b1220;color:#cbd5e1;border-top:1px solid #1e293b;}"
+        "QToolTip{background:#111827;color:#f8fafc;border:1px solid #334155;padding:5px;}");
 
     const auto config = loadControlCenterConfig();
     control_target_device_id_ = config.control_target_device_id;
@@ -262,27 +268,78 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     reconnecting_.assign(channel_count_, false);
 
     auto* central_widget = new QWidget(this);
-    auto* content_layout = new QHBoxLayout(central_widget);
-    content_layout->setContentsMargins(0, 0, 0, 0);
-    content_layout->setSpacing(0);
+    central_widget->setObjectName(QStringLiteral("centralSurface"));
+    central_widget->setStyleSheet("#centralSurface{background:#070b13;}");
+    auto* root_layout = new QVBoxLayout(central_widget);
+    root_layout->setContentsMargins(0, 0, 0, 0);
+    root_layout->setSpacing(0);
 
-    auto* video_container = new QWidget(central_widget);
+    auto* app_header = new QFrame(central_widget);
+    app_header->setObjectName(QStringLiteral("appHeader"));
+    app_header->setStyleSheet("#appHeader{background:#0b1220;border-bottom:1px solid #1e293b;}");
+    app_header->setMinimumHeight(64);
+    app_header->setMaximumHeight(64);
+    auto* app_header_layout = new QHBoxLayout(app_header);
+    app_header_layout->setContentsMargins(18, 10, 18, 10);
+    auto* app_title_layout = new QVBoxLayout();
+    app_title_layout->setContentsMargins(0, 0, 0, 0);
+    app_title_layout->setSpacing(1);
+    auto* app_eyebrow = new QLabel(QStringLiteral("SMART LOGISTICS"), app_header);
+    app_eyebrow->setStyleSheet("color:#38bdf8;font-size:10px;font-weight:800;letter-spacing:1px;");
+    auto* app_title = new QLabel(QStringLiteral("물류 자동화 통합 관제센터"), app_header);
+    app_title->setStyleSheet("color:#f8fafc;font-size:20px;font-weight:800;");
+    app_title_layout->addWidget(app_eyebrow);
+    app_title_layout->addWidget(app_title);
+    auto* channel_badge = new QLabel(QStringLiteral("%1 CHANNELS").arg(channel_count_), app_header);
+    channel_badge->setAlignment(Qt::AlignCenter);
+    channel_badge->setStyleSheet(
+        "background:#102a43;color:#7dd3fc;border:1px solid #075985;border-radius:9px;"
+        "font-size:11px;font-weight:800;padding:7px 12px;");
+    app_header_layout->addLayout(app_title_layout);
+    app_header_layout->addStretch();
+    app_header_layout->addWidget(channel_badge);
+    root_layout->addWidget(app_header);
+
+    auto* content = new QWidget(central_widget);
+    auto* content_layout = new QHBoxLayout(content);
+    content_layout->setContentsMargins(12, 12, 12, 12);
+    content_layout->setSpacing(12);
+
+    auto* video_container = new QWidget(content);
     auto* video_grid = new QGridLayout(video_container);
-    video_grid->setContentsMargins(4, 4, 4, 4);
-    video_grid->setSpacing(4);
+    video_grid->setContentsMargins(0, 0, 0, 0);
+    video_grid->setSpacing(10);
     content_layout->addWidget(video_container, 1);
 
-    auto* side_panel = new QWidget(central_widget);
-    side_panel->setMinimumWidth(300);
-    side_panel->setMaximumWidth(320);
-    auto* side_layout = new QVBoxLayout(side_panel);
+    auto* side_panel = new QScrollArea(content);
+    side_panel->setObjectName(QStringLiteral("sidePanel"));
+    side_panel->setMinimumWidth(360);
+    side_panel->setMaximumWidth(360);
+    side_panel->setWidgetResizable(true);
+    side_panel->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    side_panel->setFrameShape(QFrame::NoFrame);
+    side_panel->setStyleSheet(
+        "#sidePanel{background:transparent;border:none;}"
+        "#sidePanel>QWidget>QWidget{background:transparent;}"
+        "QScrollBar:vertical{background:#0b1220;width:8px;margin:2px 0;}"
+        "QScrollBar::handle:vertical{background:#334155;border-radius:4px;min-height:32px;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}");
+    auto* side_content = new QWidget(side_panel);
+    side_content->setObjectName(QStringLiteral("sideContent"));
+    side_content->setStyleSheet("#sideContent{background:transparent;}");
+    auto* side_layout = new QVBoxLayout(side_content);
     side_layout->setContentsMargins(0, 0, 0, 0);
-    side_layout->setSpacing(0);
-    product_result_panel_ = new ProductResultPanel(config.image_base_url, side_panel);
-    process_control_panel_ = new ProcessControlPanel(side_panel);
-    side_layout->addWidget(product_result_panel_, 0);
-    side_layout->addWidget(process_control_panel_, 1);
+    side_layout->setSpacing(12);
+    side_layout->setSizeConstraint(QLayout::SetMinAndMaxSize);
+    product_result_panel_ = new ProductResultPanel(config.image_base_url, side_content);
+    process_control_panel_ = new ProcessControlPanel(side_content);
+    side_layout->addWidget(product_result_panel_);
+    side_layout->addWidget(process_control_panel_);
+    side_layout->addStretch();
+    side_panel->setWidget(side_content);
     content_layout->addWidget(side_panel);
+    root_layout->addWidget(content, 1);
     setCentralWidget(central_widget);
 
     mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
@@ -377,20 +434,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         audio_outputs_[channel] = new QAudioOutput(this);
         reconnect_timers_[channel] = new QTimer(this);
 
-        channel_panel->setStyleSheet("background-color: #111827;");
+        channel_panel->setStyleSheet("background-color:#0b1220;border:1px solid #243247;border-radius:11px;");
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
         video_layout->addWidget(video_widgets_[channel], 0, 0);
         video_layout->addWidget(playing_badge, 0, 0, Qt::AlignLeft | Qt::AlignTop);
         playing_badge->setMargin(8);
         playing_badge->setStyleSheet(
-            "color: #d1fae5; background-color: rgba(5, 46, 22, 180); font-weight: 700;"
-            "border-radius: 4px; padding: 2px 6px;");
+            "color:#dcfce7;background-color:rgba(5,46,22,210);border:1px solid #166534;"
+            "font-weight:700;border-radius:7px;padding:4px 8px;");
 
         state_overlays_[channel]->setAttribute(Qt::WA_StyledBackground, true);
-        state_overlays_[channel]->setStyleSheet("background-color: #111827;");
+        state_overlays_[channel]->setStyleSheet("background-color:#0b1220;border-radius:10px;");
         overlay_layout->setContentsMargins(16, 12, 16, 12);
-        channel_label->setStyleSheet("color: #9ca3af; font-weight: 700;");
+        channel_label->setStyleSheet("color:#cbd5e1;font-size:12px;font-weight:800;");
         status_labels_[channel]->setObjectName(QStringLiteral("channelStatus%1").arg(channel + 1));
         status_labels_[channel]->setAlignment(Qt::AlignCenter);
         status_labels_[channel]->setWordWrap(true);

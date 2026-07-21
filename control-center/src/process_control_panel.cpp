@@ -52,28 +52,33 @@ QString ResultLabel(mqtt::CommandResult result) {
 
 ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("processControlPanel"));
-    setMinimumWidth(250);
-    setMaximumWidth(320);
+    setMinimumWidth(310);
+    setMaximumWidth(360);
     setStyleSheet(
-        "#processControlPanel { background-color: #111827; border-left: 1px solid #374151; }"
-        "QLabel { color: #e5e7eb; }"
-        "QPushButton { min-height: 42px; border-radius: 6px; background-color: #374151; color: #f9fafb;"
-        "font-size: 15px; font-weight: 700; padding: 6px 12px; }"
-        "QPushButton:hover:enabled { background-color: #4b5563; }"
-        "QPushButton:disabled { background-color: #1f2937; color: #6b7280; }"
-        "QPushButton#emergencyStopButton { min-height: 72px; background-color: #b91c1c; color: white;"
-        "font-size: 20px; border: 2px solid #fecaca; }"
-        "QPushButton#emergencyStopButton:hover:enabled { background-color: #dc2626; }");
+        "#processControlPanel{background-color:#0b1220;border:1px solid #243247;border-radius:12px;}"
+        "QLabel{color:#e2e8f0;}"
+        "QPushButton{min-height:42px;border:1px solid #334155;border-radius:8px;background-color:#1e293b;"
+        "color:#f8fafc;font-size:14px;font-weight:700;padding:6px 12px;}"
+        "QPushButton:hover:enabled{background-color:#334155;border-color:#475569;}"
+        "QPushButton:pressed:enabled{background-color:#0f172a;}"
+        "QPushButton:disabled{background-color:#111827;color:#64748b;border-color:#1e293b;}"
+        "QPushButton#startButton{background-color:#075985;border-color:#0284c7;}"
+        "QPushButton#startButton:hover:enabled{background-color:#0369a1;}"
+        "QPushButton#stopButton{background-color:#3b2a0d;border-color:#92400e;color:#fde68a;}"
+        "QPushButton#stopButton:hover:enabled{background-color:#4a310b;}"
+        "QPushButton#emergencyStopButton{min-height:72px;background-color:#991b1b;color:#fff1f2;"
+        "font-size:18px;border:1px solid #ef4444;}"
+        "QPushButton#emergencyStopButton:hover:enabled{background-color:#b91c1c;}");
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(16, 16, 16, 16);
     layout->setSpacing(10);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
-    title->setStyleSheet("font-size: 22px; font-weight: 800;");
+    title->setStyleSheet("color:#f8fafc;font-size:20px;font-weight:800;");
     connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
     connection_hint_->setWordWrap(true);
-    connection_hint_->setStyleSheet("color: #9ca3af;");
+    connection_hint_->setStyleSheet("color:#94a3b8;font-size:11px;");
 
     command_status_ = new QLabel(QStringLiteral("대기 중"), this);
     command_status_->setObjectName(QStringLiteral("commandStatus"));
