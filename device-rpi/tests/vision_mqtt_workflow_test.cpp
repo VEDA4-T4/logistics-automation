@@ -73,10 +73,14 @@ void TestDetectionAssignmentAndResultMessages() {
 }
 
 void TestMissingBarcodeProducesFailedResult() {
-    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1, 2);
     assert(workflow.Observe(Observation(), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
     assert(!workflow.HasPendingBarcode());
     assert(workflow.AssignWork(WorkCreated()));
+    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!workflow.Observe(Observation(), "IGNORED-01", "2026-07-21T11:00:01Z").has_value());
+    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!workflow.Observe(Observation(), "IGNORED-02", "2026-07-21T11:00:02Z").has_value());
     const auto work = workflow.TakeAssignedWork();
     assert(work.has_value());
     const auto barcode =

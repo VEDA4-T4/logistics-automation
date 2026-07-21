@@ -28,7 +28,7 @@ struct AssignedVisionWork final {
 class VisionMqttWorkflow final {
 public:
     explicit VisionMqttWorkflow(std::string device_id, std::size_t detection_confirm_frames = 3,
-                                std::size_t clear_confirm_frames = 5);
+                                std::size_t clear_confirm_frames = 5, std::size_t barcode_wait_frames = 90);
 
     [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> Observe(std::optional<VisionObservation> observation,
                                                                       std::string message_id, std::string timestamp);
@@ -44,10 +44,12 @@ private:
     std::string device_id_;
     std::size_t detection_confirm_frames_;
     std::size_t clear_confirm_frames_;
+    std::size_t barcode_wait_frames_;
     mutable std::mutex mutex_;
     Phase phase_{ Phase::kIdle };
     std::size_t detected_frames_{};
     std::size_t clear_frames_{};
+    std::size_t assigned_frames_{};
     std::optional<VisionObservation> observation_;
     std::optional<std::string> work_id_;
 };

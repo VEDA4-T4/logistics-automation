@@ -11,11 +11,13 @@ namespace logistics::vision {
 namespace mqtt = contracts::mqtt;
 
 VisionMqttWorkflow::VisionMqttWorkflow(std::string device_id, const std::size_t detection_confirm_frames,
-                                       const std::size_t clear_confirm_frames)
+                                       const std::size_t clear_confirm_frames, const std::size_t barcode_wait_frames)
     : device_id_(std::move(device_id)),
       detection_confirm_frames_(detection_confirm_frames),
-      clear_confirm_frames_(clear_confirm_frames) {
-    if (!mqtt::IsValidTopicLevel(device_id_) || detection_confirm_frames_ == 0 || clear_confirm_frames_ == 0) {
+      clear_confirm_frames_(clear_confirm_frames),
+      barcode_wait_frames_(barcode_wait_frames) {
+    if (!mqtt::IsValidTopicLevel(device_id_) || detection_confirm_frames_ == 0 || clear_confirm_frames_ == 0 ||
+        barcode_wait_frames_ == 0) {
         throw std::invalid_argument("invalid vision MQTT workflow configuration");
     }
 }
@@ -23,6 +25,9 @@ VisionMqttWorkflow::VisionMqttWorkflow(std::string device_id, const std::size_t 
 std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<VisionObservation> observation,
                                                              std::string message_id, std::string timestamp) {
     std::lock_guard lock(mutex_);
+    if (phase_ == Phase::kAssigned && assigned_frames_ < barcode_wait_frames_) {
+        ++assigned_frames_;
+    }
     if (!observation.has_value()) {
         detected_frames_ = 0;
         if (phase_ == Phase::kAwaitingClear && ++clear_frames_ >= clear_confirm_frames_) {
@@ -65,6 +70,7 @@ bool VisionMqttWorkflow::AssignWork(const mqtt::MqttMessage& message) {
         return false;
     }
     work_id_ = work->work_id;
+    assigned_frames_ = 0;
     phase_ = Phase::kAssigned;
     return true;
 }
@@ -80,6 +86,9 @@ std::optional<AssignedVisionWork> VisionMqttWorkflow::TakeAssignedWork() {
     if (phase_ != Phase::kAssigned || !work_id_.has_value() || !observation_.has_value()) {
         return std::nullopt;
     }
+    if (!observation_->barcode.has_value() && assigned_frames_ < barcode_wait_frames_) {
+        return std::nullopt;
+    }
     phase_ = Phase::kProcessing;
     return AssignedVisionWork{ .work_id = *work_id_, .observation = *observation_ };
 }
@@ -89,6 +98,7 @@ void VisionMqttWorkflow::CancelPendingWork() {
     if (phase_ == Phase::kAwaitingWork) {
         phase_ = Phase::kIdle;
         detected_frames_ = 0;
+        assigned_frames_ = 0;
         observation_.reset();
         work_id_.reset();
     }
@@ -99,6 +109,7 @@ void VisionMqttWorkflow::CompleteWork() {
     if (phase_ == Phase::kProcessing || phase_ == Phase::kAssigned) {
         phase_ = Phase::kAwaitingClear;
         clear_frames_ = 0;
+        assigned_frames_ = 0;
     }
 }
 

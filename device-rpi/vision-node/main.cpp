@@ -41,6 +41,7 @@ constexpr int kMaximumConsecutiveFrameErrors = 3;
 constexpr int kReconnectPollIntervalMs = 100;
 constexpr int kMaximumCameraDimension = 8192;
 constexpr int kMaximumCameraFps = 240;
+constexpr int kBarcodeRecognitionTimeoutSeconds = 3;
 constexpr std::size_t kBarcodeCornerCount = 4;
 constexpr double kLatencySmoothingFactor = 0.1;
 const cv::Scalar kBoxOutlineColor{ 255, 128, 0 };
@@ -338,7 +339,8 @@ int main(const int argc, char* argv[]) {
         image_uploader = std::make_unique<logistics::device::ImageUploader>(mqtt_config.image_upload);
     }
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
-    logistics::vision::VisionMqttWorkflow mqtt_workflow(device_id);
+    logistics::vision::VisionMqttWorkflow mqtt_workflow(
+        device_id, 3, 5, static_cast<std::size_t>(settings.fps * kBarcodeRecognitionTimeoutSeconds));
     logistics::device::MqttNodeClient mqtt_client(std::move(mqtt_config), "vision", device_status);
     mqtt_client.SetCommandHandler(
         [&mqtt_workflow, device_status](const logistics::contracts::mqtt::MqttMessage& message) {
