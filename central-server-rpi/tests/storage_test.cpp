@@ -6,6 +6,7 @@
 
 #include "logistics/central_server/database.hpp"
 #include "logistics/central_server/persistence.hpp"
+#include "logistics/central_server/upload_service.hpp"
 
 namespace {
 
@@ -15,17 +16,6 @@ std::int64_t Scalar(logistics::central_server::Database& database, std::string_v
     bool row = false;
     assert(statement.Step(row).ok() && row);
     return statement.ColumnInt64(0);
-}
-
-std::size_t CountFiles(const std::filesystem::path& root) {
-    if (!std::filesystem::exists(root))
-        return 0;
-    std::size_t count = 0;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-        if (entry.is_regular_file())
-            ++count;
-    }
-    return count;
 }
 
 logistics::contracts::mqtt::EnvelopeView Envelope(std::string_view id, logistics::contracts::mqtt::MessageType type,
@@ -65,7 +55,7 @@ int main() {
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(database.IntegrityCheck().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 2);
 
     server::StorageConfig storage;
     storage.image_root = root / "images";
@@ -118,27 +108,43 @@ int main() {
                "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BAD-WORK' AND processing_state='REJECTED'") ==
         1);
 
+    server::UploadService upload_service(database, root / "uploads");
+    const std::vector<std::uint8_t> image_bytes{ 0xff, 0xd8, 0xff, 0xd9 };
+    const server::UploadRequest image_upload{
+        .kind = logistics::contracts::http::UploadKind::kImage,
+        .device_id = "PI-VISION-01",
+        .work_id = work_id,
+        .message_id = "UPLOAD-IMAGE-1",
+        .captured_at = "2026-07-15T00:00:00Z",
+        .started_at = {},
+        .ended_at = {},
+        .sha256 = server::Sha256Hex(image_bytes),
+        .mime_type = "image/jpeg",
+        .bytes = image_bytes,
+    };
+    const auto uploaded = upload_service.Store(image_upload);
+    assert(uploaded.status == server::UploadStatus::kCreated);
+
     server::EventPayload image;
     image.work_id = work_id;
-    image.image_mime_type = "image/jpeg";
-    image.image_bytes = { 0xff, 0xd8, 0xff, 0xd9 };
-    image.captured_at_ms = base_time;
-    result = persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-1", mqtt::MessageType::kProductImage), image,
-                                               Metadata(base_time + 4));
+    image.image_id = uploaded.upload_id;
+    image.image_path = uploaded.path;
+    image.image_checksum = uploaded.checksum;
+    image.image_upload_status = "UPLOADED";
+    result =
+        persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-1", mqtt::MessageType::kProductImage, "PI-VISION-01"),
+                                          image, Metadata(base_time + 4, "device/PI-VISION-01/event"));
     assert(result.status == server::PersistenceStatus::kStored);
-    assert(Scalar(database, "SELECT count(*) FROM image_file") == 1);
-    assert(Scalar(database,
-                  "SELECT count(*) FROM image_file WHERE "
-                  "sha256='32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af'") == 1);
-    assert(CountFiles(storage.image_root) == 1);
+    assert(Scalar(database, "SELECT count(*) FROM http_upload WHERE kind='IMAGE'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM product WHERE lifecycle_state='IMAGED'") == 1);
 
     server::EventPayload bad_image = image;
     bad_image.work_id = "00000000-0000-4000-8000-000000000001";
-    result = persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-BAD", mqtt::MessageType::kProductImage), bad_image,
-                                               Metadata(base_time + 4));
+    result =
+        persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-BAD", mqtt::MessageType::kProductImage, "PI-VISION-01"),
+                                          bad_image, Metadata(base_time + 4, "device/PI-VISION-01/event"));
     assert(result.status == server::PersistenceStatus::kPermanentError);
-    assert(Scalar(database, "SELECT count(*) FROM image_file") == 1);
-    assert(CountFiles(storage.image_root) == 1);
+    assert(Scalar(database, "SELECT count(*) FROM http_upload WHERE kind='IMAGE'") == 1);
 
     server::EventPayload completed;
     completed.work_id = work_id;
@@ -162,7 +168,6 @@ int main() {
     assert(retention.RunOnce(base_time + 40 * 86'400'000LL).ok());
     assert(Scalar(database, "SELECT count(*) FROM device_status WHERE device_id='PI-INPUT-01'") == 1);
     assert(Scalar(database, "SELECT count(*) FROM image_file") == 0);
-    assert(CountFiles(storage.image_root) == 0);
 
     const auto migration_copy = root / "migrations";
     std::filesystem::create_directories(migration_copy);
