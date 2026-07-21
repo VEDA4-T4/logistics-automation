@@ -47,6 +47,12 @@ add_executable(
     ../Application/Src/sensor_filter.c
 )
 
+add_executable(
+    safety_task_test
+    safety_task_test.c
+    ../Application/Src/safety_task.c
+)
+
 target_include_directories(
     input_control_test
     PRIVATE ../Application/Inc
@@ -99,6 +105,13 @@ target_include_directories(
     PRIVATE ../Application/Inc
 )
 
+target_include_directories(
+    safety_task_test
+    PRIVATE
+        fakes
+        ../Application/Inc
+)
+
 set_target_properties(
     input_control_test
     PROPERTIES
@@ -157,6 +170,14 @@ set_target_properties(
 
 set_target_properties(
     sensor_filter_test
+    PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+)
+
+set_target_properties(
+    safety_task_test
     PROPERTIES
         C_STANDARD 11
         C_STANDARD_REQUIRED ON
@@ -165,6 +186,7 @@ set_target_properties(
 
 target_link_libraries(input_control_test PRIVATE logistics::contracts)
 target_link_libraries(sensor_filter_test PRIVATE logistics::contracts)
+target_link_libraries(safety_task_test PRIVATE logistics::contracts)
 target_link_libraries(input_motor_tb6612_test PRIVATE logistics::contracts)
 target_link_libraries(input_control_task_test PRIVATE logistics::contracts)
 target_link_libraries(app_queues_test PRIVATE logistics::contracts)
@@ -221,6 +243,12 @@ if(WIN32)
                 "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
                 $<TARGET_FILE:sensor_filter_test>
     )
+    add_test(
+        NAME safety_task_test
+        COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:safety_task_test>
+    )
 else()
     add_test(NAME input_control_test COMMAND input_control_test)
     add_test(NAME input_motor_tb6612_test COMMAND input_motor_tb6612_test)
@@ -230,4 +258,5 @@ else()
     add_test(NAME app_comm_tx_test COMMAND app_comm_tx_test)
     add_test(NAME hc_sr04_test COMMAND hc_sr04_test)
     add_test(NAME sensor_filter_test COMMAND sensor_filter_test)
+    add_test(NAME safety_task_test COMMAND safety_task_test)
 endif()
