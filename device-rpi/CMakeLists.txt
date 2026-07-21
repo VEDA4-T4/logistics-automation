@@ -32,6 +32,12 @@ target_include_directories(device_status PUBLIC common/include)
 target_link_libraries(device_status PUBLIC logistics::contracts)
 logistics_enable_warnings(device_status)
 
+add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
+add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
+target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
+target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
+logistics_enable_warnings(vision_mqtt_workflow)
+
 add_library(
     device_runtime
     common/src/node_runtime.cpp
@@ -135,6 +141,11 @@ if(BUILD_TESTING)
     target_link_libraries(device_log_spool_test PRIVATE logistics::device_log_spool)
     logistics_enable_warnings(device_log_spool_test)
     add_test(NAME device_log_spool_test COMMAND device_log_spool_test)
+
+    add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
+    target_link_libraries(vision_mqtt_workflow_test PRIVATE logistics::vision_mqtt_workflow)
+    logistics_enable_warnings(vision_mqtt_workflow_test)
+    add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
 endif()
 target_sources(
     logistics_vision_node
