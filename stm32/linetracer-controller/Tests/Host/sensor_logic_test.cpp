@@ -9,36 +9,28 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK_TRUE(condition)                                                        \
-    do {                                                                             \
-        if (!(condition)) {                                                          \
-            std::cerr << __func__ << ":" << __LINE__ << " check failed: "          \
-                      << #condition << '\n';                                         \
-            ++g_failures;                                                            \
-        }                                                                            \
+#define CHECK_TRUE(condition)                                                                    \
+    do {                                                                                         \
+        if (!(condition)) {                                                                      \
+            std::cerr << __func__ << ":" << __LINE__ << " check failed: " << #condition << '\n'; \
+            ++g_failures;                                                                        \
+        }                                                                                        \
     } while (0)
 
-sensor_logic_update_t UpdateLine(sensor_logic_context_t &context,
-                                 std::uint8_t left,
-                                 std::uint8_t right,
-                                 std::uint32_t now_ms)
-{
+sensor_logic_update_t UpdateLine(sensor_logic_context_t& context, std::uint8_t left, std::uint8_t right,
+                                 std::uint32_t now_ms) {
     sensor_logic_update_t update{};
     SensorLogic_UpdateLine(&context, left, right, now_ms, &update);
     return update;
 }
 
-sensor_logic_update_t UpdateFsr(sensor_logic_context_t &context,
-                                std::uint16_t raw,
-                                std::uint32_t now_ms)
-{
+sensor_logic_update_t UpdateFsr(sensor_logic_context_t& context, std::uint16_t raw, std::uint32_t now_ms) {
     sensor_logic_update_t update{};
     SensorLogic_UpdateFsr(&context, raw, now_ms, &update);
     return update;
 }
 
-void TestLineNormalizationAndDebounce()
-{
+void TestLineNormalizationAndDebounce() {
     sensor_logic_context_t context{};
 
     SensorLogic_Init(&context, 0U);
@@ -72,8 +64,7 @@ void TestLineNormalizationAndDebounce()
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
 }
 
-void TestMarkerIsOneShot()
-{
+void TestMarkerIsOneShot() {
     sensor_logic_context_t context{};
 
     SensorLogic_Init(&context, 0U);
@@ -91,14 +82,11 @@ void TestMarkerIsOneShot()
 
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
     CHECK_TRUE(context.diagnostics.marker_sequence == 1U);
-    CHECK_TRUE((UpdateLine(context, 1U, 1U, 100U).event_flags &
-                APP_SENSOR_EVENT_MARKER) == 0U);
-    CHECK_TRUE((UpdateLine(context, 1U, 1U, 150U).event_flags &
-                APP_SENSOR_EVENT_MARKER) == 0U);
+    CHECK_TRUE((UpdateLine(context, 1U, 1U, 100U).event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
+    CHECK_TRUE((UpdateLine(context, 1U, 1U, 150U).event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
 }
 
-void TestInvalidMarkerEntryAndLineLost()
-{
+void TestInvalidMarkerEntryAndLineLost() {
     sensor_logic_context_t context{};
 
     SensorLogic_Init(&context, 0U);
@@ -128,8 +116,7 @@ void TestInvalidMarkerEntryAndLineLost()
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_LOST) != 0U);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
     CHECK_TRUE((update.safety_activated_flags & SENSOR_LOGIC_SAFETY_LINE_LOST) != 0U);
-    CHECK_TRUE((UpdateLine(context, 0U, 0U, 560U).event_flags &
-                APP_SENSOR_EVENT_LINE_LOST) == 0U);
+    CHECK_TRUE((UpdateLine(context, 0U, 0U, 560U).event_flags & APP_SENSOR_EVENT_LINE_LOST) == 0U);
 
     (void)UpdateLine(context, 1U, 1U, 570U);
     (void)UpdateLine(context, 1U, 1U, 580U);
@@ -147,17 +134,14 @@ void TestInvalidMarkerEntryAndLineLost()
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
 }
 
-void TestFsrStabilityAndHysteresis()
-{
+void TestFsrStabilityAndHysteresis() {
     sensor_logic_context_t context{};
     std::uint32_t load_on_count = 0U;
     std::uint32_t load_off_count = 0U;
 
     SensorLogic_Init(&context, 0U);
     for (std::uint32_t now = 0U; now <= 500U; now += 10U) {
-        auto update = UpdateFsr(context,
-                                ((now / 10U) % 2U == 0U) ? 2000U : 2300U,
-                                now);
+        auto update = UpdateFsr(context, ((now / 10U) % 2U == 0U) ? 2000U : 2300U, now);
         CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LOAD_ON) == 0U);
     }
     CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_EMPTY);
@@ -191,8 +175,7 @@ void TestFsrStabilityAndHysteresis()
     CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_EMPTY);
 }
 
-void TestOverloadAndObstacleHysteresis()
-{
+void TestOverloadAndObstacleHysteresis() {
     sensor_logic_context_t context{};
     std::uint32_t overload_count = 0U;
 
@@ -223,15 +206,12 @@ void TestOverloadAndObstacleHysteresis()
     CHECK_TRUE((update.safety_cleared_flags & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U);
 }
 
-void TestPendingEventLatch()
-{
+void TestPendingEventLatch() {
     sensor_event_latch_t latch{};
 
     SensorEventLatch_Init(&latch);
-    CHECK_TRUE(SensorEventLatch_Pend(&latch, APP_SENSOR_EVENT_MARKER) ==
-               APP_SENSOR_EVENT_MARKER);
-    CHECK_TRUE(SensorEventLatch_Pend(&latch, APP_SENSOR_EVENT_NONE) ==
-               APP_SENSOR_EVENT_MARKER);
+    CHECK_TRUE(SensorEventLatch_Pend(&latch, APP_SENSOR_EVENT_MARKER) == APP_SENSOR_EVENT_MARKER);
+    CHECK_TRUE(SensorEventLatch_Pend(&latch, APP_SENSOR_EVENT_NONE) == APP_SENSOR_EVENT_MARKER);
 
     (void)SensorEventLatch_Pend(&latch, APP_SENSOR_EVENT_LOAD_ON);
     SensorEventLatch_Acknowledge(&latch, APP_SENSOR_EVENT_MARKER);
@@ -240,47 +220,37 @@ void TestPendingEventLatch()
     CHECK_TRUE(latch.pending_flags == APP_SENSOR_EVENT_NONE);
 }
 
-void TestSensorErrorsAndStaleness()
-{
+void TestSensorErrorsAndStaleness() {
     sensor_logic_context_t context{};
     sensor_logic_update_t update{};
 
     SensorLogic_Init(&context, 0U);
     SensorLogic_MarkUltrasonicStarted(&context, 0U, 0U);
     SensorLogic_CheckStaleness(&context, SENSOR_ULTRASONIC_STALE_MS - 1U);
-    CHECK_TRUE((context.diagnostics.error_flags &
-                SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
     SensorLogic_CheckStaleness(&context, SENSOR_ULTRASONIC_STALE_MS);
-    CHECK_TRUE((context.diagnostics.error_flags &
-                SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
 
-    SensorLogic_UpdateUltrasonic(&context, 0U, 500U, 1U,
-                                 SENSOR_ULTRASONIC_STALE_MS + 10U, &update);
-    CHECK_TRUE((context.diagnostics.error_flags &
-                SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 500U, 1U, SENSOR_ULTRASONIC_STALE_MS + 10U, &update);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
 
     update = {};
     SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 800U, &update);
     SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 810U, &update);
     SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 820U, &update);
-    CHECK_TRUE((context.diagnostics.error_flags &
-                SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
 
     SensorLogic_Init(&context, 0U);
     SensorLogic_CheckStaleness(&context, SENSOR_FSR_ADC_TIMEOUT_MS);
-    CHECK_TRUE((context.diagnostics.error_flags &
-                SENSOR_LOGIC_ERROR_FSR_TIMEOUT) != 0U);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_FSR_TIMEOUT) != 0U);
     update = {};
-    SensorLogic_UpdateFsr(&context, 1000U,
-                          SENSOR_FSR_ADC_TIMEOUT_MS + 1U, &update);
-    CHECK_TRUE((context.diagnostics.error_flags &
-                SENSOR_LOGIC_ERROR_FSR_TIMEOUT) == 0U);
+    SensorLogic_UpdateFsr(&context, 1000U, SENSOR_FSR_ADC_TIMEOUT_MS + 1U, &update);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_FSR_TIMEOUT) == 0U);
 }
 
 }  // namespace
 
-int main()
-{
+int main() {
     TestLineNormalizationAndDebounce();
     TestMarkerIsOneShot();
     TestInvalidMarkerEntryAndLineLost();
