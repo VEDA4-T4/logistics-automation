@@ -15,6 +15,7 @@
 #include "uart_rx.h"
 
 #define TEST_INPUT_SAFETY_EPOCH 0x12345678U
+#define TEST_SORTING_SAFETY_EPOCH 0x87654321U
 
 static uint8_t inputQueueToken;
 static uint8_t sortingQueueToken;
@@ -113,6 +114,10 @@ uint32_t input_control_task_capture_command_epoch(void) {
     return TEST_INPUT_SAFETY_EPOCH;
 }
 
+uint32_t sorting_control_task_capture_command_epoch(void) {
+    return TEST_SORTING_SAFETY_EPOCH;
+}
+
 int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command,
                                 const uint8_t* payload, uint8_t length) {
     if (failTxSend != 0U) {
@@ -178,7 +183,7 @@ static void test_sorting_and_safety_commands_keep_neutral_epoch(void) {
 
     assert(sortingQueuePuts == 1U);
     assert(capturedSortingMessage.kind == APP_CONTROL_MESSAGE_UART_COMMAND);
-    assert(capturedSortingMessage.safetyEpoch == 0U);
+    assert(capturedSortingMessage.safetyEpoch == TEST_SORTING_SAFETY_EPOCH);
     assert(capturedSortingMessage.source == APP_UART_CHANNEL_6);
     assert(memcmp(&capturedSortingMessage.frame, &frame, sizeof(frame)) == 0);
 
@@ -192,19 +197,62 @@ static void test_sorting_and_safety_commands_keep_neutral_epoch(void) {
     assert(memcmp(&capturedSafetyMessage.frame, &frame, sizeof(frame)) == 0);
 }
 
+static void test_return_home_command_is_forwarded_to_sorting_queue(void) {
+    const uint8_t payload[] = { 0x34U, 0x12U };
+    uart_frame_t frame;
+    uint32_t sortingPutsBefore;
+
+    sortingPutsBefore = sortingQueuePuts;
+    frame = frame_with_command(0x34U, UART_CMD_SORTING_RETURN_HOME, payload, sizeof(payload));
+    comm_rx_process_frame(APP_UART_CHANNEL_6, &frame);
+
+    assert(sortingQueuePuts == (sortingPutsBefore + 1U));
+    assert(capturedSortingMessage.kind == APP_CONTROL_MESSAGE_UART_COMMAND);
+    assert(capturedSortingMessage.safetyEpoch == TEST_SORTING_SAFETY_EPOCH);
+    assert(capturedSortingMessage.source == APP_UART_CHANNEL_6);
+    assert(capturedSortingMessage.frame.command == UART_CMD_SORTING_RETURN_HOME);
+    assert(capturedSortingMessage.frame.length == UART_SORTING_RETURN_HOME_PAYLOAD_SIZE);
+    assert(uart_sorting_return_home_cycle_id(capturedSortingMessage.frame.payload) == 0x1234U);
+}
+
+static void test_invalid_return_home_payload_is_rejected(void) {
+    const uint8_t shortPayload[] = { 0x34U };
+    uart_frame_t frame;
+    uint32_t sortingPutsBefore;
+    uint32_t txSendsBefore;
+
+    sortingPutsBefore = sortingQueuePuts;
+    txSendsBefore = txSends;
+    frame = frame_with_command(0x35U, UART_CMD_SORTING_RETURN_HOME, shortPayload, sizeof(shortPayload));
+    comm_rx_process_frame(APP_UART_CHANNEL_6, &frame);
+
+    assert(sortingQueuePuts == sortingPutsBefore);
+    assert(txSends == (txSendsBefore + 1U));
+    assert(capturedTxChannel == COMM_TX_CH_SORTING);
+    assert(capturedTxFrame.sequence == 0x35U);
+    assert(capturedTxFrame.command == UART_CMD_RESPONSE);
+    assert(capturedTxFrame.payload[UART_RESPONSE_STATUS_INDEX] == UART_STATUS_NACK);
+    assert(capturedTxFrame.payload[UART_RESPONSE_COMMAND_INDEX] == UART_CMD_SORTING_RETURN_HOME);
+    assert(capturedTxFrame.payload[UART_RESPONSE_ERROR_INDEX] == UART_ERROR_INVALID_PAYLOAD);
+}
+
 static void test_invalid_input_payload_is_not_forwarded(void) {
     uart_frame_t frame;
     uint32_t inputPutsBefore;
+    uint32_t safetyPutsBefore;
+    uint32_t sortingPutsBefore;
     uint32_t txSendsBefore;
 
     inputPutsBefore = inputQueuePuts;
+    sortingPutsBefore = sortingQueuePuts;
+    safetyPutsBefore = safetyQueuePuts;
     txSendsBefore = txSends;
     frame = frame_with_command(0x34U, UART_CMD_INPUT_CONVEYOR_SET_SPEED, NULL, 0U);
     comm_rx_process_frame(APP_UART_CHANNEL_1, &frame);
 
     assert(inputQueuePuts == inputPutsBefore);
-    assert(sortingQueuePuts == 1U);
-    assert(safetyQueuePuts == 1U);
+    assert(sortingQueuePuts == sortingPutsBefore);
+    assert(safetyQueuePuts == safetyPutsBefore);
     assert(txSends == (txSendsBefore + 1U));
     assert(capturedTxChannel == COMM_TX_CH_INPUT);
     assert(capturedTxFrame.sequence == 0x34U);
@@ -271,6 +319,8 @@ static void test_failed_rejection_send_is_counted(void) {
 int main(void) {
     test_input_command_is_tagged_with_current_safety_epoch();
     test_sorting_and_safety_commands_keep_neutral_epoch();
+    test_return_home_command_is_forwarded_to_sorting_queue();
+    test_invalid_return_home_payload_is_rejected();
     test_invalid_input_payload_is_not_forwarded();
     test_unsupported_input_command_returns_nack();
     test_full_input_queue_returns_busy();
