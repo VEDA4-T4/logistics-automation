@@ -25,6 +25,8 @@ void TestInitializationAndPosition() {
     assert(context.route_active == 0U);
     assert(context.safety_latched == 0U);
     assert(context.safety_error_code == UART_ERROR_NONE);
+    assert(context.route_plan.valid == 0U);
+    assert(context.pending_route_action == ROUTE_ACTION_NONE);
 
     auto command = MakeCommand(APP_CONTROL_COMMAND_SET_CURRENT_POSITION, 20U, 1U);
     command.position = UART_LINETRACER_POSITION_DEST_A;
@@ -245,9 +247,15 @@ void TestSameRouteCase(uart_linetracer_position_t position_id, uart_linetracer_r
     assign.route_id = route_id;
     assert(ControlLogic_HandleCommand(&context, &assign, 20U).accepted != 0U);
     assert(context.state == LINETRACER_CONTROL_TURNING_FROM_DEST);
+    assert(context.route_plan.valid != 0U);
+    assert(context.route_plan.junctions_total == 0U);
 
-    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION, 30U) == 0U);
-    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_MOVING_TO_PICKUP, 30U) != 0U);
+    assert(ControlLogic_CompleteTurn(&context, 30U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION);
+    assert(ControlLogic_HandleMarker(&context, 40U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION);
+    assert(ControlLogic_HandleMarker(&context, 50U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
 }
 
 void TestSameRoutesSkipCommonLine() {
@@ -308,6 +316,82 @@ void TestCompletionOutsideUnloadingDoesNothing() {
     assert(context.state == LINETRACER_CONTROL_INITIALIZING);
 }
 
+void TestMarkerAndLoadEventsDriveRouteB() {
+    control_context_t context{};
+    ControlLogic_Init(&context, 0U);
+
+    auto position = MakeCommand(APP_CONTROL_COMMAND_SET_CURRENT_POSITION, 10U, 1U);
+    position.position = UART_LINETRACER_POSITION_DEST_A;
+    assert(ControlLogic_HandleCommand(&context, &position, 10U).accepted != 0U);
+
+    auto assign = MakeCommand(APP_CONTROL_COMMAND_ASSIGN_ROUTE, 20U, 2U);
+    assign.job_id = 201U;
+    assign.route_id = UART_LINETRACER_ROUTE_B;
+    assert(ControlLogic_HandleCommand(&context, &assign, 20U).accepted != 0U);
+    assert(context.route_plan.common_direction == ROUTE_DIRECTION_RIGHT);
+    assert(context.route_plan.junctions_remaining == 1U);
+
+    assert(ControlLogic_CompleteTurn(&context, 30U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION);
+    assert(ControlLogic_HandleMarker(&context, 40U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION);
+    assert(ControlLogic_HandleMarker(&context, 50U) == ROUTE_ACTION_TURN_RIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE);
+
+    assert(ControlLogic_HandleMarker(&context, 60U) == ROUTE_ACTION_TURN_LEFT);
+    assert(context.state == LINETRACER_CONTROL_TURNING_TO_PICKUP);
+    assert(ControlLogic_CompleteTurn(&context, 70U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+
+    assert(ControlLogic_HandleMarker(&context, 80U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
+    assert(ControlLogic_HandleLoadOn(&context, 90U) == ROUTE_ACTION_TURN_AROUND);
+    assert(context.state == LINETRACER_CONTROL_TURNING_AT_PICKUP);
+    assert(ControlLogic_CompleteTurn(&context, 100U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
+
+    assert(ControlLogic_HandleMarker(&context, 110U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(ControlLogic_HandleMarker(&context, 120U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(ControlLogic_HandleMarker(&context, 130U) == ROUTE_ACTION_STOP_AT_DEST);
+    assert(context.state == LINETRACER_CONTROL_UNLOADING);
+
+    control_job_completion_t completion{};
+    assert(ControlLogic_HandleLoadOff(&context, 140U, &completion) == ROUTE_ACTION_JOB_COMPLETE);
+    assert(completion.completed != 0U);
+    assert(completion.job_id == 201U);
+    assert(completion.route_id == UART_LINETRACER_ROUTE_B);
+    assert(completion.destination == UART_LINETRACER_POSITION_DEST_B);
+    assert(context.state == LINETRACER_CONTROL_WAITING_AT_DEST);
+    assert(context.current_position == UART_LINETRACER_POSITION_DEST_B);
+    assert(context.route_plan.valid == 0U);
+}
+
+void TestLoadOffDuringReturnIsFault() {
+    control_context_t context{};
+    ControlLogic_Init(&context, 0U);
+
+    auto position = MakeCommand(APP_CONTROL_COMMAND_SET_CURRENT_POSITION, 1U, 1U);
+    position.position = UART_LINETRACER_POSITION_DEST_C;
+    assert(ControlLogic_HandleCommand(&context, &position, 1U).accepted != 0U);
+
+    auto assign = MakeCommand(APP_CONTROL_COMMAND_ASSIGN_ROUTE, 2U, 2U);
+    assign.job_id = 202U;
+    assign.route_id = UART_LINETRACER_ROUTE_C;
+    assert(ControlLogic_HandleCommand(&context, &assign, 2U).accepted != 0U);
+    assert(ControlLogic_CompleteTurn(&context, 3U) != 0U);
+    assert(ControlLogic_HandleMarker(&context, 4U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(ControlLogic_HandleMarker(&context, 5U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(ControlLogic_HandleMarker(&context, 6U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(ControlLogic_HandleLoadOn(&context, 7U) == ROUTE_ACTION_TURN_AROUND);
+    assert(ControlLogic_CompleteTurn(&context, 8U) != 0U);
+
+    control_job_completion_t completion{};
+    assert(ControlLogic_HandleLoadOff(&context, 9U, &completion) == ROUTE_ACTION_LOAD_LOST);
+    assert(completion.completed == 0U);
+    assert(context.state == LINETRACER_CONTROL_ERROR);
+    assert(context.stop_reason == LINETRACER_STOP_REASON_LOAD_LOST);
+}
+
 }  // namespace
 
 int main() {
@@ -321,5 +405,7 @@ int main() {
     TestSameRoutesSkipCommonLine();
     TestJobCompletionAllowsNextAssignment();
     TestCompletionOutsideUnloadingDoesNothing();
+    TestMarkerAndLoadEventsDriveRouteB();
+    TestLoadOffDuringReturnIsFault();
     return 0;
 }

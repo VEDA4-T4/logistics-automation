@@ -25,7 +25,7 @@ extern "C" {
 
 extern osMessageQueueId_t controlCommandQueue;
 extern osMessageQueueId_t sensorSnapshotQueue;
-/* SensorTask and CommRxTask produce; SafetyTask consumes. */
+/* SensorTask, CommRxTask and ControlTask produce; SafetyTask consumes. */
 extern osMessageQueueId_t safetyEventQueue;
 /* SafetyTask produces; ControlTask consumes before normal commands. */
 extern osMessageQueueId_t controlSafetyQueue;

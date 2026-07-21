@@ -2,6 +2,7 @@ add_executable(
     linetracer_control_logic_test
     control_logic_test.cpp
     ../../Application/Src/control_logic.c
+    ../../Application/Src/route_planner.c
 )
 
 target_include_directories(
@@ -20,4 +21,28 @@ if(WIN32)
     )
 else()
     add_test(NAME linetracer_control_logic_test COMMAND linetracer_control_logic_test)
+endif()
+
+add_executable(
+    linetracer_route_planner_test
+    route_planner_test.cpp
+    ../../Application/Src/route_planner.c
+)
+
+target_include_directories(
+    linetracer_route_planner_test
+    PRIVATE ../../Application/Inc
+)
+
+target_link_libraries(linetracer_route_planner_test PRIVATE logistics::contracts)
+
+if(WIN32)
+    get_filename_component(LOGISTICS_ROUTE_TEST_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    add_test(
+        NAME linetracer_route_planner_test
+        COMMAND ${CMAKE_COMMAND} -E env "PATH=${LOGISTICS_ROUTE_TEST_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:linetracer_route_planner_test>
+    )
+else()
+    add_test(NAME linetracer_route_planner_test COMMAND linetracer_route_planner_test)
 endif()

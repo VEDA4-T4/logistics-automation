@@ -156,14 +156,163 @@ static void ControlTask_ProcessSafetyEvents(void) {
     }
 }
 
+static void ControlTask_PublishLifecycleEvent(app_tx_event_type_t type, uint16_t job_id,
+                                              uart_linetracer_route_t route_id, uart_status_t status,
+                                              uart_error_t error_code, uint32_t now_ms) {
+    app_tx_event_t event = { 0 };
+
+    event.type = type;
+    event.created_at_ms = now_ms;
+    event.job_id = job_id;
+    event.route_id = route_id;
+    event.state = linetracer_control_state_to_uart_state(controlTaskContext.state);
+    event.load_state = controlTaskLoadState;
+    event.status = status;
+    event.error_code = error_code;
+    ControlTask_PublishTxEvent(&event, now_ms);
+}
+
+static void ControlTask_PublishStateChanged(uint32_t now_ms) {
+    if (uart_linetracer_job_id_is_valid(controlTaskContext.active_job_id) == 0U ||
+        uart_linetracer_route_is_valid(controlTaskContext.active_route) == 0U) {
+        return;
+    }
+
+    ControlTask_PublishLifecycleEvent(APP_TX_EVENT_STATE_CHANGED, controlTaskContext.active_job_id,
+                                      controlTaskContext.active_route, UART_STATUS_SUCCESS, UART_ERROR_NONE, now_ms);
+}
+
+static void ControlTask_PublishSafetyFault(linetracer_stop_reason_t reason, uint32_t now_ms) {
+    app_safety_event_t safety_event = { 0 };
+    app_safety_event_type_t type;
+
+    if (reason == LINETRACER_STOP_REASON_LOAD_LOST) {
+        type = APP_SAFETY_EVENT_LOAD_LOST;
+    } else {
+        type = APP_SAFETY_EVENT_MARKER_SEQUENCE;
+    }
+
+    safety_event.type = type;
+    safety_event.occurred_at_ms = now_ms;
+    safety_event.reason = reason;
+    safety_event.source_task = APP_TASK_CONTROL;
+    safety_event.error_code = UART_ERROR_SENSOR;
+    safety_event.active = 1U;
+    if (osMessageQueuePut(safetyEventQueue, &safety_event, 0U, 0U) != osOK) {
+        ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)type, now_ms);
+    }
+
+    ControlTask_PublishLifecycleEvent(APP_TX_EVENT_FAULT, controlTaskContext.active_job_id,
+                                      controlTaskContext.active_route, UART_STATUS_ERROR, UART_ERROR_SENSOR, now_ms);
+}
+
+static void ControlTask_StartUnload(uint32_t now_ms) {
+    app_unload_command_t command = { 0 };
+
+    command.type = APP_UNLOAD_COMMAND_START;
+    command.requested_at_ms = now_ms;
+    command.job_id = controlTaskContext.active_job_id;
+    command.route_id = controlTaskContext.active_route;
+    if (osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+        ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)command.type, now_ms);
+    }
+}
+
+static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_control_state_t previous_state,
+                                           const control_job_completion_t* completion, uint32_t now_ms) {
+    if (previous_state != controlTaskContext.state && action != ROUTE_ACTION_JOB_COMPLETE) {
+        ControlTask_PublishStateChanged(now_ms);
+    }
+
+    switch (action) {
+        case ROUTE_ACTION_STOP_AT_PICKUP:
+            ControlTask_PublishLifecycleEvent(APP_TX_EVENT_ARRIVED, controlTaskContext.active_job_id,
+                                              controlTaskContext.active_route, UART_STATUS_SUCCESS, UART_ERROR_NONE,
+                                              now_ms);
+            break;
+
+        case ROUTE_ACTION_TURN_AROUND:
+            ControlTask_PublishLifecycleEvent(APP_TX_EVENT_LOAD_DETECTED, controlTaskContext.active_job_id,
+                                              controlTaskContext.active_route, UART_STATUS_SUCCESS, UART_ERROR_NONE,
+                                              now_ms);
+            break;
+
+        case ROUTE_ACTION_STOP_AT_DEST:
+            ControlTask_PublishLifecycleEvent(APP_TX_EVENT_ARRIVED, controlTaskContext.active_job_id,
+                                              controlTaskContext.active_route, UART_STATUS_SUCCESS, UART_ERROR_NONE,
+                                              now_ms);
+            ControlTask_StartUnload(now_ms);
+            break;
+
+        case ROUTE_ACTION_JOB_COMPLETE:
+            if (completion != NULL && completion->completed != 0U) {
+                ControlTask_PublishLifecycleEvent(APP_TX_EVENT_UNLOAD_COMPLETE, completion->job_id,
+                                                  completion->route_id, UART_STATUS_SUCCESS, UART_ERROR_NONE, now_ms);
+            }
+            break;
+
+        case ROUTE_ACTION_LOAD_LOST:
+            ControlTask_PublishSafetyFault(LINETRACER_STOP_REASON_LOAD_LOST, now_ms);
+            break;
+
+        case ROUTE_ACTION_ERROR:
+            ControlTask_PublishSafetyFault(LINETRACER_STOP_REASON_MARKER_SEQUENCE, now_ms);
+            break;
+
+        case ROUTE_ACTION_NONE:
+        case ROUTE_ACTION_GO_STRAIGHT:
+        case ROUTE_ACTION_TURN_LEFT:
+        case ROUTE_ACTION_TURN_RIGHT:
+        default:
+            break;
+    }
+}
+
 static void ControlTask_ProcessSensorSnapshots(void) {
     app_sensor_snapshot_t snapshot;
     uint32_t processed = 0U;
 
     while (processed < APP_SENSOR_SNAPSHOT_QUEUE_DEPTH &&
            osMessageQueueGet(sensorSnapshotQueue, &snapshot, NULL, 0U) == osOK) {
+        uint32_t now_ms = osKernelGetTickCount();
+
         if (uart_linetracer_load_state_is_valid(snapshot.load_state) != 0U) {
             controlTaskLoadState = snapshot.load_state;
+        }
+
+        if ((snapshot.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U &&
+            snapshot.line_state == LINETRACER_LINE_CENTERED) {
+            linetracer_control_state_t previous_state = controlTaskContext.state;
+
+            if (ControlLogic_CompleteTurn(&controlTaskContext, now_ms) != 0U &&
+                previous_state != controlTaskContext.state) {
+                ControlTask_PublishStateChanged(now_ms);
+            }
+        }
+
+        if ((snapshot.event_flags & APP_SENSOR_EVENT_MARKER) != 0U && controlTaskContext.route_active != 0U) {
+            linetracer_control_state_t previous_state = controlTaskContext.state;
+            route_action_t action = ControlLogic_HandleMarker(&controlTaskContext, now_ms);
+
+            ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
+        }
+
+        if (controlTaskContext.state == LINETRACER_CONTROL_WAITING_LOAD &&
+            snapshot.load_state == UART_LINETRACER_LOAD_PRESENT) {
+            linetracer_control_state_t previous_state = controlTaskContext.state;
+            route_action_t action = ControlLogic_HandleLoadOn(&controlTaskContext, now_ms);
+
+            ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
+        }
+
+        if ((controlTaskContext.state == LINETRACER_CONTROL_MOVING_TO_DEST ||
+             controlTaskContext.state == LINETRACER_CONTROL_UNLOADING) &&
+            snapshot.load_state == UART_LINETRACER_LOAD_EMPTY) {
+            control_job_completion_t completion;
+            linetracer_control_state_t previous_state = controlTaskContext.state;
+            route_action_t action = ControlLogic_HandleLoadOff(&controlTaskContext, now_ms, &completion);
+
+            ControlTask_ProcessRouteAction(action, previous_state, &completion, now_ms);
         }
         ++processed;
     }

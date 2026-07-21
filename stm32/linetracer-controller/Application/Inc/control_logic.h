@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "app_messages.h"
+#include "route_planner.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,6 +23,8 @@ typedef struct {
     uint8_t resume_valid;
     uint8_t safety_latched;
     uint8_t safety_error_code;
+    route_plan_t route_plan;
+    route_action_t pending_route_action;
 } control_context_t;
 
 typedef struct {
@@ -52,6 +55,11 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
                                       uint32_t now_ms);
 control_command_result_t ControlLogic_HandleCommand(control_context_t* context, const app_control_command_t* command,
                                                     uint32_t now_ms);
+uint8_t ControlLogic_CompleteTurn(control_context_t* context, uint32_t now_ms);
+route_action_t ControlLogic_HandleMarker(control_context_t* context, uint32_t now_ms);
+route_action_t ControlLogic_HandleLoadOn(control_context_t* context, uint32_t now_ms);
+route_action_t ControlLogic_HandleLoadOff(control_context_t* context, uint32_t now_ms,
+                                          control_job_completion_t* completion);
 control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, uint32_t now_ms);
 
 #ifdef __cplusplus

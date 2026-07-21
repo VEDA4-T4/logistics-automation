@@ -29,17 +29,6 @@ static uart_linetracer_position_t ControlLogic_RouteDestination(uart_linetracer_
     }
 }
 
-static uint8_t ControlLogic_CurrentPositionMatchesRoute(const control_context_t* context) {
-    uart_linetracer_position_t destination;
-
-    if (context == NULL || ControlLogic_HasActiveJob(context) == 0U) {
-        return 0U;
-    }
-
-    destination = ControlLogic_RouteDestination(context->active_route);
-    return (destination != UART_LINETRACER_POSITION_NONE && context->current_position == destination) ? 1U : 0U;
-}
-
 static control_command_result_t ControlLogic_MakeResult(const control_context_t* context) {
     control_command_result_t result = { 0 };
 
@@ -135,13 +124,13 @@ static uint8_t ControlLogic_NormalTransitionIsAllowed(const control_context_t* c
                        : 0U;
 
         case LINETRACER_CONTROL_TURNING_FROM_DEST:
-            if (ControlLogic_CurrentPositionMatchesRoute(context) != 0U) {
-                return (next_state == LINETRACER_CONTROL_MOVING_TO_PICKUP) ? 1U : 0U;
-            }
             return (next_state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION) ? 1U : 0U;
 
         case LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION:
-            return (next_state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE) ? 1U : 0U;
+            return (next_state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE ||
+                    next_state == LINETRACER_CONTROL_MOVING_TO_PICKUP)
+                       ? 1U
+                       : 0U;
 
         case LINETRACER_CONTROL_MOVING_ON_COMMON_LINE:
             return (next_state == LINETRACER_CONTROL_TURNING_TO_PICKUP) ? 1U : 0U;
@@ -226,6 +215,8 @@ void ControlLogic_Init(control_context_t* context, uint32_t now_ms) {
     context->resume_valid = 0U;
     context->safety_latched = 0U;
     context->safety_error_code = UART_ERROR_NONE;
+    RoutePlanner_Reset(&context->route_plan);
+    context->pending_route_action = ROUTE_ACTION_NONE;
 }
 
 uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_control_safety_event_t* event,
@@ -337,10 +328,22 @@ static void ControlLogic_HandleAssignRoute(control_context_t* context, const app
     context->resume_valid = 0U;
     context->stop_reason = LINETRACER_STOP_REASON_NONE;
 
+    if (RoutePlanner_Create(context->current_position, context->active_route, &context->route_plan) == 0U) {
+        context->active_job_id = UART_LINETRACER_JOB_ID_NONE;
+        context->active_route = UART_LINETRACER_ROUTE_NONE;
+        context->route_active = 0U;
+        ControlLogic_Reject(result, UART_STATUS_ERROR, UART_ERROR_INTERNAL);
+        return;
+    }
+
+    context->pending_route_action = ROUTE_ACTION_TURN_AROUND;
+
     if (ControlLogic_Transition(context, LINETRACER_CONTROL_TURNING_FROM_DEST, now_ms) == 0U) {
         context->active_job_id = UART_LINETRACER_JOB_ID_NONE;
         context->active_route = UART_LINETRACER_ROUTE_NONE;
         context->route_active = 0U;
+        RoutePlanner_Reset(&context->route_plan);
+        context->pending_route_action = ROUTE_ACTION_NONE;
         ControlLogic_Reject(result, UART_STATUS_ERROR, UART_ERROR_INTERNAL);
         return;
     }
@@ -491,6 +494,173 @@ control_command_result_t ControlLogic_HandleCommand(control_context_t* context, 
     return result;
 }
 
+uint8_t ControlLogic_CompleteTurn(control_context_t* context, uint32_t now_ms) {
+    linetracer_control_state_t next_state;
+
+    if (context == NULL || ControlLogic_HasActiveJob(context) == 0U) {
+        return 0U;
+    }
+
+    switch (context->state) {
+        case LINETRACER_CONTROL_MOVING_ON_COMMON_LINE:
+            if (context->pending_route_action != ROUTE_ACTION_TURN_LEFT &&
+                context->pending_route_action != ROUTE_ACTION_TURN_RIGHT) {
+                return 0U;
+            }
+            context->pending_route_action = ROUTE_ACTION_GO_STRAIGHT;
+            return 1U;
+
+        case LINETRACER_CONTROL_TURNING_FROM_DEST:
+            next_state = LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION;
+            break;
+
+        case LINETRACER_CONTROL_TURNING_TO_PICKUP:
+            next_state = LINETRACER_CONTROL_MOVING_TO_PICKUP;
+            break;
+
+        case LINETRACER_CONTROL_TURNING_AT_PICKUP:
+            next_state = LINETRACER_CONTROL_MOVING_TO_DEST;
+            break;
+
+        default:
+            return 0U;
+    }
+
+    if (ControlLogic_Transition(context, next_state, now_ms) == 0U) {
+        return 0U;
+    }
+
+    context->pending_route_action = ROUTE_ACTION_GO_STRAIGHT;
+    return 1U;
+}
+
+static route_action_t ControlLogic_RouteError(control_context_t* context, linetracer_stop_reason_t reason,
+                                              route_action_t action, uint32_t now_ms) {
+    context->stop_reason = reason;
+    context->resume_valid = 0U;
+    context->pending_route_action = action;
+    (void)ControlLogic_Transition(context, LINETRACER_CONTROL_ERROR, now_ms);
+    return action;
+}
+
+route_action_t ControlLogic_HandleMarker(control_context_t* context, uint32_t now_ms) {
+    route_action_t action;
+    uint8_t transition_ok = 1U;
+
+    if (context == NULL || ControlLogic_HasActiveJob(context) == 0U) {
+        return ROUTE_ACTION_ERROR;
+    }
+
+    action = RoutePlanner_OnMarker(&context->route_plan);
+    context->pending_route_action = action;
+    if (action == ROUTE_ACTION_ERROR) {
+        return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE, action, now_ms);
+    }
+
+    switch (context->state) {
+        case LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION:
+            if (action == ROUTE_ACTION_GO_STRAIGHT) {
+                if (context->route_plan.phase == ROUTE_PHASE_TO_PICKUP) {
+                    transition_ok = ControlLogic_Transition(context, LINETRACER_CONTROL_MOVING_TO_PICKUP, now_ms);
+                } else if (context->route_plan.phase != ROUTE_PHASE_TO_SOURCE_JUNCTION) {
+                    transition_ok = 0U;
+                }
+            } else if (action == ROUTE_ACTION_TURN_LEFT || action == ROUTE_ACTION_TURN_RIGHT) {
+                transition_ok = ControlLogic_Transition(context, LINETRACER_CONTROL_MOVING_ON_COMMON_LINE, now_ms);
+            } else {
+                transition_ok = 0U;
+            }
+            break;
+
+        case LINETRACER_CONTROL_MOVING_ON_COMMON_LINE:
+            if (action == ROUTE_ACTION_TURN_LEFT || action == ROUTE_ACTION_TURN_RIGHT) {
+                transition_ok = ControlLogic_Transition(context, LINETRACER_CONTROL_TURNING_TO_PICKUP, now_ms);
+            } else if (action != ROUTE_ACTION_GO_STRAIGHT) {
+                transition_ok = 0U;
+            }
+            break;
+
+        case LINETRACER_CONTROL_MOVING_TO_PICKUP:
+            if (action != ROUTE_ACTION_STOP_AT_PICKUP ||
+                ControlLogic_Transition(context, LINETRACER_CONTROL_PICKUP_READY, now_ms) == 0U ||
+                ControlLogic_Transition(context, LINETRACER_CONTROL_WAITING_LOAD, now_ms) == 0U) {
+                transition_ok = 0U;
+            }
+            break;
+
+        case LINETRACER_CONTROL_MOVING_TO_DEST:
+            if (action == ROUTE_ACTION_STOP_AT_DEST) {
+                transition_ok = ControlLogic_Transition(context, LINETRACER_CONTROL_UNLOADING, now_ms);
+            } else if (action != ROUTE_ACTION_GO_STRAIGHT) {
+                transition_ok = 0U;
+            }
+            break;
+
+        default:
+            transition_ok = 0U;
+            break;
+    }
+
+    if (transition_ok == 0U) {
+        return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE, ROUTE_ACTION_ERROR, now_ms);
+    }
+
+    return action;
+}
+
+route_action_t ControlLogic_HandleLoadOn(control_context_t* context, uint32_t now_ms) {
+    route_action_t action;
+
+    if (context == NULL || ControlLogic_HasActiveJob(context) == 0U) {
+        return ROUTE_ACTION_ERROR;
+    }
+
+    action = RoutePlanner_OnLoadOn(&context->route_plan);
+    if (action == ROUTE_ACTION_TURN_AROUND) {
+        if (context->state != LINETRACER_CONTROL_WAITING_LOAD ||
+            ControlLogic_Transition(context, LINETRACER_CONTROL_TURNING_AT_PICKUP, now_ms) == 0U) {
+            return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE, ROUTE_ACTION_ERROR, now_ms);
+        }
+        context->pending_route_action = action;
+    }
+
+    return action;
+}
+
+route_action_t ControlLogic_HandleLoadOff(control_context_t* context, uint32_t now_ms,
+                                          control_job_completion_t* completion) {
+    route_action_t action;
+
+    if (completion != NULL) {
+        *completion = (control_job_completion_t){ 0 };
+        completion->route_id = UART_LINETRACER_ROUTE_NONE;
+        completion->destination = UART_LINETRACER_POSITION_NONE;
+    }
+
+    if (context == NULL || ControlLogic_HasActiveJob(context) == 0U) {
+        return ROUTE_ACTION_ERROR;
+    }
+
+    action = RoutePlanner_OnLoadOff(&context->route_plan);
+    if (action == ROUTE_ACTION_LOAD_LOST) {
+        return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_LOAD_LOST, action, now_ms);
+    }
+
+    if (action == ROUTE_ACTION_JOB_COMPLETE) {
+        control_job_completion_t result = ControlLogic_CompleteJob(context, now_ms);
+
+        if (result.completed == 0U) {
+            return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE, ROUTE_ACTION_ERROR, now_ms);
+        }
+        if (completion != NULL) {
+            *completion = result;
+        }
+        context->pending_route_action = ROUTE_ACTION_NONE;
+    }
+
+    return action;
+}
+
 control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, uint32_t now_ms) {
     control_job_completion_t completion = { 0 };
     uart_linetracer_position_t destination;
@@ -520,6 +690,8 @@ control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, ui
     context->resume_state = LINETRACER_CONTROL_WAITING_AT_DEST;
     context->resume_valid = 0U;
     context->stop_reason = LINETRACER_STOP_REASON_NONE;
+    RoutePlanner_Reset(&context->route_plan);
+    context->pending_route_action = ROUTE_ACTION_NONE;
 
     return completion;
 }
