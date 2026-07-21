@@ -229,7 +229,7 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
                     .data_json = product_details,
                 };
                 const TransportMetadata product_transport{
-                    .topic = "internal/product-catalog",
+                    .topic = mqtt::DeviceEventTopic(catalog_product_message->source_id),
                     .qos = 1,
                     .retained = false,
                     .received_at_ms = CurrentUnixTimeMilliseconds(),

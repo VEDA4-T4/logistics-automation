@@ -101,7 +101,7 @@ int main() {
 
     server::EventPayload barcode;
     barcode.work_id = work_id;
-    barcode.barcode = "8801234567890";
+    barcode.barcode = "5901234123457";
     result = persistence.PersistValidatedEvent(Envelope("MSG-BARCODE-1", mqtt::MessageType::kBarcodeDetected), barcode,
                                                Metadata(base_time + 2));
     assert(result.status == server::PersistenceStatus::kStored);
@@ -136,7 +136,7 @@ int main() {
     result = persistence.PersistValidatedEvent(Envelope("MSG-BARCODE-FAIL", mqtt::MessageType::kBarcodeDetected),
                                                barcode_failure, Metadata(base_time + 5));
     assert(result.status == server::PersistenceStatus::kStored);
-    assert(Scalar(database, "SELECT count(*) FROM product WHERE barcode='8801234567890'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM product WHERE barcode='5901234123457'") == 1);
 
     server::UploadService upload_service(database, root / "uploads");
     const std::vector<std::uint8_t> image_bytes{ 0xff, 0xd8, 0xff, 0xd9 };
