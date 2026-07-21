@@ -78,8 +78,8 @@ void TestSortingPayloadValidation() {
                                          kRouteDestination2.size()) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_ROUTE_ITEM, kInvalidDestination.data(),
                                          kInvalidDestination.size()) == 0U);
-    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_ROUTE_ITEM, kZeroCycleRoute.data(),
-                                         kZeroCycleRoute.size()) == 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_ROUTE_ITEM, kZeroCycleRoute.data(), kZeroCycleRoute.size()) ==
+           0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CANCEL, kCancelCycle.data(), kCancelCycle.size()) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CANCEL, nullptr, kCancelCycle.size()) == 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CANCEL, kZeroCycle.data(), kZeroCycle.size()) == 0U);
