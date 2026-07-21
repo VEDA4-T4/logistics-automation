@@ -113,26 +113,51 @@ TB6612FNG 모터 드라이버를 기준으로 한 핀 구성이다.
 
 | TB6612FNG 신호 | STM32 핀 | Arduino 헤더 | 용도 |
 |---|---|---|---|
-| PWMB | PB10 | D6 | 컨베이어 2 속도 PWM |
+| PWMB | PB9 | D14 | 컨베이어 2 속도 PWM (`TIM11_CH1`, 20 kHz) |
 | BIN1 | PA7 | D11 | 컨베이어 2 방향 제어 |
 | BIN2 | PA6 | D12 | 컨베이어 2 방향 제어 |
 | BO1/BO2 | - | - | 컨베이어 2 모터 출력 |
 
-### 5.3 공통 활성화 핀
+### 5.3 분류 게이트 MG90S
+
+| MG90S 신호 | STM32 핀 | Arduino 헤더 | 용도 |
+|---|---|---|---|
+| PWM | PC7 | D9 | 게이트 위치 PWM (`TIM3_CH2`, 50 Hz) |
+| VCC | 외부 5 V / 3 A | - | 서보 전용 외부 전원; STM32 GPIO·3.3 V 핀에서 공급하지 않음 |
+| GND | 공통 GND | GND | STM32·모터 드라이버·5 V 전원의 GND를 공통 연결 |
+
+### 5.4 공통 활성화 핀
 
 | TB6612FNG 신호 | STM32 핀 | Arduino 헤더 | 용도 |
 |---|---|---|---|
 | STBY | PB6 | D10 | 두 모터 채널 공통 활성화 |
 
-### 5.4 JMOD-MOTOR-1 제어 기준
+### 5.5 전원 및 JMOD 점퍼 구성
+
+| 전원 대상 | 공급원 | 연결 |
+|---|---|---|
+| Nucleo 및 JMOD 로직 | Nucleo ST-LINK USB | Nucleo `5V` 헤더 → JMOD `5V` |
+| TT 모터 2개 | 외부 6 V / 3 A | 양극 → JMOD `VIN`, 음극 → JMOD `GND` |
+| MG90S | 외부 5 V / 3 A | 양극 → MG90S `VCC`, 음극 → MG90S `GND` |
+| 공통 기준 전압 | 모든 전원과 장치 | Nucleo·JMOD·6 V 어댑터·5 V 어댑터·MG90S의 GND 공통 연결 |
+
+- 외부 6 V 모터 전원을 사용할 때 JMOD의 모터 전원 선택 점퍼는 `VCC–VIN` 위치로 설정한다.
+- 외부 5 V 어댑터의 양극은 MG90S에만 연결하고 Nucleo의 `5V` 헤더에는 연결하지 않는다.
+- JMOD의 `5V`는 로직 전원이며, TT 모터 구동 전원은 `VIN`을 통해 별도로 공급한다.
+- USB 및 모든 외부 전원을 끈 상태에서 배선한 뒤 극성과 공통 GND를 확인하고 전원을 인가한다.
+
+### 5.6 JMOD-MOTOR-1 제어 기준
 
 - 모터 드라이버는 TB6612FNG 기반 `JMOD-MOTOR-1`을 사용한다.
 - 컨베이어 1의 `PWMA`는 `TIM1_CH1`에서 20 kHz PWM으로 구동한다.
+- 컨베이어 2의 `PWMB`는 `TIM11_CH1`에서 20 kHz PWM으로 구동한다.
+- MG90S 게이트는 `TIM3_CH2`의 50 Hz PWM으로 구동하며, 실제 펄스 범위는 기구물 조립 후 안전 각도를 기준으로 보정한다.
+- MG90S의 전원은 별도 5 V / 3 A 어댑터에서 공급한다. 어댑터의 5 V 양극은 서보 VCC에만 연결하고, 어댑터 GND는 STM32 및 JMOD-MOTOR-1의 GND와 공통으로 연결한다.
 - 컨베이어 정방향은 `AIN1=HIGH`, `AIN2=LOW`로 정의한다. 실제 기구 방향이 반대면 코드 대신 `AO1`과 `AO2` 배선을 서로 바꾼다.
 - 정지 시 PWM을 0%로 내리고 `AIN1=LOW`, `AIN2=LOW`로 둔다.
 - 부팅·초기화·일반 STOP에서는 공용 `STBY`를 올리지 않는다. 실제 START에서만 활성화를 요청하며, 한 채널의 STOP은 다른 채널을 멈추지 않도록 `STBY`를 내리지 않는다.
 - 향후 SafetyTask는 비상 정지 시 `conveyor_motor_power_latch_disable()`로 공용 `STBY`를 LOW로 내리고, 양 채널의 PWM·방향이 안전 상태인지 확인한 뒤에만 latch를 해제해야 한다. 현재 InputControlTask 구현만으로 E-Stop 연동이 완료된 것은 아니며 `CONTROL_RESET`만으로 latch를 해제하지 않는다.
-- JMOD-MOTOR-1 로직을 매뉴얼 기준 5 V로 공급하면 TB6612FNG의 HIGH 입력 최소값은 3.5 V이므로 STM32의 3.3 V GPIO를 직접 연결하지 않고 3.3 V→5 V 레벨 시프터를 사용한다.
+- 현재 조달 조건에서는 별도 레벨 시프터 없이 STM32의 3.3 V GPIO를 JMOD-MOTOR-1 제어 입력에 직접 연결한다. JMOD-MOTOR-1이 Raspberry Pi 연결을 지원한다고 안내하지만, TB6612FNG 로직 전원이 5 V일 때 3.3 V HIGH는 데이터시트상 보장 범위보다 낮으므로 실제 모터를 무부하 상태에서 검증해야 한다. 기동 실패·떨림·간헐 정지가 발생하면 펌웨어보다 로직 전압 호환 문제를 먼저 확인한다.
 - STM32, JMOD-MOTOR-1, 모터 전원은 GND를 공통으로 연결한다.
 
 ---
