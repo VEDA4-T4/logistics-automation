@@ -10,13 +10,13 @@ config_path="${LOGISTICS_CONFIG_PATH:-${runtime_dir}/server.ini}"
 mqtt_host="${LOGISTICS_MQTT_HOST:-127.0.0.1}"
 upload_token="${LOGISTICS_UPLOAD_TOKEN:-}"
 force_config="${LOGISTICS_FORCE_CONFIG:-0}"
-allow_anonymous_mqtt="${LOGISTICS_ALLOW_ANONYMOUS_MQTT:-0}"
+install_dependencies="${LOGISTICS_INSTALL_DEPENDENCIES:-0}"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
     echo "This script must run on the central Linux/Raspberry Pi host." >&2
     exit 2
 fi
-if [[ -z "${upload_token}" ]]; then
+if [[ (! -e "${config_path}" || "${force_config}" == "1") && -z "${upload_token}" ]]; then
     echo "LOGISTICS_UPLOAD_TOKEN must be set." >&2
     exit 2
 fi
@@ -26,37 +26,21 @@ if [[ "${EUID}" -ne 0 ]]; then
     sudo_command=(sudo)
 fi
 
-"${sudo_command[@]}" apt-get update
-"${sudo_command[@]}" apt-get install -y \
-    build-essential cmake ninja-build pkg-config \
-    mosquitto mosquitto-clients libmosquitto-dev \
-    nlohmann-json3-dev libsqlite3-dev libssl-dev libmicrohttpd-dev
+if [[ "${install_dependencies}" == "1" ]]; then
+    "${sudo_command[@]}" apt-get update
+    "${sudo_command[@]}" apt-get install -y \
+        build-essential cmake ninja-build pkg-config \
+        libmosquitto-dev nlohmann-json3-dev libsqlite3-dev libssl-dev libmicrohttpd-dev
+fi
 
 install -d -m 0750 "${runtime_dir}" "${runtime_dir}/images" "${runtime_dir}/logs" \
     "${runtime_dir}/uploads/images" "${runtime_dir}/uploads/logs" "$(dirname -- "${config_path}")"
-
-if [[ "${allow_anonymous_mqtt}" == "1" ]]; then
-    temporary_mosquitto_config="$(mktemp)"
-    trap 'rm -f -- "${temporary_config:-}" "${temporary_mosquitto_config:-}"' EXIT
-    cat >"${temporary_mosquitto_config}" <<'EOF'
-listener 1883 0.0.0.0
-allow_anonymous true
-EOF
-    "${sudo_command[@]}" install -m 0644 "${temporary_mosquitto_config}" \
-        /etc/mosquitto/conf.d/logistics-integration.conf
-    "${sudo_command[@]}" systemctl enable --now mosquitto
-    "${sudo_command[@]}" systemctl restart mosquitto
-    echo "Enabled anonymous MQTT for integration testing. Do not use this setting in production."
-else
-    "${sudo_command[@]}" systemctl enable --now mosquitto
-    echo "Mosquitto remote authentication was not modified. Configure a listener and credentials before connecting devices."
-fi
 
 if [[ -e "${config_path}" && "${force_config}" != "1" ]]; then
     echo "Keeping existing config: ${config_path}"
 else
     temporary_config="$(mktemp)"
-    trap 'rm -f -- "${temporary_config:-}" "${temporary_mosquitto_config:-}"' EXIT
+    trap 'rm -f -- "${temporary_config:-}"' EXIT
     cat >"${temporary_config}" <<EOF
 [mqtt]
 host=${mqtt_host}
@@ -114,4 +98,4 @@ ctest --test-dir "${build_dir}" --output-on-failure
 echo
 echo "Central server setup complete."
 echo "Run: ${build_dir}/central-server-rpi/logistics_central_server --config ${config_path}"
-echo "Allow TCP ports 1883 (MQTT broker) and 8080 (HTTP upload) from the integration network."
+echo "This script did not modify or restart Mosquitto."

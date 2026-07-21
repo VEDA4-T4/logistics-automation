@@ -15,19 +15,21 @@ node_name="${LOGISTICS_NODE_NAME:-vision-node-01}"
 device_ip="${LOGISTICS_DEVICE_IP:-}"
 force_config="${LOGISTICS_FORCE_CONFIG:-0}"
 install_opencv="${LOGISTICS_INSTALL_OPENCV:-0}"
+install_dependencies="${LOGISTICS_INSTALL_DEPENDENCIES:-0}"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
     echo "This script must run on the vision Linux/Raspberry Pi host." >&2
     exit 2
 fi
-if [[ -z "${central_host}" || -z "${upload_token}" ]]; then
+if [[ (! -e "${config_path}" || "${force_config}" == "1") &&
+      (-z "${central_host}" || -z "${upload_token}") ]]; then
     echo "LOGISTICS_CENTRAL_HOST and LOGISTICS_UPLOAD_TOKEN must be set." >&2
     exit 2
 fi
-if [[ -z "${device_ip}" ]]; then
+if [[ (! -e "${config_path}" || "${force_config}" == "1") && -z "${device_ip}" ]]; then
     device_ip="$(hostname -I | awk '{print $1}')"
 fi
-if [[ -z "${device_ip}" ]]; then
+if [[ (! -e "${config_path}" || "${force_config}" == "1") && -z "${device_ip}" ]]; then
     echo "Could not detect the vision node IP; set LOGISTICS_DEVICE_IP." >&2
     exit 2
 fi
@@ -37,10 +39,12 @@ if [[ "${EUID}" -ne 0 ]]; then
     sudo_command=(sudo)
 fi
 
-"${sudo_command[@]}" apt-get update
-"${sudo_command[@]}" apt-get install -y \
-    build-essential cmake ninja-build pkg-config curl \
-    libmosquitto-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev
+if [[ "${install_dependencies}" == "1" ]]; then
+    "${sudo_command[@]}" apt-get update
+    "${sudo_command[@]}" apt-get install -y \
+        build-essential cmake ninja-build pkg-config curl \
+        libmosquitto-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev
+fi
 
 opencv_version="$(pkg-config --modversion opencv4 2>/dev/null || true)"
 if [[ "${opencv_version}" != "4.10.0" ]]; then

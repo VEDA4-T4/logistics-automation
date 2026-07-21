@@ -9,14 +9,11 @@ written below the repository's ignored `runtime/` directory. Existing INI files 
 ```sh
 export LOGISTICS_UPLOAD_TOKEN='replace-with-a-long-random-token'
 export LOGISTICS_MQTT_HOST='127.0.0.1'
-export LOGISTICS_ALLOW_ANONYMOUS_MQTT=1 # isolated integration network only
 ./deploy/scripts/setup-central-server.sh
 ```
 
-The script installs dependencies, creates `runtime/central-server/server.ini` and its storage directories, builds the
-central server, and runs its tests. Configure Mosquitto to accept the intended authenticated clients, then allow TCP
-1883 and 8080 only from the integration network. `LOGISTICS_ALLOW_ANONYMOUS_MQTT=1` opens an unauthenticated remote
-listener and must not be used in production.
+The script creates `runtime/central-server/server.ini` and its storage directories, builds the central server, and runs
+its tests. It does not modify, start, or restart Mosquitto. Existing broker configuration remains untouched.
 
 ## 2. Vision Raspberry Pi
 
@@ -38,6 +35,13 @@ export LOGISTICS_INSTALL_OPENCV=1
 ```
 
 The generated runtime configuration is `runtime/vision-node/vision-node.ini`.
+
+The setup scripts assume build dependencies are already installed. To install the required Ubuntu packages as part of
+the run, explicitly opt in:
+
+```sh
+export LOGISTICS_INSTALL_DEPENDENCIES=1
+```
 
 ## 3. Connectivity check
 
