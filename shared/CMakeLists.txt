@@ -61,15 +61,29 @@ if(BUILD_TESTING)
 
     add_executable(uart_contracts_test tests/uart_contracts_test.cpp)
     target_link_libraries(uart_contracts_test PRIVATE logistics::uart)
-    
+
     if(WIN32)
-        get_filename_component(LOGISTICS_COMPILER_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        get_filename_component(
+            LOGISTICS_COMPILER_RUNTIME_DIR
+            "${CMAKE_CXX_COMPILER}"
+            DIRECTORY
+        )
+
         add_test(
             NAME contracts_test
-            COMMAND ${CMAKE_COMMAND} -E env "PATH=${LOGISTICS_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+            COMMAND ${CMAKE_COMMAND} -E env
+                    "PATH=${LOGISTICS_COMPILER_RUNTIME_DIR};$ENV{PATH}"
                     $<TARGET_FILE:contracts_test>
+        )
+
+        add_test(
+            NAME uart_contracts_test
+            COMMAND ${CMAKE_COMMAND} -E env
+                    "PATH=${LOGISTICS_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                    $<TARGET_FILE:uart_contracts_test>
         )
     else()
         add_test(NAME contracts_test COMMAND contracts_test)
+        add_test(NAME uart_contracts_test COMMAND uart_contracts_test)
     endif()
 endif()
