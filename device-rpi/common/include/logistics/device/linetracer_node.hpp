@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -39,6 +40,20 @@ struct LineTracerCommandResult {
     [[nodiscard]] bool Succeeded() const noexcept;
 };
 
+enum class LineTracerReportChannel {
+    kStatus,
+    kEvent,
+    kError,
+};
+
+struct LineTracerReport {
+    LineTracerReportChannel channel{ LineTracerReportChannel::kStatus };
+    contracts::mqtt::MessageType message_type{ contracts::mqtt::MessageType::kUnknown };
+    contracts::mqtt::MessagePayload data;
+};
+
+using LineTracerReportHandler = std::function<void(const LineTracerReport& report)>;
+
 /*
  * Converts validated MQTT commands into line-tracer UART commands. MQTT work
  * IDs are UUID strings, while the STM32 contract uses a local uint16_t job ID;
@@ -48,6 +63,7 @@ class LineTracerNode final {
 public:
     LineTracerNode(std::string device_id, UartSession& uart_session);
 
+    void SetReportHandler(LineTracerReportHandler handler);
     [[nodiscard]] LineTracerCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
     void HandleUartEvent(const UartSessionEvent& event) noexcept;
 
@@ -82,6 +98,8 @@ private:
     [[nodiscard]] std::uint16_t AllocateJobId() noexcept;
     void RememberPending(PendingEffect effect, const LineTracerCommandResult& result);
     void ClearPending() noexcept;
+    void HandleLineTracerFrame(const uart_frame_t& frame) noexcept;
+    void EmitReport(LineTracerReport report) const noexcept;
 
     std::string device_id_;
     UartSession& uart_session_;
@@ -90,6 +108,8 @@ private:
     std::uint8_t active_route_id_{};
     std::uint16_t next_uart_job_id_{ UART_LINETRACER_JOB_ID_MIN };
     PendingContext pending_{};
+    std::uint8_t last_uart_state_{ UART_LINETRACER_STATE_IDLE };
+    LineTracerReportHandler report_handler_;
 };
 
 }  // namespace logistics::device

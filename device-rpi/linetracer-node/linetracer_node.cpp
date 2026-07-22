@@ -2,8 +2,10 @@
 
 #include <array>
 #include <cctype>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
@@ -40,6 +42,77 @@ namespace mqtt = contracts::mqtt;
     return normalized;
 }
 
+[[nodiscard]] char RouteName(std::uint8_t route_id) noexcept {
+    switch (route_id) {
+        case UART_LINETRACER_ROUTE_A:
+            return 'A';
+        case UART_LINETRACER_ROUTE_B:
+            return 'B';
+        case UART_LINETRACER_ROUTE_C:
+            return 'C';
+        default:
+            return '?';
+    }
+}
+
+[[nodiscard]] std::string RouteState(std::string_view state, std::uint8_t route_id) {
+    std::string result(state);
+    result.push_back('_');
+    result.push_back(RouteName(route_id));
+    return result;
+}
+
+[[nodiscard]] std::string UartStateName(std::uint8_t state, std::uint8_t route_id) {
+    switch (state) {
+        case UART_LINETRACER_STATE_IDLE:
+            return "IDLE";
+        case UART_LINETRACER_STATE_LOAD_WAIT:
+            return RouteState("PICKUP_READY", route_id);
+        case UART_LINETRACER_STATE_FOLLOWING_LINE:
+            return "FOLLOWING_LINE";
+        case UART_LINETRACER_STATE_CORRECTING:
+            return "CORRECTING";
+        case UART_LINETRACER_STATE_ARRIVED:
+            return RouteState("ARRIVED", route_id);
+        case UART_LINETRACER_STATE_UNLOADING:
+            return RouteState("UNLOADING", route_id);
+        case UART_LINETRACER_STATE_STOPPED:
+            return "STOPPED";
+        case UART_LINETRACER_STATE_FAULT:
+            return "FAULT";
+        case UART_LINETRACER_STATE_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+[[nodiscard]] std::string UartErrorCode(std::uint8_t error) {
+    switch (error) {
+        case UART_ERROR_TIMEOUT:
+            return "ERR-UART-TIMEOUT";
+        case UART_ERROR_SENSOR:
+            return "ERR-SENSOR";
+        case UART_ERROR_MOTOR:
+            return "ERR-MOTOR";
+        case UART_ERROR_SERVO:
+            return "ERR-SERVO";
+        case UART_ERROR_EMERGENCY_STOP:
+            return "ERR-EMERGENCY-STOP";
+        case UART_ERROR_INTERNAL:
+            return "ERR-INTERNAL";
+        default:
+            return "ERR-UART-UNKNOWN";
+    }
+}
+
+[[nodiscard]] mqtt::ConnectionState StateConnection(std::uint8_t state) noexcept {
+    if (state == UART_LINETRACER_STATE_FAULT || state == UART_LINETRACER_STATE_EMERGENCY_STOP) {
+        return mqtt::ConnectionState::kUartError;
+    }
+    return mqtt::ConnectionState::kOnline;
+}
+
 }  // namespace
 
 bool LineTracerCommandResult::Succeeded() const noexcept {
@@ -51,6 +124,10 @@ LineTracerNode::LineTracerNode(std::string device_id, UartSession& uart_session)
     if (!mqtt::IsValidTopicLevel(device_id_)) {
         throw std::invalid_argument("line tracer device ID must be one non-wildcard MQTT topic level");
     }
+}
+
+void LineTracerNode::SetReportHandler(LineTracerReportHandler handler) {
+    report_handler_ = std::move(handler);
 }
 
 LineTracerCommandResult LineTracerNode::HandleMqttCommand(const mqtt::MqttMessage& message) {
@@ -68,6 +145,11 @@ LineTracerCommandResult LineTracerNode::HandleMqttCommand(const mqtt::MqttMessag
 }
 
 void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
+    if (event.type == UartSessionEventType::kFrameReceived) {
+        HandleLineTracerFrame(event.frame);
+        return;
+    }
+
     if (!pending_.active || event.pending_sequence != pending_.sequence) {
         return;
     }
@@ -257,6 +339,146 @@ void LineTracerNode::RememberPending(PendingEffect effect, const LineTracerComma
 
 void LineTracerNode::ClearPending() noexcept {
     pending_ = {};
+}
+
+void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
+    if (frame.command != UART_CMD_EVENT || UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(frame.payload, frame.length) == 0U) {
+        return;
+    }
+
+    const std::uint16_t job_id = uart_linetracer_event_job_id(frame.payload);
+    const std::uint8_t route_id = frame.payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX];
+    if (!HasActiveJob() || job_id != active_uart_job_id_ || route_id != active_route_id_) {
+        return;
+    }
+
+    const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
+    const auto active_job = std::optional<std::string>{ active_work_id_ };
+
+    if (event_id == UART_LINETRACER_EVENT_STATE_CHANGED) {
+        last_uart_state_ = frame.payload[UART_LINETRACER_STATE_EVENT_STATE_INDEX];
+        const std::optional<std::string> error_code = last_uart_state_ == UART_LINETRACER_STATE_EMERGENCY_STOP
+                                                          ? std::optional<std::string>{ "ERR-EMERGENCY-STOP" }
+                                                          : std::nullopt;
+        EmitReport({
+            .channel = LineTracerReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = StateConnection(last_uart_state_),
+                    .current_state = UartStateName(last_uart_state_, route_id),
+                    .job_id = active_job,
+                    .error_code = error_code,
+                },
+        });
+        return;
+    }
+
+    if (event_id == UART_LINETRACER_EVENT_ARRIVED) {
+        const std::string state = last_uart_state_ == UART_LINETRACER_STATE_LOAD_WAIT
+                                      ? RouteState("PICKUP_READY", route_id)
+                                      : RouteState("ARRIVED", route_id);
+        EmitReport({
+            .channel = LineTracerReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = state,
+                    .job_id = active_job,
+                    .error_code = std::nullopt,
+                },
+        });
+        return;
+    }
+
+    if (event_id == UART_LINETRACER_EVENT_LOAD_DETECTED) {
+        EmitReport({
+            .channel = LineTracerReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = RouteState("LOAD_ON", route_id),
+                    .job_id = active_job,
+                    .error_code = std::nullopt,
+                },
+        });
+        return;
+    }
+
+    if (event_id == UART_LINETRACER_EVENT_UNLOAD_COMPLETE) {
+        const std::string completed_work_id = active_work_id_;
+        EmitReport({
+            .channel = LineTracerReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = RouteState("LOAD_OFF", route_id),
+                    .job_id = active_job,
+                    .error_code = std::nullopt,
+                },
+        });
+        EmitReport({
+            .channel = LineTracerReportChannel::kEvent,
+            .message_type = mqtt::MessageType::kWorkCompleted,
+            .data =
+                mqtt::WorkCompletedPayload{
+                    .work_id = completed_work_id,
+                    .result = "SUCCESS",
+                    .message = std::string("line tracer unload completed"),
+                },
+        });
+
+        active_work_id_.clear();
+        active_uart_job_id_ = UART_LINETRACER_JOB_ID_NONE;
+        active_route_id_ = UART_LINETRACER_ROUTE_NONE;
+        last_uart_state_ = UART_LINETRACER_STATE_IDLE;
+        ClearPending();
+
+        EmitReport({
+            .channel = LineTracerReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = RouteState("PARKED", route_id),
+                    .job_id = std::nullopt,
+                    .error_code = std::nullopt,
+                },
+        });
+        return;
+    }
+
+    if (event_id == UART_LINETRACER_EVENT_FAULT) {
+        const std::uint8_t error = frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX];
+        const std::string error_code = UartErrorCode(error);
+        EmitReport({
+            .channel = LineTracerReportChannel::kError,
+            .message_type = mqtt::MessageType::kErrorOccurred,
+            .data =
+                mqtt::ErrorOccurredPayload{
+                    .job_id = active_job,
+                    .error_code = error_code,
+                    .error_level = error == UART_ERROR_EMERGENCY_STOP ? "CRITICAL" : "ERROR",
+                    .current_state = error == UART_ERROR_EMERGENCY_STOP ? "EMERGENCY_STOP" : "FAULT",
+                    .message = "line tracer controller reported a fault",
+                    .distance = std::nullopt,
+                },
+        });
+    }
+}
+
+void LineTracerNode::EmitReport(LineTracerReport report) const noexcept {
+    if (!report_handler_) {
+        return;
+    }
+    try {
+        report_handler_(report);
+    } catch (...) {
+        // A reporting failure must not unwind into the UART receive loop.
+    }
 }
 
 }  // namespace logistics::device

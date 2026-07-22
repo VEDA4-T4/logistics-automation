@@ -22,6 +22,8 @@ namespace {
 namespace mqtt = logistics::contracts::mqtt;
 using logistics::device::LineTracerCommandStatus;
 using logistics::device::LineTracerNode;
+using logistics::device::LineTracerReport;
+using logistics::device::LineTracerReportChannel;
 using logistics::device::UartIoBackend;
 using logistics::device::UartIoResult;
 using logistics::device::UartIoStatus;
@@ -91,6 +93,7 @@ struct Fixture {
         session = std::make_unique<UartSession>(std::move(owned_backend));
         assert(session->Open());
         node = std::make_unique<LineTracerNode>("PI-LT-01", *session);
+        node->SetReportHandler([this](const LineTracerReport& report) { reports.push_back(report); });
         session->SetEventHandler(
             [this](const logistics::device::UartSessionEvent& event) { node->HandleUartEvent(event); });
     }
@@ -125,10 +128,53 @@ struct Fixture {
         assert(!session->HasPendingCommand());
     }
 
+    void PushEvent(std::uint8_t event_id, std::uint8_t detail = 0U, std::uint16_t job_id = 0U,
+                   std::uint8_t route_id = UART_LINETRACER_ROUTE_NONE) {
+        if (job_id == UART_LINETRACER_JOB_ID_NONE) {
+            job_id = node->ActiveUartJobId();
+        }
+        if (route_id == UART_LINETRACER_ROUTE_NONE) {
+            route_id = node->ActiveRouteId();
+        }
+
+        uart_frame_t frame{};
+        frame.version = UART_PROTOCOL_VERSION;
+        frame.sequence = next_event_sequence++;
+        frame.command = UART_CMD_EVENT;
+        frame.length = event_id == UART_LINETRACER_EVENT_STATE_CHANGED
+                           ? UART_LINETRACER_STATE_EVENT_PAYLOAD_SIZE
+                           : (event_id == UART_LINETRACER_EVENT_FAULT ? UART_LINETRACER_FAULT_EVENT_PAYLOAD_SIZE
+                                                                      : UART_LINETRACER_JOB_EVENT_PAYLOAD_SIZE);
+        frame.payload[UART_EVENT_ID_INDEX] = event_id;
+        frame.payload[UART_LINETRACER_EVENT_JOB_ID_LOW_INDEX] = static_cast<std::uint8_t>(job_id & 0xffU);
+        frame.payload[UART_LINETRACER_EVENT_JOB_ID_HIGH_INDEX] = static_cast<std::uint8_t>((job_id >> 8U) & 0xffU);
+        frame.payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX] = route_id;
+        if (event_id == UART_LINETRACER_EVENT_STATE_CHANGED) {
+            frame.payload[UART_LINETRACER_STATE_EVENT_STATE_INDEX] = detail;
+        } else if (event_id == UART_LINETRACER_EVENT_FAULT) {
+            frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX] = detail;
+        }
+
+        std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+        std::size_t encoded_length = 0;
+        assert(uart_encode_frame(&frame, encoded.data(), encoded.size(), &encoded_length) == UART_CODEC_OK);
+        backend->PushRead({ encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(encoded_length) });
+        assert(session->PollOnce().Succeeded());
+    }
+
     FakeUartIoBackend* backend{};
     std::unique_ptr<UartSession> session;
     std::unique_ptr<LineTracerNode> node;
+    std::vector<LineTracerReport> reports;
+    std::uint8_t next_event_sequence{ 100U };
 };
+
+template <typename Payload>
+const Payload& ReportPayload(const LineTracerReport& report) {
+    const auto* payload = std::get_if<Payload>(&report.data);
+    assert(payload != nullptr);
+    return *payload;
+}
 
 mqtt::MqttMessage MakeDestination(std::string destination = "DEST-02", std::string target = "PI-LT-01") {
     return {
@@ -297,6 +343,86 @@ void TestRejectedAssignDoesNotActivateJob() {
     assert(!fixture.node->HasActiveJob());
 }
 
+void TestStateAndArrivalEventsReportPickupReady() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_STATE_CHANGED, UART_LINETRACER_STATE_LOAD_WAIT);
+    fixture.PushEvent(UART_LINETRACER_EVENT_ARRIVED);
+
+    assert(fixture.reports.size() == 2U);
+    for (const auto& report : fixture.reports) {
+        assert(report.channel == LineTracerReportChannel::kStatus);
+        assert(report.message_type == mqtt::MessageType::kDeviceStatus);
+        const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(report);
+        assert(status.current_state == "PICKUP_READY_B");
+        assert(status.job_id == kWorkId);
+    }
+}
+
+void TestLoadDetectedReportsLoadOn() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_LOAD_DETECTED);
+
+    assert(fixture.reports.size() == 1U);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
+    assert(status.current_state == "LOAD_ON_B");
+    assert(status.job_id == kWorkId);
+}
+
+void TestUnloadCompleteReportsCompletionAndClearsMapping() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_UNLOAD_COMPLETE);
+
+    assert(fixture.reports.size() == 3U);
+    const auto& load_off = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[0]);
+    assert(load_off.current_state == "LOAD_OFF_B");
+    assert(load_off.job_id == kWorkId);
+
+    assert(fixture.reports[1].channel == LineTracerReportChannel::kEvent);
+    assert(fixture.reports[1].message_type == mqtt::MessageType::kWorkCompleted);
+    const auto& completed = ReportPayload<mqtt::WorkCompletedPayload>(fixture.reports[1]);
+    assert(completed.work_id == kWorkId);
+    assert(completed.result == "SUCCESS");
+
+    const auto& parked = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[2]);
+    assert(parked.current_state == "PARKED_B");
+    assert(!parked.job_id.has_value());
+    assert(!fixture.node->HasActiveJob());
+    assert(fixture.node->ActiveWorkId().empty());
+}
+
+void TestFaultReportsMappedError() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_SENSOR);
+
+    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.front().channel == LineTracerReportChannel::kError);
+    assert(fixture.reports.front().message_type == mqtt::MessageType::kErrorOccurred);
+    const auto& error = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.front());
+    assert(error.job_id == kWorkId);
+    assert(error.error_code == "ERR-SENSOR");
+    assert(error.error_level == "ERROR");
+    assert(error.current_state == "FAULT");
+}
+
+void TestStaleJobEventIsIgnored() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_LOAD_DETECTED, 0U,
+                      static_cast<std::uint16_t>(fixture.node->ActiveUartJobId() + 1U));
+
+    assert(fixture.reports.empty());
+    assert(fixture.node->HasActiveJob());
+}
+
 }  // namespace
 
 int main() {
@@ -309,5 +435,10 @@ int main() {
     TestWrongTargetIsRejected();
     TestPendingUartCommandReportsBusy();
     TestRejectedAssignDoesNotActivateJob();
+    TestStateAndArrivalEventsReportPickupReady();
+    TestLoadDetectedReportsLoadOn();
+    TestUnloadCompleteReportsCompletionAndClearsMapping();
+    TestFaultReportsMappedError();
+    TestStaleJobEventIsIgnored();
     return 0;
 }

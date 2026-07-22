@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/mqtt_validation.hpp"
 #include "logistics/device/mqtt_message_processor.hpp"
 #include "logistics/device/mqtt_time.hpp"
 
@@ -200,6 +201,22 @@ public:
         return published;
     }
 
+    [[nodiscard]] bool PublishResponse(const mqtt::MqttMessage& message) {
+        return PublishMessage(mqtt::DeviceResponseTopic(config_.device_id), message, 1, false, "command response");
+    }
+
+    [[nodiscard]] bool PublishStatus(const mqtt::MqttMessage& message) {
+        return PublishMessage(mqtt::DeviceStatusTopic(config_.device_id), message, 1, true, "device status");
+    }
+
+    [[nodiscard]] bool PublishEvent(const mqtt::MqttMessage& message) {
+        return PublishMessage(mqtt::DeviceEventTopic(config_.device_id), message, 1, false, "device event");
+    }
+
+    [[nodiscard]] bool PublishError(const mqtt::MqttMessage& message) {
+        return PublishMessage(mqtt::DeviceErrorTopic(config_.device_id), message, 1, false, "device error");
+    }
+
 private:
     [[nodiscard]] std::string LifecycleMessageId(std::string_view kind, std::uint64_t sequence) const {
         return std::string(kind) + '-' + MakeMessageId(config_.device_id, message_session_id_, sequence);
@@ -223,6 +240,25 @@ private:
             return false;
         }
         return true;
+    }
+
+    [[nodiscard]] bool PublishMessage(const std::string& topic, const mqtt::MqttMessage& message, int qos, bool retain,
+                                      std::string_view description) {
+        if (!connected_ || client_ == nullptr) {
+            return false;
+        }
+
+        const auto validation = mqtt::ValidateTopicMessage(topic, message);
+        if (!validation.IsSuccess()) {
+            std::cerr << "[device][mqtt][ERROR] invalid " << description << ": " << validation.message << '\n';
+            return false;
+        }
+
+        const bool published = PublishEncoded(topic, mqtt::SerializeMessage(message), qos, retain, description);
+        if (published) {
+            device_status_->MarkCommunication(message.timestamp);
+        }
+        return published;
     }
 
     [[nodiscard]] bool PublishOnlineStatusAndRegistration(std::string_view timestamp) {
@@ -376,6 +412,22 @@ bool MqttNodeClient::IsConnected() const noexcept {
 
 bool MqttNodeClient::PublishHeartbeat(std::string message_id, std::string timestamp) {
     return impl_->PublishHeartbeat(std::move(message_id), std::move(timestamp));
+}
+
+bool MqttNodeClient::PublishResponse(const contracts::mqtt::MqttMessage& message) {
+    return impl_->PublishResponse(message);
+}
+
+bool MqttNodeClient::PublishStatus(const contracts::mqtt::MqttMessage& message) {
+    return impl_->PublishStatus(message);
+}
+
+bool MqttNodeClient::PublishEvent(const contracts::mqtt::MqttMessage& message) {
+    return impl_->PublishEvent(message);
+}
+
+bool MqttNodeClient::PublishError(const contracts::mqtt::MqttMessage& message) {
+    return impl_->PublishError(message);
 }
 
 }  // namespace logistics::device
