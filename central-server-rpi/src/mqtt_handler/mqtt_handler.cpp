@@ -267,6 +267,27 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             route_succeeded = qt_response_handler_(decoded.value);
         } else if (parsed_topic.kind == mqtt::TopicKind::kDeviceStatus && qt_status_handler_) {
             route_succeeded = qt_status_handler_(decoded.value);
+        } else if (parsed_topic.kind == mqtt::TopicKind::kDeviceHeartbeat && qt_status_handler_) {
+            const auto* heartbeat = mqtt::GetPayload<mqtt::HeartbeatPayload>(decoded.value);
+            if (heartbeat == nullptr) {
+                route_succeeded = false;
+            } else {
+                const mqtt::MqttMessage status_message{
+                    .protocol_version = decoded.value.protocol_version,
+                    .message_id = decoded.value.message_id,
+                    .message_type = mqtt::MessageType::kDeviceStatus,
+                    .source_id = decoded.value.source_id,
+                    .timestamp = decoded.value.timestamp,
+                    .data =
+                        mqtt::DeviceStatusPayload{
+                            .status = heartbeat->status,
+                            .current_state = heartbeat->current_state,
+                            .job_id = heartbeat->job_id,
+                            .error_code = heartbeat->error_code,
+                        },
+                };
+                route_succeeded = qt_status_handler_(status_message);
+            }
         } else if (parsed_topic.kind == mqtt::TopicKind::kDeviceError && qt_error_handler_) {
             route_succeeded = qt_error_handler_(decoded.value);
         }
