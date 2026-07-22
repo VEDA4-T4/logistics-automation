@@ -18,14 +18,18 @@
  * E-Stop 시퀀스:
  *   1) conveyor_motor_power_latch_disable()로 공통 모터 STBY를 즉시 LOW로 latch.
  *      (SafetyTask만 최종 차단 권한을 가진다. 두 ControlTask 상태와 무관하게 동작)
- *   2) 분류 게이트를 안전 위치로 이동(sorting_control_gate_enter_safe_state).
- *   3) 투입/분류 공정에 정지를 통지(notify_safety_stop). 이때 각 공정의 safety
- *      epoch이 증가해 대기 중인 Pi 구동 명령이 무효화(STALE)된다.
- *   4) 장치 상태를 EMERGENCY_STOP으로 게시하고 안전 EVENT를 양쪽 채널에 보고.
+ *   2) 투입/분류 공정에 정지를 통지(notify_safety_stop). 이때 각 공정의 safety
+ *      epoch이 증가해 대기 중인 Pi 구동 명령이 무효화(STALE)되고, 분류 쪽은
+ *      sorting_control_handle_safety_stop()이 모터 정지와 게이트 Home 복귀까지
+ *      함께 처리한다(별도 게이트 호출 불필요).
+ *   3) 장치 상태를 EMERGENCY_STOP으로 게시하고 안전 EVENT를 양쪽 채널에 보고.
  *
  * Reset 시퀀스(UART_CMD_RESET_DEVICE, 양쪽 UART 수신 가능):
  *   E-Stop latch 상태에서만 유효하다. 두 공정이 모두 STOPPED로 동기화된 뒤에만
  *   해제를 요청하고, 두 공정이 모두 RELEASED로 확인된 뒤에만 STBY latch를 푼다.
+ *   분류 쪽은 sorting_control_handle_safety_release()가 게이트 Home 상태를
+ *   전제조건으로 검사하므로(그 전엔 MOTION_PENDING), 게이트가 아직 복귀 중이면
+ *   STOPPED 전이 자체가 지연되고 SafetyTask는 이를 그대로 폴링 대기한다.
  *   어느 단계든 시간 예산을 초과하면 latch를 유지한 채(fail-safe) reset을 거부
  *   보고한다.
  *
@@ -43,9 +47,10 @@ typedef enum {
 } safety_cause_t;
 
 /*
- * 각 공정 ControlTask의 안전 동기화 상태.
- * input_control_task.h의 input_control_safety_sync_state_t와 값이 일치하며,
- * SortingControlTask도 동일한 값 체계를 따른다.
+ * 각 공정 ControlTask의 안전 동기화 상태를 SafetyTask 내부에서 통일해 다루기
+ * 위한 표현이다. input_control_task.h의 input_control_safety_sync_state_t,
+ * sorting_control_task.h의 sorting_control_safety_sync_state_t와 값이
+ * 정확히 일치한다(RELEASED=0/STOP_REQUESTED=1/STOPPED=2/RELEASE_REQUESTED=3).
  */
 typedef enum {
     SAFETY_SYNC_RELEASED = 0U,
@@ -59,8 +64,10 @@ typedef enum {
  * 안전 상태 변경 EVENT (UART_CMD_EVENT)
  * ============================================================================
  *
- * UART 계약의 UART_CMD_EVENT payload [0] = event_id. heartbeat(0x01)와 같은
- * 애플리케이션 확장이며, 값은 Raspberry Pi 측과 공유해야 한다(변경 시 통보).
+ * UART 계약의 UART_CMD_EVENT payload [0] = event_id. heartbeat(0x01),
+ * SortingControlTask의 UART_SORTING_EVENT_CYCLE_COMPLETE(0x02)와 같은
+ * 애플리케이션 확장 네임스페이스를 공유하므로 값은 Raspberry Pi 측과
+ * 공유해야 한다(변경 시 통보). 0x01/0x02는 이미 사용 중이라 0x03을 쓴다.
  *
  * payload 구조:
  *   [0]    event_id = APP_EVENT_SAFETY
@@ -69,7 +76,7 @@ typedef enum {
  *   [3..6] timestamp_ms (Little-endian uint32, HAL_GetTick)
  *   [7]    result (RESET_COMPLETE/REJECTED에서 safety_reset_result_t, 그 외 0)
  */
-#define APP_EVENT_SAFETY 0x02U
+#define APP_EVENT_SAFETY 0x03U
 
 #define APP_SAFETY_EVENT_KIND_INDEX 1U
 #define APP_SAFETY_EVENT_CAUSE_INDEX 2U

@@ -29,9 +29,6 @@ static uint32_t latchDisableSeq;
 static uint32_t releaseLatchCalls;
 static uint32_t releaseLatchSeq;
 
-static uint32_t gateSafeCalls;
-static uint32_t gateSafeSeq;
-
 static uint32_t inputNotifyStopCalls;
 static uint32_t inputNotifyStopSeq;
 static uint8_t inputNotifyStopResult;
@@ -42,7 +39,7 @@ static uint32_t sortingNotifyStopCalls;
 static uint32_t sortingNotifyStopSeq;
 static uint8_t sortingNotifyStopResult;
 static uint32_t sortingNotifyReleaseCalls;
-static safety_sync_state_t sortingSync;
+static sorting_control_safety_sync_state_t sortingSync;
 
 static uint32_t setDeviceStatusCalls;
 static uint8_t lastDeviceState;
@@ -98,30 +95,25 @@ input_control_safety_sync_state_t input_control_task_get_safety_sync_state(void)
     return (input_control_safety_sync_state_t)inputSync;
 }
 
-/* ---- fake: SortingControlTask 안전 seam(weak stub 대체) ---- */
+/* ---- fake: SortingControlTask 안전 seam(실제 sorting_control_task.h 시그니처) ---- */
 uint8_t sorting_control_task_notify_safety_stop(void) {
     sortingNotifyStopCalls++;
     sortingNotifyStopSeq = ++callSeq;
-    sortingSync = SAFETY_SYNC_STOP_REQUESTED;
+    sortingSync = SORTING_CONTROL_SAFETY_STOP_REQUESTED;
     return sortingNotifyStopResult;
 }
 
 uint8_t sorting_control_task_notify_safety_release(void) {
     sortingNotifyReleaseCalls++;
-    if (sortingSync == SAFETY_SYNC_STOPPED) {
-        sortingSync = SAFETY_SYNC_RELEASE_REQUESTED;
+    if (sortingSync == SORTING_CONTROL_SAFETY_STOPPED) {
+        sortingSync = SORTING_CONTROL_SAFETY_RELEASE_REQUESTED;
         return 1U;
     }
     return 0U;
 }
 
-safety_sync_state_t sorting_control_task_get_safety_sync_state(void) {
+sorting_control_safety_sync_state_t sorting_control_task_get_safety_sync_state(void) {
     return sortingSync;
-}
-
-void sorting_control_gate_enter_safe_state(void) {
-    gateSafeCalls++;
-    gateSafeSeq = ++callSeq;
 }
 
 /* ---- fake: CommTx ---- */
@@ -171,8 +163,6 @@ static void reset_all(void) {
     latchDisableSeq = 0U;
     releaseLatchCalls = 0U;
     releaseLatchSeq = 0U;
-    gateSafeCalls = 0U;
-    gateSafeSeq = 0U;
     inputNotifyStopCalls = 0U;
     inputNotifyStopSeq = 0U;
     inputNotifyStopResult = 1U;
@@ -182,7 +172,7 @@ static void reset_all(void) {
     sortingNotifyStopSeq = 0U;
     sortingNotifyStopResult = 1U;
     sortingNotifyReleaseCalls = 0U;
-    sortingSync = SAFETY_SYNC_RELEASED;
+    sortingSync = SORTING_CONTROL_SAFETY_RELEASED;
     setDeviceStatusCalls = 0U;
     lastDeviceState = 0U;
     lastDeviceError = 0U;
@@ -238,10 +228,8 @@ static void test_estop_latches_before_notifying_controls(void) {
     assert(latchDisableCalls == 1U);
     assert(inputNotifyStopCalls == 1U);
     assert(sortingNotifyStopCalls == 1U);
-    assert(gateSafeCalls == 1U);
     assert(latchDisableSeq < inputNotifyStopSeq);
     assert(latchDisableSeq < sortingNotifyStopSeq);
-    assert(latchDisableSeq < gateSafeSeq);
 
     /* 장치 상태가 EMERGENCY_STOP으로 게시된다. */
     assert(setDeviceStatusCalls == 1U);
@@ -308,13 +296,13 @@ static void test_reset_releases_only_after_both_released(void) {
 
     /* ControlTask들이 STOPPED로 동기화 -> 해제 요청됨(fake가 RELEASE_REQUESTED로 전진). */
     inputSync = (int)INPUT_CONTROL_SAFETY_STOPPED;
-    sortingSync = SAFETY_SYNC_STOPPED;
+    sortingSync = SORTING_CONTROL_SAFETY_STOPPED;
     SafetyTask_ServicePending();
     assert(inputNotifyReleaseCalls == 1U);
     assert(sortingNotifyReleaseCalls == 1U);
     assert(releaseLatchCalls == 0U); /* 아직 RELEASED 확인 전 */
     assert(inputSync == (int)INPUT_CONTROL_SAFETY_RELEASE_REQUESTED);
-    assert(sortingSync == SAFETY_SYNC_RELEASE_REQUESTED);
+    assert(sortingSync == SORTING_CONTROL_SAFETY_RELEASE_REQUESTED);
 
     /* 해제 요청 접수만으로는 latch를 풀지 않는다. */
     SafetyTask_ServicePending();
@@ -322,7 +310,7 @@ static void test_reset_releases_only_after_both_released(void) {
 
     /* 두 공정이 RELEASED로 최종 확인(ControlTask가 해제 마커 처리). 이제서야 latch 해제. */
     inputSync = (int)INPUT_CONTROL_SAFETY_RELEASED;
-    sortingSync = SAFETY_SYNC_RELEASED;
+    sortingSync = SORTING_CONTROL_SAFETY_RELEASED;
     SafetyTask_ServicePending();
     assert(releaseLatchCalls == 1U);
     assert(SafetyTask_IsReleasing() == 0U);
@@ -370,7 +358,7 @@ static void test_estop_during_release_relatches(void) {
     drive_estop(APP_UART_CHANNEL_1);
     drive_reset();
     inputSync = (int)INPUT_CONTROL_SAFETY_STOPPED;
-    sortingSync = SAFETY_SYNC_STOPPED;
+    sortingSync = SORTING_CONTROL_SAFETY_STOPPED;
     SafetyTask_ServicePending(); /* WAIT_RELEASED로 진입 */
     assert(SafetyTask_IsReleasing() == 1U);
 

@@ -47,7 +47,8 @@ static safety_sync_state_t safety_input_sync(void) {
 }
 
 static safety_sync_state_t safety_sorting_sync(void) {
-    return sorting_control_task_get_safety_sync_state();
+    /* sorting_control_safety_sync_state_t와 safety_sync_state_t는 값이 일치한다. */
+    return (safety_sync_state_t)sorting_control_task_get_safety_sync_state();
 }
 
 static void safety_report_event(safety_event_kind_t kind, safety_cause_t cause, uint32_t tick, uint8_t result) {
@@ -79,13 +80,12 @@ static void safety_enter_estop(safety_cause_t cause) {
      */
     conveyor_motor_power_latch_disable();
 
-    /* 2) 분류 게이트를 안전 위치로 이동한다(스텁). */
-    sorting_control_gate_enter_safe_state();
-
     /*
-     * 3) 두 공정에 정지를 통지한다. notify는 각 공정의 safety epoch을 증가시켜
-     *    대기 중인 Pi 구동 명령을 무효화한다. 큐 접수 실패 시에도 각 공정은
-     *    내부 atomic 상태로 정지를 인지하므로 통계만 기록한다.
+     * 2) 두 공정에 정지를 통지한다. notify는 각 공정의 safety epoch을 증가시켜
+     *    대기 중인 Pi 구동 명령을 무효화한다. 분류 쪽은
+     *    sorting_control_handle_safety_stop()이 모터 정지와 게이트 Home 복귀를
+     *    함께 처리하므로 별도 게이트 호출이 필요 없다. 큐 접수 실패 시에도 각
+     *    공정은 내부 atomic 상태로 정지를 인지하므로 통계만 기록한다.
      */
     if (input_control_task_notify_safety_stop() == 0U) {
         safetyStats.controlStopFailures++;
@@ -103,7 +103,7 @@ static void safety_enter_estop(safety_cause_t cause) {
     safety.eventTick = HAL_GetTick();
     safetyStats.estopEvents++;
 
-    /* 4) 장치 상태 게시 + 양쪽 채널 EVENT 보고. */
+    /* 3) 장치 상태 게시 + 양쪽 채널 EVENT 보고. */
     CommTx_SetDeviceStatus(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP);
     safety_report_event(SAFETY_EVENT_ESTOP_LATCHED, cause, safety.eventTick, 0U);
 }

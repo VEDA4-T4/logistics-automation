@@ -78,6 +78,16 @@ add_executable(
     ../Application/Src/safety_task.c
 )
 
+add_executable(
+    safety_integration_test
+    safety_integration_test.c
+    ../Application/Src/safety_task.c
+    ../Application/Src/input_control.c
+    ../Application/Src/input_control_task.c
+    ../Application/Src/sorting_control.c
+    ../Application/Src/sorting_control_task.c
+)
+
 target_include_directories(
     input_control_test
     PRIVATE ../Application/Inc
@@ -163,6 +173,13 @@ target_include_directories(
         ../Application/Inc
 )
 
+target_include_directories(
+    safety_integration_test
+    PRIVATE
+        fakes
+        ../Application/Inc
+)
+
 set_target_properties(
     input_control_test
     PROPERTIES
@@ -261,6 +278,14 @@ set_target_properties(
 
 set_target_properties(
     safety_task_test
+    PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+)
+
+set_target_properties(
+    safety_integration_test
     PROPERTIES
         C_STANDARD 11
         C_STANDARD_REQUIRED ON
@@ -270,6 +295,7 @@ set_target_properties(
 target_link_libraries(input_control_test PRIVATE logistics::contracts)
 target_link_libraries(sensor_filter_test PRIVATE logistics::contracts)
 target_link_libraries(safety_task_test PRIVATE logistics::contracts)
+target_link_libraries(safety_integration_test PRIVATE logistics::contracts)
 target_link_libraries(input_motor_tb6612_test PRIVATE logistics::contracts)
 target_link_libraries(input_control_task_test PRIVATE logistics::contracts)
 target_link_libraries(sorting_control_test PRIVATE logistics::contracts)
@@ -360,6 +386,12 @@ if(WIN32)
                 "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
                 $<TARGET_FILE:safety_task_test>
     )
+    add_test(
+        NAME safety_integration_test
+        COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:safety_integration_test>
+    )
 else()
     add_test(NAME input_control_test COMMAND input_control_test)
     add_test(NAME input_motor_tb6612_test COMMAND input_motor_tb6612_test)
@@ -374,4 +406,5 @@ else()
     add_test(NAME hc_sr04_test COMMAND hc_sr04_test)
     add_test(NAME sensor_filter_test COMMAND sensor_filter_test)
     add_test(NAME safety_task_test COMMAND safety_task_test)
+    add_test(NAME safety_integration_test COMMAND safety_integration_test)
 endif()
