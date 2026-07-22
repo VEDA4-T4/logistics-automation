@@ -75,6 +75,15 @@
 #define HEARTBEAT_PERIOD_S 1.0
 #define HEARTBEAT_TOLERANCE_S 0.5
 
+/* SafetyTask 안전 EVENT (펌웨어 Application/Inc/safety_task.h와 동일) */
+#define APP_EVENT_SAFETY 0x03U
+
+#define APP_SAFETY_EVENT_KIND_INDEX 1U
+#define APP_SAFETY_EVENT_CAUSE_INDEX 2U
+#define APP_SAFETY_EVENT_TIMESTAMP_INDEX 3U
+#define APP_SAFETY_EVENT_RESULT_INDEX 7U
+#define APP_SAFETY_EVENT_PAYLOAD_SIZE 8U
+
 /* 기본 수신 시간 */
 #define DEFAULT_DURATION_S 30.0
 
@@ -119,6 +128,49 @@ static const char* command_name(uint8_t command) {
             return "EMERGENCY_STOP";
         default:
             return "UNKNOWN";
+    }
+}
+
+static const char* safety_event_kind_name(uint8_t kind) {
+    switch (kind) {
+        case 1U:
+            return "ESTOP_LATCHED";
+        case 2U:
+            return "RESET_COMPLETE";
+        case 3U:
+            return "RESET_REJECTED";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char* safety_cause_name(uint8_t cause) {
+    switch (cause) {
+        case 0U:
+            return "NONE";
+        case 1U:
+            return "ESTOP_INPUT_PI";
+        case 2U:
+            return "ESTOP_SORTING_PI";
+        case 3U:
+            return "FATAL_ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char* safety_reset_result_name(uint8_t result) {
+    switch (result) {
+        case 0U:
+            return "OK";
+        case 1U:
+            return "INPUT_NOT_READY";
+        case 2U:
+            return "SORTING_NOT_READY";
+        case 3U:
+            return "TIMEOUT";
+        default:
+            return "N/A";
     }
 }
 
@@ -375,6 +427,28 @@ int main(int argc, char** argv) {
                         }
                     }
                     last_heartbeat_time = now;
+                } else if (event_id == APP_EVENT_SAFETY) {
+                    stats.other++;
+
+                    if (frame.length != APP_SAFETY_EVENT_PAYLOAD_SIZE) {
+                        printf("  안전 EVENT 크기 오류: %u (기대값 %u)\n", frame.length,
+                               APP_SAFETY_EVENT_PAYLOAD_SIZE);
+                    } else {
+                        uint8_t kind = frame.payload[APP_SAFETY_EVENT_KIND_INDEX];
+                        uint8_t cause = frame.payload[APP_SAFETY_EVENT_CAUSE_INDEX];
+                        uint8_t result = frame.payload[APP_SAFETY_EVENT_RESULT_INDEX];
+                        uint32_t timestamp_ms = (uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX] |
+                                                ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 1U]
+                                                 << 8U) |
+                                                ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 2U]
+                                                 << 16U) |
+                                                ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 3U]
+                                                 << 24U);
+
+                        printf("  안전 EVENT: kind=%s(%u) cause=%s(%u) timestamp=%ums result=%s(%u) seq=%u\n",
+                               safety_event_kind_name(kind), kind, safety_cause_name(cause), cause, timestamp_ms,
+                               safety_reset_result_name(result), result, frame.sequence);
+                    }
                 } else {
                     stats.other++;
                     printf("  알 수 없는 EVENT id=0x%02X seq=%u\n", event_id, frame.sequence);

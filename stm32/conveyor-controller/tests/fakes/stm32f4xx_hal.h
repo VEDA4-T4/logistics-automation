@@ -3,7 +3,11 @@
 
 #include <stdint.h>
 
+/* fakes/main.h와 동시에 include될 수 있어(hc_sr04.h 경유) 공유 guard로 중복 정의를 막는다. */
+#ifndef TEST_FAKES_HAL_STATUS_TYPEDEF
+#define TEST_FAKES_HAL_STATUS_TYPEDEF
 typedef enum { HAL_OK = 0x00U, HAL_ERROR = 0x01U, HAL_BUSY = 0x02U } HAL_StatusTypeDef;
+#endif
 
 typedef struct __DMA_HandleTypeDef {
     uint32_t ErrorCode;
