@@ -1,3 +1,21 @@
+include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
+
+add_library(device_uart_transport common/uart_bridge/uart_transport.cpp)
+add_library(logistics::device_uart_transport ALIAS device_uart_transport)
+target_include_directories(device_uart_transport PUBLIC common/include)
+logistics_enable_warnings(device_uart_transport)
+
+if(BUILD_TESTING)
+    add_executable(device_uart_transport_test tests/uart_transport_test.cpp)
+    target_link_libraries(device_uart_transport_test PRIVATE logistics::device_uart_transport)
+    logistics_enable_warnings(device_uart_transport_test)
+    add_test(NAME device_uart_transport_test COMMAND device_uart_transport_test)
+endif()
+
+if(NOT LOGISTICS_BUILD_DEVICE_NODES)
+    return()
+endif()
+
 add_library(
     device_mqtt_core
     common/config/mqtt_node_config.cpp
@@ -22,7 +40,6 @@ target_link_libraries(
 target_include_directories(device_mqtt_core PUBLIC common/include)
 target_link_libraries(device_mqtt_core PUBLIC logistics::contracts)
 
-include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
 logistics_enable_warnings(device_mqtt_core)
 logistics_enable_warnings(device_log_spool)
 
