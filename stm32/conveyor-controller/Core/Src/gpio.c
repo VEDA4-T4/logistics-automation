@@ -54,10 +54,7 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, US1_TRIG_Pin|US2_TRIG_Pin|US3_TRIG_Pin|US4_TRIG_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, SORTING_MOTOR_BIN2_Pin|SORTING_MOTOR_BIN1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|SORTING_MOTOR_BIN2_Pin|SORTING_MOTOR_BIN1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, INPUT_MOTOR_AIN2_Pin|INPUT_MOTOR_AIN1_Pin|MOTOR_STBY_Pin, GPIO_PIN_RESET);
@@ -75,15 +72,8 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : SORTING_MOTOR_BIN2_Pin SORTING_MOTOR_BIN1_Pin */
-  GPIO_InitStruct.Pin = SORTING_MOTOR_BIN2_Pin|SORTING_MOTOR_BIN1_Pin;
+  /*Configure GPIO pins : LD2_Pin SORTING_MOTOR_BIN2_Pin SORTING_MOTOR_BIN1_Pin */
+  GPIO_InitStruct.Pin = LD2_Pin|SORTING_MOTOR_BIN2_Pin|SORTING_MOTOR_BIN1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
