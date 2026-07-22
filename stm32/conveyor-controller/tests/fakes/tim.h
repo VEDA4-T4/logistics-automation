@@ -28,7 +28,9 @@ typedef struct {
 } TIM_IC_InitTypeDef;
 
 extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim3;
+extern TIM_HandleTypeDef htim10;
 extern TIM_HandleTypeDef htim11;
 
 /* 실제 HAL과 동일한 간격(0x00, 0x04, 0x08, 0x0C)을 유지한다.

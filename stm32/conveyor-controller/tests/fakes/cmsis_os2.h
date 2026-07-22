@@ -28,5 +28,6 @@ osMessageQueueId_t osMessageQueueNew(uint32_t msg_count, uint32_t msg_size, cons
 osStatus_t osMessageQueuePut(osMessageQueueId_t mq_id, const void* msg_ptr, uint8_t msg_prio, uint32_t timeout);
 osStatus_t osMessageQueueGet(osMessageQueueId_t mq_id, void* msg_ptr, uint8_t* msg_prio, uint32_t timeout);
 osStatus_t osDelay(uint32_t ticks);
+uint32_t osKernelGetTickCount(void);
 
 #endif /* TEST_FAKES_CMSIS_OS2_H */

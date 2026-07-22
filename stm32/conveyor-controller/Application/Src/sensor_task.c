@@ -132,6 +132,16 @@ static void sensor_task_update_heartbeat(void) {
     CommTx_SetSensorState(COMM_TX_CH_SORTING, sortingState);
 }
 
+void SensorTask_Init(void) {
+    sensor_task_init_channels();
+}
+
+void SensorTask_PollChannel(uint8_t index) {
+    sensor_task_measure(&sensorChannels[index]);
+    sensor_task_report(&sensorChannels[index]);
+    sensor_task_update_heartbeat();
+}
+
 /*
  * freertos.c의 __weak StartSensorTask를 덮는 실제 구현.
  */
@@ -142,15 +152,13 @@ void StartSensorTask(void* argument) {
 
     (void)argument;
 
-    sensor_task_init_channels();
+    SensorTask_Init();
 
     for (;;) {
         for (i = 0U; i < SENSOR_COUNT; i++) {
             cycleStartTick = osKernelGetTickCount();
 
-            sensor_task_measure(&sensorChannels[i]);
-            sensor_task_report(&sensorChannels[i]);
-            sensor_task_update_heartbeat();
+            SensorTask_PollChannel(i);
 
             elapsedMs = osKernelGetTickCount() - cycleStartTick;
             if (elapsedMs < SENSOR_MIN_CYCLE_MS) {
