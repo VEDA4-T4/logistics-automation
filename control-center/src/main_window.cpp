@@ -29,6 +29,7 @@
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/control_center/command_response.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
+#include "logistics/control_center/operations_dashboard_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
 #include "logistics/control_center/product_result_panel.hpp"
 
@@ -51,6 +52,7 @@ struct ControlCenterConfig {
     int mqtt_keep_alive_seconds{ 30 };
     QUrl image_base_url{ QStringLiteral("http://127.0.0.1:8080/") };
     QString control_target_device_id{ "SYSTEM" };
+    QList<ProcessDefinition> process_definitions{ DefaultProcessDefinitions() };
     int channel_count{ kDefaultChannelCount };
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     std::vector<QUrl> stream_urls;
@@ -183,6 +185,33 @@ ControlCenterConfig loadControlCenterConfig() {
         config.control_target_device_id = control_target_device_id;
     }
 
+    const auto default_process_definitions = DefaultProcessDefinitions();
+    for (auto& definition : config.process_definitions) {
+        const auto key = QStringLiteral("dashboard/%1_device_id").arg(definition.key);
+        const auto device_id = settings.value(key, definition.device_id).toString().trimmed();
+        if (!logistics::contracts::mqtt::IsValidTopicLevel(device_id.toStdString())) {
+            config.warnings.append(
+                QStringLiteral("%1가 잘못되어 기본 장치 ID %2를 사용합니다.").arg(key, definition.device_id));
+            continue;
+        }
+        definition.device_id = device_id;
+    }
+    for (qsizetype left = 0; left < config.process_definitions.size(); ++left) {
+        for (qsizetype right = left + 1; right < config.process_definitions.size(); ++right) {
+            if (config.process_definitions[left].device_id != config.process_definitions[right].device_id) {
+                continue;
+            }
+            const auto reset_index =
+                config.process_definitions[right].device_id != default_process_definitions[right].device_id ? right
+                                                                                                            : left;
+            const auto duplicate_id = config.process_definitions[reset_index].device_id;
+            config.process_definitions[reset_index].device_id = default_process_definitions[reset_index].device_id;
+            config.warnings.append(QStringLiteral("dashboard 장치 ID %1가 중복되어 %2 공정은 기본값 %3을 사용합니다.")
+                                       .arg(duplicate_id, config.process_definitions[reset_index].display_name,
+                                            config.process_definitions[reset_index].device_id));
+        }
+    }
+
     auto image_base_url = QUrl(settings.value("http/image_base_url", config.image_base_url).toString().trimmed());
     if (!isValidHttpBaseUrl(image_base_url)) {
         config.warnings.append(QStringLiteral("http/image_base_url이 잘못되어 http://127.0.0.1:8080/을 사용합니다."));
@@ -252,6 +281,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     const auto config = loadControlCenterConfig();
     control_target_device_id_ = config.control_target_device_id;
+    operations_dashboard_state_.configureProcesses(config.process_definitions);
     channel_count_ = static_cast<std::size_t>(config.channel_count);
     reconnect_interval_ms_ = config.reconnect_interval_ms;
     stream_urls_ = config.stream_urls;
@@ -298,6 +328,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     app_header_layout->addStretch();
     app_header_layout->addWidget(channel_badge);
     root_layout->addWidget(app_header);
+
+    operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
+    operations_dashboard_panel_->setState(operations_dashboard_state_);
+    root_layout->addWidget(operations_dashboard_panel_);
 
     auto* content = new QWidget(central_widget);
     auto* content_layout = new QHBoxLayout(content);
@@ -351,29 +385,34 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 switch (state) {
                     case MqttClient::ConnectionState::Connected:
                         process_control_panel_->setMqttConnected(true);
+                        operations_dashboard_panel_->setMqttConnected(true);
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
                         mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
                         break;
                     case MqttClient::ConnectionState::Connecting:
                         process_control_panel_->setMqttConnected(false);
+                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결 중"));
                         mqtt_status_label_->setStyleSheet("color:#cca700;font-weight:700;");
                         break;
                     case MqttClient::ConnectionState::Reconnecting:
                         process_control_panel_->setMqttConnected(false);
+                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
                         mqtt_status_label_->setStyleSheet("color:#ce9178;font-weight:700;");
                         break;
                     case MqttClient::ConnectionState::Error:
                         process_control_panel_->setMqttConnected(false);
+                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
                         mqtt_status_label_->setStyleSheet("color:#f14c4c;font-weight:700;");
                         break;
                     case MqttClient::ConnectionState::Disconnected:
                         process_control_panel_->setMqttConnected(false);
+                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
                         mqtt_status_label_->setStyleSheet("color:#9d9d9d;font-weight:700;");
@@ -609,6 +648,13 @@ void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand c
 
 void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& envelope) {
     const auto parsed_topic = logistics::contracts::mqtt::ParseTopic(topic.toStdString());
+    const auto dashboard_update = operations_dashboard_state_.applyEnvelope(envelope);
+    if (dashboard_update.applied) {
+        operations_dashboard_panel_->setState(operations_dashboard_state_);
+    } else if (dashboard_update.handled && !dashboard_update.error.isEmpty()) {
+        statusBar()->showMessage(dashboard_update.error, 4000);
+    }
+
     if (parsed_topic.kind == logistics::contracts::mqtt::TopicKind::kQtEvent ||
         parsed_topic.kind == logistics::contracts::mqtt::TopicKind::kQtStatus) {
         const auto product_update = current_product_state_.applyEnvelope(envelope);

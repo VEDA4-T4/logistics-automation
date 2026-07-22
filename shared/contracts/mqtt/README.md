@@ -47,6 +47,24 @@ MQTT topic, payload, QoS, retain, Last Will 규칙을 중앙에서 관리하는 
 절대 URL 또는 Qt 설정의 `http/image_base_url`을 기준으로 하는 상대 경로이며 이미지 바이너리는 MQTT에
 포함하지 않습니다.
 
+### Qt 운영 대시보드 상태
+
+Qt는 중앙 서버가 전달한 메시지를 조합해 전체 공정과 노드별 최신 상태를 표시합니다. 투입 컨베이어, 비전
+처리, 로봇팔, 분류 컨베이어, 라인트레이서는 INI의 `dashboard/*_device_id`와 envelope의 `sourceId`를 연결하여
+구분합니다. 비전 노드는 카메라 영상 처리용이며 로봇팔 노드와 별개입니다. 로봇팔 노드가 배포되기 전에는
+로봇팔 카드가 상태 수신 대기로 유지됩니다. 각 카드는 `status`, `currentState`, `jobId`, `errorCode`와 envelope
+`timestamp`를 표시합니다.
+
+- `DEVICE_STATUS`, `HEARTBEAT`: 장치 연결 상태와 현재 상태를 갱신
+- `ERROR_OCCURRED`: 해당 장치를 오류로 구분하고 `ERROR` 또는 `CRITICAL`이면 전체 공정도 오류로 표시
+- `WORK_CREATED`부터 `WORK_COMPLETED`까지의 작업 이벤트: 공정별 `workId`와 현재 단계를 독립적으로 갱신
+- `COMMAND_RESPONSE`, `EMERGENCY_STOP`: 시작·정지·복구·비상정지 결과를 전체 공정 상태에 반영
+
+서로 다른 공정은 각각 다른 `workId`를 동시에 표시할 수 있습니다. 동일한 `messageId`, 공정별 이전
+`timestamp`, 해당 공정에서 이미 종료된 `workId`의 지연 메시지는 화면 상태를 되돌리지 않도록 무시합니다.
+중앙 서버는 장치 heartbeat의 `status`, `currentState`, `jobId`, `errorCode`를 기존 `DEVICE_STATUS`로 변환해
+Qt 상태 토픽에 전달하므로 별도의 메시지 타입이나 토픽을 추가하지 않습니다.
+
 `BOX_DETECTED`를 저장하면 중앙 서버는 UUID형 `workId`를 발급해 `WORK_CREATED`로 응답합니다. 이후의 위치,
 이미지, 바코드, 상품 정보, 목적지 및 `WORK_COMPLETED` payload는 같은 `workId`를 포함해야 합니다.
 
