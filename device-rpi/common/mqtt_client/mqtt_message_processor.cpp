@@ -192,4 +192,12 @@ mqtt::EncodeResult MqttMessageProcessor::EncodeOfflineStatus(std::string message
     return ValidateAndSerialize(mqtt::DeviceStatusTopic(device_id_), message);
 }
 
+mqtt::EncodeResult MqttMessageProcessor::EncodeDeviceEvent(const mqtt::MqttMessage& message) const {
+    return ValidateAndSerialize(mqtt::DeviceEventTopic(device_id_), message);
+}
+
+mqtt::EncodeResult MqttMessageProcessor::EncodeDeviceError(const mqtt::MqttMessage& message) const {
+    return ValidateAndSerialize(mqtt::DeviceErrorTopic(device_id_), message);
+}
+
 }  // namespace logistics::device

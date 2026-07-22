@@ -26,11 +26,31 @@ include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
 logistics_enable_warnings(device_mqtt_core)
 logistics_enable_warnings(device_log_spool)
 
+add_library(
+    device_image_upload
+    common/src/image_uploader.cpp
+    common/src/curl_image_upload_transport.cpp
+)
+add_library(logistics::device_image_upload ALIAS device_image_upload)
+target_include_directories(device_image_upload PUBLIC common/include)
+target_link_libraries(
+    device_image_upload
+    PUBLIC logistics::contracts
+    PRIVATE CURL::libcurl OpenSSL::Crypto Threads::Threads
+)
+logistics_enable_warnings(device_image_upload)
+
 add_library(device_status common/device_status/device_status.cpp)
 add_library(logistics::device_status ALIAS device_status)
 target_include_directories(device_status PUBLIC common/include)
 target_link_libraries(device_status PUBLIC logistics::contracts)
 logistics_enable_warnings(device_status)
+
+add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
+add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
+target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
+target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
+logistics_enable_warnings(vision_mqtt_workflow)
 
 add_library(
     device_runtime
@@ -135,6 +155,16 @@ if(BUILD_TESTING)
     target_link_libraries(device_log_spool_test PRIVATE logistics::device_log_spool)
     logistics_enable_warnings(device_log_spool_test)
     add_test(NAME device_log_spool_test COMMAND device_log_spool_test)
+
+    add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
+    target_link_libraries(vision_mqtt_workflow_test PRIVATE logistics::vision_mqtt_workflow)
+    logistics_enable_warnings(vision_mqtt_workflow_test)
+    add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
+
+    add_executable(device_image_uploader_test tests/image_uploader_test.cpp)
+    target_link_libraries(device_image_uploader_test PRIVATE logistics::device_image_upload)
+    logistics_enable_warnings(device_image_uploader_test)
+    add_test(NAME device_image_uploader_test COMMAND device_image_uploader_test)
 endif()
 target_sources(
     logistics_vision_node
@@ -143,6 +173,15 @@ target_sources(
         vision-node/detection.hpp
 )
 
-find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgproc objdetect videoio)
+find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgcodecs imgproc objdetect videoio)
 target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
+target_link_libraries(logistics_vision_node PRIVATE logistics::vision_mqtt_workflow)
+
+if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+    target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)
+    target_link_libraries(
+        logistics_vision_node
+        PRIVATE logistics::device_mqtt_mosquitto logistics::device_status logistics::device_image_upload
+    )
+endif()

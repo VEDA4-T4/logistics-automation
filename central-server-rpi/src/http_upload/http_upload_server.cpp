@@ -112,7 +112,7 @@ MhdResult QueueImage(MHD_Connection* connection, const std::filesystem::path& pa
         return QueueJson(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
     }
     std::string body((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    if (!input.eof()) {
+    if (input.bad()) {
         return QueueJson(connection, MHD_HTTP_INTERNAL_SERVER_ERROR,
                          "{\"error\":\"READ_FAILED\",\"message\":\"cannot read image\"}");
     }

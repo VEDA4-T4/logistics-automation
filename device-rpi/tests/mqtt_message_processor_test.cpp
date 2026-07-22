@@ -138,6 +138,42 @@ void TestRegistrationAndOnlineStatusEncoding() {
     assert(!online_payload->error_code.has_value());
 }
 
+void TestDeviceEventAndErrorEncoding() {
+    const device::MqttMessageProcessor processor("PI-VISION-01");
+    const mqtt::MqttMessage event{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-BOX-01",
+        .message_type = mqtt::MessageType::kBoxDetected,
+        .source_id = "PI-VISION-01",
+        .timestamp = "2026-07-21T10:00:00+09:00",
+        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "capture-01.jpg" },
+    };
+    assert(processor.EncodeDeviceEvent(event).IsSuccess());
+
+    auto wrong_source = event;
+    wrong_source.source_id = "PI-VISION-02";
+    assert(!processor.EncodeDeviceEvent(wrong_source).IsSuccess());
+
+    const mqtt::MqttMessage error{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-ERROR-01",
+        .message_type = mqtt::MessageType::kErrorOccurred,
+        .source_id = "PI-VISION-01",
+        .timestamp = "2026-07-21T10:00:01+09:00",
+        .data =
+            mqtt::ErrorOccurredPayload{
+                .job_id = std::nullopt,
+                .error_code = "CAMERA_DISCONNECTED",
+                .error_level = "ERROR",
+                .current_state = "CAMERA_ERROR",
+                .message = "camera stream is unavailable",
+                .distance = std::nullopt,
+            },
+    };
+    assert(processor.EncodeDeviceError(error).IsSuccess());
+    assert(!processor.EncodeDeviceEvent(error).IsSuccess());
+}
+
 }  // namespace
 
 int main() {
@@ -145,5 +181,6 @@ int main() {
     TestHeartbeatEncoding();
     TestWorkCreatedCommandDecoding();
     TestRegistrationAndOnlineStatusEncoding();
+    TestDeviceEventAndErrorEncoding();
     return 0;
 }

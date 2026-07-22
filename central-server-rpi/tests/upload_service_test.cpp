@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "logistics/central_server/database.hpp"
+#include "logistics/contracts/identifier.hpp"
 
 namespace {
 
@@ -46,12 +47,16 @@ int main() {
                                  .work_id = "22a194c3-3e3c-410c-a329-7e8c4ebcac83",
                                  .message_id = "IMAGE-001",
                                  .captured_at = "2026-07-16T10:00:00Z",
+                                 .started_at = {},
+                                 .ended_at = {},
                                  .sha256 = server::Sha256Hex(image_bytes),
                                  .mime_type = "image/jpeg",
                                  .bytes = image_bytes };
 
     auto result = service.Store(image);
     assert(result.status == server::UploadStatus::kCreated);
+    assert(logistics::contracts::IsValidUuid(result.upload_id));
+    assert(result.path.starts_with("/uploads/images/") && result.path.ends_with(".jpg"));
     assert(result.checksum == image.sha256);
     assert(std::filesystem::exists(root / "uploads" / result.path.substr(std::string("/uploads/").size())));
     assert(Scalar(database, "SELECT count(*) FROM http_upload") == 1);
@@ -78,7 +83,9 @@ int main() {
     const std::vector<std::uint8_t> log_bytes{ 'o', 'k', '\n' };
     const server::UploadRequest log{ .kind = contract::UploadKind::kLog,
                                      .device_id = "PI-VISION-01",
+                                     .work_id = {},
                                      .message_id = "LOG-001",
+                                     .captured_at = {},
                                      .started_at = "2026-07-16T09:00:00Z",
                                      .ended_at = "2026-07-16T10:00:00Z",
                                      .sha256 = server::Sha256Hex(log_bytes),

@@ -44,6 +44,9 @@ public:
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeOfflineStatus(std::string message_id,
                                                                     std::string timestamp) const;
 
+    [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceEvent(const contracts::mqtt::MqttMessage& message) const;
+    [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceError(const contracts::mqtt::MqttMessage& message) const;
+
 private:
     static constexpr std::size_t kRecentMessageLimit = 256;
 

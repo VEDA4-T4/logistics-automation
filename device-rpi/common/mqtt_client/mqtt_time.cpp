@@ -4,7 +4,6 @@
 #include <chrono>
 #include <ctime>
 #include <iomanip>
-#include <mutex>
 #include <random>
 #include <sstream>
 
@@ -13,15 +12,15 @@ namespace logistics::device {
 std::string CurrentIso8601Timestamp() {
     const std::time_t current_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::tm utc_time{};
-    {
-        static std::mutex time_mutex;
-        std::lock_guard lock(time_mutex);
-        const std::tm* converted = std::gmtime(&current_time);
-        if (converted == nullptr) {
-            return {};
-        }
-        utc_time = *converted;
+#ifdef _WIN32
+    if (gmtime_s(&utc_time, &current_time) != 0) {
+        return {};
     }
+#else
+    if (gmtime_r(&current_time, &utc_time) == nullptr) {
+        return {};
+    }
+#endif
 
     std::ostringstream output;
     output << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ");

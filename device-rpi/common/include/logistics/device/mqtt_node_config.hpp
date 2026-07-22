@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "logistics/device/image_uploader.hpp"
 #include "logistics/device/log_spool_uploader.hpp"
 
 namespace logistics::device {
@@ -24,6 +25,8 @@ struct MqttNodeConfig final {
     bool clean_session{ true };
     bool log_upload_enabled{ false };
     LogSpoolConfig log_upload;
+    bool image_upload_enabled{ false };
+    ImageUploadConfig image_upload;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

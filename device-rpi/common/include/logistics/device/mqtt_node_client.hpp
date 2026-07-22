@@ -29,6 +29,8 @@ public:
     void Stop() noexcept;
     [[nodiscard]] bool IsConnected() const noexcept;
     [[nodiscard]] bool PublishHeartbeat(std::string message_id, std::string timestamp);
+    [[nodiscard]] bool PublishEvent(const contracts::mqtt::MqttMessage& message);
+    [[nodiscard]] bool PublishError(const contracts::mqtt::MqttMessage& message);
 
 private:
     class Impl;

@@ -30,7 +30,7 @@ namespace {
 template <typename Integer>
 [[nodiscard]] Integer ParseInteger(const std::filesystem::path& path, std::size_t line_number, std::string_view key,
                                    std::string_view value, Integer minimum, Integer maximum) {
-    unsigned long long parsed{};
+    Integer parsed{};
     const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
     if (error != std::errc{} || end != value.data() + value.size() || parsed < minimum || parsed > maximum) {
         ThrowLineError(path, line_number, std::string(key) + " is outside the allowed range");
@@ -137,6 +137,35 @@ void AssignLogUploadValue(MqttNodeConfig& config, const std::filesystem::path& p
     }
 }
 
+void AssignImageUploadValue(MqttNodeConfig& config, const std::filesystem::path& path, std::size_t line_number,
+                            std::string_view key, std::string_view value) {
+    auto& upload = config.image_upload;
+    if (key == "enabled") {
+        config.image_upload_enabled = ParseBoolean(path, line_number, key, value);
+    } else if (key == "endpoint_url") {
+        upload.endpoint_url = value;
+    } else if (key == "bearer_token") {
+        upload.bearer_token = value;
+    } else if (key == "ca_certificate") {
+        upload.ca_certificate = value;
+    } else if (key == "request_timeout_seconds") {
+        upload.request_timeout = std::chrono::seconds(
+            ParseInteger<std::int64_t>(path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+    } else if (key == "maximum_attempts") {
+        upload.maximum_attempts = ParseInteger<int>(path, line_number, key, value, 1, std::numeric_limits<int>::max());
+    } else if (key == "initial_backoff_seconds") {
+        upload.initial_backoff = std::chrono::seconds(
+            ParseInteger<std::int64_t>(path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+    } else if (key == "maximum_backoff_seconds") {
+        upload.maximum_backoff = std::chrono::seconds(
+            ParseInteger<std::int64_t>(path, line_number, key, value, 1, std::numeric_limits<std::int64_t>::max()));
+    } else if (key == "allow_insecure_http") {
+        upload.allow_insecure_http = ParseBoolean(path, line_number, key, value);
+    } else {
+        ThrowLineError(path, line_number, "unknown [image_upload] setting: " + std::string(key));
+    }
+}
+
 }  // namespace
 
 bool MqttNodeConfig::IsValid() const noexcept {
@@ -146,10 +175,11 @@ bool MqttNodeConfig::IsValid() const noexcept {
          log_upload.maximum_spool_bytes >= log_upload.rotate_bytes && log_upload.rotate_interval.count() > 0 &&
          log_upload.request_timeout.count() > 0 && log_upload.maximum_attempts > 0 &&
          log_upload.initial_backoff.count() > 0 && log_upload.maximum_backoff >= log_upload.initial_backoff);
+    const bool valid_image_upload = !image_upload_enabled || image_upload.IsValid();
     return contracts::mqtt::IsValidTopicLevel(device_id) && !node_name.empty() && !ip_address.empty() &&
            !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
            reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
-           (password.empty() || !username.empty()) && valid_log_upload;
+           (password.empty() || !username.empty()) && valid_log_upload && valid_image_upload;
 }
 
 MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
@@ -182,7 +212,7 @@ MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
             found_mqtt_section = found_mqtt_section || section == "mqtt";
             continue;
         }
-        if (section != "device" && section != "mqtt" && section != "log_upload") {
+        if (section != "device" && section != "mqtt" && section != "log_upload" && section != "image_upload") {
             continue;
         }
 
@@ -201,8 +231,10 @@ MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
             AssignDeviceValue(config, path, line_number, key, value);
         } else if (section == "mqtt") {
             AssignMqttValue(config, path, line_number, key, value);
-        } else {
+        } else if (section == "log_upload") {
             AssignLogUploadValue(config, path, line_number, key, value);
+        } else {
+            AssignImageUploadValue(config, path, line_number, key, value);
         }
     }
 

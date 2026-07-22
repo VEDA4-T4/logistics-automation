@@ -288,6 +288,10 @@ if(BUILD_TESTING)
         central_server_mqtt_handler_test
         PRIVATE logistics::central_server_mqtt_handler
     )
+    target_compile_definitions(
+        central_server_mqtt_handler_test
+        PRIVATE LOGISTICS_TEST_MIGRATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/db/migrations"
+    )
     logistics_enable_warnings(central_server_mqtt_handler_test)
     add_test(
         NAME central_server_mqtt_handler_test
