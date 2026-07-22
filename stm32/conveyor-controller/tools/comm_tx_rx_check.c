@@ -84,6 +84,15 @@
 #define APP_SAFETY_EVENT_RESULT_INDEX 7U
 #define APP_SAFETY_EVENT_PAYLOAD_SIZE 8U
 
+/* HealthTask 헬스 EVENT (펌웨어 Application/Inc/health_task.h와 동일) */
+#define APP_EVENT_HEALTH 0x04U
+
+#define APP_HEALTH_EVENT_KIND_INDEX 1U
+#define APP_HEALTH_EVENT_CAUSE_INDEX 2U
+#define APP_HEALTH_EVENT_TIMESTAMP_INDEX 3U
+#define APP_HEALTH_EVENT_PAYLOAD_SIZE 7U
+#define HEALTH_ISSUE_CAUSE_DEVICE_WIDE 0xFFU
+
 /* 기본 수신 시간 */
 #define DEFAULT_DURATION_S 30.0
 
@@ -157,6 +166,32 @@ static const char* safety_cause_name(uint8_t cause) {
         default:
             return "UNKNOWN";
     }
+}
+
+static const char* health_issue_kind_name(uint8_t kind) {
+    switch (kind) {
+        case 1U:
+            return "UART_CHANNEL_TIMEOUT";
+        case 2U:
+            return "QUEUE_OVERFLOW_TRANSIENT";
+        case 3U:
+            return "SENSOR_STALE";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char* health_cause_name(uint8_t cause) {
+    if (cause == HEALTH_ISSUE_CAUSE_DEVICE_WIDE) {
+        return "DEVICE_WIDE";
+    }
+    if (cause == 0U) {
+        return "INPUT";
+    }
+    if (cause == 1U) {
+        return "SORTING";
+    }
+    return "UNKNOWN";
 }
 
 static const char* safety_reset_result_name(uint8_t result) {
@@ -448,6 +483,27 @@ int main(int argc, char** argv) {
                         printf("  안전 EVENT: kind=%s(%u) cause=%s(%u) timestamp=%ums result=%s(%u) seq=%u\n",
                                safety_event_kind_name(kind), kind, safety_cause_name(cause), cause, timestamp_ms,
                                safety_reset_result_name(result), result, frame.sequence);
+                    }
+                } else if (event_id == APP_EVENT_HEALTH) {
+                    stats.other++;
+
+                    if (frame.length != APP_HEALTH_EVENT_PAYLOAD_SIZE) {
+                        printf("  헬스 EVENT 크기 오류: %u (기대값 %u)\n", frame.length,
+                               APP_HEALTH_EVENT_PAYLOAD_SIZE);
+                    } else {
+                        uint8_t kind = frame.payload[APP_HEALTH_EVENT_KIND_INDEX];
+                        uint8_t cause = frame.payload[APP_HEALTH_EVENT_CAUSE_INDEX];
+                        uint32_t timestamp_ms = (uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX] |
+                                                ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 1U]
+                                                 << 8U) |
+                                                ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 2U]
+                                                 << 16U) |
+                                                ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 3U]
+                                                 << 24U);
+
+                        printf("  헬스 EVENT: kind=%s(%u) cause=%s(%u) timestamp=%ums seq=%u\n",
+                               health_issue_kind_name(kind), kind, health_cause_name(cause), cause, timestamp_ms,
+                               frame.sequence);
                     }
                 } else {
                     stats.other++;

@@ -5,6 +5,7 @@
 #include "app_comm_tx.h"
 #include "app_messages.h"
 #include "app_queues.h"
+#include "health_task.h"
 #include "input_control_task.h"
 #include "sorting_control_task.h"
 #include "uart_rx.h"
@@ -26,6 +27,15 @@ static comm_rx_stats_t commRxStats;
 
 static uint8_t uart1RecoveryPending;
 static uint8_t uart6RecoveryPending;
+
+/* HealthTask가 채널별 단절(timeout)을 판정하는 데 쓰는 마지막 수신 시각.
+ * 프레임 파싱 성공 여부와 무관하게 바이트가 도착했다는 사실 자체를 본다
+ * (전기적으로 살아있는지가 관심사이므로). [0]=CHANNEL_1, [1]=CHANNEL_6. */
+static uint32_t commRxLastChunkTick[2];
+
+static uint8_t comm_rx_channel_index(app_uart_channel_t channel) {
+    return (channel == APP_UART_CHANNEL_6) ? 1U : 0U;
+}
 
 static void comm_rx_count_parser_result(
     uart_parser_result_t result)
@@ -326,6 +336,8 @@ static void comm_rx_process_chunk(
         return;
     }
 
+    commRxLastChunkTick[comm_rx_channel_index(chunk->channel)] = HAL_GetTick();
+
     parser = comm_rx_select_parser(chunk->channel);
 
     if (parser == NULL)
@@ -452,7 +464,13 @@ void StartCommRxTask(void *argument)
         previousTick = currentTick;
 
         comm_rx_tick_parsers(elapsedMs);
+
+        Health_TaskAlive(HEALTH_TASK_COMM_RX);
     }
+}
+
+uint32_t comm_rx_get_channel_last_rx_tick(app_uart_channel_t channel) {
+    return commRxLastChunkTick[comm_rx_channel_index(channel)];
 }
 
 void comm_rx_get_stats(

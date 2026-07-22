@@ -3,6 +3,7 @@
 #include "app_comm_tx.h"
 #include "cmsis_os2.h"
 #include "hc_sr04.h"
+#include "health_task.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
 #include "main.h"
@@ -32,6 +33,7 @@ typedef struct {
     sensor_filter_t filter;
     comm_tx_channel_t txChannel;
     uint8_t sensorId;
+    uint32_t lastSampleTick; /* HealthTask의 갱신 지연 판정용, 유효 표본 성공 시각 */
 } sensor_channel_t;
 
 static sensor_channel_t sensorChannels[SENSOR_COUNT];
@@ -93,6 +95,7 @@ static void sensor_task_measure(sensor_channel_t* channel) {
     }
 
     sensor_filter_record_sample(&channel->filter, distanceCm);
+    channel->lastSampleTick = HAL_GetTick();
 }
 
 static void sensor_task_report(const sensor_channel_t* channel) {
@@ -142,6 +145,18 @@ void SensorTask_PollChannel(uint8_t index) {
     sensor_task_update_heartbeat();
 }
 
+uint8_t SensorTask_GetChannelCount(void) {
+    return SENSOR_COUNT;
+}
+
+uint32_t SensorTask_GetChannelLastSampleTick(uint8_t index) {
+    return sensorChannels[index].lastSampleTick;
+}
+
+comm_tx_channel_t SensorTask_GetChannelProcess(uint8_t index) {
+    return sensorChannels[index].txChannel;
+}
+
 /*
  * freertos.c의 __weak StartSensorTask를 덮는 실제 구현.
  */
@@ -159,6 +174,7 @@ void StartSensorTask(void* argument) {
             cycleStartTick = osKernelGetTickCount();
 
             SensorTask_PollChannel(i);
+            Health_TaskAlive(HEALTH_TASK_SENSOR);
 
             elapsedMs = osKernelGetTickCount() - cycleStartTick;
             if (elapsedMs < SENSOR_MIN_CYCLE_MS) {

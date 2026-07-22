@@ -12,8 +12,13 @@
 #include "app_comm_tx.h"
 #include "app_queues.h"
 #include "conveyor_motor_power.h"
+#include "health_task.h"
 #include "input_control_task.h"
 #include "sorting_control_task.h"
+
+void Health_TaskAlive(health_task_id_t id) {
+    (void)id;
+}
 
 /* ---- 안전 큐 핸들(safety_task.c가 extern으로 참조) ---- */
 osMessageQueueId_t uartRxQueueHandle;

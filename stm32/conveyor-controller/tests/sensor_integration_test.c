@@ -12,11 +12,16 @@
 #include "app_comm_tx.h"
 #include "cmsis_os2.h"
 #include "hc_sr04.h"
+#include "health_task.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
 #include "main.h"
 #include "sensor_filter.h"
 #include "tim.h"
+
+void Health_TaskAlive(health_task_id_t id) {
+    (void)id;
+}
 
 /*
  * ============================================================================
@@ -149,6 +154,10 @@ osStatus_t osDelay(uint32_t ticks) {
 }
 
 uint32_t osKernelGetTickCount(void) {
+    return 0U;
+}
+
+uint32_t HAL_GetTick(void) {
     return 0U;
 }
 

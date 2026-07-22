@@ -165,6 +165,23 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
+  /*
+   * IWDG/소프트 리셋에도 초기화되지 않고 값이 남는 영역(HealthTask의 마지막 치명
+   * 오류 기록용). NOLOAD라 이미지에 포함 안 되고, .bss와 별개 출력 섹션이라
+   * 시작코드의 zero-fill 루프(_sbss.._ebss)가 건드리지 않는다. 전원 완전 차단
+   * (SRAM 전원 손실)에는 값이 사라진다 - 그 경우는 리셋원인 레지스터(RCC->CSR)로만
+   * 구분 가능.
+   */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    _snoinit = .;
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
+    _enoinit = .;
+  } >RAM
+
   /* User_heap_stack section, used to check that there is enough "RAM" Ram  type memory left */
   ._user_heap_stack :
   {

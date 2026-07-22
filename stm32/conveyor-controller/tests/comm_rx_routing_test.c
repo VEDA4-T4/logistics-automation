@@ -9,10 +9,15 @@
 #include "app_comm_tx.h"
 #include "app_queues.h"
 #include "comm_rx_task.h"
+#include "health_task.h"
 #include "input_control_task.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
 #include "uart_rx.h"
+
+void Health_TaskAlive(health_task_id_t id) {
+    (void)id;
+}
 
 #define TEST_INPUT_SAFETY_EPOCH 0x12345678U
 #define TEST_SORTING_SAFETY_EPOCH 0x87654321U

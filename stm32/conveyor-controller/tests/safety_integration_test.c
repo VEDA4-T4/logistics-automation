@@ -9,11 +9,16 @@
 
 #include "app_comm_tx.h"
 #include "app_queues.h"
+#include "health_task.h"
 #include "input_control_task.h"
 #include "safety_task.h"
 #include "sorting_control_task.h"
 #include "sorting_gate_mg90s.h"
 #include "sorting_motor_tb6612.h"
+
+void Health_TaskAlive(health_task_id_t id) {
+    (void)id;
+}
 
 /*
  * ============================================================================

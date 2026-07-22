@@ -6,10 +6,15 @@
 
 #include "FreeRTOS.h"
 #include "app_comm_tx.h"
+#include "health_task.h"
 #include "logistics/contracts/uart_codec.h"
 #include "queue.h"
 #include "stm32f4xx_hal.h"
 #include "usart.h"
+
+void Health_TaskAlive(health_task_id_t id) {
+    (void)id;
+}
 
 #define FAKE_OBJECT_QUEUE 0x51554555UL
 #define FAKE_OBJECT_SET 0x53455420UL
