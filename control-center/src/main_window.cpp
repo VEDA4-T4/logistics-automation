@@ -15,6 +15,7 @@
 #include <QStackedLayout>
 #include <QStatusBar>
 #include <QStringList>
+#include <QTabWidget>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -29,6 +30,7 @@
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/control_center/command_response.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
+#include "logistics/control_center/operational_log_panel.hpp"
 #include "logistics/control_center/operations_dashboard_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
 #include "logistics/control_center/product_result_panel.hpp"
@@ -352,9 +354,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* side_layout = new QVBoxLayout(side_panel);
     side_layout->setContentsMargins(0, 0, 0, 0);
     side_layout->setSpacing(10);
-    product_result_panel_ = new ProductResultPanel(config.image_base_url, side_panel);
+    detail_tabs_ = new QTabWidget(side_panel);
+    detail_tabs_->setObjectName(QStringLiteral("detailTabs"));
+    detail_tabs_->setDocumentMode(true);
+    detail_tabs_->setStyleSheet(
+        "QTabWidget::pane{border:1px solid #2b2b2b;background:#181818;}"
+        "QTabBar::tab{background:#252526;color:#9d9d9d;border:1px solid #2b2b2b;padding:7px 14px;}"
+        "QTabBar::tab:selected{background:#181818;color:#f0f0f0;border-bottom:2px solid #4daafc;}");
+    product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_tabs_);
+    operational_log_panel_ = new OperationalLogPanel(detail_tabs_);
+    detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));
+    detail_tabs_->addTab(operational_log_panel_, QStringLiteral("운영 로그"));
     process_control_panel_ = new ProcessControlPanel(side_panel);
-    side_layout->addWidget(product_result_panel_, 1);
+    side_layout->addWidget(detail_tabs_, 1);
     side_layout->addWidget(process_control_panel_, 0);
     content_layout->addWidget(side_panel);
     root_layout->addWidget(content, 1);
@@ -370,6 +382,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     command_response_timer_->setSingleShot(true);
     connect(command_response_timer_, &QTimer::timeout, this, &MainWindow::handleCommandTimeout);
     connect(process_control_panel_, &ProcessControlPanel::commandRequested, this, &MainWindow::sendControlCommand);
+    operational_log_panel_->setAcknowledgeHandler([this](const QString& id) {
+        if (operational_log_state_.acknowledge(id)) {
+            refreshOperationalLogPanel();
+        }
+    });
 
     mqtt_client_ = new MqttClient({ .host = config.mqtt_host,
                                     .client_id = config.mqtt_client_id,
@@ -388,6 +405,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         operations_dashboard_panel_->setMqttConnected(true);
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
                         mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
+                        appendOperationalLog(OperationalLogSeverity::Info, QStringLiteral("central-server"),
+                                             QStringLiteral("통신"), QStringLiteral("MQTT_CONNECTED"), detail);
                         break;
                     case MqttClient::ConnectionState::Connecting:
                         process_control_panel_->setMqttConnected(false);
@@ -402,6 +421,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
                         mqtt_status_label_->setStyleSheet("color:#ce9178;font-weight:700;");
+                        appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
+                                             QStringLiteral("통신 장애"), QStringLiteral("MQTT_RECONNECTING"), detail);
                         break;
                     case MqttClient::ConnectionState::Error:
                         process_control_panel_->setMqttConnected(false);
@@ -416,6 +437,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
                         mqtt_status_label_->setStyleSheet("color:#9d9d9d;font-weight:700;");
+                        appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
+                                             QStringLiteral("통신 장애"), QStringLiteral("MQTT_DISCONNECTED"), detail);
                         break;
                 }
             });
@@ -434,10 +457,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(mqtt_client_, &MqttClient::messageReceived, this, &MainWindow::handleMqttMessage);
     connect(mqtt_client_, &MqttClient::messageRejected, this, [this](const QString& topic, const QString& reason) {
         statusBar()->showMessage(QStringLiteral("MQTT 메시지 거부 [%1]: %2").arg(topic, reason), 5000);
+        appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
+                             QStringLiteral("메시지 검증"), QStringLiteral("MQTT_MESSAGE_REJECTED"),
+                             QStringLiteral("%1 · %2").arg(topic, reason));
     });
     connect(mqtt_client_, &MqttClient::errorOccurred, this, [this](const QString& detail) {
         mqtt_status_label_->setToolTip(detail);
         statusBar()->showMessage(detail, 5000);
+        appendOperationalLog(OperationalLogSeverity::Error, QStringLiteral("central-server"),
+                             QStringLiteral("통신 장애"), QStringLiteral("MQTT_ERROR"), detail);
     });
 
     const auto grid_column_count = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(channel_count_))));
@@ -558,6 +586,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
 
     if (!config.warnings.isEmpty()) {
+        for (const auto& warning : config.warnings) {
+            appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("control-center"),
+                                 QStringLiteral("설정"), QStringLiteral("CONFIG_WARNING"), warning);
+        }
         const auto warning_message =
             QStringLiteral("설정 파일: %1\n\n%2")
                 .arg(QDir::toNativeSeparators(config.path), config.warnings.join(QLatin1Char('\n')));
@@ -581,6 +613,7 @@ void MainWindow::updatePlaybackState(std::size_t channel) {
 }
 
 void MainWindow::setChannelState(std::size_t channel, ChannelState state, const QString& detail) {
+    const auto previous_state = channel_states_[channel];
     channel_states_[channel] = state;
 
     switch (state) {
@@ -616,6 +649,11 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
                 "color:#f14c4c;background-color:transparent;font-size:22px;font-weight:700;");
             status_labels_[channel]->setToolTip(detail);
             state_overlays_[channel]->setToolTip(detail);
+            if (previous_state != ChannelState::Error) {
+                appendOperationalLog(OperationalLogSeverity::Error, QStringLiteral("RTSP-CH-%1").arg(channel + 1),
+                                     QStringLiteral("영상 통신"), QStringLiteral("RTSP_ERROR"),
+                                     detail.isEmpty() ? QStringLiteral("영상 연결 또는 재생에 실패했습니다.") : detail);
+            }
             break;
     }
 }
@@ -648,6 +686,12 @@ void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand c
 
 void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& envelope) {
     const auto parsed_topic = logistics::contracts::mqtt::ParseTopic(topic.toStdString());
+    const auto log_update = operational_log_state_.applyEnvelope(topic, envelope);
+    if (log_update.applied) {
+        refreshOperationalLogPanel();
+    } else if (log_update.handled && !log_update.error.isEmpty()) {
+        statusBar()->showMessage(log_update.error, 4000);
+    }
     const auto dashboard_update = operations_dashboard_state_.applyEnvelope(envelope);
     if (dashboard_update.applied) {
         operations_dashboard_panel_->setState(operations_dashboard_state_);
@@ -711,6 +755,8 @@ void MainWindow::handleCommandTimeout() {
         return;
     }
     process_control_panel_->setCommandFinished(pending_command_, logistics::contracts::mqtt::CommandResult::kTimeout);
+    appendOperationalLog(OperationalLogSeverity::Error, control_target_device_id_, QStringLiteral("관제 명령"),
+                         QStringLiteral("COMMAND_TIMEOUT"), QStringLiteral("관제 명령 응답 시간이 초과되었습니다."));
     clearPendingCommand();
 }
 
@@ -718,6 +764,22 @@ void MainWindow::clearPendingCommand() {
     command_response_timer_->stop();
     pending_request_id_.clear();
     pending_command_ = logistics::contracts::mqtt::ControlCommand::kUnknown;
+}
+
+void MainWindow::appendOperationalLog(OperationalLogSeverity severity, const QString& device_id,
+                                      const QString& category, const QString& code, const QString& message) {
+    operational_log_state_.appendLocal(severity, device_id, category, code, message);
+    refreshOperationalLogPanel();
+}
+
+void MainWindow::refreshOperationalLogPanel() {
+    if (operational_log_panel_ == nullptr || detail_tabs_ == nullptr) {
+        return;
+    }
+    operational_log_panel_->setState(operational_log_state_);
+    const auto alert_count = operational_log_state_.activeAlertCount();
+    detail_tabs_->setTabText(
+        1, alert_count > 0 ? QStringLiteral("운영 로그 (%1)").arg(alert_count) : QStringLiteral("운영 로그"));
 }
 
 }  // namespace logistics::control_center

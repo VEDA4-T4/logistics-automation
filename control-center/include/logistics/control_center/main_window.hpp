@@ -8,6 +8,7 @@
 
 #include "logistics/contracts/mqtt_message.hpp"
 #include "logistics/control_center/current_product_state.hpp"
+#include "logistics/control_center/operational_log_state.hpp"
 #include "logistics/control_center/operations_dashboard_state.hpp"
 
 class QAudioOutput;
@@ -15,6 +16,7 @@ class QJsonObject;
 class QLabel;
 class QMediaPlayer;
 class QStackedLayout;
+class QTabWidget;
 class QTimer;
 class QVideoWidget;
 class QWidget;
@@ -22,6 +24,7 @@ class QWidget;
 namespace logistics::control_center {
 
 class MqttClient;
+class OperationalLogPanel;
 class OperationsDashboardPanel;
 class ProductResultPanel;
 class ProcessControlPanel;
@@ -44,6 +47,9 @@ private:
     void handleMqttMessage(const QString& topic, const QJsonObject& envelope);
     void handleCommandTimeout();
     void clearPendingCommand();
+    void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,
+                              const QString& code, const QString& message);
+    void refreshOperationalLogPanel();
 
     std::vector<QMediaPlayer*> players_{};
     std::vector<QVideoWidget*> video_widgets_{};
@@ -58,6 +64,8 @@ private:
     std::vector<bool> reconnecting_{};
     MqttClient* mqtt_client_{ nullptr };
     QLabel* mqtt_status_label_{ nullptr };
+    QTabWidget* detail_tabs_{ nullptr };
+    OperationalLogPanel* operational_log_panel_{ nullptr };
     OperationsDashboardPanel* operations_dashboard_panel_{ nullptr };
     ProductResultPanel* product_result_panel_{ nullptr };
     ProcessControlPanel* process_control_panel_{ nullptr };
@@ -66,6 +74,7 @@ private:
     QString pending_request_id_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
     CurrentProductState current_product_state_;
+    OperationalLogState operational_log_state_;
     OperationsDashboardState operations_dashboard_state_;
     std::size_t channel_count_{ 4 };
     int reconnect_interval_ms_{ 3000 };
