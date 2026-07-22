@@ -135,6 +135,7 @@ typedef enum {
     APP_TX_EVENT_COMMAND_ACK,
     APP_TX_EVENT_STATUS,
     APP_TX_EVENT_HEARTBEAT,
+    APP_TX_EVENT_STARTED,
     APP_TX_EVENT_ARRIVED,
     APP_TX_EVENT_LOAD_DETECTED,
     APP_TX_EVENT_UNLOAD_COMPLETE,
@@ -169,6 +170,10 @@ static inline uint8_t app_tx_event_is_response(app_tx_event_type_t type) {
     return (type == APP_TX_EVENT_COMMAND_ACK || type == APP_TX_EVENT_STATUS) ? 1U : 0U;
 }
 
+static inline uint8_t app_tx_event_is_emergency(app_tx_event_type_t type) {
+    return (type == APP_TX_EVENT_FAULT) ? 1U : 0U;
+}
+
 static inline uint8_t app_tx_event_priority(app_tx_event_type_t type) {
     switch (type) {
         case APP_TX_EVENT_COMMAND_ACK:
@@ -178,6 +183,7 @@ static inline uint8_t app_tx_event_priority(app_tx_event_type_t type) {
         case APP_TX_EVENT_FAULT:
             return APP_TX_PRIORITY_SAFETY;
 
+        case APP_TX_EVENT_STARTED:
         case APP_TX_EVENT_ARRIVED:
         case APP_TX_EVENT_LOAD_DETECTED:
         case APP_TX_EVENT_UNLOAD_COMPLETE:
@@ -211,6 +217,9 @@ typedef struct {
 #define APP_COMM_RX_NOTIFY_DATA_READY (1UL << 0U)
 #define APP_COMM_RX_NOTIFY_UART_ERROR (1UL << 1U)
 #define APP_SAFETY_NOTIFY_EMERGENCY_STOP (1UL << 0U)
+#define APP_COMM_TX_NOTIFY_QUEUE_READY (1UL << 0U)
+#define APP_COMM_TX_NOTIFY_TX_COMPLETE (1UL << 1U)
+#define APP_COMM_TX_NOTIFY_ABORT_COMPLETE (1UL << 2U)
 
 #ifdef __cplusplus
 }
