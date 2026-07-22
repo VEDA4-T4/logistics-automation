@@ -27,6 +27,8 @@ qt_add_executable(
     src/current_product_state.cpp
     src/mqtt_client.cpp
     src/mqtt_message_validator.cpp
+    src/operations_dashboard_panel.cpp
+    src/operations_dashboard_state.cpp
     src/product_result_panel.cpp
     src/process_control_panel.cpp
     include/logistics/control_center/main_window.hpp
@@ -34,6 +36,8 @@ qt_add_executable(
     include/logistics/control_center/current_product_state.hpp
     include/logistics/control_center/mqtt_client.hpp
     include/logistics/control_center/mqtt_message_validator.hpp
+    include/logistics/control_center/operations_dashboard_panel.hpp
+    include/logistics/control_center/operations_dashboard_state.hpp
     include/logistics/control_center/product_result_panel.hpp
     include/logistics/control_center/process_control_panel.hpp
     include/logistics/control_center/process_control_state.hpp
@@ -108,6 +112,39 @@ if(BUILD_TESTING)
     target_include_directories(control_center_process_control_state_test PRIVATE include)
     logistics_enable_warnings(control_center_process_control_state_test)
     add_test(NAME control_center_process_control_state_test COMMAND control_center_process_control_state_test)
+
+    add_executable(
+        control_center_operations_dashboard_state_test
+        tests/operations_dashboard_state_test.cpp
+        src/operations_dashboard_state.cpp
+        include/logistics/control_center/operations_dashboard_state.hpp
+    )
+    target_include_directories(control_center_operations_dashboard_state_test PRIVATE include)
+    target_link_libraries(control_center_operations_dashboard_state_test PRIVATE Qt6::Core logistics::contracts)
+    logistics_enable_warnings(control_center_operations_dashboard_state_test)
+    add_test(
+        NAME control_center_operations_dashboard_state_test
+        COMMAND control_center_operations_dashboard_state_test
+    )
+
+    add_executable(
+        control_center_operations_dashboard_panel_test
+        tests/operations_dashboard_panel_test.cpp
+        src/operations_dashboard_panel.cpp
+        src/operations_dashboard_state.cpp
+        include/logistics/control_center/operations_dashboard_panel.hpp
+        include/logistics/control_center/operations_dashboard_state.hpp
+    )
+    target_include_directories(control_center_operations_dashboard_panel_test PRIVATE include)
+    target_link_libraries(
+        control_center_operations_dashboard_panel_test
+        PRIVATE Qt6::Widgets logistics::contracts
+    )
+    logistics_enable_warnings(control_center_operations_dashboard_panel_test)
+    add_test(
+        NAME control_center_operations_dashboard_panel_test
+        COMMAND control_center_operations_dashboard_panel_test
+    )
 
     add_executable(
         control_center_mqtt_reconnect_test

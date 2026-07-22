@@ -12,6 +12,7 @@
 #include "logistics/central_server/device_manager.hpp"
 #include "logistics/central_server/persistence.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/contracts/mqtt_validation.hpp"
 
 namespace {
 
@@ -169,6 +170,61 @@ void TestBarcodeIsEnrichedFromProductCatalog() {
     std::filesystem::remove_all(root);
 }
 
+void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto root = std::filesystem::temp_directory_path() / ("logistics-heartbeat-test-" + unique);
+    std::filesystem::create_directories(root);
+    {
+        central_server::Database database;
+        const central_server::DatabaseConfig database_config{
+            .path = root / "test.db",
+            .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+            .busy_timeout_ms = 100,
+        };
+        assert(database.Open(database_config).ok());
+        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
+
+        central_server::StorageConfig storage;
+        storage.image_root = root / "images";
+        central_server::PersistenceService persistence(database, storage);
+        central_server::DeviceManager device_manager;
+        central_server::MqttHandler handler(device_manager, {}, &persistence);
+        std::vector<mqtt::MqttMessage> qt_statuses;
+        handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
+            qt_statuses.push_back(message);
+            return true;
+        });
+
+        assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:01Z"));
+        const mqtt::MqttMessage heartbeat{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-HEARTBEAT-QT-01",
+            .message_type = mqtt::MessageType::kHeartbeat,
+            .source_id = "PI-01",
+            .timestamp = "2026-07-16T01:00:05Z",
+            .data =
+                mqtt::HeartbeatPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = "PICKING",
+                    .uptime = 120,
+                    .job_id = std::string("WORK-103"),
+                    .error_code = std::nullopt,
+                },
+        };
+        assert(handler.Handle("device/PI-01/heartbeat", Encode(heartbeat), "2026-07-16T01:00:05Z"));
+        assert(qt_statuses.size() == 1);
+        assert(qt_statuses[0].message_type == mqtt::MessageType::kDeviceStatus);
+        assert(qt_statuses[0].source_id == "PI-01");
+        const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
+        assert(status != nullptr);
+        assert(status->status == mqtt::ConnectionState::kOnline);
+        assert(status->current_state == "PICKING");
+        assert(status->job_id == std::optional<std::string>("WORK-103"));
+        assert(mqtt::ValidateTopicMessage(mqtt::QtStatusTopic("control-center"), qt_statuses[0]).IsSuccess());
+    }
+    std::filesystem::remove_all(root);
+}
+
 }  // namespace
 
 int main() {
@@ -176,5 +232,6 @@ int main() {
     TestMalformedJsonIsRejected();
     TestTopicMessageMismatchIsRejected();
     TestBarcodeIsEnrichedFromProductCatalog();
+    TestHeartbeatIsForwardedToQtAsDeviceStatus();
     return 0;
 }

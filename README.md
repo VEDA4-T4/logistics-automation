@@ -90,9 +90,19 @@ password=
 reconnect_interval_ms=3000
 keep_alive_seconds=30
 
+[dashboard]
+input_device_id=PI-INPUT-01
+vision_device_id=PI-VISION-01
+robot_arm_device_id=PI-ROBOT-01
+sorting_device_id=PI-SORTING-01
+linetracer_device_id=PI-LT-01
+
 [http]
 image_base_url=http://127.0.0.1:8080/
 ```
+
+`dashboard`의 장치 ID는 각 장치가 MQTT envelope의 `sourceId`로 보내는 값과 같아야 합니다. 각 공정은
+자신의 `jobId`를 독립적으로 표시하므로 서로 다른 상품을 동시에 처리할 수 있습니다.
 
 연결되면 QoS 1로 중앙 서버 및 해당 클라이언트 토픽을 구독합니다. 연결이 끊기면
 `reconnect_interval_ms` 간격으로 재연결하며, 연결 및 오류 상태는 중앙관제 상태 표시줄에 나타납니다.
