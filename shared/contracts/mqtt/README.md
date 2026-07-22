@@ -1,5 +1,7 @@
 # MQTT contracts
 
+공통 버전 형식, 호환성 분류와 폐기 절차는 [통신 계약 버전 및 변경 관리](../VERSIONING.md)를 따릅니다.
+
 MQTT topic, payload, QoS, retain, Last Will 규칙을 중앙에서 관리하는 위치입니다. 구현 기준은
 `설계서.pdf`의 MQTT Topic/Payload 설계(83~100쪽)입니다.
 

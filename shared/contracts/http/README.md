@@ -1,5 +1,8 @@
 # HTTP(S) image and log upload contract
 
+Version format, compatibility classification, and deprecation follow the
+[communication contract versioning policy](../VERSIONING.md).
+
 Binary images and rotated log bundles are transferred with HTTP(S). MQTT carries
 real-time events and the metadata returned after a successful upload; file bytes
 must never be embedded in an MQTT payload.
