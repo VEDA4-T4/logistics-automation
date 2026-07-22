@@ -41,6 +41,7 @@ struct LineTracerCommandResult {
 };
 
 enum class LineTracerReportChannel {
+    kResponse,
     kStatus,
     kEvent,
     kError,
@@ -85,6 +86,8 @@ private:
         bool active{};
         PendingEffect effect{ PendingEffect::kNone };
         std::uint8_t sequence{};
+        contracts::mqtt::ControlCommand mqtt_command{ contracts::mqtt::ControlCommand::kUnknown };
+        std::string request_id;
         std::string work_id;
         std::uint16_t uart_job_id{};
         std::uint8_t route_id{};
@@ -99,6 +102,8 @@ private:
     void RememberPending(PendingEffect effect, const LineTracerCommandResult& result);
     void ClearPending() noexcept;
     void HandleLineTracerFrame(const uart_frame_t& frame) noexcept;
+    void EmitPendingResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
+                             std::string message) const noexcept;
     void EmitReport(LineTracerReport report) const noexcept;
 
     std::string device_id_;

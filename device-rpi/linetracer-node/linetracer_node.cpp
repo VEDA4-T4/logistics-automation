@@ -166,12 +166,34 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             active_uart_job_id_ = UART_LINETRACER_JOB_ID_NONE;
             active_route_id_ = UART_LINETRACER_ROUTE_NONE;
         }
+        if (accepted) {
+            EmitPendingResponse(mqtt::CommandResult::kSuccess, std::nullopt,
+                                "line tracer command acknowledged by controller");
+        } else if (status == UART_STATUS_BUSY) {
+            EmitPendingResponse(mqtt::CommandResult::kRejected, std::string("ERR-UART-BUSY"),
+                                "line tracer controller is busy");
+        } else if (status == UART_STATUS_NACK) {
+            EmitPendingResponse(mqtt::CommandResult::kRejected, std::string("ERR-UART-NACK"),
+                                "line tracer controller rejected the command");
+        } else {
+            EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-CONTROLLER"),
+                                "line tracer controller reported a command error");
+        }
         ClearPending();
         return;
     }
 
-    if (event.type == UartSessionEventType::kAckTimeout || event.type == UartSessionEventType::kTransportDisconnected ||
+    if (event.type == UartSessionEventType::kAckTimeout) {
+        EmitPendingResponse(mqtt::CommandResult::kTimeout, std::string("ERR-UART-ACK-TIMEOUT"),
+                            "line tracer controller acknowledgement timed out");
+        ClearPending();
+        return;
+    }
+
+    if (event.type == UartSessionEventType::kTransportDisconnected ||
         event.type == UartSessionEventType::kTransportError) {
+        EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
+                            "UART transport disconnected before acknowledgement");
         ClearPending();
     }
 }
@@ -331,6 +353,8 @@ void LineTracerNode::RememberPending(PendingEffect effect, const LineTracerComma
         .active = true,
         .effect = effect,
         .sequence = result.uart_sequence,
+        .mqtt_command = result.mqtt_command,
+        .request_id = result.request_id,
         .work_id = result.work_id,
         .uart_job_id = result.uart_job_id,
         .route_id = result.uart_route_id,
@@ -468,6 +492,26 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
                 },
         });
     }
+}
+
+void LineTracerNode::EmitPendingResponse(mqtt::CommandResult result, std::optional<std::string> error_code,
+                                         std::string message) const noexcept {
+    if (!pending_.active || pending_.request_id.empty() || pending_.mqtt_command == mqtt::ControlCommand::kUnknown) {
+        return;
+    }
+
+    EmitReport({
+        .channel = LineTracerReportChannel::kResponse,
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .data =
+            mqtt::CommandResponsePayload{
+                .request_id = pending_.request_id,
+                .command = pending_.mqtt_command,
+                .result = result,
+                .error_code = std::move(error_code),
+                .message = std::move(message),
+            },
+    });
 }
 
 void LineTracerNode::EmitReport(LineTracerReport report) const noexcept {

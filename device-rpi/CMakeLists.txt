@@ -154,6 +154,17 @@ add_device_node(logistics_vision_node vision-node/main.cpp)
 add_device_node(logistics_sorting_node sorting-node/main.cpp)
 add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
 
+if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+    target_compile_definitions(logistics_linetracer_node PRIVATE LOGISTICS_LINETRACER_DAEMON_ENABLED=1)
+    target_link_libraries(
+        logistics_linetracer_node
+        PRIVATE
+            logistics::device_linetracer_node
+            logistics::device_mqtt_mosquitto
+            logistics::device_status
+    )
+endif()
+
 if(BUILD_TESTING)
     add_executable(device_mqtt_message_processor_test tests/mqtt_message_processor_test.cpp)
     target_link_libraries(device_mqtt_message_processor_test PRIVATE logistics::device_mqtt_core)

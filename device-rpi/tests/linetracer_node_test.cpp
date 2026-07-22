@@ -216,6 +216,7 @@ void AssignAndAcknowledge(Fixture& fixture) {
     const auto result = fixture.node->HandleMqttCommand(MakeDestination());
     assert(result.Succeeded());
     fixture.AcknowledgeLastFrame();
+    fixture.reports.clear();
 }
 
 void TestDestinationMapsToAssignRoute() {
@@ -341,6 +342,27 @@ void TestRejectedAssignDoesNotActivateJob() {
     assert(fixture.session->PollOnce().Succeeded());
 
     assert(!fixture.node->HasActiveJob());
+    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.front().channel == LineTracerReportChannel::kResponse);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(response.result == mqtt::CommandResult::kRejected);
+    assert(response.error_code == "ERR-UART-NACK");
+}
+
+void TestAcceptedAssignReportsSuccessAfterAck() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    assert(fixture.reports.empty());
+
+    fixture.AcknowledgeLastFrame();
+
+    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.front().channel == LineTracerReportChannel::kResponse);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(response.request_id == "REQ-DEST-01");
+    assert(response.command == mqtt::ControlCommand::kDestinationSet);
+    assert(response.result == mqtt::CommandResult::kSuccess);
+    assert(!response.error_code.has_value());
 }
 
 void TestStateAndArrivalEventsReportPickupReady() {
@@ -435,6 +457,7 @@ int main() {
     TestWrongTargetIsRejected();
     TestPendingUartCommandReportsBusy();
     TestRejectedAssignDoesNotActivateJob();
+    TestAcceptedAssignReportsSuccessAfterAck();
     TestStateAndArrivalEventsReportPickupReady();
     TestLoadDetectedReportsLoadOn();
     TestUnloadCompleteReportsCompletionAndClearsMapping();
