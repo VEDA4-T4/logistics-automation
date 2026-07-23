@@ -106,6 +106,7 @@ reconnect_interval_ms=3000
 low_latency=true
 network_timeout_ms=3000
 onvif_metadata_enabled=true
+onvif_log_payload=true
 metadata_stale_timeout_ms=1500
 ```
 
@@ -119,6 +120,9 @@ metadata_stale_timeout_ms=1500
 메타데이터가 별도 프로파일에 있다면 `channel_N_metadata_url`을 지정하고, 생략하면 `channel_N_url`을
 그대로 사용합니다. 현재 비압축 ONVIF XML을 지원하며 GZIP/EXI 메타데이터는 지원하지 않습니다.
 `metadata_stale_timeout_ms` 동안 새 프레임이 없으면 오래된 박스를 자동으로 지웁니다.
+`onvif_log_payload=true`이면 Qt Creator의 **Application Output**에 RTSP 연결 단계, 원본 XML,
+파싱된 객체 ID·클래스·신뢰도·바운딩 박스를 채널별 `[ONVIF][CH N]` 형식으로 출력합니다. 정상 운용에서
+로그 양이 많으면 `false`로 변경합니다.
 
 `dashboard`의 장치 ID는 각 장치가 MQTT envelope의 `sourceId`로 보내는 값과 같아야 합니다. 각 공정은
 자신의 `jobId`를 독립적으로 표시하므로 서로 다른 상품을 동시에 처리할 수 있습니다.

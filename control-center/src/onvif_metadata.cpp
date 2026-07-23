@@ -125,8 +125,6 @@ OnvifMetadataParseResult ParseOnvifMetadata(const QByteArray& xml) {
     if (reader.hasError()) {
         result.frames.clear();
         result.error = QStringLiteral("ONVIF XML 파싱 오류: %1").arg(reader.errorString());
-    } else if (result.frames.isEmpty()) {
-        result.error = QStringLiteral("ONVIF 메타데이터에 VideoAnalytics Frame이 없습니다.");
     }
     return result;
 }

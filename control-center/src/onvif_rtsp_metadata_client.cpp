@@ -50,7 +50,10 @@ OnvifRtspMetadataClient::OnvifRtspMetadataClient(QObject* parent)
 
     connect(reconnect_timer_, &QTimer::timeout, this, &OnvifRtspMetadataClient::connectToCamera);
     connect(keep_alive_timer_, &QTimer::timeout, this, &OnvifRtspMetadataClient::sendKeepAlive);
-    connect(socket_, &QTcpSocket::connected, this, &OnvifRtspMetadataClient::sendDescribe);
+    connect(socket_, &QTcpSocket::connected, this, [this]() {
+        emit diagnosticMessage(QStringLiteral("TCP 연결 성공 · DESCRIBE 요청"));
+        sendDescribe();
+    });
     connect(socket_, &QTcpSocket::readyRead, this, [this]() {
         receive_buffer_.append(socket_->readAll());
         processIncomingData();
@@ -178,7 +181,10 @@ void OnvifRtspMetadataClient::processRtspResponse(const QByteArray& header, cons
 
     const auto status = responseStatusCode(lines.front());
     const auto headers = parseHeaders(lines);
+    emit diagnosticMessage(
+        QStringLiteral("%1 응답 · RTSP %2").arg(QString::fromLatin1(pending_request_.method)).arg(status));
     if (status == 401) {
+        emit diagnosticMessage(QStringLiteral("인증 요청 수신 · Authorization 재시도"));
         if (pending_request_.authentication_retried ||
             !parseAuthenticationChallenge(headers.value("www-authenticate"))) {
             scheduleReconnect(QStringLiteral("ONVIF RTSP 인증에 실패했습니다."));
@@ -196,6 +202,8 @@ void OnvifRtspMetadataClient::processRtspResponse(const QByteArray& header, cons
     }
 
     if (pending_request_.method == "DESCRIBE") {
+        emit diagnosticMessage(
+            QStringLiteral("SDP 수신 (%1 bytes)\n%2").arg(body.size()).arg(QString::fromUtf8(body).trimmed()));
         QUrl content_base(QString::fromUtf8(headers.value("content-base")));
         if (!content_base.isValid() || content_base.isEmpty()) {
             content_base = request_url_;
@@ -204,6 +212,7 @@ void OnvifRtspMetadataClient::processRtspResponse(const QByteArray& header, cons
             scheduleReconnect(QStringLiteral("RTSP 프로파일에 비압축 ONVIF 메타데이터 트랙이 없습니다."));
             return;
         }
+        emit diagnosticMessage(QStringLiteral("ONVIF 메타데이터 트랙 선택 · SETUP 요청"));
         sendSetup(metadata_track_url_);
     } else if (pending_request_.method == "SETUP") {
         session_id_ = headers.value("session").split(';').front().trimmed();
@@ -217,6 +226,7 @@ void OnvifRtspMetadataClient::processRtspResponse(const QByteArray& header, cons
         if (match.hasMatch()) {
             metadata_rtp_channel_ = match.captured(1).toInt();
         }
+        emit diagnosticMessage(QStringLiteral("메타데이터 RTP 채널 %1 설정 · PLAY 요청").arg(metadata_rtp_channel_));
         sendPlay();
     } else if (pending_request_.method == "PLAY") {
         streaming_ = true;
@@ -275,6 +285,9 @@ void OnvifRtspMetadataClient::processInterleavedPacket(quint8 channel, const QBy
     }
     if (marker) {
         if (!metadata_buffer_.trimmed().isEmpty()) {
+            emit diagnosticMessage(QStringLiteral("ONVIF RTP 문서 조립 완료 · seq=%1 · %2 bytes")
+                                       .arg(sequence)
+                                       .arg(metadata_buffer_.size()));
             emit metadataReceived(metadata_buffer_);
         }
         metadata_buffer_.clear();

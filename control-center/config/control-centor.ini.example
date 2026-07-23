@@ -38,6 +38,8 @@ low_latency=true
 network_timeout_ms=3000
 ; Subscribe to the ONVIF XML metadata track and draw detections over the video.
 onvif_metadata_enabled=true
+; Print received ONVIF XML and parsed detections to Qt Creator Application Output.
+onvif_log_payload=true
 ; Remove boxes when no newer metadata frame arrives within this time.
 metadata_stale_timeout_ms=1500
 

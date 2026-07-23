@@ -86,6 +86,7 @@ private:
     bool rtsp_low_latency_{ true };
     int rtsp_network_timeout_ms_{ 3000 };
     bool onvif_metadata_enabled_{ true };
+    bool onvif_log_payload_{ true };
     int metadata_stale_timeout_ms_{ 1500 };
 };
 

@@ -25,6 +25,7 @@ public:
 signals:
     void metadataReceived(const QByteArray& xml);
     void connectionStateChanged(bool connected, const QString& detail);
+    void diagnosticMessage(const QString& message);
 
 private:
     struct Request {

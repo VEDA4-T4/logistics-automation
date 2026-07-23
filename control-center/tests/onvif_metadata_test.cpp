@@ -69,5 +69,15 @@ int main(int argc, char* argv[]) {
         qCritical() << "mapped rectangle differs" << mapped;
         return 1;
     }
+
+    const QByteArray event_xml =
+        "<tt:MetadataStream xmlns:tt=\"http://www.onvif.org/ver10/schema\" "
+        "xmlns:wsnt=\"http://docs.oasis-open.org/wsn/b-2\">"
+        "<tt:Event><wsnt:NotificationMessage/></tt:Event></tt:MetadataStream>";
+    const auto event_result = logistics::control_center::ParseOnvifMetadata(event_xml);
+    if (!event_result.isValid() || !event_result.frames.isEmpty()) {
+        qCritical() << "valid event metadata was treated as an error";
+        return 1;
+    }
     return 0;
 }
