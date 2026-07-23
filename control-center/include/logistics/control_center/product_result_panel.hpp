@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPixmap>
 #include <QUrl>
 #include <QWidget>
 
@@ -8,6 +9,7 @@
 class QLabel;
 class QNetworkAccessManager;
 class QNetworkReply;
+class QResizeEvent;
 
 namespace logistics::control_center {
 
@@ -16,10 +18,14 @@ public:
     explicit ProductResultPanel(QUrl image_base_url, QWidget* parent = nullptr);
     void setCurrentProduct(const CurrentProduct& product);
 
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+
 private:
     void setValue(QLabel* label, const QString& value);
     void setImagePlaceholder(const QString& text, bool is_error = false);
     void loadImage(const CurrentProduct& product);
+    void updateImagePixmap();
 
     QUrl image_base_url_;
     QNetworkAccessManager* network_manager_{ nullptr };
@@ -37,6 +43,7 @@ private:
     QLabel* detail_value_{ nullptr };
     QString current_work_id_;
     QString current_image_path_;
+    QPixmap source_image_;
 };
 
 }  // namespace logistics::control_center

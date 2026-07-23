@@ -10,6 +10,7 @@
 #include <QNetworkRequest>
 #include <QPixmap>
 #include <QPointer>
+#include <QResizeEvent>
 #include <QSizePolicy>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -63,7 +64,7 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     setMinimumWidth(0);
     setMinimumHeight(330);
     setStyleSheet(
-        "#productResultPanel{background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
+        "#productResultPanel{background-color:#181818;border:0;}"
         "#productInfoCard,#productDetailCard{background-color:#1f1f1f;border:1px solid #2b2b2b;"
         "border-radius:4px;}"
         "QLabel{color:#cccccc;}");
@@ -102,8 +103,8 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     status_layout->addWidget(processing_status_, 1);
 
     image_label_ = new QLabel(this);
-    image_label_->setMinimumHeight(190);
-    image_label_->setMaximumHeight(280);
+    image_label_->setObjectName(QStringLiteral("productImage"));
+    image_label_->setMinimumHeight(220);
     image_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     image_label_->setAlignment(Qt::AlignCenter);
     setImagePlaceholder(QStringLiteral("상품 이미지 대기 중"));
@@ -225,6 +226,7 @@ void ProductResultPanel::setValue(QLabel* label, const QString& value) {
 }
 
 void ProductResultPanel::setImagePlaceholder(const QString& text, bool is_error) {
+    source_image_ = {};
     image_label_->clear();
     image_label_->setText(text);
     image_label_->setStyleSheet(is_error
@@ -289,9 +291,26 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
         }
         image_label_->setText({});
         image_label_->setStyleSheet("background:#1f1f1f;border:1px solid #2b2b2b;border-radius:4px;");
-        image_label_->setPixmap(image.scaled(350, 168, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        source_image_ = image;
+        updateImagePixmap();
         image_label_->setToolTip({});
     });
+}
+
+void ProductResultPanel::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    updateImagePixmap();
+}
+
+void ProductResultPanel::updateImagePixmap() {
+    if (source_image_.isNull() || image_label_ == nullptr) {
+        return;
+    }
+    const auto target_size = image_label_->contentsRect().size();
+    if (target_size.width() <= 1 || target_size.height() <= 1) {
+        return;
+    }
+    image_label_->setPixmap(source_image_.scaled(target_size, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 }
 
 }  // namespace logistics::control_center

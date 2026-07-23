@@ -59,6 +59,7 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
         "QHeaderView::section{background:#181818;color:#777777;border:0;border-bottom:1px solid #303030;"
         "font-size:10px;font-weight:600;padding:7px;}"
         "QTableWidget::item{border-bottom:1px solid #272727;padding:8px;}"
+        "QTableWidget::item:hover{background:#202a33;}"
         "QTableWidget::item:selected{background:#21364a;color:#f0f0f0;}");
 
     auto* layout = new QVBoxLayout(this);
@@ -107,14 +108,15 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     result_count_ = new QLabel(this);
     result_count_->setObjectName(QStringLiteral("operationalLogResultCount"));
     result_count_->setStyleSheet("color:#9d9d9d;font-size:10px;");
-    acknowledge_button_ = new QPushButton(QStringLiteral("선택 확인"), this);
-    acknowledge_button_->setObjectName(QStringLiteral("acknowledgeLogButton"));
+    auto* interaction_hint = new QLabel(QStringLiteral("클릭: 확인  ·  더블클릭: 상세 보기"), this);
+    interaction_hint->setObjectName(QStringLiteral("operationalLogInteractionHint"));
+    interaction_hint->setStyleSheet("color:#737373;font-size:9px;");
     acknowledge_all_button_ = new QPushButton(QStringLiteral("오류 전체 확인"), this);
     acknowledge_all_button_->setObjectName(QStringLiteral("acknowledgeAllLogsButton"));
     secondary_filters->addWidget(unacknowledged_filter_);
     secondary_filters->addWidget(result_count_);
     secondary_filters->addStretch();
-    secondary_filters->addWidget(acknowledge_button_);
+    secondary_filters->addWidget(interaction_hint);
     secondary_filters->addWidget(acknowledge_all_button_);
     layout->addLayout(secondary_filters);
 
@@ -129,6 +131,7 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     table_->setShowGrid(false);
     table_->setAlternatingRowColors(false);
     table_->setWordWrap(false);
+    table_->viewport()->setCursor(Qt::PointingHandCursor);
     table_->verticalHeader()->setVisible(false);
     table_->verticalHeader()->setDefaultSectionSize(46);
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -140,14 +143,15 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     connect(severity_filter_, &QComboBox::currentIndexChanged, this, [this]() { refresh(); });
     connect(query_filter_, &QLineEdit::textChanged, this, [this]() { refresh(); });
     connect(unacknowledged_filter_, &QCheckBox::toggled, this, [this]() { refresh(); });
-    connect(table_, &QTableWidget::itemSelectionChanged, this, [this]() {
-        const auto row = table_->currentRow();
-        const bool can_acknowledge =
-            row >= 0 && table_->item(row, 0) != nullptr && !table_->item(row, 0)->data(Qt::UserRole + 1).toBool();
-        acknowledge_button_->setEnabled(can_acknowledge);
+    connect(table_, &QTableWidget::cellClicked, this, [this](int row, int) {
+        last_clicked_id_ = entryIdAtRow(row);
+        acknowledgeEntry(last_clicked_id_);
     });
-    connect(table_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { showDetails(row); });
-    connect(acknowledge_button_, &QPushButton::clicked, this, &OperationalLogPanel::acknowledgeSelected);
+    connect(table_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        const auto id = last_clicked_id_.isEmpty() ? entryIdAtRow(row) : last_clicked_id_;
+        acknowledgeEntry(id);
+        showDetails(id);
+    });
     connect(acknowledge_all_button_, &QPushButton::clicked, this, [this]() {
         if (acknowledge_all_handler_) {
             acknowledge_all_handler_();
@@ -218,25 +222,30 @@ void OperationalLogPanel::refresh() {
     alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(state_.activeAlertCount()));
     alert_count_->setVisible(state_.activeAlertCount() > 0);
     acknowledge_all_button_->setEnabled(state_.activeAlertCount() > 0);
-    acknowledge_button_->setEnabled(false);
 }
 
-void OperationalLogPanel::acknowledgeSelected() {
-    const auto row = table_->currentRow();
-    if (row < 0 || table_->item(row, 0) == nullptr || table_->item(row, 0)->data(Qt::UserRole + 1).toBool()) {
-        return;
-    }
-    const auto id = table_->item(row, 0)->data(Qt::UserRole).toString();
-    if (acknowledge_handler_ && !id.isEmpty()) {
-        acknowledge_handler_(id);
-    }
-}
-
-void OperationalLogPanel::showDetails(int row) {
+QString OperationalLogPanel::entryIdAtRow(int row) const {
     if (row < 0 || table_->item(row, 0) == nullptr) {
+        return {};
+    }
+    return table_->item(row, 0)->data(Qt::UserRole).toString();
+}
+
+void OperationalLogPanel::acknowledgeEntry(const QString& id) {
+    if (id.isEmpty() || !acknowledge_handler_) {
         return;
     }
-    const auto id = table_->item(row, 0)->data(Qt::UserRole).toString();
+    for (const auto& entry : state_.entries()) {
+        if (entry.id == id) {
+            if (!entry.acknowledged) {
+                acknowledge_handler_(id);
+            }
+            return;
+        }
+    }
+}
+
+void OperationalLogPanel::showDetails(const QString& id) {
     const OperationalLogEntry* selected = nullptr;
     for (const auto& entry : state_.entries()) {
         if (entry.id == id) {

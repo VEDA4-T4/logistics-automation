@@ -27,18 +27,19 @@ public:
 
 private:
     [[nodiscard]] OperationalLogFilter currentFilter() const;
+    [[nodiscard]] QString entryIdAtRow(int row) const;
     void refresh();
-    void acknowledgeSelected();
-    void showDetails(int row);
+    void acknowledgeEntry(const QString& id);
+    void showDetails(const QString& id);
 
     QLabel* alert_count_{ nullptr };
     QLabel* result_count_{ nullptr };
     QComboBox* severity_filter_{ nullptr };
     QLineEdit* query_filter_{ nullptr };
     QCheckBox* unacknowledged_filter_{ nullptr };
-    QPushButton* acknowledge_button_{ nullptr };
     QPushButton* acknowledge_all_button_{ nullptr };
     QTableWidget* table_{ nullptr };
+    QString last_clicked_id_;
     OperationalLogState state_;
     AcknowledgeHandler acknowledge_handler_;
     AcknowledgeAllHandler acknowledge_all_handler_;

@@ -277,6 +277,7 @@ ControlCenterConfig loadControlCenterConfig() {
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Smart Logistics Control Center");
     setMinimumSize(1280, 720);
+    resize(1600, 900);
     setStyleSheet(
         "QMainWindow{background:#1f1f1f;}"
         "QStatusBar{background:#181818;color:#cccccc;border-top:1px solid #2b2b2b;}"
@@ -363,13 +364,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     side_layout->setSpacing(10);
     detail_tabs_ = new QTabWidget(side_panel);
     detail_tabs_->setObjectName(QStringLiteral("detailTabs"));
-    detail_tabs_->setDocumentMode(true);
+    detail_tabs_->setDocumentMode(false);
     detail_tabs_->setStyleSheet(
-        "QTabWidget::pane{border:1px solid #2b2b2b;border-radius:7px;background:#181818;}"
-        "QTabBar::tab{background:transparent;color:#888888;border:0;border-bottom:2px solid transparent;"
-        "font-size:11px;font-weight:600;padding:9px 17px;}"
-        "QTabBar::tab:hover{color:#d4d4d4;}"
-        "QTabBar::tab:selected{color:#f0f0f0;border-bottom-color:#4daafc;}");
+        "QTabWidget::pane{border:1px solid #2b2b2b;background:#181818;top:-1px;}"
+        "QTabBar::tab{background:#252526;color:#9d9d9d;border:1px solid #333333;border-bottom:0;"
+        "font-size:11px;font-weight:600;min-width:92px;padding:8px 16px;margin-right:2px;}"
+        "QTabBar::tab:hover{background:#2d2d30;color:#f0f0f0;}"
+        "QTabBar::tab:selected{background:#181818;color:#f0f0f0;border-top:2px solid #4daafc;"
+        "padding-top:7px;}");
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_tabs_);
     operational_log_panel_ = new OperationalLogPanel(detail_tabs_);
     detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));

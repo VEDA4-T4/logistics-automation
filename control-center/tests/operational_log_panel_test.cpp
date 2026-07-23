@@ -47,10 +47,10 @@ int main(int argc, char* argv[]) {
     auto* severity = panel.findChild<QComboBox*>(QStringLiteral("logSeverityFilter"));
     auto* query = panel.findChild<QLineEdit*>(QStringLiteral("logQueryFilter"));
     auto* unacknowledged = panel.findChild<QCheckBox*>(QStringLiteral("logUnacknowledgedOnly"));
-    auto* acknowledge = panel.findChild<QPushButton*>(QStringLiteral("acknowledgeLogButton"));
     auto* acknowledge_all = panel.findChild<QPushButton*>(QStringLiteral("acknowledgeAllLogsButton"));
     assert(table != nullptr && severity != nullptr && query != nullptr && unacknowledged != nullptr &&
-           acknowledge != nullptr && acknowledge_all != nullptr);
+           acknowledge_all != nullptr);
+    assert(panel.findChild<QPushButton*>(QStringLiteral("acknowledgeLogButton")) == nullptr);
     assert(table->rowCount() == 4);
 
     severity->setCurrentIndex(severity->findData(static_cast<int>(OperationalLogSeverity::Error)));
@@ -67,6 +67,7 @@ int main(int argc, char* argv[]) {
     query->clear();
     table->cellDoubleClicked(0, 3);
     application.processEvents();
+    assert(state.activeAlertCount() == 1);
     auto* detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
     assert(detail_dialog != nullptr && detail_dialog->isVisible());
     auto* detail_message = detail_dialog->findChild<QPlainTextEdit*>(QStringLiteral("operationalLogDetailMessage"));
@@ -74,15 +75,16 @@ int main(int argc, char* argv[]) {
     detail_dialog->close();
     application.processEvents();
 
-    table->selectRow(0);
+    table->cellClicked(1, 3);
     application.processEvents();
-    acknowledge->click();
-    assert(state.activeAlertCount() == 1);
-    assert(acknowledge_all->isEnabled());
-    acknowledge_all->click();
     assert(state.activeAlertCount() == 0);
+    assert(!acknowledge_all->isEnabled());
+
     unacknowledged->setChecked(true);
     application.processEvents();
     assert(table->rowCount() == 2);
+    table->cellClicked(0, 3);
+    application.processEvents();
+    assert(table->rowCount() == 1);
     return 0;
 }
