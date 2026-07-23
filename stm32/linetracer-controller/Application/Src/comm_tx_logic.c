@@ -134,19 +134,6 @@ void CommTxLogic_InitObservedState(comm_tx_observed_state_t* state) {
     state->error_code = UART_ERROR_NONE;
 }
 
-uint8_t CommTxLogic_ShouldSynthesizeStarted(const app_tx_event_t* event) {
-    if (event == NULL) {
-        return 0U;
-    }
-
-    return (event->type == APP_TX_EVENT_COMMAND_ACK &&
-            event->original_command == UART_CMD_LINETRACER_ASSIGN_ROUTE && event->status == UART_STATUS_ACK &&
-            event->error_code == UART_ERROR_NONE && uart_linetracer_job_id_is_valid(event->job_id) != 0U &&
-            uart_linetracer_route_is_valid(event->route_id) != 0U)
-               ? 1U
-               : 0U;
-}
-
 void CommTxLogic_ObserveEvent(comm_tx_observed_state_t* state, const app_tx_event_t* event) {
     uint8_t job_route_valid;
     uint8_t job_route_none;
@@ -251,6 +238,51 @@ void CommTxLogic_ObserveSensor(comm_tx_observed_state_t* state, const app_sensor
     if ((snapshot->event_flags & (APP_SENSOR_EVENT_LINE_LOST | APP_SENSOR_EVENT_OVERLOAD)) != 0U ||
         obstacle_detected != 0U) {
         state->error_code = UART_ERROR_SENSOR;
+    } else if (state->error_code == UART_ERROR_SENSOR) {
+        state->error_code = UART_ERROR_NONE;
+    }
+}
+
+void CommTxLogic_ObserveControl(comm_tx_observed_state_t* state, const app_control_snapshot_t* snapshot) {
+    uint8_t job_route_valid;
+    uint8_t job_route_none;
+
+    if (state == NULL || snapshot == NULL) {
+        return;
+    }
+
+    if (uart_linetracer_state_is_valid(snapshot->state) != 0U) {
+        state->state = snapshot->state;
+    }
+    if (uart_linetracer_load_state_is_valid(snapshot->load_state) != 0U) {
+        state->load_state = snapshot->load_state;
+    }
+
+    job_route_valid = (uart_linetracer_job_id_is_valid(snapshot->job_id) != 0U &&
+                       uart_linetracer_route_is_valid(snapshot->route_id) != 0U)
+                          ? 1U
+                          : 0U;
+    job_route_none = (snapshot->job_id == UART_LINETRACER_JOB_ID_NONE &&
+                      snapshot->route_id == UART_LINETRACER_ROUTE_NONE)
+                         ? 1U
+                         : 0U;
+    if (job_route_valid != 0U || job_route_none != 0U) {
+        state->job_id = snapshot->job_id;
+        state->route_id = snapshot->route_id;
+        if (job_route_valid != 0U) {
+            state->sensor_flags |= UART_LINETRACER_FLAG_ROUTE_ACTIVE;
+        } else {
+            state->sensor_flags &= (uint8_t)(~UART_LINETRACER_FLAG_ROUTE_ACTIVE);
+        }
+    }
+
+    if (snapshot->error_code == UART_ERROR_NONE) {
+        state->error_code =
+            (snapshot->safety_latched != 0U) ? UART_ERROR_INTERNAL : UART_ERROR_NONE;
+    } else if (uart_linetracer_fault_error_is_valid(snapshot->error_code) != 0U) {
+        state->error_code = snapshot->error_code;
+    } else {
+        state->error_code = UART_ERROR_INTERNAL;
     }
 }
 

@@ -45,6 +45,17 @@ typedef struct {
     uint8_t original_payload_length;
 } app_control_command_t;
 
+/* Thread-safe ControlTask snapshot consumed by telemetry producers. */
+typedef struct {
+    uint32_t updated_at_ms;
+    uint16_t job_id;
+    uart_linetracer_route_t route_id;
+    uart_linetracer_state_t state;
+    uart_linetracer_load_state_t load_state;
+    uint8_t error_code;
+    uint8_t safety_latched;
+} app_control_snapshot_t;
+
 typedef enum {
     APP_SENSOR_EVENT_NONE = 0U,
     APP_SENSOR_EVENT_LINE_CHANGED = (1U << 0U),

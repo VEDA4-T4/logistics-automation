@@ -185,24 +185,38 @@ void TestEmergencyEventPriorityPrecedesRegularEvents() {
     assert(app_tx_event_priority(APP_TX_EVENT_ARRIVED) == APP_TX_PRIORITY_EVENT);
 }
 
-void TestAssignAckSynthesizesStartedAndUpdatesObservedRoute() {
+void TestControlSnapshotOverridesBestEffortObservedState() {
     comm_tx_observed_state_t state{};
-    auto event = MakeJobEvent(APP_TX_EVENT_COMMAND_ACK);
-
-    event.original_command = UART_CMD_LINETRACER_ASSIGN_ROUTE;
-    event.status = UART_STATUS_ACK;
-    event.error_code = UART_ERROR_NONE;
+    app_control_snapshot_t snapshot{};
+    comm_tx_heartbeat_t heartbeat{};
 
     CommTxLogic_InitObservedState(&state);
-    assert(CommTxLogic_ShouldSynthesizeStarted(&event) != 0U);
-    CommTxLogic_ObserveEvent(&state, &event);
-    assert(state.job_id == 0x1234U);
-    assert(state.route_id == UART_LINETRACER_ROUTE_B);
-    assert(state.state == UART_LINETRACER_STATE_FOLLOWING_LINE);
+    snapshot.job_id = 0x1234U;
+    snapshot.route_id = UART_LINETRACER_ROUTE_B;
+    snapshot.state = UART_LINETRACER_STATE_FOLLOWING_LINE;
+    snapshot.load_state = UART_LINETRACER_LOAD_PRESENT;
+    snapshot.error_code = UART_ERROR_EMERGENCY_STOP;
+    snapshot.safety_latched = 1U;
+
+    CommTxLogic_ObserveControl(&state, &snapshot);
+    CommTxLogic_MakeHeartbeat(&state, 1000U, UART_ERROR_NONE, &heartbeat);
+    assert(heartbeat.job_id == 0x1234U);
+    assert(heartbeat.route_id == UART_LINETRACER_ROUTE_B);
+    assert(heartbeat.state == UART_LINETRACER_STATE_FOLLOWING_LINE);
+    assert(heartbeat.load_state == UART_LINETRACER_LOAD_PRESENT);
+    assert(heartbeat.error_code == UART_ERROR_EMERGENCY_STOP);
     assert((state.sensor_flags & UART_LINETRACER_FLAG_ROUTE_ACTIVE) != 0U);
 
-    event.status = UART_STATUS_NACK;
-    assert(CommTxLogic_ShouldSynthesizeStarted(&event) == 0U);
+    snapshot.job_id = UART_LINETRACER_JOB_ID_NONE;
+    snapshot.route_id = UART_LINETRACER_ROUTE_NONE;
+    snapshot.state = UART_LINETRACER_STATE_IDLE;
+    snapshot.load_state = UART_LINETRACER_LOAD_EMPTY;
+    snapshot.error_code = UART_ERROR_NONE;
+    snapshot.safety_latched = 0U;
+    CommTxLogic_ObserveControl(&state, &snapshot);
+    CommTxLogic_MakeHeartbeat(&state, 2000U, UART_ERROR_NONE, &heartbeat);
+    assert(heartbeat.error_code == UART_ERROR_NONE);
+    assert((state.sensor_flags & UART_LINETRACER_FLAG_ROUTE_ACTIVE) == 0U);
 }
 
 void TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags() {
@@ -285,7 +299,7 @@ int main() {
     TestHeartbeatAllowsIdleAndRejectsUnknownFlags();
     TestAsyncSequenceWraps();
     TestEmergencyEventPriorityPrecedesRegularEvents();
-    TestAssignAckSynthesizesStartedAndUpdatesObservedRoute();
+    TestControlSnapshotOverridesBestEffortObservedState();
     TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags();
     TestObservedFaultPersistsUntilSuccessfulReset();
     TestUnloadCompletionClearsObservedActiveRoute();

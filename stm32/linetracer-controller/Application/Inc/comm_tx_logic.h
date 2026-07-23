@@ -39,7 +39,7 @@ void CommTxLogic_Init(comm_tx_logic_t* context);
 void CommTxLogic_InitObservedState(comm_tx_observed_state_t* state);
 void CommTxLogic_ObserveEvent(comm_tx_observed_state_t* state, const app_tx_event_t* event);
 void CommTxLogic_ObserveSensor(comm_tx_observed_state_t* state, const app_sensor_snapshot_t* snapshot);
-uint8_t CommTxLogic_ShouldSynthesizeStarted(const app_tx_event_t* event);
+void CommTxLogic_ObserveControl(comm_tx_observed_state_t* state, const app_control_snapshot_t* snapshot);
 void CommTxLogic_MakeHeartbeat(const comm_tx_observed_state_t* state, uint32_t uptime_ms,
                                uint8_t local_error_code, comm_tx_heartbeat_t* heartbeat);
 

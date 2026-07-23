@@ -9,6 +9,7 @@
 #include "cmsis_os2.h"
 #include "comm_tx_config.h"
 #include "comm_tx_logic.h"
+#include "control_task.h"
 #include "sensor_task.h"
 #include "usart.h"
 
@@ -130,11 +131,19 @@ static uint8_t CommTxTask_Transmit(const uint8_t* data, size_t length) {
 }
 
 static void CommTxTask_BuildHeartbeat(uint32_t now_ms, comm_tx_heartbeat_t* heartbeat) {
+#if defined(CONTROL_TASK_SNAPSHOT_API_AVAILABLE)
+    app_control_snapshot_t control_snapshot;
+#endif
     app_sensor_snapshot_t sensor_snapshot;
 
     if (SensorTask_GetLatest(&sensor_snapshot)) {
         CommTxLogic_ObserveSensor(&commTxObservedState, &sensor_snapshot);
     }
+#if defined(CONTROL_TASK_SNAPSHOT_API_AVAILABLE)
+    if (ControlTask_GetLatest(&control_snapshot)) {
+        CommTxLogic_ObserveControl(&commTxObservedState, &control_snapshot);
+    }
+#endif
     CommTxLogic_MakeHeartbeat(&commTxObservedState, now_ms, commTxCurrentError, heartbeat);
 }
 
@@ -196,24 +205,8 @@ static uint8_t CommTxTask_SendSingleEvent(app_tx_event_t* event, uint32_t now_ms
 }
 
 static void CommTxTask_SendEvent(app_tx_event_t* event, uint32_t now_ms) {
-    uint8_t synthesize_started;
-
-    synthesize_started = CommTxLogic_ShouldSynthesizeStarted(event);
     CommTxLogic_ObserveEvent(&commTxObservedState, event);
-    if (CommTxTask_SendSingleEvent(event, now_ms) == 0U || synthesize_started == 0U) {
-        return;
-    }
-
-    {
-        app_tx_event_t started = *event;
-
-        started.type = APP_TX_EVENT_STARTED;
-        started.created_at_ms = osKernelGetTickCount();
-        started.status = UART_STATUS_SUCCESS;
-        started.error_code = UART_ERROR_NONE;
-        started.retry_count = 0U;
-        (void)CommTxTask_SendSingleEvent(&started, started.created_at_ms);
-    }
+    (void)CommTxTask_SendSingleEvent(event, now_ms);
 }
 
 void CommTxTask_NotifyQueueReady(void) {
