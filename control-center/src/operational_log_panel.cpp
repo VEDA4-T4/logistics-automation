@@ -1,5 +1,6 @@
 #include "logistics/control_center/operational_log_panel.hpp"
 
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
@@ -94,6 +95,11 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     severity_filter_->addItem(QStringLiteral("경고"), static_cast<int>(OperationalLogSeverity::Warning));
     severity_filter_->addItem(QStringLiteral("오류"), static_cast<int>(OperationalLogSeverity::Error));
     severity_filter_->addItem(QStringLiteral("심각"), static_cast<int>(OperationalLogSeverity::Critical));
+    severity_filter_->view()->setStyleSheet(
+        "QAbstractItemView{background:#252526;color:#d4d4d4;border:1px solid #454545;outline:0;"
+        "selection-background-color:#094771;selection-color:#ffffff;padding:3px;}"
+        "QAbstractItemView::item{min-height:28px;padding:2px 8px;}"
+        "QAbstractItemView::item:hover{background:#2a3f52;color:#ffffff;}");
     query_filter_ = new QLineEdit(this);
     query_filter_->setObjectName(QStringLiteral("logQueryFilter"));
     query_filter_->setPlaceholderText(QStringLiteral("장치·코드·내용 검색"));

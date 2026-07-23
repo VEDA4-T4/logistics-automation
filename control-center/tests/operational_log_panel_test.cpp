@@ -1,5 +1,6 @@
 #include "logistics/control_center/operational_log_panel.hpp"
 
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -52,6 +53,8 @@ int main(int argc, char* argv[]) {
            acknowledge_all != nullptr);
     assert(panel.findChild<QPushButton*>(QStringLiteral("acknowledgeLogButton")) == nullptr);
     assert(table->rowCount() == 4);
+    assert(severity->view()->styleSheet().contains(QStringLiteral("color:#d4d4d4")));
+    assert(severity->view()->styleSheet().contains(QStringLiteral("selection-background-color:#094771")));
 
     severity->setCurrentIndex(severity->findData(static_cast<int>(OperationalLogSeverity::Error)));
     application.processEvents();
