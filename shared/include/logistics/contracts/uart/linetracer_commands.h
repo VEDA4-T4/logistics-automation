@@ -114,7 +114,9 @@ typedef enum {
     UART_LINETRACER_EVENT_LOAD_DETECTED = 0x02U,
     UART_LINETRACER_EVENT_UNLOAD_COMPLETE = 0x03U,
     UART_LINETRACER_EVENT_STATE_CHANGED = 0x04U,
-    UART_LINETRACER_EVENT_FAULT = 0x05U
+    UART_LINETRACER_EVENT_FAULT = 0x05U,
+    UART_LINETRACER_EVENT_STARTED = 0x06U,
+    UART_LINETRACER_EVENT_HEARTBEAT = 0x07U
 } uart_linetracer_event_t;
 
 #define UART_LINETRACER_EVENT_JOB_ID_LOW_INDEX UART_EVENT_HEADER_SIZE
@@ -130,6 +132,25 @@ typedef enum {
 #define UART_LINETRACER_FAULT_EVENT_ERROR_INDEX (UART_EVENT_HEADER_SIZE + 3U)
 #define UART_LINETRACER_FAULT_EVENT_DATA_SIZE 4U
 #define UART_LINETRACER_FAULT_EVENT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_LINETRACER_FAULT_EVENT_DATA_SIZE)
+
+/* Periodic heartbeat payload. Uptime is a 32-bit little-endian millisecond counter. */
+#define UART_LINETRACER_HEARTBEAT_STATE_INDEX UART_EVENT_HEADER_SIZE
+#define UART_LINETRACER_HEARTBEAT_ERROR_INDEX (UART_EVENT_HEADER_SIZE + 1U)
+#define UART_LINETRACER_HEARTBEAT_FLAGS_INDEX (UART_EVENT_HEADER_SIZE + 2U)
+#define UART_LINETRACER_HEARTBEAT_LOAD_STATE_INDEX (UART_EVENT_HEADER_SIZE + 3U)
+#define UART_LINETRACER_HEARTBEAT_UPTIME_0_INDEX (UART_EVENT_HEADER_SIZE + 4U)
+#define UART_LINETRACER_HEARTBEAT_UPTIME_1_INDEX (UART_EVENT_HEADER_SIZE + 5U)
+#define UART_LINETRACER_HEARTBEAT_UPTIME_2_INDEX (UART_EVENT_HEADER_SIZE + 6U)
+#define UART_LINETRACER_HEARTBEAT_UPTIME_3_INDEX (UART_EVENT_HEADER_SIZE + 7U)
+#define UART_LINETRACER_HEARTBEAT_JOB_ID_LOW_INDEX (UART_EVENT_HEADER_SIZE + 8U)
+#define UART_LINETRACER_HEARTBEAT_JOB_ID_HIGH_INDEX (UART_EVENT_HEADER_SIZE + 9U)
+#define UART_LINETRACER_HEARTBEAT_ROUTE_ID_INDEX (UART_EVENT_HEADER_SIZE + 10U)
+#define UART_LINETRACER_HEARTBEAT_DATA_SIZE 11U
+#define UART_LINETRACER_HEARTBEAT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_LINETRACER_HEARTBEAT_DATA_SIZE)
+
+#define UART_LINETRACER_HEARTBEAT_KNOWN_FLAGS                                                       \
+    (UART_LINETRACER_FLAG_LINE_DETECTED | UART_LINETRACER_FLAG_OBSTACLE_DETECTED |                \
+     UART_LINETRACER_FLAG_LOAD_PRESENT | UART_LINETRACER_FLAG_ROUTE_ACTIVE)
 
 static inline uint8_t uart_linetracer_command_is_valid(uint32_t command) {
     switch (command) {
@@ -178,7 +199,19 @@ static inline uint8_t uart_linetracer_load_state_is_valid(uint32_t state) {
 }
 
 static inline uint8_t uart_linetracer_event_is_valid(uint32_t event_id) {
-    return (event_id >= UART_LINETRACER_EVENT_ARRIVED && event_id <= UART_LINETRACER_EVENT_FAULT) ? 1U : 0U;
+    switch (event_id) {
+        case UART_LINETRACER_EVENT_ARRIVED:
+        case UART_LINETRACER_EVENT_LOAD_DETECTED:
+        case UART_LINETRACER_EVENT_UNLOAD_COMPLETE:
+        case UART_LINETRACER_EVENT_STATE_CHANGED:
+        case UART_LINETRACER_EVENT_FAULT:
+        case UART_LINETRACER_EVENT_STARTED:
+        case UART_LINETRACER_EVENT_HEARTBEAT:
+            return 1U;
+
+        default:
+            return 0U;
+    }
 }
 
 static inline uint8_t uart_linetracer_fault_error_is_valid(uint32_t error) {
@@ -217,6 +250,17 @@ static inline uint16_t uart_linetracer_stop_job_id(const uint8_t* payload) {
 static inline uint16_t uart_linetracer_event_job_id(const uint8_t* payload) {
     return uart_linetracer_read_job_id(payload, UART_LINETRACER_EVENT_JOB_ID_LOW_INDEX,
                                        UART_LINETRACER_EVENT_JOB_ID_HIGH_INDEX);
+}
+
+static inline uint32_t uart_linetracer_heartbeat_uptime_ms(const uint8_t* payload) {
+    if (payload == NULL) {
+        return 0U;
+    }
+
+    return (uint32_t)payload[UART_LINETRACER_HEARTBEAT_UPTIME_0_INDEX] |
+           ((uint32_t)payload[UART_LINETRACER_HEARTBEAT_UPTIME_1_INDEX] << 8U) |
+           ((uint32_t)payload[UART_LINETRACER_HEARTBEAT_UPTIME_2_INDEX] << 16U) |
+           ((uint32_t)payload[UART_LINETRACER_HEARTBEAT_UPTIME_3_INDEX] << 24U);
 }
 
 static inline uint8_t uart_linetracer_payload_is_valid(uint32_t command, const uint8_t* payload, uint32_t length) {
@@ -285,6 +329,7 @@ static inline uint8_t uart_linetracer_event_payload_is_valid(const uint8_t* payl
     }
 
     switch (event_id) {
+        case UART_LINETRACER_EVENT_STARTED:
         case UART_LINETRACER_EVENT_ARRIVED:
         case UART_LINETRACER_EVENT_LOAD_DETECTED:
         case UART_LINETRACER_EVENT_UNLOAD_COMPLETE:
@@ -305,27 +350,65 @@ static inline uint8_t uart_linetracer_event_payload_is_valid(const uint8_t* payl
             }
             break;
 
+        case UART_LINETRACER_EVENT_HEARTBEAT:
+            if (length != UART_LINETRACER_HEARTBEAT_PAYLOAD_SIZE) {
+                return 0U;
+            }
+            break;
+
         default:
             return 0U;
     }
 
-    job_id = uart_linetracer_event_job_id(payload);
-    if (uart_linetracer_job_id_is_valid(job_id) == 0U ||
-        uart_linetracer_route_is_valid(payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX]) == 0U) {
-        return 0U;
-    }
-
     switch (event_id) {
+        case UART_LINETRACER_EVENT_STARTED:
         case UART_LINETRACER_EVENT_ARRIVED:
         case UART_LINETRACER_EVENT_LOAD_DETECTED:
         case UART_LINETRACER_EVENT_UNLOAD_COMPLETE:
-            return 1U;
+            job_id = uart_linetracer_event_job_id(payload);
+            return (uart_linetracer_job_id_is_valid(job_id) != 0U &&
+                    uart_linetracer_route_is_valid(payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX]) != 0U)
+                       ? 1U
+                       : 0U;
 
         case UART_LINETRACER_EVENT_STATE_CHANGED:
-            return uart_linetracer_state_is_valid(payload[UART_LINETRACER_STATE_EVENT_STATE_INDEX]);
+            job_id = uart_linetracer_event_job_id(payload);
+            return (uart_linetracer_job_id_is_valid(job_id) != 0U &&
+                    uart_linetracer_route_is_valid(payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX]) != 0U &&
+                    uart_linetracer_state_is_valid(payload[UART_LINETRACER_STATE_EVENT_STATE_INDEX]) != 0U)
+                       ? 1U
+                       : 0U;
 
         case UART_LINETRACER_EVENT_FAULT:
+            job_id = uart_linetracer_event_job_id(payload);
+            if (!((job_id == UART_LINETRACER_JOB_ID_NONE &&
+                   payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX] == UART_LINETRACER_ROUTE_NONE) ||
+                  (uart_linetracer_job_id_is_valid(job_id) != 0U &&
+                   uart_linetracer_route_is_valid(payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX]) != 0U))) {
+                return 0U;
+            }
             return uart_linetracer_fault_error_is_valid(payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX]);
+
+        case UART_LINETRACER_EVENT_HEARTBEAT:
+            job_id = uart_linetracer_read_job_id(payload, UART_LINETRACER_HEARTBEAT_JOB_ID_LOW_INDEX,
+                                                 UART_LINETRACER_HEARTBEAT_JOB_ID_HIGH_INDEX);
+            if (!((job_id == UART_LINETRACER_JOB_ID_NONE &&
+                   payload[UART_LINETRACER_HEARTBEAT_ROUTE_ID_INDEX] == UART_LINETRACER_ROUTE_NONE) ||
+                  (uart_linetracer_job_id_is_valid(job_id) != 0U &&
+                   uart_linetracer_route_is_valid(payload[UART_LINETRACER_HEARTBEAT_ROUTE_ID_INDEX]) != 0U))) {
+                return 0U;
+            }
+            if (uart_linetracer_state_is_valid(payload[UART_LINETRACER_HEARTBEAT_STATE_INDEX]) == 0U ||
+                uart_linetracer_load_state_is_valid(payload[UART_LINETRACER_HEARTBEAT_LOAD_STATE_INDEX]) == 0U ||
+                (payload[UART_LINETRACER_HEARTBEAT_FLAGS_INDEX] &
+                 (uint8_t)(~UART_LINETRACER_HEARTBEAT_KNOWN_FLAGS)) != 0U) {
+                return 0U;
+            }
+            if (payload[UART_LINETRACER_HEARTBEAT_ERROR_INDEX] != UART_ERROR_NONE &&
+                uart_linetracer_fault_error_is_valid(payload[UART_LINETRACER_HEARTBEAT_ERROR_INDEX]) == 0U) {
+                return 0U;
+            }
+            return 1U;
 
         default:
             return 0U;
