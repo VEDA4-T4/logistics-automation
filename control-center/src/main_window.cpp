@@ -21,9 +21,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
-#include <QVideoFrame>
 #include <QVideoSink>
-#include <QVideoWidget>
 #include <QWidget>
 #include <array>
 #include <chrono>
@@ -394,7 +392,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
     players_.resize(channel_count_);
-    video_widgets_.resize(channel_count_);
     audio_outputs_.resize(channel_count_);
     status_labels_.resize(channel_count_);
     channel_stacks_.resize(channel_count_);
@@ -615,7 +612,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         auto* overlay_layout = new QVBoxLayout(state_overlays_[channel]);
         auto* channel_label = new QLabel(QStringLiteral("CH %1").arg(channel + 1), state_overlays_[channel]);
         status_labels_[channel] = new QLabel(state_overlays_[channel]);
-        video_widgets_[channel] = new QVideoWidget(video_layers_[channel]);
         detection_overlays_[channel] = new DetectionOverlay(video_layers_[channel]);
         audio_outputs_[channel] = new QAudioOutput(this);
         reconnect_timers_[channel] = new QTimer(this);
@@ -623,10 +619,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_panel->setStyleSheet("background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;");
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
-        video_layout->addWidget(video_widgets_[channel], 0, 0);
         video_layout->addWidget(detection_overlays_[channel], 0, 0);
         video_layout->addWidget(playing_badge, 0, 0, Qt::AlignLeft | Qt::AlignTop);
-        detection_overlays_[channel]->raise();
         playing_badge->raise();
         playing_badge->setMargin(8);
         playing_badge->setStyleSheet(
@@ -647,19 +641,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel]->addWidget(video_layers_[channel]);
         channel_stacks_[channel]->addWidget(state_overlays_[channel]);
 
-        video_widgets_[channel]->setMinimumSize(320, 180);
-        players_[channel]->setVideoOutput(video_widgets_[channel]);
+        detection_overlays_[channel]->setMinimumSize(320, 180);
+        players_[channel]->setVideoOutput(detection_overlays_[channel]->videoSink());
         players_[channel]->setAudioOutput(audio_outputs_[channel]);
         audio_outputs_[channel]->setVolume(0.0F);
         reconnect_timers_[channel]->setInterval(reconnect_interval_ms_);
         detection_overlays_[channel]->setStaleTimeout(metadata_stale_timeout_ms_);
-
-        connect(video_widgets_[channel]->videoSink(), &QVideoSink::videoFrameChanged, this,
-                [this, channel](const QVideoFrame& frame) {
-                    if (frame.isValid()) {
-                        detection_overlays_[channel]->setVideoSize(frame.size());
-                    }
-                });
 
         if (onvif_metadata_enabled_ && !metadata_stream_urls_[channel].isEmpty()) {
             metadata_clients_[channel] = new OnvifRtspMetadataClient(this);
@@ -711,7 +698,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                                      .arg(detection.bounding_box.bottom());
                         }
                         detection_overlays_[channel]->setDetectionFrame(frame);
-                        detection_overlays_[channel]->raise();
                     });
             connect(metadata_clients_[channel], &OnvifRtspMetadataClient::connectionStateChanged, this,
                     [this, channel](bool connected, const QString& detail) {

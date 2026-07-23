@@ -18,7 +18,6 @@ class QMediaPlayer;
 class QStackedLayout;
 class QTabWidget;
 class QTimer;
-class QVideoWidget;
 class QWidget;
 
 namespace logistics::control_center {
@@ -54,7 +53,6 @@ private:
     void refreshOperationalLogPanel();
 
     std::vector<QMediaPlayer*> players_{};
-    std::vector<QVideoWidget*> video_widgets_{};
     std::vector<QAudioOutput*> audio_outputs_{};
     std::vector<QLabel*> status_labels_{};
     std::vector<QStackedLayout*> channel_stacks_{};

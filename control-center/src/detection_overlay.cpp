@@ -4,18 +4,23 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QTimer>
+#include <QVideoSink>
 #include <algorithm>
 
 namespace logistics::control_center {
 
-DetectionOverlay::DetectionOverlay(QWidget* parent) : QWidget(parent), stale_timer_(new QTimer(this)) {
-    setAttribute(Qt::WA_TransparentForMouseEvents);
-    setAttribute(Qt::WA_TranslucentBackground);
-    setAttribute(Qt::WA_NoSystemBackground);
+DetectionOverlay::DetectionOverlay(QWidget* parent)
+    : QWidget(parent), video_sink_(new QVideoSink(this)), stale_timer_(new QTimer(this)) {
+    setAttribute(Qt::WA_OpaquePaintEvent);
     setAutoFillBackground(false);
     stale_timer_->setSingleShot(true);
     stale_timer_->setInterval(1500);
     connect(stale_timer_, &QTimer::timeout, this, &DetectionOverlay::clearDetections);
+    connect(video_sink_, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame& frame) {
+        video_frame_ = frame;
+        video_size_ = frame.isValid() ? frame.size() : QSize();
+        update();
+    });
 }
 
 void DetectionOverlay::setDetectionFrame(const OnvifDetectionFrame& frame) {
@@ -23,13 +28,6 @@ void DetectionOverlay::setDetectionFrame(const OnvifDetectionFrame& frame) {
     has_frame_ = true;
     stale_timer_->start();
     update();
-}
-
-void DetectionOverlay::setVideoSize(const QSize& size) {
-    if (size.isValid() && size != video_size_) {
-        video_size_ = size;
-        update();
-    }
 }
 
 void DetectionOverlay::setMetadataState(bool connected, const QString& detail) {
@@ -52,6 +50,10 @@ void DetectionOverlay::clearDetections() {
     update();
 }
 
+QVideoSink* DetectionOverlay::videoSink() const {
+    return video_sink_;
+}
+
 QRectF DetectionOverlay::displayedVideoRect() const {
     const QRectF available(rect());
     if (!video_size_.isValid() || video_size_.isEmpty()) {
@@ -68,6 +70,12 @@ void DetectionOverlay::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
+    painter.fillRect(rect(), Qt::black);
+
+    const auto video_rect = displayedVideoRect();
+    if (video_frame_.isValid()) {
+        video_frame_.paint(&painter, video_rect, {});
+    }
 
     if (metadata_connected_) {
         const auto status =
@@ -86,7 +94,6 @@ void DetectionOverlay::paintEvent(QPaintEvent* event) {
         return;
     }
 
-    const auto video_rect = displayedVideoRect();
     painter.setClipRect(video_rect);
     QPen box_pen(QColor(78, 201, 176));
     box_pen.setWidth(2);

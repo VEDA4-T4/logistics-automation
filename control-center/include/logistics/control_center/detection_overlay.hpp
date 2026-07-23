@@ -1,11 +1,13 @@
 #pragma once
 
 #include <QSize>
+#include <QVideoFrame>
 #include <QWidget>
 
 #include "logistics/control_center/onvif_metadata.hpp"
 
 class QTimer;
+class QVideoSink;
 
 namespace logistics::control_center {
 
@@ -14,10 +16,10 @@ public:
     explicit DetectionOverlay(QWidget* parent = nullptr);
 
     void setDetectionFrame(const OnvifDetectionFrame& frame);
-    void setVideoSize(const QSize& size);
     void setMetadataState(bool connected, const QString& detail = {});
     void setStaleTimeout(int timeout_ms);
     void clearDetections();
+    [[nodiscard]] QVideoSink* videoSink() const;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -26,7 +28,9 @@ private:
     [[nodiscard]] QRectF displayedVideoRect() const;
 
     OnvifDetectionFrame frame_;
+    QVideoFrame video_frame_;
     QSize video_size_;
+    QVideoSink* video_sink_{ nullptr };
     QTimer* stale_timer_{ nullptr };
     QString metadata_detail_;
     bool has_frame_{ false };

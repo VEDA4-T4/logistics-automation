@@ -15,7 +15,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     )
 endif()
 
-find_package(Qt6 6.10 REQUIRED COMPONENTS Mqtt Multimedia MultimediaWidgets Network Widgets)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Mqtt Multimedia Network Widgets)
 
 qt_standard_project_setup()
 
@@ -73,7 +73,6 @@ target_link_libraries(
     PRIVATE
         Qt6::Mqtt
         Qt6::Multimedia
-        Qt6::MultimediaWidgets
         Qt6::Network
         Qt6::Widgets
         logistics::contracts
@@ -126,6 +125,19 @@ if(BUILD_TESTING)
     target_link_libraries(control_center_onvif_metadata_test PRIVATE Qt6::Core)
     logistics_enable_warnings(control_center_onvif_metadata_test)
     add_test(NAME control_center_onvif_metadata_test COMMAND control_center_onvif_metadata_test)
+
+    add_executable(
+        control_center_detection_overlay_test
+        tests/detection_overlay_test.cpp
+        src/detection_overlay.cpp
+        src/onvif_metadata.cpp
+        include/logistics/control_center/detection_overlay.hpp
+        include/logistics/control_center/onvif_metadata.hpp
+    )
+    target_include_directories(control_center_detection_overlay_test PRIVATE include)
+    target_link_libraries(control_center_detection_overlay_test PRIVATE Qt6::Multimedia Qt6::Widgets)
+    logistics_enable_warnings(control_center_detection_overlay_test)
+    add_test(NAME control_center_detection_overlay_test COMMAND control_center_detection_overlay_test)
 
     add_executable(
         control_center_onvif_rtsp_metadata_client_test
