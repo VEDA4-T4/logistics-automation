@@ -47,6 +47,8 @@ namespace {
 constexpr int kDefaultReconnectIntervalMs = 3000;
 constexpr int kDefaultRtspNetworkTimeoutMs = 3000;
 constexpr int kDefaultMetadataStaleTimeoutMs = 1500;
+constexpr int kDefaultMetadataSyncDelayMs = 0;
+constexpr int kMaximumMetadataSyncDelayMs = 30000;
 constexpr int kMaximumRtspNetworkTimeoutMs = 60000;
 constexpr int kDefaultChannelCount = 4;
 constexpr int kMaximumChannelCount = 16;
@@ -71,8 +73,10 @@ struct ControlCenterConfig {
     bool onvif_metadata_enabled{ true };
     bool onvif_log_payload{ true };
     int metadata_stale_timeout_ms{ kDefaultMetadataStaleTimeoutMs };
+    int metadata_sync_delay_ms{ kDefaultMetadataSyncDelayMs };
     std::vector<QUrl> stream_urls;
     std::vector<QUrl> metadata_stream_urls;
+    std::vector<int> metadata_sync_delays_ms;
     QStringList warnings;
 };
 
@@ -325,9 +329,21 @@ ControlCenterConfig loadControlCenterConfig() {
             QStringLiteral("rtsp/metadata_stale_timeout_ms는 100~60000ms여야 하므로 1500ms를 사용합니다."));
     }
 
+    bool metadata_sync_delay_is_valid = false;
+    const auto metadata_sync_delay =
+        settings.value(QStringLiteral("rtsp/metadata_sync_delay_ms"), kDefaultMetadataSyncDelayMs)
+            .toInt(&metadata_sync_delay_is_valid);
+    if (metadata_sync_delay_is_valid && metadata_sync_delay >= 0 &&
+        metadata_sync_delay <= kMaximumMetadataSyncDelayMs) {
+        config.metadata_sync_delay_ms = metadata_sync_delay;
+    } else {
+        config.warnings.append(QStringLiteral("rtsp/metadata_sync_delay_ms는 0~30000ms여야 하므로 0ms를 사용합니다."));
+    }
+
     QStringList invalid_channels;
     config.stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
     config.metadata_stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
+    config.metadata_sync_delays_ms.reserve(static_cast<std::size_t>(config.channel_count));
     for (int channel = 1; channel <= config.channel_count; ++channel) {
         const auto key = QStringLiteral("rtsp/channel_%1_url").arg(channel);
         const QUrl stream_url(settings.value(key).toString().trimmed());
@@ -351,6 +367,20 @@ ControlCenterConfig loadControlCenterConfig() {
                 config.warnings.append(
                     QStringLiteral("%1이 잘못되어 해당 채널의 ONVIF 메타데이터를 끕니다.").arg(metadata_key));
             }
+        }
+
+        const auto sync_key = QStringLiteral("rtsp/channel_%1_metadata_sync_delay_ms").arg(channel);
+        bool channel_sync_delay_is_valid = false;
+        const auto channel_sync_delay =
+            settings.value(sync_key, config.metadata_sync_delay_ms).toInt(&channel_sync_delay_is_valid);
+        if (channel_sync_delay_is_valid && channel_sync_delay >= 0 &&
+            channel_sync_delay <= kMaximumMetadataSyncDelayMs) {
+            config.metadata_sync_delays_ms.push_back(channel_sync_delay);
+        } else {
+            config.metadata_sync_delays_ms.push_back(config.metadata_sync_delay_ms);
+            config.warnings.append(QStringLiteral("%1은 0~30000ms여야 하므로 전역값 %2ms를 사용합니다.")
+                                       .arg(sync_key)
+                                       .arg(config.metadata_sync_delay_ms));
         }
     }
 
@@ -391,6 +421,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     metadata_stale_timeout_ms_ = config.metadata_stale_timeout_ms;
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
+    metadata_sync_delays_ms_ = config.metadata_sync_delays_ms;
     players_.resize(channel_count_);
     audio_outputs_.resize(channel_count_);
     status_labels_.resize(channel_count_);
@@ -640,6 +671,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         players_[channel]->setAudioOutput(audio_outputs_[channel]);
         audio_outputs_[channel]->setVolume(0.0F);
         reconnect_timers_[channel]->setInterval(reconnect_interval_ms_);
+        detection_overlays_[channel]->setSynchronizationDelay(metadata_sync_delays_ms_[channel]);
         detection_overlays_[channel]->setStaleTimeout(metadata_stale_timeout_ms_);
 
         if (onvif_metadata_enabled_ && !metadata_stream_urls_[channel].isEmpty()) {
@@ -669,14 +701,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         const auto& frame = parsed.frames.back();
                         qInfo().noquote() << QStringLiteral(
                                                  "[ONVIF][CH %1] Frame 파싱 · UTC=%2 · 객체=%3 · "
-                                                 "translate=(%4,%5) · scale=(%6,%7)")
+                                                 "translate=(%4,%5) · scale=(%6,%7) · sync=%8ms")
                                                  .arg(channel + 1)
                                                  .arg(frame.utc_time.toUTC().toString(Qt::ISODateWithMs))
                                                  .arg(frame.detections.size())
                                                  .arg(frame.translate.x())
                                                  .arg(frame.translate.y())
                                                  .arg(frame.scale.x())
-                                                 .arg(frame.scale.y());
+                                                 .arg(frame.scale.y())
+                                                 .arg(metadata_sync_delays_ms_[channel]);
                         for (const auto& detection : frame.detections) {
                             qInfo().noquote() << QStringLiteral(
                                                      "[ONVIF][CH %1] Object #%2 · %3 · confidence=%4 · "

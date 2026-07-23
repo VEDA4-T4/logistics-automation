@@ -1,21 +1,28 @@
 #include "logistics/control_center/detection_overlay.hpp"
 
+#include <QDateTime>
 #include <QFontMetrics>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QTimer>
 #include <QVideoSink>
 #include <algorithm>
+#include <limits>
 
 namespace logistics::control_center {
 
 DetectionOverlay::DetectionOverlay(QWidget* parent)
-    : QWidget(parent), video_sink_(new QVideoSink(this)), stale_timer_(new QTimer(this)) {
+    : QWidget(parent),
+      video_sink_(new QVideoSink(this)),
+      stale_timer_(new QTimer(this)),
+      synchronization_timer_(new QTimer(this)) {
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAutoFillBackground(false);
     stale_timer_->setSingleShot(true);
     stale_timer_->setInterval(1500);
-    connect(stale_timer_, &QTimer::timeout, this, &DetectionOverlay::clearDetections);
+    synchronization_timer_->setSingleShot(true);
+    connect(stale_timer_, &QTimer::timeout, this, &DetectionOverlay::clearVisibleDetections);
+    connect(synchronization_timer_, &QTimer::timeout, this, &DetectionOverlay::presentDueDetectionFrames);
     connect(video_sink_, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame& frame) {
         video_frame_ = frame;
         video_size_ = frame.isValid() ? frame.size() : QSize();
@@ -29,10 +36,30 @@ void DetectionOverlay::setChannelLabel(const QString& label) {
 }
 
 void DetectionOverlay::setDetectionFrame(const OnvifDetectionFrame& frame) {
-    frame_ = frame;
-    has_frame_ = true;
-    stale_timer_->start();
-    update();
+    if (synchronization_delay_ms_ <= 0) {
+        presentDetectionFrame(frame);
+        return;
+    }
+
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    auto due = now + synchronization_delay_ms_;
+    if (frame.utc_time.isValid()) {
+        const auto source_time = frame.utc_time.toUTC().toMSecsSinceEpoch();
+        constexpr qint64 kMaximumTrustedClockDifferenceMs = 60000;
+        if (std::abs(now - source_time) <= kMaximumTrustedClockDifferenceMs) {
+            due = source_time + synchronization_delay_ms_;
+        }
+    }
+
+    const auto insertion_point = std::upper_bound(
+        scheduled_frames_.begin(), scheduled_frames_.end(), due,
+        [](qint64 value, const ScheduledFrame& scheduled) { return value < scheduled.due_msecs_since_epoch; });
+    scheduled_frames_.insert(insertion_point, ScheduledFrame{ due, frame });
+    constexpr std::size_t kMaximumScheduledFrames = 300;
+    while (scheduled_frames_.size() > kMaximumScheduledFrames) {
+        scheduled_frames_.pop_front();
+    }
+    scheduleNextDetectionFrame();
 }
 
 void DetectionOverlay::setMetadataState(bool connected, const QString& detail) {
@@ -45,18 +72,65 @@ void DetectionOverlay::setMetadataState(bool connected, const QString& detail) {
     }
 }
 
+void DetectionOverlay::setSynchronizationDelay(int delay_ms) {
+    synchronization_delay_ms_ = std::clamp(delay_ms, 0, 30000);
+    scheduled_frames_.clear();
+    synchronization_timer_->stop();
+}
+
 void DetectionOverlay::setStaleTimeout(int timeout_ms) {
     stale_timer_->setInterval(std::max(timeout_ms, 100));
 }
 
 void DetectionOverlay::clearDetections() {
-    has_frame_ = false;
-    frame_.detections.clear();
-    update();
+    scheduled_frames_.clear();
+    synchronization_timer_->stop();
+    clearVisibleDetections();
 }
 
 QVideoSink* DetectionOverlay::videoSink() const {
     return video_sink_;
+}
+
+void DetectionOverlay::presentDetectionFrame(const OnvifDetectionFrame& frame) {
+    frame_ = frame;
+    has_frame_ = true;
+    stale_timer_->start();
+    update();
+}
+
+void DetectionOverlay::presentDueDetectionFrames() {
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    bool has_due_frame = false;
+    OnvifDetectionFrame due_frame;
+    while (!scheduled_frames_.empty() && scheduled_frames_.front().due_msecs_since_epoch <= now) {
+        due_frame = std::move(scheduled_frames_.front().frame);
+        scheduled_frames_.pop_front();
+        has_due_frame = true;
+    }
+    if (has_due_frame) {
+        presentDetectionFrame(due_frame);
+    }
+    scheduleNextDetectionFrame();
+}
+
+void DetectionOverlay::scheduleNextDetectionFrame() {
+    if (scheduled_frames_.empty()) {
+        synchronization_timer_->stop();
+        return;
+    }
+    const auto remaining = scheduled_frames_.front().due_msecs_since_epoch - QDateTime::currentMSecsSinceEpoch();
+    if (remaining <= 0) {
+        presentDueDetectionFrames();
+        return;
+    }
+    synchronization_timer_->start(static_cast<int>(std::min<qint64>(remaining, std::numeric_limits<int>::max())));
+}
+
+void DetectionOverlay::clearVisibleDetections() {
+    has_frame_ = false;
+    frame_.detections.clear();
+    update();
 }
 
 QRectF DetectionOverlay::displayedVideoRect() const {

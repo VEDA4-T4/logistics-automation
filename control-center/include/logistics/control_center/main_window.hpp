@@ -63,6 +63,7 @@ private:
     std::vector<OnvifRtspMetadataClient*> metadata_clients_{};
     std::vector<QUrl> stream_urls_{};
     std::vector<QUrl> metadata_stream_urls_{};
+    std::vector<int> metadata_sync_delays_ms_{};
     std::vector<ChannelState> channel_states_{};
     std::vector<bool> reconnecting_{};
     MqttClient* mqtt_client_{ nullptr };

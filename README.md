@@ -108,6 +108,7 @@ network_timeout_ms=3000
 onvif_metadata_enabled=true
 onvif_log_payload=true
 metadata_stale_timeout_ms=1500
+metadata_sync_delay_ms=0
 ```
 
 `rtsp/low_latency=true`이면 각 RTSP 소스를 열기 전에 Qt Multimedia의 저지연 스트리밍 모드를 적용합니다.
@@ -123,6 +124,12 @@ metadata_stale_timeout_ms=1500
 `onvif_log_payload=true`이면 Qt Creator의 **Application Output**에 RTSP 연결 단계, 원본 XML,
 파싱된 객체 ID·클래스·신뢰도·바운딩 박스를 채널별 `[ONVIF][CH N]` 형식으로 출력합니다. 정상 운용에서
 로그 양이 많으면 `false`로 변경합니다.
+
+영상이 ONVIF 메타데이터보다 늦게 표시되면 `metadata_sync_delay_ms`에 카메라 촬영부터 관제 화면
+표시까지의 지연 시간을 밀리초로 지정합니다. 관제는 XML의 `Frame/UtcTime`을 기준으로 객체 프레임을
+예약하므로 메타데이터 네트워크 지터가 있어도 같은 촬영 시각의 박스를 일정하게 표시합니다. 채널별 지연이
+다르면 `channel_N_metadata_sync_delay_ms`로 덮어쓸 수 있습니다. 카메라와 관제 PC의 시계는 NTP로
+동기화해야 하며, 시각 차이가 60초를 넘으면 안전하게 메타데이터 수신 시각 기준 지연으로 전환합니다.
 
 `dashboard`의 장치 ID는 각 장치가 MQTT envelope의 `sourceId`로 보내는 값과 같아야 합니다. 각 공정은
 자신의 `jobId`를 독립적으로 표시하므로 서로 다른 상품을 동시에 처리할 수 있습니다.
