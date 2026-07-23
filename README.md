@@ -103,19 +103,25 @@ image_base_url=http://127.0.0.1:8080/
 [rtsp]
 channel_count=4
 reconnect_interval_ms=3000
+transport=tcp
 low_latency=true
 network_timeout_ms=3000
 probe_size_bytes=32768
+max_buffer_size_bytes=2097152
 onvif_metadata_enabled=true
 onvif_log_payload=false
 metadata_stale_timeout_ms=1500
 ```
 
-`rtsp/low_latency=true`이면 각 RTSP 소스를 열기 전에 Qt Multimedia의 저지연 스트리밍 모드를 적용합니다.
-재생 버퍼가 줄어드는 대신 패킷 손실이 화면에 더 쉽게 드러날 수 있으므로, 지연보다 부드러운 재생이 중요하면
-`false`로 변경합니다. `rtsp/network_timeout_ms`는 소켓 입출력이 멈췄을 때 기존 재연결 흐름으로 전환할
-때까지 기다리는 시간을 지정합니다. `probe_size_bytes`는 재생 전 스트림 분석량이며 기본값 32768은
-RTSP 시작 대기를 줄이기 위한 값입니다. 스트림 정보 인식에 실패하면 값을 늘립니다.
+영상 수신기는 RTSP `SETUP`에서 `RTP/AVP/TCP;interleaved`를 요청하여 영상 RTP를 TCP 연결로 강제합니다.
+현재 `rtsp/transport`는 `tcp`만 지원하며, H.264 RTP를 Annex-B 스트림으로 재조립한 뒤 Qt Multimedia의
+FFmpeg 디코더에 전달합니다. RTP 순서가 어긋나거나 내부 입력 버퍼가 `max_buffer_size_bytes`를 넘으면
+손상된 종속 프레임을 버리고 다음 IDR 프레임부터 SPS/PPS와 함께 재생을 복구합니다.
+
+`rtsp/low_latency=true`이면 Qt Multimedia의 저지연 디코딩 모드를 적용합니다. `network_timeout_ms` 동안
+RTSP 응답 또는 영상 패킷이 없으면 채널을 오류로 전환하고 `reconnect_interval_ms` 간격으로 다시 연결합니다.
+`probe_size_bytes`는 디코더가 재생 전에 분석할 스트림 데이터 크기이며 기본값 32768은 시작 대기를 줄이기
+위한 값입니다. 스트림 정보 인식에 실패하면 값을 늘립니다.
 
 `rtsp/onvif_metadata_enabled=true`이면 각 채널 URL의 RTSP `application` 트랙에서
 `vnd.onvif.metadata` XML을 구독하고 객체의 바운딩 박스, 분류명, 신뢰도를 영상 위에 표시합니다.

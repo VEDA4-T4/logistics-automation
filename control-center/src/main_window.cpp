@@ -38,6 +38,7 @@
 #include "logistics/control_center/operations_dashboard_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
 #include "logistics/control_center/product_result_panel.hpp"
+#include "logistics/control_center/rtsp_h264_stream.hpp"
 #include "logistics/control_center/ui_dialog.hpp"
 
 namespace logistics::control_center {
@@ -48,6 +49,9 @@ constexpr int kDefaultRtspNetworkTimeoutMs = 3000;
 constexpr qsizetype kDefaultRtspProbeSizeBytes = 32768;
 constexpr qsizetype kMinimumRtspProbeSizeBytes = 2048;
 constexpr qsizetype kMaximumRtspProbeSizeBytes = 1048576;
+constexpr qsizetype kDefaultRtspMaximumBufferSizeBytes = 2 * 1024 * 1024;
+constexpr qsizetype kMinimumRtspMaximumBufferSizeBytes = 64 * 1024;
+constexpr qsizetype kMaximumRtspMaximumBufferSizeBytes = 16 * 1024 * 1024;
 constexpr int kDefaultMetadataStaleTimeoutMs = 1500;
 constexpr int kMaximumRtspNetworkTimeoutMs = 60000;
 constexpr int kDefaultChannelCount = 4;
@@ -71,6 +75,7 @@ struct ControlCenterConfig {
     bool low_latency{ true };
     int network_timeout_ms{ kDefaultRtspNetworkTimeoutMs };
     qsizetype probe_size_bytes{ kDefaultRtspProbeSizeBytes };
+    qsizetype maximum_buffer_size_bytes{ kDefaultRtspMaximumBufferSizeBytes };
     bool onvif_metadata_enabled{ true };
     bool onvif_log_payload{ false };
     int metadata_stale_timeout_ms{ kDefaultMetadataStaleTimeoutMs };
@@ -281,6 +286,14 @@ ControlCenterConfig loadControlCenterConfig() {
         config.warnings.append(QStringLiteral("rtsp/low_latency는 true 또는 false여야 하므로 true를 사용합니다."));
     }
 
+    const auto transport = settings.value(QStringLiteral("rtsp/transport"), QStringLiteral("tcp"))
+                               .toString()
+                               .trimmed()
+                               .toLower();
+    if (transport != QStringLiteral("tcp")) {
+        config.warnings.append(QStringLiteral("rtsp/transport는 현재 tcp만 지원하므로 RTSP/TCP를 사용합니다."));
+    }
+
     bool network_timeout_is_valid = false;
     const auto network_timeout = settings.value(QStringLiteral("rtsp/network_timeout_ms"), kDefaultRtspNetworkTimeoutMs)
                                      .toInt(&network_timeout_is_valid);
@@ -297,6 +310,18 @@ ControlCenterConfig loadControlCenterConfig() {
         config.probe_size_bytes = static_cast<qsizetype>(probe_size);
     } else {
         config.warnings.append(QStringLiteral("rtsp/probe_size_bytes는 2048~1048576이어야 하므로 32768을 사용합니다."));
+    }
+
+    bool maximum_buffer_size_is_valid = false;
+    const auto maximum_buffer_size =
+        settings.value(QStringLiteral("rtsp/max_buffer_size_bytes"), kDefaultRtspMaximumBufferSizeBytes)
+            .toLongLong(&maximum_buffer_size_is_valid);
+    if (maximum_buffer_size_is_valid && maximum_buffer_size >= kMinimumRtspMaximumBufferSizeBytes &&
+        maximum_buffer_size <= kMaximumRtspMaximumBufferSizeBytes) {
+        config.maximum_buffer_size_bytes = static_cast<qsizetype>(maximum_buffer_size);
+    } else {
+        config.warnings.append(
+            QStringLiteral("rtsp/max_buffer_size_bytes는 65536~16777216이어야 하므로 2097152를 사용합니다."));
     }
 
     const auto metadata_enabled_value =
@@ -399,12 +424,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     rtsp_low_latency_ = config.low_latency;
     rtsp_network_timeout_ms_ = config.network_timeout_ms;
     rtsp_probe_size_bytes_ = config.probe_size_bytes;
+    rtsp_maximum_buffer_size_bytes_ = config.maximum_buffer_size_bytes;
     onvif_metadata_enabled_ = config.onvif_metadata_enabled;
     onvif_log_payload_ = config.onvif_log_payload;
     metadata_stale_timeout_ms_ = config.metadata_stale_timeout_ms;
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
     players_.resize(channel_count_);
+    video_streams_.resize(channel_count_);
     status_labels_.resize(channel_count_);
     channel_stacks_.resize(channel_count_);
     video_layers_.resize(channel_count_);
@@ -610,6 +637,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     for (std::size_t channel = 0; channel < channel_count_; ++channel) {
         players_[channel] = new QMediaPlayer(this);
+        video_streams_[channel] = new RtspH264Stream(this);
+        video_streams_[channel]->setNetworkTimeout(rtsp_network_timeout_ms_);
+        video_streams_[channel]->setMaximumBufferSize(rtsp_maximum_buffer_size_bytes_);
         QPlaybackOptions playback_options;
         playback_options.setPlaybackIntent(rtsp_low_latency_ ? QPlaybackOptions::PlaybackIntent::LowLatencyStreaming
                                                              : QPlaybackOptions::PlaybackIntent::Playback);
@@ -655,6 +685,43 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             players_[channel]->setActiveAudioTrack(-1);
             players_[channel]->setActiveSubtitleTrack(-1);
         });
+        connect(video_streams_[channel], &RtspH264Stream::streamReady, this, [this, channel]() {
+            players_[channel]->stop();
+            players_[channel]->setSource({});
+            const auto format_hint = QUrl(QStringLiteral("channel_%1.h264").arg(channel + 1));
+            players_[channel]->setSourceDevice(video_streams_[channel], format_hint);
+            players_[channel]->play();
+            reconnecting_[channel] = false;
+        });
+        connect(video_streams_[channel], &RtspH264Stream::connectionStateChanged, this,
+                [channel](bool connected, const QString& detail) {
+                    if (connected) {
+                        qInfo().noquote() << QStringLiteral("[VIDEO][CH %1][RTSP/TCP] %2").arg(channel + 1).arg(detail);
+                    } else {
+                        qWarning().noquote()
+                            << QStringLiteral("[VIDEO][CH %1][RTSP/TCP] %2").arg(channel + 1).arg(detail);
+                    }
+                });
+        connect(video_streams_[channel], &RtspH264Stream::streamError, this,
+                [this, channel](const QString& detail) {
+                    reconnecting_[channel] = false;
+                    players_[channel]->stop();
+                    players_[channel]->setSource({});
+                    setChannelState(channel, ChannelState::Error, detail);
+                });
+        connect(video_streams_[channel], &RtspH264Stream::packetLossDetected, this,
+                [channel](quint16 expected, quint16 received) {
+                    qWarning().noquote()
+                        << QStringLiteral("[VIDEO][CH %1][RTP] 패킷 순서 불일치 · expected=%2 · received=%3 · "
+                                          "다음 IDR 프레임까지 폐기")
+                               .arg(channel + 1)
+                               .arg(expected)
+                               .arg(received);
+                });
+        connect(video_streams_[channel], &RtspH264Stream::diagnosticMessage, this,
+                [channel](const QString& message) {
+                    qInfo().noquote() << QStringLiteral("[VIDEO][CH %1][RTSP/TCP] %2").arg(channel + 1).arg(message);
+                });
 
         if (onvif_metadata_enabled_ && !metadata_stream_urls_[channel].isEmpty()) {
             metadata_clients_[channel] = new OnvifRtspMetadataClient(this);
@@ -732,6 +799,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 [this, channel](QMediaPlayer::Error error, const QString& description) {
                     if (error != QMediaPlayer::NoError) {
                         const auto detail = description.isEmpty() ? QStringLiteral("영상 연결 오류") : description;
+                        qWarning().noquote()
+                            << QStringLiteral("[VIDEO][CH %1][DECODER] %2").arg(channel + 1).arg(detail);
                         setChannelState(channel, ChannelState::Error, detail);
                     }
                 });
@@ -749,13 +818,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                             updatePlaybackState(channel);
                             break;
                         case QMediaPlayer::StalledMedia:
+                            qWarning().noquote()
+                                << QStringLiteral("[VIDEO][CH %1][DECODER] 영상 데이터 정지").arg(channel + 1);
                             setChannelState(channel, ChannelState::Error, QStringLiteral("영상 연결이 끊겼습니다"));
                             break;
                         case QMediaPlayer::EndOfMedia:
+                            qWarning().noquote()
+                                << QStringLiteral("[VIDEO][CH %1][DECODER] 입력 스트림 종료").arg(channel + 1);
                             setChannelState(channel, ChannelState::Error,
                                             QStringLiteral("영상 스트림이 종료되었습니다"));
                             break;
                         case QMediaPlayer::InvalidMedia:
+                            qWarning().noquote()
+                                << QStringLiteral("[VIDEO][CH %1][DECODER] 잘못된 영상 스트림 · %2")
+                                       .arg(channel + 1)
+                                       .arg(players_[channel]->errorString());
                             setChannelState(channel, ChannelState::Error, players_[channel]->errorString());
                             break;
                         case QMediaPlayer::NoMedia:
@@ -771,13 +848,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         return;
                     }
                     if (state == QMediaPlayer::PlayingState) {
+                        qInfo().noquote() << QStringLiteral("[VIDEO][CH %1][DECODER] 재생 시작").arg(channel + 1);
                         updatePlaybackState(channel);
                     } else if (channel_states_[channel] == ChannelState::Playing) {
+                        qWarning().noquote()
+                            << QStringLiteral("[VIDEO][CH %1][DECODER] 재생 상태 종료").arg(channel + 1);
                         setChannelState(channel, ChannelState::Error, QStringLiteral("영상 재생이 중단되었습니다"));
                     }
                 });
         connect(players_[channel], &QMediaPlayer::hasVideoChanged, this, [this, channel](bool has_video) {
             if (has_video) {
+                qInfo().noquote() << QStringLiteral("[VIDEO][CH %1][DECODER] 영상 트랙 확인").arg(channel + 1);
                 updatePlaybackState(channel);
             } else if (!reconnecting_[channel] && channel_states_[channel] == ChannelState::Playing) {
                 setChannelState(channel, ChannelState::Error, QStringLiteral("영상 신호가 끊겼습니다"));
@@ -788,9 +869,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             setChannelState(channel, ChannelState::Error, QStringLiteral("RTSP URL 설정을 확인하세요"));
         } else {
             setChannelState(channel, ChannelState::Connecting);
-            reconnect_timers_[channel]->start();
-            players_[channel]->setSource(stream_urls_[channel]);
-            players_[channel]->play();
+            reconnecting_[channel] = true;
+            video_streams_[channel]->start(stream_urls_[channel]);
             if (metadata_clients_[channel] != nullptr) {
                 metadata_clients_[channel]->start(metadata_stream_urls_[channel]);
             }
@@ -834,6 +914,7 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
     switch (state) {
         case ChannelState::Connecting:
             channel_stacks_[channel]->setCurrentWidget(state_overlays_[channel]);
+            reconnect_timers_[channel]->stop();
             status_labels_[channel]->setText(QStringLiteral("연결 중…\n영상을 불러오는 중입니다"));
             status_labels_[channel]->setStyleSheet(
                 "color:#cca700;background-color:transparent;font-size:22px;font-weight:700;");
@@ -880,15 +961,11 @@ void MainWindow::reconnectChannel(std::size_t channel) {
     }
 
     reconnecting_[channel] = true;
-    setChannelState(channel, ChannelState::Error, QStringLiteral("연결 시간 초과 또는 연결 실패"));
+    setChannelState(channel, ChannelState::Connecting);
+    video_streams_[channel]->stop();
     players_[channel]->stop();
     players_[channel]->setSource({});
-
-    QTimer::singleShot(0, this, [this, channel]() {
-        players_[channel]->setSource(stream_urls_[channel]);
-        players_[channel]->play();
-        reconnecting_[channel] = false;
-    });
+    video_streams_[channel]->start(stream_urls_[channel]);
 }
 
 void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand command) {

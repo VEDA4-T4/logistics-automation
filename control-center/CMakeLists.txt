@@ -36,6 +36,7 @@ qt_add_executable(
     src/onvif_rtsp_metadata_client.cpp
     src/product_result_panel.cpp
     src/process_control_panel.cpp
+    src/rtsp_h264_stream.cpp
     src/ui_dialog.cpp
     include/logistics/control_center/main_window.hpp
     include/logistics/control_center/command_response.hpp
@@ -52,6 +53,7 @@ qt_add_executable(
     include/logistics/control_center/product_result_panel.hpp
     include/logistics/control_center/process_control_panel.hpp
     include/logistics/control_center/process_control_state.hpp
+    include/logistics/control_center/rtsp_h264_stream.hpp
     include/logistics/control_center/ui_dialog.hpp
 )
 
@@ -145,6 +147,7 @@ if(BUILD_TESTING)
         src/onvif_rtsp_metadata_client.cpp
         include/logistics/control_center/onvif_rtsp_metadata_client.hpp
     )
+
     target_include_directories(control_center_onvif_rtsp_metadata_client_test PRIVATE include)
     target_link_libraries(control_center_onvif_rtsp_metadata_client_test PRIVATE Qt6::Core Qt6::Network)
     logistics_enable_warnings(control_center_onvif_rtsp_metadata_client_test)
@@ -152,6 +155,17 @@ if(BUILD_TESTING)
         NAME control_center_onvif_rtsp_metadata_client_test
         COMMAND control_center_onvif_rtsp_metadata_client_test
     )
+
+    add_executable(
+        control_center_rtsp_h264_stream_test
+        tests/rtsp_h264_stream_test.cpp
+        src/rtsp_h264_stream.cpp
+        include/logistics/control_center/rtsp_h264_stream.hpp
+    )
+    target_include_directories(control_center_rtsp_h264_stream_test PRIVATE include)
+    target_link_libraries(control_center_rtsp_h264_stream_test PRIVATE Qt6::Core Qt6::Network)
+    logistics_enable_warnings(control_center_rtsp_h264_stream_test)
+    add_test(NAME control_center_rtsp_h264_stream_test COMMAND control_center_rtsp_h264_stream_test)
 
     add_executable(
         control_center_process_control_state_test

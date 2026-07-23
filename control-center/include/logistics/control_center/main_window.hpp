@@ -28,6 +28,7 @@ class ProductResultPanel;
 class ProcessControlPanel;
 class DetectionOverlay;
 class OnvifRtspMetadataClient;
+class RtspH264Stream;
 
 class MainWindow final : public QMainWindow {
 public:
@@ -52,6 +53,7 @@ private:
     void refreshOperationalLogPanel();
 
     std::vector<QMediaPlayer*> players_{};
+    std::vector<RtspH264Stream*> video_streams_{};
     std::vector<QLabel*> status_labels_{};
     std::vector<QStackedLayout*> channel_stacks_{};
     std::vector<QWidget*> video_layers_{};
@@ -82,6 +84,7 @@ private:
     bool rtsp_low_latency_{ true };
     int rtsp_network_timeout_ms_{ 3000 };
     qsizetype rtsp_probe_size_bytes_{ 32768 };
+    qsizetype rtsp_maximum_buffer_size_bytes_{ 2 * 1024 * 1024 };
     bool onvif_metadata_enabled_{ true };
     bool onvif_log_payload_{ false };
     int metadata_stale_timeout_ms_{ 1500 };
