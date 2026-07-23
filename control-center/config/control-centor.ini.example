@@ -42,8 +42,6 @@ onvif_metadata_enabled=true
 onvif_log_payload=true
 ; Remove boxes when no newer metadata frame arrives within this time.
 metadata_stale_timeout_ms=1500
-; Delay ONVIF boxes to match end-to-end video latency. Start at 0 and tune in milliseconds.
-metadata_sync_delay_ms=0
 
 ; Define one RTSP or RTSPS URL for every configured channel.
 channel_1_url=rtsp://username:password@camera-1.example.com:554/stream
@@ -52,8 +50,6 @@ channel_3_url=rtsp://username:password@camera-3.example.com:554/stream
 channel_4_url=rtsp://username:password@camera-4.example.com:554/stream
 ; Optional. When omitted, the corresponding channel_N_url is used for metadata.
 ; channel_1_metadata_url=rtsp://username:password@camera-1.example.com:554/onvif-metadata
-; Optional per-channel override when camera/video latency differs.
-; channel_1_metadata_sync_delay_ms=1200
 
 [ui]
 language=ko_KR
