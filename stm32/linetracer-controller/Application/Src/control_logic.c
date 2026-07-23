@@ -1,5 +1,7 @@
 #include "control_logic.h"
 
+#include <string.h>
+
 #include "logistics/contracts/uart/linetracer_commands.h"
 
 static uint8_t ControlLogic_HasActiveJob(const control_context_t* context) {
@@ -79,6 +81,40 @@ static uart_error_t ControlLogic_SafetyError(const control_context_t* context) {
     }
 
     return UART_ERROR_BUSY;
+}
+
+static uart_error_t ControlLogic_CurrentError(const control_context_t* context) {
+    if (context == NULL) {
+        return UART_ERROR_INTERNAL;
+    }
+
+    if (context->safety_error_code != UART_ERROR_NONE) {
+        return (uart_linetracer_fault_error_is_valid(context->safety_error_code) != 0U)
+                   ? (uart_error_t)context->safety_error_code
+                   : UART_ERROR_INTERNAL;
+    }
+
+    switch (context->stop_reason) {
+        case LINETRACER_STOP_REASON_EMERGENCY:
+            return UART_ERROR_EMERGENCY_STOP;
+
+        case LINETRACER_STOP_REASON_TURN_TIMEOUT:
+        case LINETRACER_STOP_REASON_COMM_TIMEOUT:
+            return UART_ERROR_TIMEOUT;
+
+        case LINETRACER_STOP_REASON_OBSTACLE:
+        case LINETRACER_STOP_REASON_LINE_LOST:
+        case LINETRACER_STOP_REASON_LOAD_LOST:
+        case LINETRACER_STOP_REASON_OVERLOAD:
+        case LINETRACER_STOP_REASON_MARKER_SEQUENCE:
+        case LINETRACER_STOP_REASON_SENSOR_FAULT:
+            return UART_ERROR_SENSOR;
+
+        case LINETRACER_STOP_REASON_NONE:
+        case LINETRACER_STOP_REASON_COMMAND:
+        default:
+            return (context->state == LINETRACER_CONTROL_ERROR) ? UART_ERROR_INTERNAL : UART_ERROR_NONE;
+    }
 }
 
 static linetracer_control_state_t ControlLogic_SafetyState(linetracer_stop_reason_t reason) {
@@ -256,6 +292,81 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
         default:
             return 0U;
     }
+}
+
+void ControlLogic_MakeSnapshot(const control_context_t* context, uart_linetracer_load_state_t load_state,
+                               uint32_t now_ms, app_control_snapshot_t* snapshot) {
+    if (context == NULL || snapshot == NULL) {
+        return;
+    }
+
+    (void)memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->updated_at_ms = now_ms;
+    snapshot->job_id = context->active_job_id;
+    snapshot->route_id = context->active_route;
+    snapshot->state = linetracer_control_state_to_uart_state(context->state);
+    snapshot->load_state = load_state;
+    snapshot->error_code = (uint8_t)ControlLogic_CurrentError(context);
+    snapshot->safety_latched = context->safety_latched;
+}
+
+uint8_t ControlLogic_BuildStartedEvent(const control_context_t* context, const app_control_command_t* command,
+                                       const control_command_result_t* result,
+                                       uart_linetracer_load_state_t load_state, uint32_t now_ms,
+                                       app_tx_event_t* event) {
+    if (context == NULL || command == NULL || result == NULL || event == NULL ||
+        command->type != APP_CONTROL_COMMAND_ASSIGN_ROUTE || result->accepted == 0U ||
+        result->status != UART_STATUS_ACK || result->state_changed == 0U || context->route_active == 0U ||
+        uart_linetracer_job_id_is_valid(context->active_job_id) == 0U ||
+        uart_linetracer_route_is_valid(context->active_route) == 0U) {
+        return 0U;
+    }
+
+    (void)memset(event, 0, sizeof(*event));
+    event->type = APP_TX_EVENT_STARTED;
+    event->created_at_ms = now_ms;
+    event->job_id = context->active_job_id;
+    event->route_id = context->active_route;
+    event->state = linetracer_control_state_to_uart_state(context->state);
+    event->load_state = load_state;
+    event->status = UART_STATUS_SUCCESS;
+    event->error_code = UART_ERROR_NONE;
+    return 1U;
+}
+
+uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
+                                           const app_control_safety_event_t* safety_event,
+                                           uart_linetracer_load_state_t load_state, uint32_t now_ms,
+                                           app_tx_event_t* event) {
+    uart_error_t error_code;
+
+    if (context == NULL || safety_event == NULL || event == NULL ||
+        safety_event->type != APP_CONTROL_SAFETY_LATCHED) {
+        return 0U;
+    }
+
+    (void)memset(event, 0, sizeof(*event));
+    event->type = APP_TX_EVENT_FAULT;
+    event->created_at_ms = now_ms;
+    if (uart_linetracer_job_id_is_valid(context->active_job_id) != 0U &&
+        uart_linetracer_route_is_valid(context->active_route) != 0U) {
+        event->job_id = context->active_job_id;
+        event->route_id = context->active_route;
+    } else {
+        event->job_id = UART_LINETRACER_JOB_ID_NONE;
+        event->route_id = UART_LINETRACER_ROUTE_NONE;
+    }
+    event->state = linetracer_control_state_to_uart_state(context->state);
+    event->load_state = load_state;
+    event->status = UART_STATUS_ERROR;
+    error_code = ControlLogic_CurrentError(context);
+    if (error_code == UART_ERROR_NONE &&
+        uart_linetracer_fault_error_is_valid(safety_event->error_code) != 0U) {
+        error_code = (uart_error_t)safety_event->error_code;
+    }
+    event->error_code =
+        (error_code != UART_ERROR_NONE) ? (uint8_t)error_code : (uint8_t)UART_ERROR_INTERNAL;
+    return 1U;
 }
 
 uint8_t ControlLogic_CommandToUartCommand(app_control_command_type_t command) {

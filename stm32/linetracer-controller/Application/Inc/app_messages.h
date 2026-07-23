@@ -45,6 +45,17 @@ typedef struct {
     uint8_t original_payload_length;
 } app_control_command_t;
 
+/* Thread-safe ControlTask snapshot consumed by telemetry producers. */
+typedef struct {
+    uint32_t updated_at_ms;
+    uint16_t job_id;
+    uart_linetracer_route_t route_id;
+    uart_linetracer_state_t state;
+    uart_linetracer_load_state_t load_state;
+    uint8_t error_code;
+    uint8_t safety_latched;
+} app_control_snapshot_t;
+
 typedef enum {
     APP_SENSOR_EVENT_NONE = 0U,
     APP_SENSOR_EVENT_LINE_CHANGED = (1U << 0U),
@@ -135,6 +146,7 @@ typedef enum {
     APP_TX_EVENT_COMMAND_ACK,
     APP_TX_EVENT_STATUS,
     APP_TX_EVENT_HEARTBEAT,
+    APP_TX_EVENT_STARTED,
     APP_TX_EVENT_ARRIVED,
     APP_TX_EVENT_LOAD_DETECTED,
     APP_TX_EVENT_UNLOAD_COMPLETE,
@@ -178,6 +190,7 @@ static inline uint8_t app_tx_event_priority(app_tx_event_type_t type) {
         case APP_TX_EVENT_FAULT:
             return APP_TX_PRIORITY_SAFETY;
 
+        case APP_TX_EVENT_STARTED:
         case APP_TX_EVENT_ARRIVED:
         case APP_TX_EVENT_LOAD_DETECTED:
         case APP_TX_EVENT_UNLOAD_COMPLETE:
