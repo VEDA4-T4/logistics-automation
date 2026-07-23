@@ -100,6 +100,9 @@ int main() {
                       QDateTime::fromString(QStringLiteral("2026-07-23T02:00:02.000Z"), Qt::ISODateWithMs));
     assert(state.entries().front().severity == OperationalLogSeverity::Critical);
     assert(state.activeAlertCount() == 2);
+    assert(state.acknowledgeAllAlerts() == 2);
+    assert(state.activeAlertCount() == 0);
+    assert(state.acknowledgeAllAlerts() == 0);
 
     for (qsizetype index = 0; index < OperationalLogState::kMaximumEntries + 10; ++index) {
         state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("test"), QStringLiteral("테스트"),

@@ -3,11 +3,15 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QDialog>
 #include <QFont>
+#include <QFormLayout>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -44,27 +48,39 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     setStyleSheet(
         "#operationalLogPanel{background:#181818;}"
         "QLabel{color:#cccccc;}"
-        "QComboBox,QLineEdit{background:#252526;color:#cccccc;border:1px solid #3c3c3c;border-radius:4px;padding:5px;}"
-        "QCheckBox{color:#cccccc;}"
-        "QPushButton{background:#2d2d30;color:#f0f0f0;border:1px solid #454545;border-radius:4px;padding:5px 9px;}"
-        "QPushButton:hover{background:#3a3a3d;}"
-        "QPushButton:disabled{color:#777777;}"
-        "QTableWidget{background:#181818;color:#cccccc;border:1px solid #2b2b2b;gridline-color:#2b2b2b;}"
-        "QHeaderView::section{background:#252526;color:#cccccc;border:0;border-right:1px solid #3c3c3c;padding:5px;}"
-        "QTableWidget::item:selected{background:#264f78;}");
+        "QComboBox,QLineEdit{background:#202020;color:#d4d4d4;border:1px solid #303030;border-radius:6px;padding:7px;}"
+        "QComboBox:hover,QLineEdit:hover{border-color:#454545;}"
+        "QCheckBox{color:#a8a8a8;spacing:6px;}"
+        "QPushButton{background:#242424;color:#d4d4d4;border:1px solid #353535;border-radius:6px;padding:6px 10px;}"
+        "QPushButton:hover:enabled{background:#303030;border-color:#4a4a4a;}"
+        "QPushButton:disabled{color:#666666;background:#202020;border-color:#292929;}"
+        "QPushButton#acknowledgeAllLogsButton{color:#ff938a;border-color:#5d3235;background:#2a2021;}"
+        "QTableWidget{background:#181818;color:#cccccc;border:0;gridline-color:transparent;outline:0;}"
+        "QHeaderView::section{background:#181818;color:#777777;border:0;border-bottom:1px solid #303030;"
+        "font-size:10px;font-weight:600;padding:7px;}"
+        "QTableWidget::item{border-bottom:1px solid #272727;padding:8px;}"
+        "QTableWidget::item:selected{background:#21364a;color:#f0f0f0;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(7);
+    layout->setContentsMargins(12, 11, 12, 12);
+    layout->setSpacing(9);
 
     auto* header = new QHBoxLayout();
-    auto* title = new QLabel(QStringLiteral("오류 알림 및 운영 로그"), this);
-    title->setStyleSheet("color:#f0f0f0;font-size:14px;font-weight:700;");
+    auto* header_text = new QVBoxLayout();
+    header_text->setContentsMargins(0, 0, 0, 0);
+    header_text->setSpacing(1);
+    auto* eyebrow = new QLabel(QStringLiteral("OPERATIONS"), this);
+    eyebrow->setStyleSheet("color:#4daafc;font-size:8px;font-weight:700;letter-spacing:1px;");
+    auto* title = new QLabel(QStringLiteral("운영 로그"), this);
+    title->setStyleSheet("color:#f0f0f0;font-size:16px;font-weight:700;");
+    header_text->addWidget(eyebrow);
+    header_text->addWidget(title);
     alert_count_ = new QLabel(QStringLiteral("미확인 오류 0"), this);
     alert_count_->setObjectName(QStringLiteral("unacknowledgedAlertCount"));
     alert_count_->setStyleSheet(
-        "background:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;font-weight:700;padding:3px 6px;");
-    header->addWidget(title);
+        "background:#2c2021;color:#ff7b72;border:1px solid #5d3235;border-radius:9px;font-size:9px;"
+        "font-weight:700;padding:3px 7px;");
+    header->addLayout(header_text);
     header->addStretch();
     header->addWidget(alert_count_);
     layout->addLayout(header);
@@ -93,10 +109,13 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     result_count_->setStyleSheet("color:#9d9d9d;font-size:10px;");
     acknowledge_button_ = new QPushButton(QStringLiteral("선택 확인"), this);
     acknowledge_button_->setObjectName(QStringLiteral("acknowledgeLogButton"));
+    acknowledge_all_button_ = new QPushButton(QStringLiteral("오류 전체 확인"), this);
+    acknowledge_all_button_->setObjectName(QStringLiteral("acknowledgeAllLogsButton"));
     secondary_filters->addWidget(unacknowledged_filter_);
     secondary_filters->addWidget(result_count_);
     secondary_filters->addStretch();
     secondary_filters->addWidget(acknowledge_button_);
+    secondary_filters->addWidget(acknowledge_all_button_);
     layout->addLayout(secondary_filters);
 
     table_ = new QTableWidget(this);
@@ -107,9 +126,11 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table_->setAlternatingRowColors(true);
+    table_->setShowGrid(false);
+    table_->setAlternatingRowColors(false);
+    table_->setWordWrap(false);
     table_->verticalHeader()->setVisible(false);
-    table_->verticalHeader()->setDefaultSectionSize(34);
+    table_->verticalHeader()->setDefaultSectionSize(46);
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -125,8 +146,13 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
             row >= 0 && table_->item(row, 0) != nullptr && !table_->item(row, 0)->data(Qt::UserRole + 1).toBool();
         acknowledge_button_->setEnabled(can_acknowledge);
     });
-    connect(table_, &QTableWidget::cellDoubleClicked, this, [this](int, int) { acknowledgeSelected(); });
+    connect(table_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { showDetails(row); });
     connect(acknowledge_button_, &QPushButton::clicked, this, &OperationalLogPanel::acknowledgeSelected);
+    connect(acknowledge_all_button_, &QPushButton::clicked, this, [this]() {
+        if (acknowledge_all_handler_) {
+            acknowledge_all_handler_();
+        }
+    });
     refresh();
 }
 
@@ -137,6 +163,10 @@ void OperationalLogPanel::setState(const OperationalLogState& state) {
 
 void OperationalLogPanel::setAcknowledgeHandler(AcknowledgeHandler handler) {
     acknowledge_handler_ = std::move(handler);
+}
+
+void OperationalLogPanel::setAcknowledgeAllHandler(AcknowledgeAllHandler handler) {
+    acknowledge_all_handler_ = std::move(handler);
 }
 
 OperationalLogFilter OperationalLogPanel::currentFilter() const {
@@ -187,6 +217,7 @@ void OperationalLogPanel::refresh() {
     result_count_->setText(QStringLiteral("%1건").arg(entries.size()));
     alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(state_.activeAlertCount()));
     alert_count_->setVisible(state_.activeAlertCount() > 0);
+    acknowledge_all_button_->setEnabled(state_.activeAlertCount() > 0);
     acknowledge_button_->setEnabled(false);
 }
 
@@ -199,6 +230,99 @@ void OperationalLogPanel::acknowledgeSelected() {
     if (acknowledge_handler_ && !id.isEmpty()) {
         acknowledge_handler_(id);
     }
+}
+
+void OperationalLogPanel::showDetails(int row) {
+    if (row < 0 || table_->item(row, 0) == nullptr) {
+        return;
+    }
+    const auto id = table_->item(row, 0)->data(Qt::UserRole).toString();
+    const OperationalLogEntry* selected = nullptr;
+    for (const auto& entry : state_.entries()) {
+        if (entry.id == id) {
+            selected = &entry;
+            break;
+        }
+    }
+    if (selected == nullptr) {
+        return;
+    }
+
+    auto* dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("operationalLogDetailDialog"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("운영 로그 상세"));
+    dialog->resize(620, 430);
+    dialog->setMinimumSize(520, 360);
+    dialog->setStyleSheet(
+        "QDialog{background:#181818;}"
+        "QLabel{color:#cccccc;}"
+        "QLabel#detailTitle{color:#f0f0f0;font-size:18px;font-weight:700;}"
+        "QLabel#detailMetaLabel{color:#777777;font-size:10px;}"
+        "QLabel#detailMetaValue{color:#d4d4d4;font-size:11px;}"
+        "QPlainTextEdit{background:#202020;color:#e5e5e5;border:1px solid #303030;border-radius:8px;padding:10px;}"
+        "QPushButton{background:#2d2d30;color:#f0f0f0;border:1px solid #454545;border-radius:6px;padding:7px 18px;}"
+        "QPushButton:hover{background:#3a3a3d;}");
+    auto* dialog_layout = new QVBoxLayout(dialog);
+    dialog_layout->setContentsMargins(20, 18, 20, 18);
+    dialog_layout->setSpacing(13);
+
+    auto* dialog_header = new QHBoxLayout();
+    auto* severity = new QLabel(OperationalSeverityLabel(selected->severity), dialog);
+    severity->setStyleSheet(QStringLiteral("background:%1;color:#181818;border-radius:9px;font-size:10px;"
+                                           "font-weight:800;padding:4px 9px;")
+                                .arg(SeverityColor(selected->severity)));
+    auto* acknowledgement =
+        new QLabel(selected->acknowledged ? QStringLiteral("확인됨") : QStringLiteral("미확인"), dialog);
+    acknowledgement->setStyleSheet(selected->acknowledged
+                                       ? QStringLiteral("color:#89d185;font-size:10px;font-weight:700;")
+                                       : QStringLiteral("color:#cca700;font-size:10px;font-weight:700;"));
+    dialog_header->addWidget(severity);
+    dialog_header->addStretch();
+    dialog_header->addWidget(acknowledgement);
+    dialog_layout->addLayout(dialog_header);
+
+    auto* detail_title = new QLabel(selected->code.isEmpty() ? selected->category : selected->code, dialog);
+    detail_title->setObjectName(QStringLiteral("detailTitle"));
+    detail_title->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    dialog_layout->addWidget(detail_title);
+
+    auto* metadata = new QFormLayout();
+    metadata->setContentsMargins(0, 0, 0, 0);
+    metadata->setHorizontalSpacing(18);
+    metadata->setVerticalSpacing(7);
+    const auto add_metadata = [dialog, metadata](const QString& label, const QString& value) {
+        auto* key = new QLabel(label, dialog);
+        key->setObjectName(QStringLiteral("detailMetaLabel"));
+        auto* content = new QLabel(value.isEmpty() ? QStringLiteral("없음") : value, dialog);
+        content->setObjectName(QStringLiteral("detailMetaValue"));
+        content->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        content->setWordWrap(true);
+        metadata->addRow(key, content);
+    };
+    add_metadata(QStringLiteral("발생 시각"), selected->occurred_at.toLocalTime().toString(Qt::ISODateWithMs));
+    add_metadata(QStringLiteral("장치"), selected->device_id);
+    add_metadata(QStringLiteral("분류"), selected->category);
+    add_metadata(QStringLiteral("토픽"), selected->topic);
+    add_metadata(QStringLiteral("메시지 ID"), selected->id);
+    dialog_layout->addLayout(metadata);
+
+    auto* message = new QPlainTextEdit(selected->message, dialog);
+    message->setObjectName(QStringLiteral("operationalLogDetailMessage"));
+    message->setReadOnly(true);
+    message->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    dialog_layout->addWidget(message, 1);
+
+    auto* actions = new QHBoxLayout();
+    auto* close_button = new QPushButton(QStringLiteral("닫기"), dialog);
+    close_button->setObjectName(QStringLiteral("closeOperationalLogDetail"));
+    actions->addStretch();
+    actions->addWidget(close_button);
+    dialog_layout->addLayout(actions);
+    connect(close_button, &QPushButton::clicked, dialog, &QDialog::close);
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 }  // namespace logistics::control_center

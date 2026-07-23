@@ -12,6 +12,7 @@
 #include <QMediaPlayer>
 #include <QMessageBox>
 #include <QSettings>
+#include <QSplitter>
 #include <QStackedLayout>
 #include <QStatusBar>
 #include <QStringList>
@@ -338,18 +339,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* content = new QWidget(central_widget);
     auto* content_layout = new QHBoxLayout(content);
     content_layout->setContentsMargins(10, 10, 10, 10);
-    content_layout->setSpacing(10);
+    content_layout->setSpacing(0);
 
-    auto* video_container = new QWidget(content);
+    auto* content_splitter = new QSplitter(Qt::Horizontal, content);
+    content_splitter->setObjectName(QStringLiteral("contentSplitter"));
+    content_splitter->setChildrenCollapsible(false);
+    content_splitter->setHandleWidth(7);
+    content_splitter->setStyleSheet(
+        "QSplitter::handle{background:#1f1f1f;border-left:1px solid #303030;border-right:1px solid #303030;}"
+        "QSplitter::handle:hover{background:#264f78;}");
+
+    auto* video_container = new QWidget(content_splitter);
     auto* video_grid = new QGridLayout(video_container);
     video_grid->setContentsMargins(0, 0, 0, 0);
     video_grid->setSpacing(8);
-    content_layout->addWidget(video_container, 1);
 
-    auto* side_panel = new QWidget(content);
+    auto* side_panel = new QWidget(content_splitter);
     side_panel->setObjectName(QStringLiteral("sidePanel"));
-    side_panel->setMinimumWidth(390);
-    side_panel->setMaximumWidth(390);
+    side_panel->setMinimumWidth(450);
     side_panel->setStyleSheet("#sidePanel{background:transparent;}");
     auto* side_layout = new QVBoxLayout(side_panel);
     side_layout->setContentsMargins(0, 0, 0, 0);
@@ -358,9 +365,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_tabs_->setObjectName(QStringLiteral("detailTabs"));
     detail_tabs_->setDocumentMode(true);
     detail_tabs_->setStyleSheet(
-        "QTabWidget::pane{border:1px solid #2b2b2b;background:#181818;}"
-        "QTabBar::tab{background:#252526;color:#9d9d9d;border:1px solid #2b2b2b;padding:7px 14px;}"
-        "QTabBar::tab:selected{background:#181818;color:#f0f0f0;border-bottom:2px solid #4daafc;}");
+        "QTabWidget::pane{border:1px solid #2b2b2b;border-radius:7px;background:#181818;}"
+        "QTabBar::tab{background:transparent;color:#888888;border:0;border-bottom:2px solid transparent;"
+        "font-size:11px;font-weight:600;padding:9px 17px;}"
+        "QTabBar::tab:hover{color:#d4d4d4;}"
+        "QTabBar::tab:selected{color:#f0f0f0;border-bottom-color:#4daafc;}");
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_tabs_);
     operational_log_panel_ = new OperationalLogPanel(detail_tabs_);
     detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));
@@ -368,7 +377,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     process_control_panel_ = new ProcessControlPanel(side_panel);
     side_layout->addWidget(detail_tabs_, 1);
     side_layout->addWidget(process_control_panel_, 0);
-    content_layout->addWidget(side_panel);
+    content_splitter->addWidget(video_container);
+    content_splitter->addWidget(side_panel);
+    content_splitter->setStretchFactor(0, 3);
+    content_splitter->setStretchFactor(1, 2);
+    content_splitter->setSizes({ 740, 500 });
+    content_layout->addWidget(content_splitter);
     root_layout->addWidget(content, 1);
     setCentralWidget(central_widget);
 
@@ -385,6 +399,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operational_log_panel_->setAcknowledgeHandler([this](const QString& id) {
         if (operational_log_state_.acknowledge(id)) {
             refreshOperationalLogPanel();
+        }
+    });
+    operational_log_panel_->setAcknowledgeAllHandler([this]() {
+        const auto count = operational_log_state_.acknowledgeAllAlerts();
+        if (count > 0) {
+            refreshOperationalLogPanel();
+            statusBar()->showMessage(QStringLiteral("오류 로그 %1건을 확인 처리했습니다.").arg(count), 3000);
         }
     });
 

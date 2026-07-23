@@ -49,6 +49,7 @@ public:
     void appendLocal(OperationalLogSeverity severity, const QString& device_id, const QString& category,
                      const QString& code, const QString& message, const QDateTime& occurred_at = {});
     [[nodiscard]] bool acknowledge(const QString& id);
+    [[nodiscard]] int acknowledgeAllAlerts();
     [[nodiscard]] QList<OperationalLogEntry> filteredEntries(const OperationalLogFilter& filter) const;
     [[nodiscard]] const QList<OperationalLogEntry>& entries() const noexcept;
     [[nodiscard]] int unacknowledgedCount() const noexcept;

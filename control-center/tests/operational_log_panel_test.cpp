@@ -3,7 +3,9 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTableWidget>
 #include <cassert>
@@ -23,12 +25,19 @@ int main(int argc, char* argv[]) {
                       QStringLiteral("BARCODE_FAILED"), QStringLiteral("바코드 인식 실패"));
     state.appendLocal(OperationalLogSeverity::Error, QStringLiteral("PI-SORTING-01"), QStringLiteral("장치 오류"),
                       QStringLiteral("SENSOR_TIMEOUT"), QStringLiteral("센서 응답 없음"));
+    state.appendLocal(OperationalLogSeverity::Critical, QStringLiteral("central-server"), QStringLiteral("통신 장애"),
+                      QStringLiteral("MQTT_AUTH_ERROR"),
+                      QStringLiteral("인증 정보가 올바르지 않아 중앙 서버 연결을 완료하지 못했습니다."));
 
     OperationalLogPanel panel;
     panel.resize(390, 500);
     panel.setState(state);
     panel.setAcknowledgeHandler([&state, &panel](const QString& id) {
         assert(state.acknowledge(id));
+        panel.setState(state);
+    });
+    panel.setAcknowledgeAllHandler([&state, &panel]() {
+        assert(state.acknowledgeAllAlerts() > 0);
         panel.setState(state);
     });
     panel.show();
@@ -39,9 +48,10 @@ int main(int argc, char* argv[]) {
     auto* query = panel.findChild<QLineEdit*>(QStringLiteral("logQueryFilter"));
     auto* unacknowledged = panel.findChild<QCheckBox*>(QStringLiteral("logUnacknowledgedOnly"));
     auto* acknowledge = panel.findChild<QPushButton*>(QStringLiteral("acknowledgeLogButton"));
+    auto* acknowledge_all = panel.findChild<QPushButton*>(QStringLiteral("acknowledgeAllLogsButton"));
     assert(table != nullptr && severity != nullptr && query != nullptr && unacknowledged != nullptr &&
-           acknowledge != nullptr);
-    assert(table->rowCount() == 3);
+           acknowledge != nullptr && acknowledge_all != nullptr);
+    assert(table->rowCount() == 4);
 
     severity->setCurrentIndex(severity->findData(static_cast<int>(OperationalLogSeverity::Error)));
     application.processEvents();
@@ -55,9 +65,22 @@ int main(int argc, char* argv[]) {
     assert(table->item(0, 3)->text().contains(QStringLiteral("바코드 인식 실패")));
 
     query->clear();
+    table->cellDoubleClicked(0, 3);
+    application.processEvents();
+    auto* detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
+    assert(detail_dialog != nullptr && detail_dialog->isVisible());
+    auto* detail_message = detail_dialog->findChild<QPlainTextEdit*>(QStringLiteral("operationalLogDetailMessage"));
+    assert(detail_message != nullptr && detail_message->toPlainText().contains(QStringLiteral("인증 정보")));
+    detail_dialog->close();
+    application.processEvents();
+
     table->selectRow(0);
     application.processEvents();
     acknowledge->click();
+    assert(state.activeAlertCount() == 1);
+    assert(acknowledge_all->isEnabled());
+    acknowledge_all->click();
+    assert(state.activeAlertCount() == 0);
     unacknowledged->setChecked(true);
     application.processEvents();
     assert(table->rowCount() == 2);

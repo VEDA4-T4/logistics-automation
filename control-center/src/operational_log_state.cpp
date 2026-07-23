@@ -276,6 +276,19 @@ bool OperationalLogState::acknowledge(const QString& id) {
     return false;
 }
 
+int OperationalLogState::acknowledgeAllAlerts() {
+    int acknowledged_count = 0;
+    for (auto& entry : entries_) {
+        const bool is_alert =
+            entry.severity == OperationalLogSeverity::Error || entry.severity == OperationalLogSeverity::Critical;
+        if (is_alert && !entry.acknowledged) {
+            entry.acknowledged = true;
+            ++acknowledged_count;
+        }
+    }
+    return acknowledged_count;
+}
+
 QList<OperationalLogEntry> OperationalLogState::filteredEntries(const OperationalLogFilter& filter) const {
     QList<OperationalLogEntry> filtered;
     for (const auto& entry : entries_) {
