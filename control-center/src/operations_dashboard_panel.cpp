@@ -164,6 +164,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     setStyleSheet(
         "#operationsDashboard{background:#1f1f1f;border-bottom:1px solid #2b2b2b;}"
         "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
+        "#processStatusSection,#processStatusContent{background:#1f1f1f;border:0;}"
         "QLabel{color:#cccccc;}");
 
     auto* layout = new QHBoxLayout(this);
@@ -200,6 +201,8 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     layout->addWidget(overall_card);
 
     auto* process_section = new QWidget(this);
+    process_section->setObjectName(QStringLiteral("processStatusSection"));
+    process_section->setAttribute(Qt::WA_StyledBackground);
     auto* process_section_layout = new QVBoxLayout(process_section);
     process_section_layout->setContentsMargins(0, 0, 0, 0);
     process_section_layout->setSpacing(3);
@@ -219,11 +222,19 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     scroll_area->setFrameShape(QFrame::NoFrame);
     scroll_area->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll_area->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll_area->setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollBar:horizontal{height:4px;}");
+    scroll_area->setStyleSheet(
+        "QScrollArea{background:#1f1f1f;border:0;}"
+        "QScrollArea>QWidget>QWidget{background:#1f1f1f;}"
+        "QScrollBar:horizontal{height:4px;background:#1f1f1f;}"
+        "QScrollBar::handle:horizontal{background:#454545;border-radius:2px;min-width:24px;}"
+        "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}");
+    scroll_area->viewport()->setStyleSheet("background:#1f1f1f;");
     auto* process_content = new QWidget(scroll_area);
+    process_content->setObjectName(QStringLiteral("processStatusContent"));
+    process_content->setAttribute(Qt::WA_StyledBackground);
     process_layout_ = new QHBoxLayout(process_content);
     process_layout_->setContentsMargins(0, 0, 0, 0);
-    process_layout_->setSpacing(6);
+    process_layout_->setSpacing(4);
     scroll_area->setWidget(process_content);
     process_section_layout->addWidget(scroll_area, 1);
     layout->addWidget(process_section, 1);
@@ -266,6 +277,7 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     ProcessCardWidgets widgets;
     widgets.card = new QFrame(this);
     widgets.card->setObjectName(QStringLiteral("processUnitCard"));
+    widgets.card->setAttribute(Qt::WA_StyledBackground);
     widgets.card->setMinimumWidth(170);
     widgets.card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     widgets.card->setToolTip(QStringLiteral("장치 ID: %1").arg(process.device_id));

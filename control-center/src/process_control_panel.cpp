@@ -3,9 +3,10 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
+
+#include "logistics/control_center/ui_dialog.hpp"
 
 namespace logistics::control_center {
 namespace {
@@ -53,14 +54,13 @@ QString ResultLabel(mqtt::CommandResult result) {
 
 ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("processControlPanel"));
-    setMinimumWidth(360);
-    setMaximumWidth(390);
-    setMinimumHeight(205);
-    setMaximumHeight(225);
+    setMinimumWidth(0);
+    setMinimumHeight(170);
+    setMaximumHeight(190);
     setStyleSheet(
         "#processControlPanel{background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
         "QLabel{color:#cccccc;}"
-        "QPushButton{min-height:32px;border:1px solid #3c3c3c;border-radius:4px;background-color:#2d2d2d;"
+        "QPushButton{min-height:27px;border:1px solid #3c3c3c;border-radius:5px;background-color:#2d2d2d;"
         "color:#f0f0f0;font-size:12px;font-weight:600;padding:3px 8px;}"
         "QPushButton:hover:enabled{background-color:#3c3c3c;border-color:#4d4d4d;}"
         "QPushButton:pressed:enabled{background-color:#252526;}"
@@ -68,23 +68,23 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "QPushButton#startButton{background-color:#0e639c;border-color:#1177bb;}"
         "QPushButton#startButton:hover:enabled{background-color:#1177bb;}"
         "QPushButton#stopButton{color:#cca700;}"
-        "QPushButton#emergencyStopButton{min-height:42px;background-color:#a1260d;color:#ffffff;"
+        "QPushButton#emergencyStopButton{min-height:34px;background-color:#a1260d;color:#ffffff;"
         "font-size:13px;border:1px solid #c42b1c;}"
         "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 9, 12, 9);
-    layout->setSpacing(6);
+    layout->setContentsMargins(12, 8, 12, 8);
+    layout->setSpacing(4);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
-    title->setStyleSheet("color:#f0f0f0;font-size:16px;font-weight:700;");
+    title->setStyleSheet("color:#f0f0f0;font-size:14px;font-weight:700;");
     connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
     connection_hint_->setWordWrap(true);
     connection_hint_->setStyleSheet("color:#9d9d9d;font-size:10px;");
 
     command_status_ = new QLabel(QStringLiteral("대기 중"), this);
     command_status_->setObjectName(QStringLiteral("commandStatus"));
-    command_status_->setMinimumHeight(34);
+    command_status_->setMinimumHeight(28);
     command_status_->setAlignment(Qt::AlignCenter);
     command_status_->setWordWrap(true);
     command_status_->setStyleSheet(
@@ -185,8 +185,7 @@ void ProcessControlPanel::requestCommand(mqtt::ControlCommand command, const QSt
     if (!control_state_.isMqttConnected() || control_state_.isCommandPending()) {
         return;
     }
-    if (QMessageBox::question(this, QStringLiteral("공정 제어 확인"), confirmation, QMessageBox::Yes,
-                              QMessageBox::No) == QMessageBox::Yes) {
+    if (ShowConfirmationDialog(this, QStringLiteral("공정 제어 확인"), confirmation, CommandLabel(command))) {
         emit commandRequested(command);
     }
 }
