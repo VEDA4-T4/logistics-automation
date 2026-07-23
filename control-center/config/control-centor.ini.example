@@ -36,12 +36,18 @@ reconnect_interval_ms=3000
 low_latency=true
 ; Socket I/O timeout. A timeout is handled by the existing reconnect flow.
 network_timeout_ms=3000
+; Subscribe to the ONVIF XML metadata track and draw detections over the video.
+onvif_metadata_enabled=true
+; Remove boxes when no newer metadata frame arrives within this time.
+metadata_stale_timeout_ms=1500
 
 ; Define one RTSP or RTSPS URL for every configured channel.
 channel_1_url=rtsp://username:password@camera-1.example.com:554/stream
 channel_2_url=rtsp://username:password@camera-2.example.com:554/stream
 channel_3_url=rtsp://username:password@camera-3.example.com:554/stream
 channel_4_url=rtsp://username:password@camera-4.example.com:554/stream
+; Optional. When omitted, the corresponding channel_N_url is used for metadata.
+; channel_1_metadata_url=rtsp://username:password@camera-1.example.com:554/onvif-metadata
 
 [ui]
 language=ko_KR

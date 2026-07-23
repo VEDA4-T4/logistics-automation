@@ -28,6 +28,8 @@ class OperationalLogPanel;
 class OperationsDashboardPanel;
 class ProductResultPanel;
 class ProcessControlPanel;
+class DetectionOverlay;
+class OnvifRtspMetadataClient;
 
 class MainWindow final : public QMainWindow {
 public:
@@ -59,7 +61,10 @@ private:
     std::vector<QWidget*> video_layers_{};
     std::vector<QWidget*> state_overlays_{};
     std::vector<QTimer*> reconnect_timers_{};
+    std::vector<DetectionOverlay*> detection_overlays_{};
+    std::vector<OnvifRtspMetadataClient*> metadata_clients_{};
     std::vector<QUrl> stream_urls_{};
+    std::vector<QUrl> metadata_stream_urls_{};
     std::vector<ChannelState> channel_states_{};
     std::vector<bool> reconnecting_{};
     MqttClient* mqtt_client_{ nullptr };
@@ -80,6 +85,8 @@ private:
     int reconnect_interval_ms_{ 3000 };
     bool rtsp_low_latency_{ true };
     int rtsp_network_timeout_ms_{ 3000 };
+    bool onvif_metadata_enabled_{ true };
+    int metadata_stale_timeout_ms_{ 1500 };
 };
 
 }  // namespace logistics::control_center

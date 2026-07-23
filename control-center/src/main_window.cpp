@@ -20,6 +20,8 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QVideoFrame>
+#include <QVideoSink>
 #include <QVideoWidget>
 #include <QWidget>
 #include <array>
@@ -30,7 +32,10 @@
 
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/control_center/command_response.hpp"
+#include "logistics/control_center/detection_overlay.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
+#include "logistics/control_center/onvif_metadata.hpp"
+#include "logistics/control_center/onvif_rtsp_metadata_client.hpp"
 #include "logistics/control_center/operational_log_panel.hpp"
 #include "logistics/control_center/operations_dashboard_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
@@ -42,6 +47,7 @@ namespace {
 
 constexpr int kDefaultReconnectIntervalMs = 3000;
 constexpr int kDefaultRtspNetworkTimeoutMs = 3000;
+constexpr int kDefaultMetadataStaleTimeoutMs = 1500;
 constexpr int kMaximumRtspNetworkTimeoutMs = 60000;
 constexpr int kDefaultChannelCount = 4;
 constexpr int kMaximumChannelCount = 16;
@@ -63,7 +69,10 @@ struct ControlCenterConfig {
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     bool low_latency{ true };
     int network_timeout_ms{ kDefaultRtspNetworkTimeoutMs };
+    bool onvif_metadata_enabled{ true };
+    int metadata_stale_timeout_ms{ kDefaultMetadataStaleTimeoutMs };
     std::vector<QUrl> stream_urls;
+    std::vector<QUrl> metadata_stream_urls;
     QStringList warnings;
 };
 
@@ -270,18 +279,42 @@ ControlCenterConfig loadControlCenterConfig() {
     }
 
     bool network_timeout_is_valid = false;
-    const auto network_timeout =
-        settings.value(QStringLiteral("rtsp/network_timeout_ms"), kDefaultRtspNetworkTimeoutMs)
-            .toInt(&network_timeout_is_valid);
+    const auto network_timeout = settings.value(QStringLiteral("rtsp/network_timeout_ms"), kDefaultRtspNetworkTimeoutMs)
+                                     .toInt(&network_timeout_is_valid);
     if (network_timeout_is_valid && network_timeout > 0 && network_timeout <= kMaximumRtspNetworkTimeoutMs) {
         config.network_timeout_ms = network_timeout;
     } else {
+        config.warnings.append(QStringLiteral("rtsp/network_timeout_ms는 1~60000ms여야 하므로 3000ms를 사용합니다."));
+    }
+
+    const auto metadata_enabled_value =
+        settings.value(QStringLiteral("rtsp/onvif_metadata_enabled"), config.onvif_metadata_enabled)
+            .toString()
+            .trimmed()
+            .toLower();
+    if (metadata_enabled_value == QStringLiteral("true") || metadata_enabled_value == QStringLiteral("1")) {
+        config.onvif_metadata_enabled = true;
+    } else if (metadata_enabled_value == QStringLiteral("false") || metadata_enabled_value == QStringLiteral("0")) {
+        config.onvif_metadata_enabled = false;
+    } else {
         config.warnings.append(
-            QStringLiteral("rtsp/network_timeout_ms는 1~60000ms여야 하므로 3000ms를 사용합니다."));
+            QStringLiteral("rtsp/onvif_metadata_enabled는 true 또는 false여야 하므로 true를 사용합니다."));
+    }
+
+    bool metadata_timeout_is_valid = false;
+    const auto metadata_timeout =
+        settings.value(QStringLiteral("rtsp/metadata_stale_timeout_ms"), kDefaultMetadataStaleTimeoutMs)
+            .toInt(&metadata_timeout_is_valid);
+    if (metadata_timeout_is_valid && metadata_timeout >= 100 && metadata_timeout <= 60000) {
+        config.metadata_stale_timeout_ms = metadata_timeout;
+    } else {
+        config.warnings.append(
+            QStringLiteral("rtsp/metadata_stale_timeout_ms는 100~60000ms여야 하므로 1500ms를 사용합니다."));
     }
 
     QStringList invalid_channels;
     config.stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
+    config.metadata_stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
     for (int channel = 1; channel <= config.channel_count; ++channel) {
         const auto key = QStringLiteral("rtsp/channel_%1_url").arg(channel);
         const QUrl stream_url(settings.value(key).toString().trimmed());
@@ -290,6 +323,21 @@ ControlCenterConfig loadControlCenterConfig() {
         } else {
             config.stream_urls.emplace_back();
             invalid_channels.append(QString::number(channel));
+        }
+
+        const auto metadata_key = QStringLiteral("rtsp/channel_%1_metadata_url").arg(channel);
+        const auto metadata_value = settings.value(metadata_key).toString().trimmed();
+        if (metadata_value.isEmpty()) {
+            config.metadata_stream_urls.push_back(config.stream_urls.back());
+        } else {
+            const QUrl metadata_url(metadata_value);
+            if (isValidRtspUrl(metadata_url)) {
+                config.metadata_stream_urls.push_back(metadata_url);
+            } else {
+                config.metadata_stream_urls.emplace_back();
+                config.warnings.append(
+                    QStringLiteral("%1이 잘못되어 해당 채널의 ONVIF 메타데이터를 끕니다.").arg(metadata_key));
+            }
         }
     }
 
@@ -325,7 +373,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     reconnect_interval_ms_ = config.reconnect_interval_ms;
     rtsp_low_latency_ = config.low_latency;
     rtsp_network_timeout_ms_ = config.network_timeout_ms;
+    onvif_metadata_enabled_ = config.onvif_metadata_enabled;
+    metadata_stale_timeout_ms_ = config.metadata_stale_timeout_ms;
     stream_urls_ = config.stream_urls;
+    metadata_stream_urls_ = config.metadata_stream_urls;
     players_.resize(channel_count_);
     video_widgets_.resize(channel_count_);
     audio_outputs_.resize(channel_count_);
@@ -334,6 +385,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     video_layers_.resize(channel_count_);
     state_overlays_.resize(channel_count_);
     reconnect_timers_.resize(channel_count_);
+    detection_overlays_.resize(channel_count_);
+    metadata_clients_.resize(channel_count_);
     channel_states_.assign(channel_count_, ChannelState::Connecting);
     reconnecting_.assign(channel_count_, false);
 
@@ -533,9 +586,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     for (std::size_t channel = 0; channel < channel_count_; ++channel) {
         players_[channel] = new QMediaPlayer(this);
         QPlaybackOptions playback_options;
-        playback_options.setPlaybackIntent(
-            rtsp_low_latency_ ? QPlaybackOptions::PlaybackIntent::LowLatencyStreaming
-                              : QPlaybackOptions::PlaybackIntent::Playback);
+        playback_options.setPlaybackIntent(rtsp_low_latency_ ? QPlaybackOptions::PlaybackIntent::LowLatencyStreaming
+                                                             : QPlaybackOptions::PlaybackIntent::Playback);
         playback_options.setNetworkTimeout(std::chrono::milliseconds(rtsp_network_timeout_ms_));
         players_[channel]->setPlaybackOptions(playback_options);
         auto* channel_panel = new QWidget(central_widget);
@@ -548,6 +600,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         auto* channel_label = new QLabel(QStringLiteral("CH %1").arg(channel + 1), state_overlays_[channel]);
         status_labels_[channel] = new QLabel(state_overlays_[channel]);
         video_widgets_[channel] = new QVideoWidget(video_layers_[channel]);
+        detection_overlays_[channel] = new DetectionOverlay(video_layers_[channel]);
         audio_outputs_[channel] = new QAudioOutput(this);
         reconnect_timers_[channel] = new QTimer(this);
 
@@ -555,6 +608,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
         video_layout->addWidget(video_widgets_[channel], 0, 0);
+        video_layout->addWidget(detection_overlays_[channel], 0, 0);
         video_layout->addWidget(playing_badge, 0, 0, Qt::AlignLeft | Qt::AlignTop);
         playing_badge->setMargin(8);
         playing_badge->setStyleSheet(
@@ -580,6 +634,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         players_[channel]->setAudioOutput(audio_outputs_[channel]);
         audio_outputs_[channel]->setVolume(0.0F);
         reconnect_timers_[channel]->setInterval(reconnect_interval_ms_);
+        detection_overlays_[channel]->setStaleTimeout(metadata_stale_timeout_ms_);
+
+        connect(video_widgets_[channel]->videoSink(), &QVideoSink::videoFrameChanged, this,
+                [this, channel](const QVideoFrame& frame) {
+                    if (frame.isValid()) {
+                        detection_overlays_[channel]->setVideoSize(frame.size());
+                    }
+                });
+
+        if (onvif_metadata_enabled_ && !metadata_stream_urls_[channel].isEmpty()) {
+            metadata_clients_[channel] = new OnvifRtspMetadataClient(this);
+            metadata_clients_[channel]->setReconnectInterval(reconnect_interval_ms_);
+            connect(metadata_clients_[channel], &OnvifRtspMetadataClient::metadataReceived, this,
+                    [this, channel](const QByteArray& xml) {
+                        const auto parsed = ParseOnvifMetadata(xml);
+                        if (!parsed.isValid() || parsed.frames.isEmpty()) {
+                            return;
+                        }
+                        detection_overlays_[channel]->setDetectionFrame(parsed.frames.back());
+                    });
+            connect(metadata_clients_[channel], &OnvifRtspMetadataClient::connectionStateChanged, this,
+                    [this, channel](bool connected, const QString& detail) {
+                        detection_overlays_[channel]->setMetadataState(connected, detail);
+                    });
+        }
 
         connect(reconnect_timers_[channel], &QTimer::timeout, this, [this, channel]() { reconnectChannel(channel); });
         connect(players_[channel], &QMediaPlayer::errorOccurred, this,
@@ -645,6 +724,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             reconnect_timers_[channel]->start();
             players_[channel]->setSource(stream_urls_[channel]);
             players_[channel]->play();
+            if (metadata_clients_[channel] != nullptr) {
+                metadata_clients_[channel]->start(metadata_stream_urls_[channel]);
+            }
         }
 
         const auto grid_index = static_cast<int>(channel);
