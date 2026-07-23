@@ -35,6 +35,7 @@
 
 #include "FreeRTOS.h"
 #include "cmsis_os.h"
+#include "health_task.h"
 #include "logistics/contracts/uart_codec.h"
 #include "queue.h"
 #include "task.h"
@@ -563,6 +564,7 @@ void StartCommTxTask(void* argument) {
 
     for (;;) {
         CommTx_ProcessOnce();
+        Health_TaskAlive(HEALTH_TASK_COMM_TX);
     }
 }
 

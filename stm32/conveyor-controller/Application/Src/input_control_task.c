@@ -6,6 +6,7 @@
 #include "app_comm_tx.h"
 #include "app_queues.h"
 #include "cmsis_os2.h"
+#include "health_task.h"
 #include "input_motor_tb6612.h"
 
 #define INPUT_CONTROL_QUEUE_RETRY_TICKS 100U
@@ -459,6 +460,8 @@ void StartInputControlTask(void* argument) {
     (void)input_control_task_initialize_controller(&inputController, input_motor_tb6612_port());
 
     for (;;) {
+        Health_TaskAlive(HEALTH_TASK_INPUT_CONTROL);
+
         if (input_control_task_safety_state() == INPUT_CONTROL_SAFETY_STOP_REQUESTED) {
             message = input_control_task_safety_marker(APP_CONTROL_MESSAGE_SAFETY_STOP, UART_CMD_EMERGENCY_STOP);
             (void)input_control_task_process_message(&inputController, &message);

@@ -7,6 +7,7 @@
 #include "app_queues.h"
 #include "cmsis_os2.h"
 #include "conveyor_motor_power.h"
+#include "health_task.h"
 #include "input_control_task.h"
 #include "sorting_control_task.h"
 
@@ -231,6 +232,8 @@ void StartSafetyTask(void* argument) {
 
     for (;;) {
         uint32_t waitMs = (SafetyTask_IsReleasing() != 0U) ? SAFETY_RELEASE_POLL_MS : SAFETY_QUEUE_IDLE_WAIT_MS;
+
+        Health_TaskAlive(HEALTH_TASK_SAFETY);
 
         if ((safetyCommandQueueHandle != NULL) &&
             (osMessageQueueGet(safetyCommandQueueHandle, &message, NULL, waitMs) == osOK)) {

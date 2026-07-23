@@ -27,4 +27,8 @@ void comm_rx_process_frame(app_uart_channel_t source, const uart_frame_t* frame)
 
 void comm_rx_get_stats(comm_rx_stats_t* stats);
 
+/* HealthTask가 채널 단절(timeout) 판정에 쓰는, 해당 채널의 마지막 바이트 수신
+ * 시각(HAL_GetTick 기준). 프레임 파싱 성공 여부와 무관하다. */
+uint32_t comm_rx_get_channel_last_rx_tick(app_uart_channel_t channel);
+
 #endif /* COMM_RX_TASK_H */

@@ -6,6 +6,7 @@
 #include "app_comm_tx.h"
 #include "app_queues.h"
 #include "cmsis_os2.h"
+#include "health_task.h"
 #include "sorting_gate_mg90s.h"
 #include "sorting_motor_tb6612.h"
 
@@ -498,6 +499,8 @@ void StartSortingControlTask(void* argument) {
                                                      sorting_gate_mg90s_port());
 
     for (;;) {
+        Health_TaskAlive(HEALTH_TASK_SORTING_CONTROL);
+
         if (sorting_control_task_safety_state() == SORTING_CONTROL_SAFETY_STOP_REQUESTED) {
             message = sorting_control_task_safety_marker(APP_CONTROL_MESSAGE_SAFETY_STOP, UART_CMD_EMERGENCY_STOP);
             (void)sorting_control_task_process_message(&sortingController, &message);

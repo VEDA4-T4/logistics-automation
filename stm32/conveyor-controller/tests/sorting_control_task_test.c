@@ -11,8 +11,13 @@
 
 #include "app_comm_tx.h"
 #include "app_queues.h"
+#include "health_task.h"
 #include "sorting_gate_mg90s.h"
 #include "sorting_motor_tb6612.h"
+
+void Health_TaskAlive(health_task_id_t id) {
+    (void)id;
+}
 
 #define FAKE_QUEUE_MAX_ITEMS 16U
 
