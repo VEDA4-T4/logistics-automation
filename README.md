@@ -105,24 +105,26 @@ channel_count=4
 reconnect_interval_ms=3000
 low_latency=true
 network_timeout_ms=3000
+probe_size_bytes=32768
 onvif_metadata_enabled=true
-onvif_log_payload=true
+onvif_log_payload=false
 metadata_stale_timeout_ms=1500
 ```
 
 `rtsp/low_latency=true`이면 각 RTSP 소스를 열기 전에 Qt Multimedia의 저지연 스트리밍 모드를 적용합니다.
 재생 버퍼가 줄어드는 대신 패킷 손실이 화면에 더 쉽게 드러날 수 있으므로, 지연보다 부드러운 재생이 중요하면
 `false`로 변경합니다. `rtsp/network_timeout_ms`는 소켓 입출력이 멈췄을 때 기존 재연결 흐름으로 전환할
-때까지 기다리는 시간을 지정합니다.
+때까지 기다리는 시간을 지정합니다. `probe_size_bytes`는 재생 전 스트림 분석량이며 기본값 32768은
+RTSP 시작 대기를 줄이기 위한 값입니다. 스트림 정보 인식에 실패하면 값을 늘립니다.
 
 `rtsp/onvif_metadata_enabled=true`이면 각 채널 URL의 RTSP `application` 트랙에서
 `vnd.onvif.metadata` XML을 구독하고 객체의 바운딩 박스, 분류명, 신뢰도를 영상 위에 표시합니다.
 메타데이터가 별도 프로파일에 있다면 `channel_N_metadata_url`을 지정하고, 생략하면 `channel_N_url`을
 그대로 사용합니다. 현재 비압축 ONVIF XML을 지원하며 GZIP/EXI 메타데이터는 지원하지 않습니다.
 `metadata_stale_timeout_ms` 동안 새 프레임이 없으면 오래된 박스를 자동으로 지웁니다.
-`onvif_log_payload=true`이면 Qt Creator의 **Application Output**에 RTSP 연결 단계, 원본 XML,
-파싱된 객체 ID·클래스·신뢰도·바운딩 박스를 채널별 `[ONVIF][CH N]` 형식으로 출력합니다. 정상 운용에서
-로그 양이 많으면 `false`로 변경합니다.
+`onvif_log_payload=true`이면 Qt Creator의 **Application Output**에 원본 XML과 파싱된 객체
+ID·클래스·신뢰도·바운딩 박스를 채널별 `[ONVIF][CH N]` 형식으로 출력합니다. 이 로그는 프레임마다
+발생하여 UI 렌더링을 지연시킬 수 있으므로 기본값은 `false`이며 진단할 때만 활성화합니다.
 
 `dashboard`의 장치 ID는 각 장치가 MQTT envelope의 `sourceId`로 보내는 값과 같아야 합니다. 각 공정은
 자신의 `jobId`를 독립적으로 표시하므로 서로 다른 상품을 동시에 처리할 수 있습니다.

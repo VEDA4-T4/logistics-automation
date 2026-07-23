@@ -11,7 +11,6 @@
 #include "logistics/control_center/operational_log_state.hpp"
 #include "logistics/control_center/operations_dashboard_state.hpp"
 
-class QAudioOutput;
 class QJsonObject;
 class QLabel;
 class QMediaPlayer;
@@ -53,7 +52,6 @@ private:
     void refreshOperationalLogPanel();
 
     std::vector<QMediaPlayer*> players_{};
-    std::vector<QAudioOutput*> audio_outputs_{};
     std::vector<QLabel*> status_labels_{};
     std::vector<QStackedLayout*> channel_stacks_{};
     std::vector<QWidget*> video_layers_{};
@@ -83,8 +81,9 @@ private:
     int reconnect_interval_ms_{ 3000 };
     bool rtsp_low_latency_{ true };
     int rtsp_network_timeout_ms_{ 3000 };
+    qsizetype rtsp_probe_size_bytes_{ 32768 };
     bool onvif_metadata_enabled_{ true };
-    bool onvif_log_payload_{ true };
+    bool onvif_log_payload_{ false };
     int metadata_stale_timeout_ms_{ 1500 };
 };
 

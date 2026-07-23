@@ -285,9 +285,6 @@ void OnvifRtspMetadataClient::processInterleavedPacket(quint8 channel, const QBy
     }
     if (marker) {
         if (!metadata_buffer_.trimmed().isEmpty()) {
-            emit diagnosticMessage(QStringLiteral("ONVIF RTP 문서 조립 완료 · seq=%1 · %2 bytes")
-                                       .arg(sequence)
-                                       .arg(metadata_buffer_.size()));
             emit metadataReceived(metadata_buffer_);
         }
         metadata_buffer_.clear();

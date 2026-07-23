@@ -1,6 +1,5 @@
 #include "logistics/control_center/main_window.hpp"
 
-#include <QAudioOutput>
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
@@ -46,6 +45,9 @@ namespace {
 
 constexpr int kDefaultReconnectIntervalMs = 3000;
 constexpr int kDefaultRtspNetworkTimeoutMs = 3000;
+constexpr qsizetype kDefaultRtspProbeSizeBytes = 32768;
+constexpr qsizetype kMinimumRtspProbeSizeBytes = 2048;
+constexpr qsizetype kMaximumRtspProbeSizeBytes = 1048576;
 constexpr int kDefaultMetadataStaleTimeoutMs = 1500;
 constexpr int kMaximumRtspNetworkTimeoutMs = 60000;
 constexpr int kDefaultChannelCount = 4;
@@ -68,8 +70,9 @@ struct ControlCenterConfig {
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     bool low_latency{ true };
     int network_timeout_ms{ kDefaultRtspNetworkTimeoutMs };
+    qsizetype probe_size_bytes{ kDefaultRtspProbeSizeBytes };
     bool onvif_metadata_enabled{ true };
-    bool onvif_log_payload{ true };
+    bool onvif_log_payload{ false };
     int metadata_stale_timeout_ms{ kDefaultMetadataStaleTimeoutMs };
     std::vector<QUrl> stream_urls;
     std::vector<QUrl> metadata_stream_urls;
@@ -287,6 +290,15 @@ ControlCenterConfig loadControlCenterConfig() {
         config.warnings.append(QStringLiteral("rtsp/network_timeout_ms는 1~60000ms여야 하므로 3000ms를 사용합니다."));
     }
 
+    bool probe_size_is_valid = false;
+    const auto probe_size = settings.value(QStringLiteral("rtsp/probe_size_bytes"), kDefaultRtspProbeSizeBytes)
+                                .toLongLong(&probe_size_is_valid);
+    if (probe_size_is_valid && probe_size >= kMinimumRtspProbeSizeBytes && probe_size <= kMaximumRtspProbeSizeBytes) {
+        config.probe_size_bytes = static_cast<qsizetype>(probe_size);
+    } else {
+        config.warnings.append(QStringLiteral("rtsp/probe_size_bytes는 2048~1048576이어야 하므로 32768을 사용합니다."));
+    }
+
     const auto metadata_enabled_value =
         settings.value(QStringLiteral("rtsp/onvif_metadata_enabled"), config.onvif_metadata_enabled)
             .toString()
@@ -311,7 +323,7 @@ ControlCenterConfig loadControlCenterConfig() {
         config.onvif_log_payload = false;
     } else {
         config.warnings.append(
-            QStringLiteral("rtsp/onvif_log_payload는 true 또는 false여야 하므로 true를 사용합니다."));
+            QStringLiteral("rtsp/onvif_log_payload는 true 또는 false여야 하므로 false를 사용합니다."));
     }
 
     bool metadata_timeout_is_valid = false;
@@ -386,13 +398,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     reconnect_interval_ms_ = config.reconnect_interval_ms;
     rtsp_low_latency_ = config.low_latency;
     rtsp_network_timeout_ms_ = config.network_timeout_ms;
+    rtsp_probe_size_bytes_ = config.probe_size_bytes;
     onvif_metadata_enabled_ = config.onvif_metadata_enabled;
     onvif_log_payload_ = config.onvif_log_payload;
     metadata_stale_timeout_ms_ = config.metadata_stale_timeout_ms;
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
     players_.resize(channel_count_);
-    audio_outputs_.resize(channel_count_);
     status_labels_.resize(channel_count_);
     channel_stacks_.resize(channel_count_);
     video_layers_.resize(channel_count_);
@@ -602,6 +614,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         playback_options.setPlaybackIntent(rtsp_low_latency_ ? QPlaybackOptions::PlaybackIntent::LowLatencyStreaming
                                                              : QPlaybackOptions::PlaybackIntent::Playback);
         playback_options.setNetworkTimeout(std::chrono::milliseconds(rtsp_network_timeout_ms_));
+        playback_options.setProbeSize(rtsp_probe_size_bytes_);
         players_[channel]->setPlaybackOptions(playback_options);
         auto* channel_panel = new QWidget(central_widget);
         channel_stacks_[channel] = new QStackedLayout(channel_panel);
@@ -612,7 +625,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         auto* channel_label = new QLabel(QStringLiteral("CH %1").arg(channel + 1), state_overlays_[channel]);
         status_labels_[channel] = new QLabel(state_overlays_[channel]);
         detection_overlays_[channel] = new DetectionOverlay(video_layers_[channel]);
-        audio_outputs_[channel] = new QAudioOutput(this);
         reconnect_timers_[channel] = new QTimer(this);
 
         channel_panel->setStyleSheet("background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;");
@@ -636,37 +648,43 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel]->addWidget(state_overlays_[channel]);
 
         detection_overlays_[channel]->setMinimumSize(320, 180);
-        players_[channel]->setVideoOutput(detection_overlays_[channel]->videoSink());
-        players_[channel]->setAudioOutput(audio_outputs_[channel]);
-        audio_outputs_[channel]->setVolume(0.0F);
+        players_[channel]->setVideoSink(detection_overlays_[channel]->videoSink());
         reconnect_timers_[channel]->setInterval(reconnect_interval_ms_);
         detection_overlays_[channel]->setStaleTimeout(metadata_stale_timeout_ms_);
+        connect(players_[channel], &QMediaPlayer::tracksChanged, this, [this, channel]() {
+            players_[channel]->setActiveAudioTrack(-1);
+            players_[channel]->setActiveSubtitleTrack(-1);
+        });
 
         if (onvif_metadata_enabled_ && !metadata_stream_urls_[channel].isEmpty()) {
             metadata_clients_[channel] = new OnvifRtspMetadataClient(this);
             metadata_clients_[channel]->setReconnectInterval(reconnect_interval_ms_);
-            connect(metadata_clients_[channel], &OnvifRtspMetadataClient::metadataReceived, this,
-                    [this, channel](const QByteArray& xml) {
+            connect(
+                metadata_clients_[channel], &OnvifRtspMetadataClient::metadataReceived, this,
+                [this, channel](const QByteArray& xml) {
+                    if (onvif_log_payload_) {
                         qInfo().noquote()
                             << QStringLiteral("[ONVIF][CH %1] XML 수신 · %2 bytes").arg(channel + 1).arg(xml.size());
+                        qInfo().noquote() << QStringLiteral("[ONVIF][CH %1] 원본 XML\n%2")
+                                                 .arg(channel + 1)
+                                                 .arg(QString::fromUtf8(xml).trimmed());
+                    }
+                    const auto parsed = ParseOnvifMetadata(xml);
+                    if (!parsed.isValid()) {
+                        qWarning().noquote()
+                            << QStringLiteral("[ONVIF][CH %1] 파싱 실패 · %2").arg(channel + 1).arg(parsed.error);
+                        return;
+                    }
+                    if (parsed.frames.isEmpty()) {
                         if (onvif_log_payload_) {
-                            qInfo().noquote() << QStringLiteral("[ONVIF][CH %1] 원본 XML\n%2")
-                                                     .arg(channel + 1)
-                                                     .arg(QString::fromUtf8(xml).trimmed());
-                        }
-                        const auto parsed = ParseOnvifMetadata(xml);
-                        if (!parsed.isValid()) {
-                            qWarning().noquote()
-                                << QStringLiteral("[ONVIF][CH %1] 파싱 실패 · %2").arg(channel + 1).arg(parsed.error);
-                            return;
-                        }
-                        if (parsed.frames.isEmpty()) {
                             qInfo().noquote()
                                 << QStringLiteral("[ONVIF][CH %1] 일반 Event 메타데이터 · 객체 Frame 없음")
                                        .arg(channel + 1);
-                            return;
                         }
-                        const auto& frame = parsed.frames.back();
+                        return;
+                    }
+                    const auto& frame = parsed.frames.back();
+                    if (onvif_log_payload_) {
                         qInfo().noquote() << QStringLiteral(
                                                  "[ONVIF][CH %1] Frame 파싱 · UTC=%2 · 객체=%3 · "
                                                  "translate=(%4,%5) · scale=(%6,%7)")
@@ -691,8 +709,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                                      .arg(detection.bounding_box.right())
                                                      .arg(detection.bounding_box.bottom());
                         }
-                        detection_overlays_[channel]->setDetectionFrame(frame);
-                    });
+                    }
+                    detection_overlays_[channel]->setDetectionFrame(frame);
+                });
             connect(metadata_clients_[channel], &OnvifRtspMetadataClient::connectionStateChanged, this,
                     [this, channel](bool connected, const QString& detail) {
                         if (connected || detail.contains(QStringLiteral("연결 중"))) {
