@@ -23,6 +23,11 @@ DetectionOverlay::DetectionOverlay(QWidget* parent)
     });
 }
 
+void DetectionOverlay::setChannelLabel(const QString& label) {
+    channel_label_ = label;
+    update();
+}
+
 void DetectionOverlay::setDetectionFrame(const OnvifDetectionFrame& frame) {
     frame_ = frame;
     has_frame_ = true;
@@ -75,6 +80,22 @@ void DetectionOverlay::paintEvent(QPaintEvent* event) {
     const auto video_rect = displayedVideoRect();
     if (video_frame_.isValid()) {
         video_frame_.paint(&painter, video_rect, {});
+    }
+
+    if (!channel_label_.isEmpty()) {
+        painter.save();
+        QFont badge_font = painter.font();
+        badge_font.setBold(true);
+        painter.setFont(badge_font);
+        const QFontMetrics metrics(badge_font);
+        const auto badge_width = metrics.horizontalAdvance(channel_label_) + 20;
+        const QRect badge_rect(10, 10, badge_width, 26);
+        painter.setPen(QPen(QColor(60, 60, 60), 1));
+        painter.setBrush(QColor(24, 24, 24, 220));
+        painter.drawRoundedRect(badge_rect, 5, 5);
+        painter.setPen(QColor(181, 206, 168));
+        painter.drawText(badge_rect, Qt::AlignCenter, channel_label_);
+        painter.restore();
     }
 
     if (metadata_connected_) {

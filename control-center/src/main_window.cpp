@@ -607,7 +607,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel] = new QStackedLayout(channel_panel);
         video_layers_[channel] = new QWidget(channel_panel);
         auto* video_layout = new QGridLayout(video_layers_[channel]);
-        auto* playing_badge = new QLabel(QStringLiteral("CH %1 · 재생 중").arg(channel + 1), video_layers_[channel]);
         state_overlays_[channel] = new QWidget(channel_panel);
         auto* overlay_layout = new QVBoxLayout(state_overlays_[channel]);
         auto* channel_label = new QLabel(QStringLiteral("CH %1").arg(channel + 1), state_overlays_[channel]);
@@ -620,12 +619,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
         video_layout->addWidget(detection_overlays_[channel], 0, 0);
-        video_layout->addWidget(playing_badge, 0, 0, Qt::AlignLeft | Qt::AlignTop);
-        playing_badge->raise();
-        playing_badge->setMargin(8);
-        playing_badge->setStyleSheet(
-            "color:#b5cea8;background-color:rgba(24,24,24,220);border:1px solid #3c3c3c;"
-            "font-weight:700;border-radius:4px;padding:4px 8px;");
+        detection_overlays_[channel]->setChannelLabel(QStringLiteral("CH %1 · 재생 중").arg(channel + 1));
 
         state_overlays_[channel]->setAttribute(Qt::WA_StyledBackground, true);
         state_overlays_[channel]->setStyleSheet("background-color:#181818;border-radius:5px;");
