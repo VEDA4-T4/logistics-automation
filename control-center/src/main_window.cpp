@@ -191,7 +191,16 @@ ControlCenterConfig loadControlCenterConfig() {
     const auto default_process_definitions = DefaultProcessDefinitions();
     for (auto& definition : config.process_definitions) {
         const auto key = QStringLiteral("dashboard/%1_device_id").arg(definition.key);
-        const auto device_id = settings.value(key, definition.device_id).toString().trimmed();
+        auto configured_value = settings.value(key);
+        if (!configured_value.isValid() && definition.key == QString::fromLatin1(kGripperProcessKey)) {
+            configured_value = settings.value(QStringLiteral("dashboard/robot_arm_device_id"));
+            if (configured_value.isValid()) {
+                config.warnings.append(QStringLiteral(
+                    "dashboard/robot_arm_device_id는 이전 키입니다. dashboard/gripper_device_id로 변경하세요."));
+            }
+        }
+        const auto device_id =
+            (configured_value.isValid() ? configured_value : QVariant(definition.device_id)).toString().trimmed();
         if (!logistics::contracts::mqtt::IsValidTopicLevel(device_id.toStdString())) {
             config.warnings.append(
                 QStringLiteral("%1가 잘못되어 기본 장치 ID %2를 사용합니다.").arg(key, definition.device_id));

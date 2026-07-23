@@ -50,10 +50,14 @@ MQTT topic, payload, QoS, retain, Last Will 규칙을 중앙에서 관리하는 
 ### Qt 운영 대시보드 상태
 
 Qt는 중앙 서버가 전달한 메시지를 조합해 전체 공정과 노드별 최신 상태를 표시합니다. 투입 컨베이어, 비전
-처리, 로봇팔, 분류 컨베이어, 라인트레이서는 INI의 `dashboard/*_device_id`와 envelope의 `sourceId`를 연결하여
-구분합니다. 비전 노드는 카메라 영상 처리용이며 로봇팔 노드와 별개입니다. 로봇팔 노드가 배포되기 전에는
-로봇팔 카드가 상태 수신 대기로 유지됩니다. 각 카드는 `status`, `currentState`, `jobId`, `errorCode`와 envelope
-`timestamp`를 표시합니다.
+처리, 그리퍼 이송, 분류 컨베이어, 라인트레이서는 INI의 `dashboard/*_device_id`와 envelope의 `sourceId`를
+연결하여 구분합니다. 비전 노드는 상품 윗면의 바코드를 인식하며 상품을 회전해 여러 면을 탐색하지 않습니다.
+그리퍼 노드는 비전 노드와 별개이며 상품을 컨베이어 사이로 옮기는 역할만 담당합니다. 그리퍼 노드가 배포되기
+전에는 그리퍼 카드가 상태 수신 대기로 유지됩니다. 각 카드는 `status`, `currentState`, `jobId`, `errorCode`와
+envelope `timestamp`를 표시합니다.
+
+그리퍼의 기본 상태 흐름은 `PICKING`, `TRANSFERRING`, `PLACING`이며 각각 파지, 컨베이어 사이 이송, 내려놓기를
+의미합니다. 상품 회전, 방향 보정 및 바코드 탐색 상태는 그리퍼 프로토콜에 포함하지 않습니다.
 
 - `DEVICE_STATUS`, `HEARTBEAT`: 장치 연결 상태와 현재 상태를 갱신
 - `ERROR_OCCURRED`: 해당 장치를 오류로 구분하고 `ERROR` 또는 `CRITICAL`이면 전체 공정도 오류로 표시

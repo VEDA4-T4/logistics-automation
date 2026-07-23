@@ -15,7 +15,7 @@ namespace logistics::control_center {
 
 inline constexpr auto kInputProcessKey = "input";
 inline constexpr auto kVisionProcessKey = "vision";
-inline constexpr auto kRobotArmProcessKey = "robot_arm";
+inline constexpr auto kGripperProcessKey = "gripper";
 inline constexpr auto kSortingProcessKey = "sorting";
 inline constexpr auto kLineTracerProcessKey = "linetracer";
 

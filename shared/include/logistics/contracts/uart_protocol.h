@@ -108,7 +108,7 @@ extern "C" {
  * input-controller (컨베이어/초음파 센서):
  *   0x10 ~ 0x1F
  *
- * rotation-controller (로봇팔, 예약):
+ * gripper-controller (컨베이어 사이 상품 이송, 예약):
  *   0x20 ~ 0x2F
  *
  * sorting-controller (분류장치):
@@ -125,8 +125,12 @@ extern "C" {
 #define UART_CMD_INPUT_MIN 0x10U
 #define UART_CMD_INPUT_MAX 0x1FU
 
-#define UART_CMD_ROTATION_MIN 0x20U
-#define UART_CMD_ROTATION_MAX 0x2FU
+#define UART_CMD_GRIPPER_MIN 0x20U
+#define UART_CMD_GRIPPER_MAX 0x2FU
+
+/* 기존 개발 브랜치와의 소스 호환성을 위한 임시 별칭. 새 코드는 GRIPPER 이름을 사용한다. */
+#define UART_CMD_ROTATION_MIN UART_CMD_GRIPPER_MIN
+#define UART_CMD_ROTATION_MAX UART_CMD_GRIPPER_MAX
 
 #define UART_CMD_SORTING_MIN 0x30U
 #define UART_CMD_SORTING_MAX 0x3FU
