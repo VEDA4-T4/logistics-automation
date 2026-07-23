@@ -53,10 +53,14 @@ The runtime sequence is:
 1. The vision node connects, publishes registration, and starts heartbeats.
 2. After a box is stable for the configured confirmation frames, it publishes `BOX_DETECTED`.
 3. The central server creates a work and sends `WORK_CREATED` to the vision node.
-4. The vision node publishes `POSITION_DETECTED` and `BARCODE_DETECTED` for that work.
+4. The vision node reads the barcode attached to the product's top face and publishes `POSITION_DETECTED` and
+   `BARCODE_DETECTED` for that work.
 5. If image upload is enabled, it uploads the JPEG over HTTP(S), verifies the response, and publishes `PRODUCT_IMAGE`.
 6. Camera, encoding, upload, and MQTT publication failures are reported with `ERROR_OCCURRED`.
 
 The central server must therefore be running with its MQTT subscriptions and image upload endpoint enabled before the
 complete scenario can finish. The vision node will not invent a work ID locally; it waits for `WORK_CREATED` so all
 subsequent events use the server-assigned work ID.
+
+The product orientation is a system input constraint: the barcode must face upward when the product enters the vision
+area. The vision node does not request product rotation or search the other five faces.

@@ -18,8 +18,8 @@ target_device_id=SYSTEM
 ; Map each independently operating process to the sourceId used by its device node.
 input_device_id=PI-INPUT-01
 vision_device_id=PI-VISION-01
-; This card remains in "waiting for status" until the robot-arm node is deployed.
-robot_arm_device_id=PI-ROBOT-01
+; The gripper only transfers a product between conveyors; it does not rotate the product.
+gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 linetracer_device_id=PI-LT-01
 

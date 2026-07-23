@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QFrame>
 #include <QJsonObject>
+#include <QLabel>
 #include <cassert>
 
 namespace {
@@ -36,7 +37,7 @@ int main(int argc, char* argv[]) {
     logistics::control_center::OperationsDashboardState state;
     assert(state.applyEnvelope(DeviceEnvelope("INPUT", "PI-INPUT-01", "RUNNING", "WORK-105", 0)).applied);
     assert(state.applyEnvelope(DeviceEnvelope("VISION", "PI-VISION-01", "VISION_PROCESSING", "WORK-104", 1)).applied);
-    assert(state.applyEnvelope(DeviceEnvelope("ROBOT", "PI-ROBOT-01", "PICKING", "WORK-103", 2)).applied);
+    assert(state.applyEnvelope(DeviceEnvelope("GRIPPER", "PI-GRIPPER-01", "TRANSFERRING", "WORK-103", 2)).applied);
     assert(state.applyEnvelope(DeviceEnvelope("SORTING", "PI-SORTING-01", "SORTING", "WORK-102", 3)).applied);
     assert(state.applyEnvelope(DeviceEnvelope("LINE", "PI-LT-01", "DELIVERING", "WORK-101", 4)).applied);
 
@@ -50,5 +51,13 @@ int main(int argc, char* argv[]) {
     assert(panel.minimumHeight() == 112);
     assert(panel.maximumHeight() == 112);
     assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
+    bool has_gripper_title = false;
+    bool has_transfer_state = false;
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        has_gripper_title = has_gripper_title || label->text() == QStringLiteral("그리퍼 이송");
+        has_transfer_state = has_transfer_state || label->text() == QStringLiteral("컨베이어 사이 이송 중");
+    }
+    assert(has_gripper_title);
+    assert(has_transfer_state);
     return 0;
 }

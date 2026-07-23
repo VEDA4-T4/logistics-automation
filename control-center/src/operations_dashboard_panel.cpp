@@ -134,8 +134,10 @@ QString CurrentStateText(const QString& current_state) {
         return QStringLiteral("영상 처리 중");
     if (state == QStringLiteral("PICKING"))
         return QStringLiteral("상품 집는 중");
+    if (state == QStringLiteral("TRANSFERRING"))
+        return QStringLiteral("컨베이어 사이 이송 중");
     if (state == QStringLiteral("PLACING"))
-        return QStringLiteral("상품 이동 중");
+        return QStringLiteral("상품 내려놓는 중");
     if (state == QStringLiteral("SORTING"))
         return QStringLiteral("분류 중");
     if (state == QStringLiteral("DELIVERING"))

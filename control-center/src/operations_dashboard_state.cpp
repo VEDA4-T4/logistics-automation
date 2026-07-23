@@ -164,7 +164,7 @@ QList<ProcessDefinition> DefaultProcessDefinitions() {
     return {
         { QString::fromLatin1(kInputProcessKey), QStringLiteral("투입 컨베이어"), QStringLiteral("PI-INPUT-01") },
         { QString::fromLatin1(kVisionProcessKey), QStringLiteral("비전 처리"), QStringLiteral("PI-VISION-01") },
-        { QString::fromLatin1(kRobotArmProcessKey), QStringLiteral("로봇팔"), QStringLiteral("PI-ROBOT-01") },
+        { QString::fromLatin1(kGripperProcessKey), QStringLiteral("그리퍼 이송"), QStringLiteral("PI-GRIPPER-01") },
         { QString::fromLatin1(kSortingProcessKey), QStringLiteral("분류 컨베이어"), QStringLiteral("PI-SORTING-01") },
         { QString::fromLatin1(kLineTracerProcessKey), QStringLiteral("라인트레이서"), QStringLiteral("PI-LT-01") },
     };
