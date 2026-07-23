@@ -54,7 +54,17 @@ uint8_t ControlLogic_CommandToUartCommand(app_control_command_type_t command);
 uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_control_safety_event_t* event,
                                       uint32_t now_ms);
 control_command_result_t ControlLogic_HandleCommand(control_context_t* context, const app_control_command_t* command,
-                                                    uint32_t now_ms);
+                                                     uint32_t now_ms);
+void ControlLogic_MakeSnapshot(const control_context_t* context, uart_linetracer_load_state_t load_state,
+                               uint32_t now_ms, app_control_snapshot_t* snapshot);
+uint8_t ControlLogic_BuildStartedEvent(const control_context_t* context, const app_control_command_t* command,
+                                       const control_command_result_t* result,
+                                       uart_linetracer_load_state_t load_state, uint32_t now_ms,
+                                       app_tx_event_t* event);
+uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
+                                           const app_control_safety_event_t* safety_event,
+                                           uart_linetracer_load_state_t load_state, uint32_t now_ms,
+                                           app_tx_event_t* event);
 uint8_t ControlLogic_CompleteTurn(control_context_t* context, uint32_t now_ms);
 route_action_t ControlLogic_HandleMarker(control_context_t* context, uint32_t now_ms);
 route_action_t ControlLogic_HandleLoadOn(control_context_t* context, uint32_t now_ms);
