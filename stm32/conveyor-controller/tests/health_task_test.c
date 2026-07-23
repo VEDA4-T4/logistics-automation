@@ -319,7 +319,7 @@ static void test_sensor_staleness_reports_to_owning_process(void) {
     HealthTask_RunCycle();
     assert(commTxSendCallCount == 0U);
 
-    fakeTick = 600U; /* 센서 stale 기준(500ms)보다 크게, 나머지 채널은 갱신되게 함 */
+    fakeTick = 1100U; /* 센서 stale 기준(1000ms)보다 크게, 나머지 채널은 갱신되게 함 */
     fakeSensorLastSampleTick[0] = fakeTick; /* index0=US1=input, 최신 */
     fakeSensorLastSampleTick[1] = fakeTick; /* US2=sorting, 최신 */
     fakeSensorLastSampleTick[2] = fakeTick; /* US3=sorting, 최신 */
