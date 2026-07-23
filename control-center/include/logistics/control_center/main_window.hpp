@@ -78,6 +78,8 @@ private:
     OperationsDashboardState operations_dashboard_state_;
     std::size_t channel_count_{ 4 };
     int reconnect_interval_ms_{ 3000 };
+    bool rtsp_low_latency_{ true };
+    int rtsp_network_timeout_ms_{ 3000 };
 };
 
 }  // namespace logistics::control_center

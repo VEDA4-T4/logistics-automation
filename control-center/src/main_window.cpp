@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QMediaPlayer>
+#include <QPlaybackOptions>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedLayout>
@@ -40,6 +41,8 @@ namespace logistics::control_center {
 namespace {
 
 constexpr int kDefaultReconnectIntervalMs = 3000;
+constexpr int kDefaultRtspNetworkTimeoutMs = 3000;
+constexpr int kMaximumRtspNetworkTimeoutMs = 60000;
 constexpr int kDefaultChannelCount = 4;
 constexpr int kMaximumChannelCount = 16;
 constexpr int kDefaultMqttPort = 1883;
@@ -58,6 +61,8 @@ struct ControlCenterConfig {
     QList<ProcessDefinition> process_definitions{ DefaultProcessDefinitions() };
     int channel_count{ kDefaultChannelCount };
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
+    bool low_latency{ true };
+    int network_timeout_ms{ kDefaultRtspNetworkTimeoutMs };
     std::vector<QUrl> stream_urls;
     QStringList warnings;
 };
@@ -254,6 +259,27 @@ ControlCenterConfig loadControlCenterConfig() {
         config.warnings.append(QStringLiteral("rtsp/reconnect_interval_ms가 잘못되어 3000ms를 사용합니다."));
     }
 
+    const auto low_latency_value =
+        settings.value(QStringLiteral("rtsp/low_latency"), config.low_latency).toString().trimmed().toLower();
+    if (low_latency_value == QStringLiteral("true") || low_latency_value == QStringLiteral("1")) {
+        config.low_latency = true;
+    } else if (low_latency_value == QStringLiteral("false") || low_latency_value == QStringLiteral("0")) {
+        config.low_latency = false;
+    } else {
+        config.warnings.append(QStringLiteral("rtsp/low_latency는 true 또는 false여야 하므로 true를 사용합니다."));
+    }
+
+    bool network_timeout_is_valid = false;
+    const auto network_timeout =
+        settings.value(QStringLiteral("rtsp/network_timeout_ms"), kDefaultRtspNetworkTimeoutMs)
+            .toInt(&network_timeout_is_valid);
+    if (network_timeout_is_valid && network_timeout > 0 && network_timeout <= kMaximumRtspNetworkTimeoutMs) {
+        config.network_timeout_ms = network_timeout;
+    } else {
+        config.warnings.append(
+            QStringLiteral("rtsp/network_timeout_ms는 1~60000ms여야 하므로 3000ms를 사용합니다."));
+    }
+
     QStringList invalid_channels;
     config.stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
     for (int channel = 1; channel <= config.channel_count; ++channel) {
@@ -297,6 +323,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operations_dashboard_state_.configureProcesses(config.process_definitions);
     channel_count_ = static_cast<std::size_t>(config.channel_count);
     reconnect_interval_ms_ = config.reconnect_interval_ms;
+    rtsp_low_latency_ = config.low_latency;
+    rtsp_network_timeout_ms_ = config.network_timeout_ms;
     stream_urls_ = config.stream_urls;
     players_.resize(channel_count_);
     video_widgets_.resize(channel_count_);
@@ -504,6 +532,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     for (std::size_t channel = 0; channel < channel_count_; ++channel) {
         players_[channel] = new QMediaPlayer(this);
+        QPlaybackOptions playback_options;
+        playback_options.setPlaybackIntent(
+            rtsp_low_latency_ ? QPlaybackOptions::PlaybackIntent::LowLatencyStreaming
+                              : QPlaybackOptions::PlaybackIntent::Playback);
+        playback_options.setNetworkTimeout(std::chrono::milliseconds(rtsp_network_timeout_ms_));
+        players_[channel]->setPlaybackOptions(playback_options);
         auto* channel_panel = new QWidget(central_widget);
         channel_stacks_[channel] = new QStackedLayout(channel_panel);
         video_layers_[channel] = new QWidget(channel_panel);

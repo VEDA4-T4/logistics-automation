@@ -15,7 +15,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     )
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Mqtt Multimedia MultimediaWidgets Network Widgets)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Mqtt Multimedia MultimediaWidgets Network Widgets)
 
 qt_standard_project_setup()
 

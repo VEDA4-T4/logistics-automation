@@ -99,7 +99,18 @@ linetracer_device_id=PI-LT-01
 
 [http]
 image_base_url=http://127.0.0.1:8080/
+
+[rtsp]
+channel_count=4
+reconnect_interval_ms=3000
+low_latency=true
+network_timeout_ms=3000
 ```
+
+`rtsp/low_latency=true`이면 각 RTSP 소스를 열기 전에 Qt Multimedia의 저지연 스트리밍 모드를 적용합니다.
+재생 버퍼가 줄어드는 대신 패킷 손실이 화면에 더 쉽게 드러날 수 있으므로, 지연보다 부드러운 재생이 중요하면
+`false`로 변경합니다. `rtsp/network_timeout_ms`는 소켓 입출력이 멈췄을 때 기존 재연결 흐름으로 전환할
+때까지 기다리는 시간을 지정합니다.
 
 `dashboard`의 장치 ID는 각 장치가 MQTT envelope의 `sourceId`로 보내는 값과 같아야 합니다. 각 공정은
 자신의 `jobId`를 독립적으로 표시하므로 서로 다른 상품을 동시에 처리할 수 있습니다.

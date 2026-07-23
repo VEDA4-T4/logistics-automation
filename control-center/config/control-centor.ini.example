@@ -31,6 +31,11 @@ image_base_url=http://127.0.0.1:8080/
 ; Supported channel count: 1-16
 channel_count=4
 reconnect_interval_ms=3000
+; Qt 6.10+ FFmpeg backend: reduce playback buffering for live monitoring.
+; Disable this when smooth playback is more important than latency.
+low_latency=true
+; Socket I/O timeout. A timeout is handled by the existing reconnect flow.
+network_timeout_ms=3000
 
 ; Define one RTSP or RTSPS URL for every configured channel.
 channel_1_url=rtsp://username:password@camera-1.example.com:554/stream
