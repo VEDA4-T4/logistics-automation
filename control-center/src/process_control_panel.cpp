@@ -3,9 +3,10 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
+
+#include "logistics/control_center/ui_dialog.hpp"
 
 namespace logistics::control_center {
 namespace {
@@ -184,8 +185,7 @@ void ProcessControlPanel::requestCommand(mqtt::ControlCommand command, const QSt
     if (!control_state_.isMqttConnected() || control_state_.isCommandPending()) {
         return;
     }
-    if (QMessageBox::question(this, QStringLiteral("공정 제어 확인"), confirmation, QMessageBox::Yes,
-                              QMessageBox::No) == QMessageBox::Yes) {
+    if (ShowConfirmationDialog(this, QStringLiteral("공정 제어 확인"), confirmation, CommandLabel(command))) {
         emit commandRequested(command);
     }
 }

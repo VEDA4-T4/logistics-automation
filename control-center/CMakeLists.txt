@@ -33,6 +33,7 @@ qt_add_executable(
     src/operations_dashboard_state.cpp
     src/product_result_panel.cpp
     src/process_control_panel.cpp
+    src/ui_dialog.cpp
     include/logistics/control_center/main_window.hpp
     include/logistics/control_center/command_response.hpp
     include/logistics/control_center/current_product_state.hpp
@@ -45,6 +46,7 @@ qt_add_executable(
     include/logistics/control_center/product_result_panel.hpp
     include/logistics/control_center/process_control_panel.hpp
     include/logistics/control_center/process_control_state.hpp
+    include/logistics/control_center/ui_dialog.hpp
 )
 
 add_custom_target(
@@ -173,6 +175,17 @@ if(BUILD_TESTING)
         NAME control_center_operations_dashboard_panel_test
         COMMAND control_center_operations_dashboard_panel_test
     )
+
+    add_executable(
+        control_center_ui_dialog_test
+        tests/ui_dialog_test.cpp
+        src/ui_dialog.cpp
+        include/logistics/control_center/ui_dialog.hpp
+    )
+    target_include_directories(control_center_ui_dialog_test PRIVATE include)
+    target_link_libraries(control_center_ui_dialog_test PRIVATE Qt6::Widgets)
+    logistics_enable_warnings(control_center_ui_dialog_test)
+    add_test(NAME control_center_ui_dialog_test COMMAND control_center_ui_dialog_test)
 
     add_executable(
         control_center_mqtt_reconnect_test

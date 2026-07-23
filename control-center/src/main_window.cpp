@@ -10,7 +10,6 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QMediaPlayer>
-#include <QMessageBox>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedLayout>
@@ -35,6 +34,7 @@
 #include "logistics/control_center/operations_dashboard_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
 #include "logistics/control_center/product_result_panel.hpp"
+#include "logistics/control_center/ui_dialog.hpp"
 
 namespace logistics::control_center {
 namespace {
@@ -617,7 +617,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             QStringLiteral("설정 파일: %1\n\n%2")
                 .arg(QDir::toNativeSeparators(config.path), config.warnings.join(QLatin1Char('\n')));
         QTimer::singleShot(0, this, [this, warning_message]() {
-            QMessageBox::warning(this, QStringLiteral("설정 확인"), warning_message);
+            ShowWarningDialog(this, QStringLiteral("설정 확인"), warning_message);
         });
     }
 
