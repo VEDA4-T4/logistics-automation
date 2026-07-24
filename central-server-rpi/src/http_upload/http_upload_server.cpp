@@ -14,15 +14,22 @@
 #include <system_error>
 #include <utility>
 
+#include "logistics/central_server/history_service.hpp"
 #include "logistics/central_server/upload_service.hpp"
 #include "logistics/contracts/http_upload.hpp"
 #include "logistics/contracts/identifier.hpp"
+#include "logistics/contracts/mqtt_codec.hpp"
 
 namespace logistics::central_server {
 namespace {
 
 namespace contract = contracts::http;
+namespace mqtt = contracts::mqtt;
 using MhdResult = decltype(MHD_queue_response(nullptr, 0U, nullptr));
+constexpr std::string_view kWorkHistoryPrefix = "/api/v1/history/work/";
+constexpr std::string_view kDeviceHistoryPrefix = "/api/v1/history/device/";
+
+bool ParseSize(std::string_view text, std::size_t& output);
 
 std::string ReadTextFile(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
@@ -150,6 +157,71 @@ MhdResult ServeUploadedImage(MHD_Connection* connection, const std::filesystem::
     return QueueJson(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"NOT_FOUND\",\"message\":\"image not found\"}");
 }
 
+bool IsAuthorized(MHD_Connection* connection, std::string_view bearer_token) {
+    const char* authorization =
+        MHD_lookup_connection_value(connection, MHD_HEADER_KIND, contract::kAuthorizationHeader.data());
+    const std::string expected = std::string(contract::kBearerPrefix) + std::string(bearer_token);
+    return authorization != nullptr && std::string_view(authorization) == expected;
+}
+
+std::size_t HistoryLimit(MHD_Connection* connection) {
+    const char* value = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "limit");
+    if (value == nullptr) {
+        return HistoryService::kDefaultLimit;
+    }
+    std::size_t parsed = 0;
+    return ParseSize(value, parsed) ? parsed : 0;
+}
+
+std::string HistoryJson(const std::vector<HistoryEntry>& entries) {
+    mqtt::Json items = mqtt::Json::array();
+    for (const auto& entry : entries) {
+        auto details = mqtt::Json::parse(entry.details_json, nullptr, false);
+        if (details.is_discarded()) {
+            details = entry.details_json;
+        }
+        items.push_back({
+            { "messageId", entry.message_id },
+            { "eventType", entry.event_type },
+            { "sourceId", entry.source_id },
+            { "state", entry.state },
+            { "errorCode", entry.error_code },
+            { "severity", entry.severity },
+            { "message", entry.message },
+            { "details", std::move(details) },
+            { "occurredAtMs", entry.occurred_at_ms },
+        });
+    }
+    return mqtt::Json{ { "count", items.size() }, { "items", std::move(items) } }.dump();
+}
+
+MhdResult ServeHistory(MHD_Connection* connection, HistoryService& service, std::string_view bearer_token,
+                       std::string_view url) {
+    if (!IsAuthorized(connection, bearer_token)) {
+        return QueueJson(connection, MHD_HTTP_UNAUTHORIZED,
+                         "{\"error\":\"UNAUTHORIZED\",\"message\":\"invalid bearer token\"}");
+    }
+
+    const auto limit = HistoryLimit(connection);
+    std::vector<HistoryEntry> entries;
+    DatabaseStatus status;
+    if (url.starts_with(kWorkHistoryPrefix)) {
+        status = service.FindByWorkId(url.substr(kWorkHistoryPrefix.size()), limit, entries);
+    } else if (url.starts_with(kDeviceHistoryPrefix)) {
+        status = service.FindByDeviceId(url.substr(kDeviceHistoryPrefix.size()), limit, entries);
+    } else {
+        return QueueJson(connection, MHD_HTTP_NOT_FOUND,
+                         "{\"error\":\"NOT_FOUND\",\"message\":\"unknown history endpoint\"}");
+    }
+    if (!status.ok()) {
+        const auto http_status =
+            status.code == DatabaseStatusCode::kInvalidArgument ? MHD_HTTP_BAD_REQUEST : MHD_HTTP_INTERNAL_SERVER_ERROR;
+        return QueueJson(connection, http_status,
+                         "{\"error\":\"HISTORY_QUERY_FAILED\",\"message\":\"" + JsonEscape(status.message) + "\"}");
+    }
+    return QueueJson(connection, MHD_HTTP_OK, HistoryJson(entries));
+}
+
 bool ParseSize(std::string_view text, std::size_t& output) {
     std::uint64_t value = 0;
     const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -234,7 +306,7 @@ MhdResult ProcessPart(void* context_pointer, MHD_ValueKind, const char* key, con
 class HttpUploadServer::Impl final {
 public:
     Impl(Database& database, HttpUploadServerConfig config)
-        : config_(std::move(config)), service_(database, config_.upload_root) {}
+        : config_(std::move(config)), service_(database, config_.upload_root), history_service_(database) {}
 
     DatabaseStatus Start() {
         if (!config_.enabled) {
@@ -282,6 +354,10 @@ private:
                                    std::size_t* upload_data_size, void** context_pointer) {
         auto& server = *static_cast<Impl*>(server_pointer);
         if (std::string_view(method) == MHD_HTTP_METHOD_GET) {
+            if (std::string_view(url).starts_with(kWorkHistoryPrefix) ||
+                std::string_view(url).starts_with(kDeviceHistoryPrefix)) {
+                return ServeHistory(connection, server.history_service_, server.config_.bearer_token, url);
+            }
             return ServeUploadedImage(connection, server.config_.upload_root, url);
         }
         if (std::string_view(method) != MHD_HTTP_METHOD_POST) {
@@ -368,6 +444,7 @@ private:
 
     HttpUploadServerConfig config_;
     UploadService service_;
+    HistoryService history_service_;
     MHD_Daemon* daemon_{ nullptr };
     std::string certificate_;
     std::string private_key_;

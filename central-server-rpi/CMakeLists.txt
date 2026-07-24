@@ -12,6 +12,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ProjectWarnings.cmake")
 add_library(
     logistics_central_storage
     src/db_manager/database.cpp
+    src/db_manager/history_service.cpp
     src/http_upload/upload_service.cpp
     src/db_manager/persistence.cpp
 )
