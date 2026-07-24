@@ -468,15 +468,29 @@ static void SafetyTask_Initialize(void)
 void StartSafetyTask(void *argument)
 {
     uint32_t next_wake;
+    uint32_t last_alive_ms;
+    uint32_t now_ms;
 
     (void)argument;
 
     SafetyTask_Initialize();
-    next_wake = osKernelGetTickCount();
+    now_ms = osKernelGetTickCount();
+    next_wake = now_ms;
+    last_alive_ms = now_ms;
 
     for (;;) {
-        SafetyTask_ProcessEmergencyStopInput(osKernelGetTickCount());
+        now_ms = osKernelGetTickCount();
+        SafetyTask_ProcessEmergencyStopInput(now_ms);
         SafetyTask_ProcessQueue();
+
+        if ((uint32_t)(now_ms - last_alive_ms) >=
+            APP_TIMING_HEALTH_PERIOD_MS) {
+            SafetyTask_PublishHealthEvent(
+                APP_HEALTH_EVENT_TASK_ALIVE,
+                s_safety_context.latched_hazard_mask,
+                now_ms);
+            last_alive_ms = now_ms;
+        }
 
         next_wake += APP_TIMING_SAFETY_PERIOD_MS;
         if (osDelayUntil(next_wake) != osOK) {
