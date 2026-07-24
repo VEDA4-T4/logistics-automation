@@ -16,6 +16,10 @@ static health_reset_cause_t s_reset_cause;
 static volatile health_task_snapshot_t s_health_snapshot;
 static volatile uint8_t s_health_snapshot_valid;
 static uint8_t s_persisted_fault_report_pending;
+static uint8_t s_persisted_fault_locked;
+static health_fault_record_t s_pending_safety_fault;
+static uint8_t s_pending_safety_fault_valid;
+static uint8_t s_safety_fault_active;
 
 static uint32_t HealthTask_EnterShortCriticalSection(void) {
     uint32_t primask = __get_PRIMASK();
@@ -44,6 +48,7 @@ static void HealthTask_UpdateSnapshot(uint32_t now_ms, uint8_t watchdog_allowed)
     for (task = 0U; task < (uint32_t)APP_TASK_COUNT; ++task) {
         snapshot.last_alive_ms[task] = s_health_logic.last_alive_ms[task];
         snapshot.stack_high_water_words[task] = s_health_logic.stack_high_water_words[task];
+        snapshot.active_event_fault_mask[task] = s_health_logic.event_fault_latch[task];
     }
     snapshot.last_fault = s_last_fault;
     snapshot.persisted_record = s_persisted_record;
@@ -74,7 +79,7 @@ uint8_t HealthTask_GetLatest(health_task_snapshot_t* snapshot) {
     return 1U;
 }
 
-static uint8_t HealthTask_PublishSafetyFault(const health_fault_record_t* fault) {
+static uint8_t HealthTask_PublishSafetyFault(const health_fault_record_t* fault, uint8_t active) {
     app_safety_event_t event = { 0 };
 
     if ((fault == NULL) || (safetyEventQueue == NULL)) {
@@ -86,8 +91,22 @@ static uint8_t HealthTask_PublishSafetyFault(const health_fault_record_t* fault)
     event.reason = LINETRACER_STOP_REASON_HEALTH_FAULT;
     event.source_task = fault->source_task;
     event.error_code = fault->error_code;
-    event.active = 1U;
+    event.active = active;
     return (osMessageQueuePut(safetyEventQueue, &event, 0U, 0U) == osOK) ? 1U : 0U;
+}
+
+static void HealthTask_TryPublishPendingSafetyFault(void) {
+    if (s_pending_safety_fault_valid == 0U) {
+        return;
+    }
+
+    if (HealthTask_PublishSafetyFault(&s_pending_safety_fault, 1U) != 0U) {
+        s_pending_safety_fault_valid = 0U;
+        s_safety_fault_active = 1U;
+        ++s_health_stats.faults_reported;
+    } else {
+        ++s_health_stats.safety_report_drops;
+    }
 }
 
 static void HealthTask_ReportFault(const health_fault_record_t* fault, uint8_t persist) {
@@ -96,15 +115,31 @@ static void HealthTask_ReportFault(const health_fault_record_t* fault, uint8_t p
     }
 
     s_last_fault = *fault;
-    if (persist != 0U) {
+    if ((persist != 0U) && (s_persisted_fault_locked == 0U)) {
         HealthHw_StoreFault(fault);
         s_persisted_record.fault = *fault;
         s_persisted_record.reset_cause = s_reset_cause;
         s_persisted_record.valid = 1U;
+        if (fault->watchdog_blocking != 0U) {
+            s_persisted_fault_locked = 1U;
+        }
+    } else if (persist != 0U) {
+        ++s_health_stats.persisted_fault_skips;
     }
 
-    if (HealthTask_PublishSafetyFault(fault) != 0U) {
-        ++s_health_stats.faults_reported;
+    s_pending_safety_fault = *fault;
+    s_pending_safety_fault_valid = 1U;
+    HealthTask_TryPublishPendingSafetyFault();
+}
+
+static void HealthTask_ClearSafetyFaultIfRecovered(void) {
+    if ((s_safety_fault_active == 0U) || (HealthLogic_HasActiveFaults(&s_health_logic) != 0U)) {
+        return;
+    }
+
+    if (HealthTask_PublishSafetyFault(&s_last_fault, 0U) != 0U) {
+        s_safety_fault_active = 0U;
+        ++s_health_stats.fault_clears_reported;
     } else {
         ++s_health_stats.safety_report_drops;
     }
@@ -158,7 +193,11 @@ static void HealthTask_Initialize(uint32_t now_ms) {
     (void)memset(&s_last_fault, 0, sizeof(s_last_fault));
     (void)memset(&s_persisted_record, 0, sizeof(s_persisted_record));
     (void)memset((void*)&s_health_snapshot, 0, sizeof(s_health_snapshot));
+    (void)memset(&s_pending_safety_fault, 0, sizeof(s_pending_safety_fault));
     s_health_snapshot_valid = 0U;
+    s_persisted_fault_locked = 0U;
+    s_pending_safety_fault_valid = 0U;
+    s_safety_fault_active = 0U;
 
     HealthLogic_Init(&s_health_logic, HEALTH_REQUIRED_TASK_MASK, now_ms);
     s_reset_cause = HealthHw_CaptureResetCause();
@@ -185,6 +224,9 @@ void StartHealthTask(void* argument) {
         HealthTask_DrainEvents();
         HealthTask_SampleStacks();
         HealthTask_Evaluate(now_ms);
+        (void)HealthLogic_ClearExpiredTransientFaults(&s_health_logic, now_ms, HEALTH_TRANSIENT_FAULT_CLEAR_MS);
+        HealthTask_TryPublishPendingSafetyFault();
+        HealthTask_ClearSafetyFaultIfRecovered();
 
         watchdog_allowed = HealthLogic_WatchdogAllowed(&s_health_logic, now_ms, HEALTH_STARTUP_GRACE_MS,
                                                        HEALTH_ALIVE_TIMEOUT_MS, HEALTH_STACK_MIN_WORDS);

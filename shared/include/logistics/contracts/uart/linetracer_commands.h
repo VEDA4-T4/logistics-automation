@@ -217,6 +217,7 @@ static inline uint8_t uart_linetracer_event_is_valid(uint32_t event_id) {
 static inline uint8_t uart_linetracer_fault_error_is_valid(uint32_t error) {
     switch (error) {
         case UART_ERROR_TIMEOUT:
+        case UART_ERROR_BUSY:
         case UART_ERROR_SENSOR:
         case UART_ERROR_MOTOR:
         case UART_ERROR_SERVO:

@@ -29,6 +29,7 @@ static uint8_t commTxBuffer[UART_MAX_FRAME_SIZE];
 static comm_tx_logic_t commTxLogic;
 static comm_tx_observed_state_t commTxObservedState;
 static comm_tx_stats_t commTxStats;
+static uint8_t commTxTimeoutActive;
 
 static uint8_t CommTxTask_TimeReached(uint32_t now_ms, uint32_t deadline_ms) {
     return ((int32_t)(now_ms - deadline_ms) >= 0) ? 1U : 0U;
@@ -114,12 +115,17 @@ static uint8_t CommTxTask_Transmit(const uint8_t* data, size_t length) {
         commTxState = COMM_TX_STATE_IDLE;
         commTxCurrentError = UART_ERROR_NONE;
         ++commTxStats.frames_completed;
+        if (commTxTimeoutActive != 0U) {
+            CommTxTask_PublishHealth(APP_HEALTH_EVENT_UART_TX_RECOVERED, commTxStats.frames_completed, now_ms);
+            commTxTimeoutActive = 0U;
+        }
         return 1U;
     }
 
     if (flags == osFlagsErrorTimeout) {
         ++commTxStats.dma_timeouts;
         commTxCurrentError = UART_ERROR_TIMEOUT;
+        commTxTimeoutActive = 1U;
         CommTxTask_PublishHealth(APP_HEALTH_EVENT_UART_TX_TIMEOUT, (uint32_t)length, now_ms);
     } else {
         commTxCurrentError = UART_ERROR_INTERNAL;
@@ -181,6 +187,7 @@ static void CommTxTask_RequeueFailedEvent(app_tx_event_t* event, uint32_t now_ms
     }
 
     ++commTxStats.dropped_events;
+    commTxTimeoutActive = 1U;
     CommTxTask_PublishHealth(APP_HEALTH_EVENT_UART_TX_TIMEOUT, (uint32_t)event->type, now_ms);
 }
 
@@ -252,6 +259,7 @@ void StartCommTxTask(void* argument) {
     commTxTaskId = osThreadGetId();
     commTxState = COMM_TX_STATE_IDLE;
     commTxCurrentError = UART_ERROR_NONE;
+    commTxTimeoutActive = 0U;
     (void)memset(&commTxStats, 0, sizeof(commTxStats));
     CommTxLogic_Init(&commTxLogic);
     CommTxLogic_InitObservedState(&commTxObservedState);
