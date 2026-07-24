@@ -1,3 +1,52 @@
+# ---------------------------------------------------------------------------
+# Cross-platform libraries and tests.
+#
+# These build even when the full device-node runtime (mosquitto/CURL/OpenCV) is
+# disabled, so the UART transport and the input-node command logic can be unit
+# tested on a developer host. The device-node runtime below is skipped unless
+# LOGISTICS_BUILD_DEVICE_NODES is enabled.
+# ---------------------------------------------------------------------------
+include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
+
+add_library(device_uart_transport common/uart_bridge/uart_transport.cpp)
+add_library(logistics::device_uart_transport ALIAS device_uart_transport)
+target_include_directories(device_uart_transport PUBLIC common/include)
+logistics_enable_warnings(device_uart_transport)
+
+add_library(
+    device_input_node
+    input-node/input_uart_session.cpp
+    input-node/input_node.cpp
+)
+add_library(logistics::device_input_node ALIAS device_input_node)
+target_include_directories(device_input_node PUBLIC common/include)
+target_link_libraries(
+    device_input_node
+    PUBLIC logistics::contracts logistics::uart logistics::device_uart_transport
+)
+logistics_enable_warnings(device_input_node)
+
+if(BUILD_TESTING)
+    add_executable(device_uart_transport_test tests/uart_transport_test.cpp)
+    target_link_libraries(device_uart_transport_test PRIVATE logistics::device_uart_transport)
+    logistics_enable_warnings(device_uart_transport_test)
+    add_test(NAME device_uart_transport_test COMMAND device_uart_transport_test)
+
+    add_executable(device_input_uart_session_test tests/input_uart_session_test.cpp)
+    target_link_libraries(device_input_uart_session_test PRIVATE logistics::device_input_node)
+    logistics_enable_warnings(device_input_uart_session_test)
+    add_test(NAME device_input_uart_session_test COMMAND device_input_uart_session_test)
+
+    add_executable(device_input_node_test tests/input_node_test.cpp)
+    target_link_libraries(device_input_node_test PRIVATE logistics::device_input_node)
+    logistics_enable_warnings(device_input_node_test)
+    add_test(NAME device_input_node_test COMMAND device_input_node_test)
+endif()
+
+if(NOT LOGISTICS_BUILD_DEVICE_NODES)
+    return()
+endif()
+
 add_library(
     device_mqtt_core
     common/config/mqtt_node_config.cpp
@@ -134,6 +183,17 @@ add_device_node(logistics_input_node input-node/main.cpp)
 add_device_node(logistics_vision_node vision-node/main.cpp)
 add_device_node(logistics_sorting_node sorting-node/main.cpp)
 add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
+
+if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+    target_compile_definitions(logistics_input_node PRIVATE LOGISTICS_INPUT_DAEMON_ENABLED=1)
+    target_link_libraries(
+        logistics_input_node
+        PRIVATE
+            logistics::device_input_node
+            logistics::device_mqtt_mosquitto
+            logistics::device_status
+    )
+endif()
 
 if(BUILD_TESTING)
     add_executable(device_mqtt_message_processor_test tests/mqtt_message_processor_test.cpp)

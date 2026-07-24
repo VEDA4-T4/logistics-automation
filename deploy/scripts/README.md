@@ -43,7 +43,25 @@ the run, explicitly opt in:
 export LOGISTICS_INSTALL_DEPENDENCIES=1
 ```
 
-## 3. Connectivity check
+## 3. Input conveyor Raspberry Pi
+
+The input node bridges MQTT commands to the input-controller STM32 over the `/dev/vedauart` character device and
+reports sensor/motor status back to the central server.
+
+```sh
+export LOGISTICS_CENTRAL_HOST='192.168.0.10'
+export LOGISTICS_DEVICE_ID='PI-INPUT-01'
+export LOGISTICS_DEVICE_IP='192.168.0.22'
+export LOGISTICS_UART_DEVICE='/dev/vedauart'
+./deploy/scripts/setup-input-node.sh
+```
+
+The generated runtime configuration is `runtime/input-node/input-node.ini`. The daemon is started manually (or by a
+future systemd unit) with the UART device supplied through `LOGISTICS_UART_DEVICE` or as the second argument. Because
+the device-node build currently compiles all nodes together, OpenCV 4.10.0 is required even though the input node has
+no camera; pass `LOGISTICS_INSTALL_OPENCV=1` to build it from source when it is absent.
+
+## 4. Connectivity check
 
 Run this from the Vision Pi after the MQTT broker and central server have started:
 
