@@ -14,7 +14,6 @@ node_name="${LOGISTICS_NODE_NAME:-input-node-01}"
 device_ip="${LOGISTICS_DEVICE_IP:-}"
 uart_device="${LOGISTICS_UART_DEVICE:-/dev/vedauart}"
 force_config="${LOGISTICS_FORCE_CONFIG:-0}"
-install_opencv="${LOGISTICS_INSTALL_OPENCV:-0}"
 install_dependencies="${LOGISTICS_INSTALL_DEPENDENCIES:-0}"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
@@ -43,20 +42,6 @@ if [[ "${install_dependencies}" == "1" ]]; then
     "${sudo_command[@]}" apt-get install -y \
         build-essential cmake ninja-build pkg-config curl \
         libmosquitto-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev
-fi
-
-# The device-node build currently compiles every node together, so the vision
-# node's OpenCV requirement also applies here even though the input node has no
-# camera. Decoupling per-node builds is tracked as a follow-up.
-opencv_version="$(pkg-config --modversion opencv4 2>/dev/null || true)"
-if [[ "${opencv_version}" != "4.10.0" ]]; then
-    if [[ "${install_opencv}" == "1" ]]; then
-        "${sudo_command[@]}" bash "${repo_root}/.github/scripts/install-opencv.sh" 4.10.0 /usr/local
-    else
-        echo "OpenCV 4.10.0 is required by the device-node build; found '${opencv_version:-none}'." >&2
-        echo "Re-run with LOGISTICS_INSTALL_OPENCV=1 to build and install it." >&2
-        exit 3
-    fi
 fi
 
 install -d -m 0750 "${runtime_dir}" "$(dirname -- "${config_path}")"
@@ -93,6 +78,10 @@ cmake -S "${repo_root}" -B "${build_dir}" -G Ninja \
     -DLOGISTICS_BUILD_CONTROL_CENTER=OFF \
     -DLOGISTICS_BUILD_CENTRAL_SERVER=OFF \
     -DLOGISTICS_BUILD_DEVICE_NODES=ON \
+    -DLOGISTICS_BUILD_INPUT_NODE=ON \
+    -DLOGISTICS_BUILD_VISION_NODE=OFF \
+    -DLOGISTICS_BUILD_SORTING_NODE=OFF \
+    -DLOGISTICS_BUILD_LINETRACER_NODE=OFF \
     -DLOGISTICS_ENABLE_MOSQUITTO_TRANSPORT=ON
 cmake --build "${build_dir}" --target logistics_input_node
 

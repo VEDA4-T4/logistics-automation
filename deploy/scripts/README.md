@@ -57,9 +57,9 @@ export LOGISTICS_UART_DEVICE='/dev/vedauart'
 ```
 
 The generated runtime configuration is `runtime/input-node/input-node.ini`. The daemon is started manually (or by a
-future systemd unit) with the UART device supplied through `LOGISTICS_UART_DEVICE` or as the second argument. Because
-the device-node build currently compiles all nodes together, OpenCV 4.10.0 is required even though the input node has
-no camera; pass `LOGISTICS_INSTALL_OPENCV=1` to build it from source when it is absent.
+future systemd unit) with the UART device supplied through `LOGISTICS_UART_DEVICE` or as the second argument. The
+script configures with `LOGISTICS_BUILD_VISION_NODE=OFF`, `LOGISTICS_BUILD_SORTING_NODE=OFF`, and
+`LOGISTICS_BUILD_LINETRACER_NODE=OFF`, so OpenCV is not required to build the input node.
 
 ## 4. Connectivity check
 

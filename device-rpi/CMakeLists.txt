@@ -179,20 +179,27 @@ function(add_device_node target_name source_file)
     logistics_enable_warnings(${target_name})
 endfunction()
 
-add_device_node(logistics_input_node input-node/main.cpp)
-add_device_node(logistics_vision_node vision-node/main.cpp)
-add_device_node(logistics_sorting_node sorting-node/main.cpp)
-add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
+if(LOGISTICS_BUILD_INPUT_NODE)
+    add_device_node(logistics_input_node input-node/main.cpp)
 
-if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
-    target_compile_definitions(logistics_input_node PRIVATE LOGISTICS_INPUT_DAEMON_ENABLED=1)
-    target_link_libraries(
-        logistics_input_node
-        PRIVATE
-            logistics::device_input_node
-            logistics::device_mqtt_mosquitto
-            logistics::device_status
-    )
+    if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+        target_compile_definitions(logistics_input_node PRIVATE LOGISTICS_INPUT_DAEMON_ENABLED=1)
+        target_link_libraries(
+            logistics_input_node
+            PRIVATE
+                logistics::device_input_node
+                logistics::device_mqtt_mosquitto
+                logistics::device_status
+        )
+    endif()
+endif()
+
+if(LOGISTICS_BUILD_SORTING_NODE)
+    add_device_node(logistics_sorting_node sorting-node/main.cpp)
+endif()
+
+if(LOGISTICS_BUILD_LINETRACER_NODE)
+    add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
 endif()
 
 if(BUILD_TESTING)
@@ -226,22 +233,25 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_image_uploader_test)
     add_test(NAME device_image_uploader_test COMMAND device_image_uploader_test)
 endif()
-target_sources(
-    logistics_vision_node
-    PRIVATE
-        vision-node/detection.cpp
-        vision-node/detection.hpp
-)
-
-find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgcodecs imgproc objdetect videoio)
-target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
-target_link_libraries(logistics_vision_node PRIVATE logistics::vision_mqtt_workflow)
-
-if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
-    target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)
-    target_link_libraries(
+if(LOGISTICS_BUILD_VISION_NODE)
+    add_device_node(logistics_vision_node vision-node/main.cpp)
+    target_sources(
         logistics_vision_node
-        PRIVATE logistics::device_mqtt_mosquitto logistics::device_status logistics::device_image_upload
+        PRIVATE
+            vision-node/detection.cpp
+            vision-node/detection.hpp
     )
+
+    find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgcodecs imgproc objdetect videoio)
+    target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
+    target_link_libraries(logistics_vision_node PRIVATE logistics::vision_mqtt_workflow)
+
+    if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+        target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)
+        target_link_libraries(
+            logistics_vision_node
+            PRIVATE logistics::device_mqtt_mosquitto logistics::device_status logistics::device_image_upload
+        )
+    endif()
 endif()
