@@ -600,6 +600,7 @@ void StartSensorTask(void *argument)
     ultrasonic_result_t ultrasonic_result;
     sensor_adc_state_t adc_state;
     uint32_t next_wake;
+    uint32_t last_alive_ms;
     uint32_t now_ms;
     uint16_t fsr_value = 0U;
     uint8_t ultrasonic_timer_ready;
@@ -615,6 +616,7 @@ void StartSensorTask(void *argument)
     (void)StartFsrConversion(now_ms);
 
     next_wake = osKernelGetTickCount();
+    last_alive_ms = now_ms;
 
     for (;;) {
         now_ms = osKernelGetTickCount();
@@ -678,6 +680,15 @@ void StartSensorTask(void *argument)
 
         context.logic.snapshot.sampled_at_ms = now_ms;
         PublishSnapshot(&context, update.event_flags, now_ms);
+
+        if (TimeElapsed(now_ms,
+                        last_alive_ms,
+                        APP_TIMING_HEALTH_PERIOD_MS) != 0U) {
+            PublishHealthEvent(APP_HEALTH_EVENT_TASK_ALIVE,
+                               now_ms,
+                               context.reported_error_flags);
+            last_alive_ms = now_ms;
+        }
 
         next_wake += APP_TIMING_SENSOR_PERIOD_MS;
         if (osDelayUntil(next_wake) != osOK) {
