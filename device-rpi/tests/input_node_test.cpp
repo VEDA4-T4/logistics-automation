@@ -200,6 +200,23 @@ void TestEmergencyStop() {
     assert(response->command == mqtt::ControlCommand::kEmergencyStop);
 }
 
+void TestEmergencyStopDoesNotWaitForReply() {
+    // The controller answers EMERGENCY_STOP with an asynchronous EVENT/
+    // DEVICE_STATUS broadcast, never a sequence-matched reply. Confirm the
+    // node reports success from a single write instead of timing out and
+    // retrying (which would re-trigger the controller's safety broadcast).
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t&) { return std::vector<uart_frame_t>{}; };
+
+    const InputCommandResult result = fixture.node->HandleMqttCommand(MakeEmergencyStop(std::string(kDeviceId)));
+
+    assert(result.status == InputCommandStatus::kSuccess);
+    assert(fixture.backend->write_calls == 1);
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr);
+    assert(response->result == mqtt::CommandResult::kSuccess);
+}
+
 void TestInvalidTarget() {
     Fixture fixture;
     fixture.backend->responder = AlwaysSucceed();
@@ -297,6 +314,7 @@ int main() {
     TestControllerRejection();
     TestUnsupportedCommand();
     TestEmergencyStop();
+    TestEmergencyStopDoesNotWaitForReply();
     TestInvalidTarget();
     TestControllerTimeout();
     TestSensorDetectedReport();

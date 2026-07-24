@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -33,6 +34,7 @@ enum class InputTransactStatus {
     kSuccess,          // controller reported SUCCESS / NONE
     kRejected,         // controller answered with NACK, BUSY or an error status
     kTimeout,          // no matching response after the configured retries
+    kSent,             // frame was written; the command has no sequence-matched reply to wait for
     kNotOpen,          // the UART device is not open
     kInvalidArgument,  // command or payload failed contract validation
     kEncodeError,      // the frame could not be encoded
@@ -86,6 +88,19 @@ public:
     void SetSpontaneousFrameHandler(InputSpontaneousFrameHandler handler);
 
     [[nodiscard]] InputTransactResult Transact(std::uint8_t command, std::span<const std::uint8_t> payload = {});
+
+    /*
+     * Writes a command frame once and returns without waiting for a reply.
+     *
+     * UART_CMD_EMERGENCY_STOP is answered by the controller with an
+     * asynchronous EVENT/DEVICE_STATUS broadcast rather than a
+     * sequence-matched RESPONSE/OPERATION_RESULT, so routing it through
+     * Transact() always times out and retries, which re-triggers the
+     * controller's safety broadcast on every retry. Use this instead for
+     * commands that have no sequence-matched reply to wait for.
+     */
+    [[nodiscard]] InputTransactResult SendCommand(std::uint8_t command, std::span<const std::uint8_t> payload = {});
+
     [[nodiscard]] UartIoResult PollSpontaneous(std::chrono::milliseconds timeout);
 
     [[nodiscard]] const InputUartDiagnostics& Diagnostics() const noexcept;
@@ -99,6 +114,10 @@ private:
         kTransportError,
     };
 
+    [[nodiscard]] bool EncodeCommandFrame(std::uint8_t command, std::span<const std::uint8_t> payload,
+                                         uart_frame_t& frame,
+                                         std::array<std::uint8_t, UART_MAX_FRAME_SIZE>& encoded,
+                                         std::size_t& encoded_length, InputTransactResult& result);
     [[nodiscard]] WaitOutcome WaitForResponse(std::uint8_t sequence, InputTransactResult& result);
     void Classify(const uart_frame_t& frame, InputTransactResult& result) noexcept;
     [[nodiscard]] static bool IsResponseFrame(const uart_frame_t& frame, std::uint8_t sequence) noexcept;

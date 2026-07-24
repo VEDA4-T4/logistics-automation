@@ -150,6 +150,32 @@ InputUartSession::WaitOutcome InputUartSession::WaitForResponse(std::uint8_t seq
     }
 }
 
+bool InputUartSession::EncodeCommandFrame(std::uint8_t command, std::span<const std::uint8_t> payload,
+                                          uart_frame_t& frame,
+                                          std::array<std::uint8_t, UART_MAX_FRAME_SIZE>& encoded,
+                                          std::size_t& encoded_length, InputTransactResult& result) {
+    if (payload.size() > UART_MAX_PAYLOAD_SIZE || UART_IS_VALID_COMMAND(command) == 0U ||
+        UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(command, payload.size()) == 0U) {
+        result.status = InputTransactStatus::kInvalidArgument;
+        return false;
+    }
+
+    frame = uart_frame_t{};
+    frame.version = UART_PROTOCOL_VERSION;
+    frame.sequence = AllocateSequence();
+    frame.command = command;
+    frame.length = static_cast<std::uint8_t>(payload.size());
+    if (!payload.empty()) {
+        std::copy(payload.begin(), payload.end(), frame.payload);
+    }
+
+    if (uart_encode_frame(&frame, encoded.data(), encoded.size(), &encoded_length) != UART_CODEC_OK) {
+        result.status = InputTransactStatus::kEncodeError;
+        return false;
+    }
+    return true;
+}
+
 InputTransactResult InputUartSession::Transact(std::uint8_t command, std::span<const std::uint8_t> payload) {
     InputTransactResult result{};
     result.command = command;
@@ -159,28 +185,14 @@ InputTransactResult InputUartSession::Transact(std::uint8_t command, std::span<c
         result.io_result = { UartIoStatus::kNotOpen, 0, transport_.LastError() };
         return result;
     }
-    if (payload.size() > UART_MAX_PAYLOAD_SIZE || UART_IS_VALID_COMMAND(command) == 0U ||
-        UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(command, payload.size()) == 0U) {
-        result.status = InputTransactStatus::kInvalidArgument;
-        return result;
-    }
 
     uart_frame_t frame{};
-    frame.version = UART_PROTOCOL_VERSION;
-    frame.sequence = AllocateSequence();
-    frame.command = command;
-    frame.length = static_cast<std::uint8_t>(payload.size());
-    if (!payload.empty()) {
-        std::copy(payload.begin(), payload.end(), frame.payload);
-    }
-    result.sequence = frame.sequence;
-
     std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
     std::size_t encoded_length = 0U;
-    if (uart_encode_frame(&frame, encoded.data(), encoded.size(), &encoded_length) != UART_CODEC_OK) {
-        result.status = InputTransactStatus::kEncodeError;
+    if (!EncodeCommandFrame(command, payload, frame, encoded, encoded_length, result)) {
         return result;
     }
+    result.sequence = frame.sequence;
 
     ++diagnostics_.commands_sent;
     for (std::uint32_t attempt = 0U; attempt <= UART_MAX_RETRY_COUNT; ++attempt) {
@@ -210,6 +222,38 @@ InputTransactResult InputUartSession::Transact(std::uint8_t command, std::span<c
 
     ++diagnostics_.timeouts;
     result.status = InputTransactStatus::kTimeout;
+    return result;
+}
+
+InputTransactResult InputUartSession::SendCommand(std::uint8_t command, std::span<const std::uint8_t> payload) {
+    InputTransactResult result{};
+    result.command = command;
+
+    if (!IsOpen()) {
+        result.status = InputTransactStatus::kNotOpen;
+        result.io_result = { UartIoStatus::kNotOpen, 0, transport_.LastError() };
+        return result;
+    }
+
+    uart_frame_t frame{};
+    std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+    std::size_t encoded_length = 0U;
+    if (!EncodeCommandFrame(command, payload, frame, encoded, encoded_length, result)) {
+        return result;
+    }
+    result.sequence = frame.sequence;
+
+    ++diagnostics_.commands_sent;
+    const UartIoResult io =
+        transport_.WriteAll(std::span<const std::uint8_t>(encoded.data(), encoded_length), kWriteTimeout);
+    if (!io.Succeeded()) {
+        ++diagnostics_.transport_errors;
+        result.io_result = io;
+        result.status = InputTransactStatus::kTransportError;
+        return result;
+    }
+
+    result.status = InputTransactStatus::kSent;
     return result;
 }
 

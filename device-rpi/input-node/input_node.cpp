@@ -35,6 +35,7 @@ namespace mqtt = contracts::mqtt;
 [[nodiscard]] InputCommandStatus CommandStatusFromTransact(InputTransactStatus status) noexcept {
     switch (status) {
         case InputTransactStatus::kSuccess:
+        case InputTransactStatus::kSent:
             return InputCommandStatus::kSuccess;
         case InputTransactStatus::kRejected:
             return InputCommandStatus::kRejected;
@@ -217,7 +218,13 @@ InputCommandResult InputNode::HandleEmergencyStop(const mqtt::EmergencyStopPaylo
         return result;
     }
 
-    result = Execute(std::move(result), UART_CMD_EMERGENCY_STOP, {});
+    // The controller answers UART_CMD_EMERGENCY_STOP with an asynchronous
+    // EVENT/DEVICE_STATUS broadcast, not a sequence-matched RESPONSE/
+    // OPERATION_RESULT, so this goes through SendCommand() (fire-and-forget)
+    // rather than Execute()/Transact(), which would time out and retry,
+    // re-triggering the controller's safety broadcast on every retry.
+    result.uart_result = uart_session_.SendCommand(UART_CMD_EMERGENCY_STOP, {});
+    result.status = CommandStatusFromTransact(result.uart_result.status);
     EmitCommandResponse(result, "input conveyor emergency stop");
     return result;
 }

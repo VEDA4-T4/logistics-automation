@@ -172,6 +172,26 @@ void TestWriteTransportError() {
     assert(!fixture.session->IsOpen());
 }
 
+void TestSendCommandDoesNotWaitForReply() {
+    Fixture fixture;
+    // No responder is set, so no reply is ever queued; SendCommand must not
+    // block waiting for one.
+    const InputTransactResult result = fixture.session->SendCommand(UART_CMD_EMERGENCY_STOP);
+
+    assert(result.status == InputTransactStatus::kSent);
+    assert(fixture.backend->write_calls == 1);
+    assert(fixture.backend->last_written.command == UART_CMD_EMERGENCY_STOP);
+}
+
+void TestSendCommandWriteTransportError() {
+    Fixture fixture;
+    fixture.backend->fail_write = true;
+
+    const InputTransactResult result = fixture.session->SendCommand(UART_CMD_EMERGENCY_STOP);
+
+    assert(result.status == InputTransactStatus::kTransportError);
+}
+
 }  // namespace
 
 int main() {
@@ -185,5 +205,7 @@ int main() {
     TestTransactNotOpen();
     TestTransactInvalidArgument();
     TestWriteTransportError();
+    TestSendCommandDoesNotWaitForReply();
+    TestSendCommandWriteTransportError();
     return 0;
 }
