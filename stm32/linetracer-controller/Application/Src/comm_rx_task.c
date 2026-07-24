@@ -288,8 +288,13 @@ void CommRxTask_ProcessReceivedBytes(const uint8_t* data, uint16_t length) {
         uart_parser_result_t result = uart_parser_feed(&commRxParser, data[index], &frame);
 
         if (result == UART_PARSER_FRAME_READY) {
+            const uint8_t timeout_was_active = commRxLinkMonitor.timeout_reported;
+
             CommRxLogic_LinkRecordValidFrame(&commRxLinkMonitor, now_ms);
             commRxStats.last_valid_frame_ms = commRxLinkMonitor.last_valid_frame_ms;
+            if (timeout_was_active != 0U) {
+                CommRxTask_PublishHealthEvent(APP_HEALTH_EVENT_UART_RX_RECOVERED, commRxStats.received_frames, now_ms);
+            }
             CommRxTask_DispatchFrame(&frame, now_ms);
         } else if (result < UART_PARSER_NO_FRAME) {
             CommRxTask_ReportParserError(result, now_ms);

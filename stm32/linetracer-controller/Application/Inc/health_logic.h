@@ -38,6 +38,7 @@ typedef struct {
     uint32_t last_alive_detail[APP_TASK_COUNT];
     uint32_t stack_high_water_words[APP_TASK_COUNT];
     uint32_t event_fault_latch[APP_TASK_COUNT];
+    uint32_t last_event_ms[APP_TASK_COUNT][APP_HEALTH_EVENT_COUNT];
     uint32_t seen_alive_mask;
     uint32_t stalled_task_mask;
     uint32_t reported_stalled_mask;
@@ -63,6 +64,15 @@ void HealthLogic_UpdateStack(health_logic_context_t* context, app_task_id_t task
  */
 uint8_t HealthLogic_Evaluate(health_logic_context_t* context, uint32_t now_ms, uint32_t startup_grace_ms,
                              uint32_t alive_timeout_ms, uint32_t stack_min_words, health_fault_record_t* fault);
+
+/*
+ * Queue pressure and a TX failure are transient when they stop recurring.
+ * RX timeout is cleared only by the explicit RX_RECOVERED event.
+ */
+uint32_t HealthLogic_ClearExpiredTransientFaults(health_logic_context_t* context, uint32_t now_ms,
+                                                 uint32_t clear_timeout_ms);
+
+uint8_t HealthLogic_HasActiveFaults(const health_logic_context_t* context);
 
 uint8_t HealthLogic_WatchdogAllowed(const health_logic_context_t* context, uint32_t now_ms, uint32_t startup_grace_ms,
                                     uint32_t alive_timeout_ms, uint32_t stack_min_words);

@@ -14,6 +14,7 @@
 #define HEALTH_STARTUP_GRACE_MS 2000U
 #define HEALTH_STACK_MIN_WORDS 128U
 #define HEALTH_MAX_EVENTS_PER_CYCLE 8U
+#define HEALTH_TRANSIENT_FAULT_CLEAR_MS 2000U
 
 /*
  * UnloadTask remains outside the required mask until its real implementation
