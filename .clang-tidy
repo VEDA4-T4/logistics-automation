@@ -8,6 +8,6 @@ Checks: >
 
 WarningsAsErrors: ''
 
-HeaderFilterRegex: '.*'
+HeaderFilterRegex: '(^|.*/)(shared|central-server-rpi|device-rpi)/.*'
 
 FormatStyle: file

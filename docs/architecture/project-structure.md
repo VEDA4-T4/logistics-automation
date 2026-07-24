@@ -37,7 +37,7 @@ logistics-automation/
 │   └── logs/
 ├── stm32/
 │   ├── input-controller/
-│   ├── rotation-controller/
+│   ├── gripper-controller/
 │   ├── sorting-controller/
 │   ├── linetracer-controller/
 │   └── common/                    # UART HAL 연동/안전 처리/공통 드라이버

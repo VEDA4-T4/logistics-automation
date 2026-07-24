@@ -7,7 +7,7 @@ namespace logistics::device {
 class NodeRuntime final {
 public:
     explicit NodeRuntime(contracts::DeviceRole role);
-    [[nodiscard]] int Run() const;
+    [[nodiscard]] int Run(int argc, char* argv[]) const;
 
 private:
     contracts::DeviceRole role_;

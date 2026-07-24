@@ -2,10 +2,12 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 
 #include "logistics/central_server/database.hpp"
 #include "logistics/central_server/persistence.hpp"
+#include "logistics/central_server/upload_service.hpp"
 
 namespace {
 
@@ -15,17 +17,6 @@ std::int64_t Scalar(logistics::central_server::Database& database, std::string_v
     bool row = false;
     assert(statement.Step(row).ok() && row);
     return statement.ColumnInt64(0);
-}
-
-std::size_t CountFiles(const std::filesystem::path& root) {
-    if (!std::filesystem::exists(root))
-        return 0;
-    std::size_t count = 0;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-        if (entry.is_regular_file())
-            ++count;
-    }
-    return count;
 }
 
 logistics::contracts::mqtt::EnvelopeView Envelope(std::string_view id, logistics::contracts::mqtt::MessageType type,
@@ -65,11 +56,19 @@ int main() {
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(database.IntegrityCheck().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 4);
+    assert(Scalar(database,
+                  "SELECT count(*) FROM product_catalog WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
+                  "product_name='VEDA107 기본 상품' AND destination='1' AND active=1") == 1);
 
     server::StorageConfig storage;
     storage.image_root = root / "images";
     server::PersistenceService persistence(database, storage);
+    std::optional<server::CatalogProduct> catalog_product;
+    assert(persistence.FindActiveProductByBarcode("5901234123457", catalog_product).ok());
+    assert(catalog_product && catalog_product->product_id == "VEDA107" && catalog_product->destination == "1");
+    assert(persistence.FindActiveProductByBarcode("0000000000000", catalog_product).ok());
+    assert(!catalog_product);
     constexpr std::int64_t base_time = 1'700'000'000'000;
 
     server::Database lock_holder;
@@ -102,43 +101,80 @@ int main() {
 
     server::EventPayload barcode;
     barcode.work_id = work_id;
-    barcode.barcode = "8801234567890";
+    barcode.barcode = "5901234123457";
     result = persistence.PersistValidatedEvent(Envelope("MSG-BARCODE-1", mqtt::MessageType::kBarcodeDetected), barcode,
                                                Metadata(base_time + 2));
     assert(result.status == server::PersistenceStatus::kStored);
+
+    server::EventPayload product_info;
+    product_info.work_id = work_id;
+    product_info.barcode = "5901234123457";
+    product_info.product_id = "VEDA107";
+    product_info.product_name = "VEDA107 기본 상품";
+    product_info.destination = "1";
+    result = persistence.PersistValidatedEvent(Envelope("MSG-PRODUCT-1", mqtt::MessageType::kProductInfo), product_info,
+                                               Metadata(base_time + 3));
+    assert(result.status == server::PersistenceStatus::kStored);
+    assert(Scalar(database,
+                  "SELECT count(*) FROM product WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
+                  "product_name='VEDA107 기본 상품' AND destination='1'") == 1);
 
     server::EventPayload missing_work;
     missing_work.work_id = "00000000-0000-4000-8000-000000000000";
     missing_work.destination = "A-01";
     result = persistence.PersistValidatedEvent(Envelope("MSG-BAD-WORK", mqtt::MessageType::kDestinationSet),
-                                               missing_work, Metadata(base_time + 3));
+                                               missing_work, Metadata(base_time + 4));
     assert(result.status == server::PersistenceStatus::kPermanentError);
     assert(
         Scalar(database,
                "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BAD-WORK' AND processing_state='REJECTED'") ==
         1);
 
+    server::EventPayload barcode_failure;
+    barcode_failure.work_id = work_id;
+    barcode_failure.process_state = "FAILED";
+    result = persistence.PersistValidatedEvent(Envelope("MSG-BARCODE-FAIL", mqtt::MessageType::kBarcodeDetected),
+                                               barcode_failure, Metadata(base_time + 5));
+    assert(result.status == server::PersistenceStatus::kStored);
+    assert(Scalar(database, "SELECT count(*) FROM product WHERE barcode='5901234123457'") == 1);
+
+    server::UploadService upload_service(database, root / "uploads");
+    const std::vector<std::uint8_t> image_bytes{ 0xff, 0xd8, 0xff, 0xd9 };
+    const server::UploadRequest image_upload{
+        .kind = logistics::contracts::http::UploadKind::kImage,
+        .device_id = "PI-VISION-01",
+        .work_id = work_id,
+        .message_id = "UPLOAD-IMAGE-1",
+        .captured_at = "2026-07-15T00:00:00Z",
+        .started_at = {},
+        .ended_at = {},
+        .sha256 = server::Sha256Hex(image_bytes),
+        .mime_type = "image/jpeg",
+        .bytes = image_bytes,
+    };
+    const auto uploaded = upload_service.Store(image_upload);
+    assert(uploaded.status == server::UploadStatus::kCreated);
+
     server::EventPayload image;
     image.work_id = work_id;
-    image.image_mime_type = "image/jpeg";
-    image.image_bytes = { 0xff, 0xd8, 0xff, 0xd9 };
-    image.captured_at_ms = base_time;
-    result = persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-1", mqtt::MessageType::kProductImage), image,
-                                               Metadata(base_time + 4));
+    image.image_id = uploaded.upload_id;
+    image.image_path = uploaded.path;
+    image.image_checksum = uploaded.checksum;
+    image.image_upload_status = "UPLOADED";
+    result =
+        persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-1", mqtt::MessageType::kProductImage, "PI-VISION-01"),
+                                          image, Metadata(base_time + 6, "device/PI-VISION-01/event"));
     assert(result.status == server::PersistenceStatus::kStored);
-    assert(Scalar(database, "SELECT count(*) FROM image_file") == 1);
-    assert(Scalar(database,
-                  "SELECT count(*) FROM image_file WHERE "
-                  "sha256='32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af'") == 1);
-    assert(CountFiles(storage.image_root) == 1);
+    assert(Scalar(database, "SELECT count(*) FROM http_upload WHERE kind='IMAGE'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM product WHERE lifecycle_state='IMAGED'") == 1);
 
     server::EventPayload bad_image = image;
     bad_image.work_id = "00000000-0000-4000-8000-000000000001";
-    result = persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-BAD", mqtt::MessageType::kProductImage), bad_image,
-                                               Metadata(base_time + 4));
+    result =
+        persistence.PersistValidatedEvent(Envelope("MSG-IMAGE-BAD", mqtt::MessageType::kProductImage, "PI-VISION-01"),
+                                          bad_image, Metadata(base_time + 4, "device/PI-VISION-01/event"));
     assert(result.status == server::PersistenceStatus::kPermanentError);
-    assert(Scalar(database, "SELECT count(*) FROM image_file") == 1);
-    assert(CountFiles(storage.image_root) == 1);
+    assert(Scalar(database, "SELECT count(*) FROM http_upload WHERE kind='IMAGE'") == 1);
 
     server::EventPayload completed;
     completed.work_id = work_id;
@@ -150,19 +186,21 @@ int main() {
     server::EventPayload device;
     device.device_role = "input";
     device.connection_state = "ONLINE";
+    device.process_state = "AWAITING_WORK_ID";
     result = persistence.PersistValidatedEvent(Envelope("MSG-STATUS-OLD", mqtt::MessageType::kDeviceStatus), device,
                                                Metadata(base_time, "device/PI-INPUT-01/status"));
     assert(result.ok());
     device.connection_state = "OFFLINE";
+    device.process_state = "VISION_REPORTED";
     result = persistence.PersistValidatedEvent(Envelope("MSG-STATUS-NEW", mqtt::MessageType::kDeviceStatus), device,
                                                Metadata(base_time + 40 * 86'400'000LL, "device/PI-INPUT-01/status"));
     assert(result.ok());
+    assert(Scalar(database, "SELECT count(*) FROM device_status WHERE process_state='VISION_REPORTED'") == 1);
 
     server::RetentionService retention(database, storage);
     assert(retention.RunOnce(base_time + 40 * 86'400'000LL).ok());
     assert(Scalar(database, "SELECT count(*) FROM device_status WHERE device_id='PI-INPUT-01'") == 1);
     assert(Scalar(database, "SELECT count(*) FROM image_file") == 0);
-    assert(CountFiles(storage.image_root) == 0);
 
     const auto migration_copy = root / "migrations";
     std::filesystem::create_directories(migration_copy);

@@ -69,12 +69,14 @@ Testing/
 .cache/
 
 # Runtime and local configuration
+/runtime/
 *.ini
 !*.ini.example
 *.db
 *.db-journal
 *.sqlite
 *.sqlite3
+central-server-rpi/config/devices.json
 logs/
 images/
 

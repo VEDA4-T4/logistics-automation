@@ -9,29 +9,57 @@ on:
 jobs:
   clang-tidy:
     name: clang-tidy
-    runs-on: ubuntu-24.04
+    runs-on: self-hosted
     env:
+      CC: gcc-10
+      CXX: g++-10
       OPENCV_VERSION: 4.10.0
-      OPENCV_INSTALL_DIR: ${{ github.workspace }}/.opencv/4.10.0
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure runner cache paths
+        run: echo "OPENCV_INSTALL_DIR=${RUNNER_TOOL_CACHE}/opencv/4.10.0-gcc10" >> "$GITHUB_ENV"
+
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-tidy cmake curl g++ ninja-build
+          sudo apt-get install -y \
+            build-essential \
+            ca-certificates \
+            clang-tidy \
+            curl \
+            g++-10 \
+            gcc-10 \
+            git \
+            gzip \
+            libcurl4-openssl-dev \
+            libmicrohttpd-dev \
+            libmosquitto-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            ninja-build \
+            nlohmann-json3-dev \
+            pkg-config \
+            tar
 
-      - name: Cache OpenCV
-        id: cache-opencv
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.OPENCV_INSTALL_DIR }}
-          key: opencv-${{ env.OPENCV_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v2
+      - name: Configure CMake
+        run: |
+          test -x /snap/bin/cmake
+          echo "/snap/bin" >> "$GITHUB_PATH"
+          /snap/bin/cmake --version
+          "$CC" --version
+          "$CXX" --version
 
-      - name: Build OpenCV
-        if: steps.cache-opencv.outputs.cache-hit != 'true'
-        run: bash .github/scripts/install-opencv.sh "${OPENCV_VERSION}" "${OPENCV_INSTALL_DIR}"
+      - name: Prepare runner OpenCV cache
+        run: |
+          config_dir="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
+          if [[ -f "${config_dir}/OpenCVConfig.cmake" && \
+                -f "${config_dir}/OpenCVConfig-version.cmake" ]]; then
+            echo "Using runner-cached OpenCV ${OPENCV_VERSION} from ${OPENCV_INSTALL_DIR}"
+          else
+            bash .github/scripts/install-opencv.sh "${OPENCV_VERSION}" "${OPENCV_INSTALL_DIR}"
+          fi
 
       - name: Verify OpenCV installation
         run: |
@@ -57,4 +85,7 @@ jobs:
             -not -path "./.git/*" \
             -not -path "./.opencv/*" \
             -not -path "./control-center/*" \
-            -print0 | xargs -0 clang-tidy -p build
+            -not -path "./device-rpi/kernel/*" \
+            -not -path "./stm32/*" \
+            -not -path "./tmp/*" \
+            -print0 | xargs -0 clang-tidy --quiet -p build

@@ -19,6 +19,10 @@ void TestCrc16KnownVector() {
 }
 
 void TestCommonValidationDoesNotTruncateWideValues() {
+    static_assert(UART_CMD_GRIPPER_MIN == 0x20U);
+    static_assert(UART_CMD_GRIPPER_MAX == 0x2FU);
+    static_assert(UART_CMD_ROTATION_MIN == UART_CMD_GRIPPER_MIN);
+    static_assert(UART_CMD_ROTATION_MAX == UART_CMD_GRIPPER_MAX);
     assert(UART_IS_VALID_COMMAND(UART_CMD_PING) != 0U);
     assert(UART_IS_VALID_COMMAND(0x101U) == 0U);
     assert(UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(UART_CMD_PING, 0U) != 0U);

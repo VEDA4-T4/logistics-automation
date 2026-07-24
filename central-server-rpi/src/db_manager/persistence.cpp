@@ -307,14 +307,27 @@ DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts
                                              const EventPayload& payload, std::int64_t now_ms) {
     std::string sql;
     using contracts::mqtt::MessageType;
+    bool update_barcode = false;
+    bool update_product_info = false;
     if (type == MessageType::kBarcodeDetected) {
-        if (!payload.barcode || payload.barcode->empty())
-            return { DatabaseStatusCode::kInvalidArgument, "BARCODE_DETECTED requires barcode" };
-        sql = "UPDATE product SET barcode=?,lifecycle_state='IDENTIFIED',updated_at_ms=? WHERE work_id=?";
+        update_barcode = payload.barcode.has_value() && !payload.barcode->empty();
+        if (update_barcode) {
+            sql = "UPDATE product SET barcode=?,lifecycle_state='IDENTIFIED',updated_at_ms=? WHERE work_id=?";
+        } else if (payload.process_state == "FAILED") {
+            sql = "UPDATE product SET updated_at_ms=? WHERE work_id=?";
+        } else {
+            return { DatabaseStatusCode::kInvalidArgument,
+                     "BARCODE_DETECTED requires barcode unless recognitionStatus is FAILED" };
+        }
     } else if (type == MessageType::kProductInfo) {
         if (!payload.product_name || payload.product_name->empty())
             return { DatabaseStatusCode::kInvalidArgument, "PRODUCT_INFO requires product_name" };
-        sql = "UPDATE product SET product_name=?,lifecycle_state='IDENTIFIED',updated_at_ms=? WHERE work_id=?";
+        update_product_info = true;
+        sql =
+            "UPDATE product SET barcode=COALESCE(NULLIF(?,''),barcode),"
+            "product_id=COALESCE(NULLIF(?,''),product_id),product_name=?,"
+            "destination=COALESCE(NULLIF(?,''),destination),"
+            "lifecycle_state='IDENTIFIED',updated_at_ms=? WHERE work_id=?";
     } else if (type == MessageType::kDestinationSet) {
         if (!payload.destination || payload.destination->empty())
             return { DatabaseStatusCode::kInvalidArgument, "DESTINATION_SET requires destination" };
@@ -331,10 +344,17 @@ DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts
     if (!status.ok())
         return status;
     int index = 1;
-    if (type == MessageType::kBarcodeDetected)
+    if (update_barcode)
         status = statement.Bind(index++, *payload.barcode);
-    if (type == MessageType::kProductInfo)
-        status = statement.Bind(index++, *payload.product_name);
+    if (update_product_info) {
+        status = statement.Bind(index++, payload.barcode.value_or(""));
+        if (status.ok())
+            status = statement.Bind(index++, payload.product_id.value_or(""));
+        if (status.ok())
+            status = statement.Bind(index++, *payload.product_name);
+        if (status.ok())
+            status = statement.Bind(index++, payload.destination.value_or(""));
+    }
     if (type == MessageType::kDestinationSet)
         status = statement.Bind(index++, *payload.destination);
     if (!status.ok() || !(status = statement.Bind(index++, now_ms)).ok())
@@ -437,6 +457,29 @@ PersistenceService::PersistenceService(Database& database, StorageConfig storage
       next_cleanup_at_ms_(CurrentUnixTimeMilliseconds() +
                           std::max(1, storage_config_.cleanup_interval_hours) * 3'600'000LL) {}
 
+DatabaseStatus PersistenceService::FindActiveProductByBarcode(std::string_view barcode,
+                                                              std::optional<CatalogProduct>& output) {
+    output.reset();
+    Statement statement;
+    auto status = database_.Prepare(
+        "SELECT barcode,product_id,product_name,destination FROM product_catalog "
+        "WHERE barcode=? AND active=1",
+        statement);
+    if (!status.ok() || !(status = statement.Bind(1, barcode)).ok())
+        return status;
+    bool has_row = false;
+    status = statement.Step(has_row);
+    if (!status.ok() || !has_row)
+        return status;
+    output = CatalogProduct{
+        .barcode = statement.ColumnText(0),
+        .product_id = statement.ColumnText(1),
+        .product_name = statement.ColumnText(2),
+        .destination = statement.ColumnText(3),
+    };
+    return DatabaseStatus::Ok();
+}
+
 DatabaseStatus PersistenceService::RunRetentionIfDue(std::int64_t now_ms) {
     if (now_ms < next_cleanup_at_ms_)
         return DatabaseStatus::Ok();
@@ -477,10 +520,24 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
     if (!status.ok())
         return Failure(status);
     if (duplicate) {
+        std::optional<std::string> duplicate_work_id = payload.work_id;
+        if (envelope.message_type == contracts::mqtt::MessageType::kBoxDetected) {
+            Statement existing_work;
+            status = database_.Prepare("SELECT work_id FROM work_history WHERE message_id=?", existing_work);
+            if (status.ok())
+                status = existing_work.Bind(1, envelope.message_id);
+            bool work_row = false;
+            if (status.ok())
+                status = existing_work.Step(work_row);
+            if (!status.ok())
+                return Failure(status);
+            if (work_row)
+                duplicate_work_id = existing_work.ColumnText(0);
+        }
         status = transaction.Commit();
         if (!status.ok())
             return Failure(status);
-        return { PersistenceStatus::kDuplicate, "message was already stored", payload.work_id };
+        return { PersistenceStatus::kDuplicate, "message was already stored", duplicate_work_id };
     }
 
     ProductRepository products(database_);
@@ -516,40 +573,38 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
             return reject(status);
     } else if (RequiresWorkId(envelope.message_type)) {
         if (envelope.message_type == contracts::mqtt::MessageType::kProductImage) {
-            if (!payload.image_mime_type || payload.image_bytes.empty())
-                return reject({ DatabaseStatusCode::kInvalidArgument, "PRODUCT_IMAGE requires MIME type and bytes" });
-            status = image_store_.Store(*work_id, *payload.image_mime_type, payload.image_bytes,
-                                        payload.captured_at_ms.value_or(metadata.received_at_ms), stored_image);
-            if (!status.ok())
-                return reject(status);
-            remove_image_on_failure = stored_image.created;
-            Statement image;
+            if (!payload.image_id || !payload.image_path || !payload.image_checksum ||
+                payload.image_upload_status != "UPLOADED") {
+                return reject(
+                    { DatabaseStatusCode::kInvalidArgument, "PRODUCT_IMAGE requires confirmed HTTP upload metadata" });
+            }
+            constexpr std::string_view upload_path_prefix = "/uploads/";
+            if (!payload.image_path->starts_with(upload_path_prefix)) {
+                return reject({ DatabaseStatusCode::kInvalidArgument, "PRODUCT_IMAGE path is not an upload path" });
+            }
+            Statement uploaded;
             status = database_.Prepare(
-                "INSERT INTO "
-                "image_file(work_id,message_id,relative_path,mime_type,byte_size,sha256,captured_at_ms,created_at_ms) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                image);
+                "SELECT count(*) FROM http_upload WHERE upload_id=? AND kind='IMAGE' AND work_id=? "
+                "AND relative_path=? AND sha256=? AND device_id=?",
+                uploaded);
             if (status.ok())
-                status = image.Bind(1, *work_id);
+                status = uploaded.Bind(1, *payload.image_id);
             if (status.ok())
-                status = image.Bind(2, envelope.message_id);
+                status = uploaded.Bind(2, *work_id);
             if (status.ok())
-                status = image.Bind(3, stored_image.relative_path.generic_string());
+                status = uploaded.Bind(3, payload.image_path->substr(upload_path_prefix.size()));
             if (status.ok())
-                status = image.Bind(4, *payload.image_mime_type);
+                status = uploaded.Bind(4, *payload.image_checksum);
             if (status.ok())
-                status = image.Bind(5, stored_image.byte_size);
-            if (status.ok())
-                status = image.Bind(6, stored_image.sha256);
-            if (status.ok())
-                status = image.Bind(7, payload.captured_at_ms.value_or(metadata.received_at_ms));
-            if (status.ok())
-                status = image.Bind(8, metadata.received_at_ms);
+                status = uploaded.Bind(5, envelope.source_id);
             bool row = false;
             if (status.ok())
-                status = image.Step(row);
-            if (!status.ok()) {
+                status = uploaded.Step(row);
+            if (!status.ok())
                 return reject(status);
+            if (!row || uploaded.ColumnInt(0) != 1) {
+                return reject(
+                    { DatabaseStatusCode::kNotFound, "PRODUCT_IMAGE does not match a confirmed HTTP upload" });
             }
         }
         if (!(status = products.ApplyEvent(*work_id, envelope.message_type, payload, metadata.received_at_ms)).ok() ||
