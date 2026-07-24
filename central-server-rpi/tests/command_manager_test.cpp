@@ -136,6 +136,44 @@ void TestResponsesAreAggregatedAndDuplicatesIgnored() {
 
     const auto late = manager.HandleResponse(MakeResponse("PI-02", "RESP-03", "REQ-AGGREGATE"));
     assert(late.disposition == central_server::CommandResponseDisposition::kUnknownRequest);
+    assert(!manager.TrackCommand(MakeCommand("REQ-AGGREGATE", "SYSTEM"), { "PI-01", "PI-02" }));
+    assert(manager.LastError() == "requestId was already received");
+}
+
+void TestPartialDispatchFailureIsIncludedInFinalResult() {
+    central_server::CommandManager manager;
+    assert(manager.TrackCommand(MakeCommand("REQ-PARTIAL", "SYSTEM"), { "PI-01", "PI-02" }));
+
+    const auto progress = manager.HandleDispatchFailures("REQ-PARTIAL", { "PI-02" }, "2026-07-25T01:00:01Z");
+    assert(progress.has_value());
+    const auto* progress_payload = mqtt::GetPayload<mqtt::CommandResponsePayload>(*progress);
+    assert(progress_payload != nullptr);
+    assert(progress_payload->result == mqtt::CommandResult::kProcessing);
+    assert(progress_payload->error_code == std::optional<std::string>("ERR-COMMAND-DISPATCH"));
+    assert(manager.PendingCount() == 1);
+
+    const auto response = manager.HandleResponse(MakeResponse("PI-01", "RESP-PARTIAL", "REQ-PARTIAL"));
+    assert(response.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(response.message.has_value());
+    const auto* final_payload = mqtt::GetPayload<mqtt::CommandResponsePayload>(*response.message);
+    assert(final_payload != nullptr);
+    assert(final_payload->result == mqtt::CommandResult::kFailed);
+    assert(final_payload->error_code == std::optional<std::string>("ERR-COMMAND-DISPATCH"));
+    assert(manager.PendingCount() == 0);
+}
+
+void TestNoTargetProducesImmediateRejection() {
+    central_server::CommandManager manager;
+    const auto rejected = manager.MakeImmediateResult(MakeCommand("REQ-NO-TARGET"), mqtt::CommandResult::kRejected,
+                                                      "2026-07-25T01:00:00Z", std::string("ERR-COMMAND-NO-TARGET"),
+                                                      "command has no reachable target devices");
+    assert(rejected.has_value());
+    const auto* payload = mqtt::GetPayload<mqtt::CommandResponsePayload>(*rejected);
+    assert(payload != nullptr);
+    assert(payload->request_id == "REQ-NO-TARGET");
+    assert(payload->result == mqtt::CommandResult::kRejected);
+    assert(payload->error_code == std::optional<std::string>("ERR-COMMAND-NO-TARGET"));
+    assert(mqtt::ValidateTopicMessage(mqtt::QtResponseTopic("control-center"), *rejected).IsSuccess());
 }
 
 void TestWrongDeviceIsRejectedAndTimeoutIsGenerated() {
@@ -180,6 +218,8 @@ void TestEmergencyStopUsesShortConfirmationTimeout() {
 int main() {
     TestCommandTargetsAreResolvedByDeviceAndRole();
     TestResponsesAreAggregatedAndDuplicatesIgnored();
+    TestPartialDispatchFailureIsIncludedInFinalResult();
+    TestNoTargetProducesImmediateRejection();
     TestWrongDeviceIsRejectedAndTimeoutIsGenerated();
     TestEmergencyStopUsesShortConfirmationTimeout();
     return 0;

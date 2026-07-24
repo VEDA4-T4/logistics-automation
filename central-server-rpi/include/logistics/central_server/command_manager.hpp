@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -51,6 +52,11 @@ public:
 
     [[nodiscard]] bool TrackCommand(const contracts::mqtt::MqttMessage& message,
                                     const std::vector<std::string>& target_device_ids);
+    [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> HandleDispatchFailures(
+        std::string_view request_id, const std::vector<std::string>& failed_device_ids, std::string_view timestamp);
+    [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> MakeImmediateResult(
+        const contracts::mqtt::MqttMessage& command, contracts::mqtt::CommandResult result, std::string timestamp,
+        std::optional<std::string> error_code, std::string message);
     [[nodiscard]] CommandResponseDecision HandleResponse(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] std::vector<contracts::mqtt::MqttMessage> CheckTimeouts(std::string_view checked_at);
     [[nodiscard]] std::size_t PendingCount() const;
@@ -70,9 +76,12 @@ private:
     [[nodiscard]] contracts::mqtt::MqttMessage MakeAggregateResponse(
         std::string_view request_id, const PendingCommand& pending, contracts::mqtt::CommandResult result,
         std::string timestamp, std::optional<std::string> error_code, std::string message);
+    void RememberCompletedRequest(std::string request_id);
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, PendingCommand> pending_;
+    std::unordered_set<std::string> completed_requests_;
+    std::deque<std::string> completed_request_order_;
     NowProvider now_provider_;
     std::uint64_t message_sequence_{};
     std::string last_error_;

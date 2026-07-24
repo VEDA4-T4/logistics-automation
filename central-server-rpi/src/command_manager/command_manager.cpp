@@ -7,6 +7,7 @@ namespace logistics::central_server {
 namespace {
 
 namespace mqtt = contracts::mqtt;
+constexpr std::size_t kCompletedRequestLimit = 256;
 
 [[nodiscard]] bool IsReachable(const DeviceSnapshot& device) noexcept {
     return device.registered && device.connection_state != mqtt::ConnectionState::kOffline;
@@ -93,13 +94,79 @@ bool CommandManager::TrackCommand(const mqtt::MqttMessage& message, const std::v
     }
 
     std::lock_guard lock(mutex_);
-    if (pending_.contains(identity->first)) {
-        last_error_ = "requestId is already pending";
+    if (pending_.contains(identity->first) || completed_requests_.contains(identity->first)) {
+        last_error_ = "requestId was already received";
         return false;
     }
     pending_.emplace(identity->first, std::move(pending));
     last_error_.clear();
     return true;
+}
+
+std::optional<mqtt::MqttMessage> CommandManager::HandleDispatchFailures(
+    std::string_view request_id, const std::vector<std::string>& failed_device_ids, std::string_view timestamp) {
+    std::lock_guard lock(mutex_);
+    const auto pending_iterator = pending_.find(std::string(request_id));
+    if (pending_iterator == pending_.end() || failed_device_ids.empty()) {
+        return std::nullopt;
+    }
+
+    PendingCommand& pending = pending_iterator->second;
+    std::size_t newly_failed = 0;
+    for (const auto& device_id : failed_device_ids) {
+        if (!pending.expected_devices.contains(device_id)) {
+            continue;
+        }
+        newly_failed += pending.completed_devices.insert(device_id).second ? 1U : 0U;
+    }
+    if (newly_failed == 0) {
+        return std::nullopt;
+    }
+
+    pending.failure = mqtt::CommandResponsePayload{
+        .request_id = std::string(request_id),
+        .command = pending.command,
+        .result = mqtt::CommandResult::kFailed,
+        .error_code = std::string("ERR-COMMAND-DISPATCH"),
+        .message = "command dispatch failed for one or more target devices",
+    };
+
+    if (pending.completed_devices.size() < pending.expected_devices.size()) {
+        return MakeAggregateResponse(request_id, pending, mqtt::CommandResult::kProcessing, std::string(timestamp),
+                                     std::string("ERR-COMMAND-DISPATCH"),
+                                     "dispatch partially failed; waiting for remaining device responses");
+    }
+
+    auto failed =
+        MakeAggregateResponse(request_id, pending, mqtt::CommandResult::kFailed, std::string(timestamp),
+                              std::string("ERR-COMMAND-DISPATCH"), "command dispatch failed for all target devices");
+    RememberCompletedRequest(std::string(request_id));
+    pending_.erase(pending_iterator);
+    return failed;
+}
+
+std::optional<mqtt::MqttMessage> CommandManager::MakeImmediateResult(const mqtt::MqttMessage& command,
+                                                                     mqtt::CommandResult result, std::string timestamp,
+                                                                     std::optional<std::string> error_code,
+                                                                     std::string message) {
+    const auto identity = CommandIdentity(command);
+    if (!identity) {
+        return std::nullopt;
+    }
+
+    std::lock_guard lock(mutex_);
+    PendingCommand immediate{
+        .command = identity->second,
+        .started_at = now_provider_(),
+        .timeout = {},
+        .expected_devices = {},
+        .completed_devices = {},
+        .response_message_ids = {},
+        .failure = std::nullopt,
+    };
+    RememberCompletedRequest(identity->first);
+    return MakeAggregateResponse(identity->first, immediate, result, std::move(timestamp), std::move(error_code),
+                                 std::move(message));
 }
 
 CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& message) {
@@ -167,6 +234,7 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
         pending.failure ? pending.failure->message : "all target devices completed the command";
     auto aggregate = MakeAggregateResponse(response->request_id, pending, final_result, message.timestamp, final_error,
                                            final_message);
+    RememberCompletedRequest(response->request_id);
     pending_.erase(pending_iterator);
     return {
         .disposition = CommandResponseDisposition::kForward,
@@ -190,6 +258,7 @@ std::vector<mqtt::MqttMessage> CommandManager::CheckTimeouts(std::string_view ch
         timed_out.push_back(MakeAggregateResponse(iterator->first, pending, mqtt::CommandResult::kTimeout,
                                                   std::string(checked_at), std::string("ERR-COMMAND-TIMEOUT"),
                                                   "one or more target devices did not respond before timeout"));
+        RememberCompletedRequest(iterator->first);
         iterator = pending_.erase(iterator);
     }
     return timed_out;
@@ -223,6 +292,17 @@ mqtt::MqttMessage CommandManager::MakeAggregateResponse(std::string_view request
                 .message = std::move(message),
             },
     };
+}
+
+void CommandManager::RememberCompletedRequest(std::string request_id) {
+    if (!completed_requests_.insert(request_id).second) {
+        return;
+    }
+    completed_request_order_.push_back(std::move(request_id));
+    if (completed_request_order_.size() > kCompletedRequestLimit) {
+        completed_requests_.erase(completed_request_order_.front());
+        completed_request_order_.pop_front();
+    }
 }
 
 }  // namespace logistics::central_server

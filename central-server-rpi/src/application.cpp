@@ -16,6 +16,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "logistics/central_server/command_manager.hpp"
 #include "logistics/central_server/database.hpp"
@@ -414,47 +415,74 @@ int Application::Run(int argc, char* argv[]) {
             return mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(qt_client_id), message,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         });
-    mqtt_handler.SetCommandRouteHandler(
-        [&mqtt_client, &device_manager, &command_manager](const contracts::mqtt::MqttMessage& message) {
-            const auto route = ResolveCommandTargets(message, device_manager->RegisteredDevices());
-            if (!route.IsValid()) {
-                std::cerr << "[server][ERROR] command has no reachable target devices\n";
+    mqtt_handler.SetCommandRouteHandler([&mqtt_client, &device_manager, &command_manager,
+                                         &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
+        const auto route = ResolveCommandTargets(message, device_manager->RegisteredDevices());
+        if (!route.IsValid()) {
+            std::cerr << "[server][ERROR] command has no reachable target devices\n";
+            const auto rejected = command_manager.MakeImmediateResult(
+                message, contracts::mqtt::CommandResult::kRejected, CurrentIso8601Timestamp(),
+                std::string("ERR-COMMAND-NO-TARGET"), "command has no reachable target devices");
+            return rejected.has_value() && publish_qt_response(*rejected);
+        }
+
+        std::string request_id;
+        if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message)) {
+            request_id = command->request_id;
+        } else if (const auto* emergency_stop =
+                       contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(message)) {
+            request_id = emergency_stop->request_id;
+        } else if (const auto* destination =
+                       contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(message)) {
+            request_id = destination->request_id;
+        }
+        if (!command_manager.TrackCommand(message, route.target_device_ids)) {
+            std::clog << "[server][INFO] duplicate command request ignored: " << command_manager.LastError() << '\n';
+            return true;
+        }
+
+        if (route.broadcast) {
+            auto forwarded = message;
+            auto* payload = contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(forwarded);
+            if (payload == nullptr) {
                 return false;
             }
-
-            if (route.broadcast) {
-                auto forwarded = message;
-                auto* payload = contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(forwarded);
-                if (payload == nullptr) {
-                    return false;
-                }
-                payload->target_device_id = "ALL";
-                if (!mqtt_client.PublishMessage(contracts::mqtt::kSystemBroadcastCommandTopic, forwarded,
-                                                contracts::mqtt::Qos::kAtLeastOnce)) {
-                    return false;
-                }
-                return command_manager.TrackCommand(message, route.target_device_ids);
+            payload->target_device_id = "ALL";
+            if (mqtt_client.PublishMessage(contracts::mqtt::kSystemBroadcastCommandTopic, forwarded,
+                                           contracts::mqtt::Qos::kAtLeastOnce)) {
+                return true;
             }
+            const auto failed =
+                command_manager.HandleDispatchFailures(request_id, route.target_device_ids, CurrentIso8601Timestamp());
+            return failed.has_value() && publish_qt_response(*failed);
+        }
 
-            const auto publish_to_device = [&mqtt_client, &message](std::string_view device_id) {
-                auto forwarded = message;
-                forwarded.message_id += "-" + std::string(device_id);
-                if (auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(forwarded)) {
-                    command->target_device_id = device_id;
-                } else if (auto* destination =
-                               contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(forwarded)) {
-                    destination->target_device_id = device_id;
-                }
-                return mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), forwarded,
-                                                  contracts::mqtt::Qos::kAtLeastOnce);
-            };
-
-            bool all_published = true;
-            for (const auto& device_id : route.target_device_ids) {
-                all_published = publish_to_device(device_id) && all_published;
+        const auto publish_to_device = [&mqtt_client, &message](std::string_view device_id) {
+            auto forwarded = message;
+            forwarded.message_id += "-" + std::string(device_id);
+            if (auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(forwarded)) {
+                command->target_device_id = device_id;
+            } else if (auto* destination =
+                           contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(forwarded)) {
+                destination->target_device_id = device_id;
             }
-            return all_published && command_manager.TrackCommand(message, route.target_device_ids);
-        });
+            return mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), forwarded,
+                                              contracts::mqtt::Qos::kAtLeastOnce);
+        };
+
+        std::vector<std::string> failed_devices;
+        for (const auto& device_id : route.target_device_ids) {
+            if (!publish_to_device(device_id)) {
+                failed_devices.push_back(device_id);
+            }
+        }
+        if (failed_devices.empty()) {
+            return true;
+        }
+        const auto failure =
+            command_manager.HandleDispatchFailures(request_id, failed_devices, CurrentIso8601Timestamp());
+        return failure.has_value() && publish_qt_response(*failure);
+    });
 
     mqtt_client.SetMessageHandler([&mqtt_handler](std::string_view topic, std::string_view payload) {
         static_cast<void>(mqtt_handler.Handle(topic, payload));
