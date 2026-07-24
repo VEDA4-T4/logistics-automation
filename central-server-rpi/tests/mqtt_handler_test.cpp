@@ -100,6 +100,31 @@ void TestTopicMessageMismatchIsRejected() {
     assert(logs.front().message.find("SOURCE_ID_MISMATCH") != std::string::npos);
 }
 
+void TestUnsupportedVersionAndMissingFieldsAreRejected() {
+    central_server::DeviceManager device_manager;
+    std::vector<LogEntry> logs;
+    central_server::MqttHandler handler(device_manager,
+                                        [&logs](central_server::MqttHandlerLogLevel level, std::string_view message) {
+                                            logs.push_back({ .level = level, .message = std::string(message) });
+                                        });
+
+    auto unsupported_version = mqtt::Json::parse(Encode(MakeRegistration()));
+    unsupported_version[std::string(mqtt::kProtocolVersionField)] = "2.0";
+    assert(!handler.Handle("device/PI-01/register", unsupported_version.dump()));
+
+    auto missing_data = mqtt::Json::parse(Encode(MakeRegistration()));
+    missing_data.erase(std::string(mqtt::kDataField));
+    assert(!handler.Handle("device/PI-01/register", missing_data.dump()));
+
+    assert(device_manager.RegisteredDeviceCount() == 0);
+    assert(logs.size() == 2);
+    assert(logs[0].level == central_server::MqttHandlerLogLevel::kError);
+    assert(logs[0].message.find("UNSUPPORTED_PROTOCOL_VERSION") != std::string::npos);
+    assert(logs[1].level == central_server::MqttHandlerLogLevel::kError);
+    assert(logs[1].message.find("MISSING_FIELD") != std::string::npos);
+    assert(logs[1].message.find("field=data") != std::string::npos);
+}
+
 void TestBarcodeIsEnrichedFromProductCatalog() {
     const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path() / ("logistics-handler-test-" + unique);
@@ -225,13 +250,133 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
     std::filesystem::remove_all(root);
 }
 
+void TestMessageTypesUseDedicatedRouteHandlers() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto root = std::filesystem::temp_directory_path() / ("logistics-routing-test-" + unique);
+    std::filesystem::create_directories(root);
+    {
+        central_server::Database database;
+        const central_server::DatabaseConfig database_config{
+            .path = root / "test.db",
+            .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+            .busy_timeout_ms = 100,
+        };
+        assert(database.Open(database_config).ok());
+        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
+
+        central_server::StorageConfig storage;
+        storage.image_root = root / "images";
+        central_server::PersistenceService persistence(database, storage);
+        central_server::DeviceManager device_manager;
+        central_server::MqttHandler handler(device_manager, {}, &persistence);
+        std::vector<mqtt::MessageType> command_routes;
+        std::vector<mqtt::MessageType> response_routes;
+        std::vector<mqtt::MessageType> status_routes;
+        std::vector<mqtt::MessageType> error_routes;
+        handler.SetCommandRouteHandler([&command_routes](const mqtt::MqttMessage& message) {
+            command_routes.push_back(message.message_type);
+            return true;
+        });
+        handler.SetQtResponseHandler([&response_routes](const mqtt::MqttMessage& message) {
+            response_routes.push_back(message.message_type);
+            return true;
+        });
+        handler.SetQtStatusHandler([&status_routes](const mqtt::MqttMessage& message) {
+            status_routes.push_back(message.message_type);
+            return true;
+        });
+        handler.SetQtErrorHandler([&error_routes](const mqtt::MqttMessage& message) {
+            error_routes.push_back(message.message_type);
+            return true;
+        });
+
+        assert(handler.Handle("device/PI-ROUTE/register", Encode(MakeRegistration("PI-ROUTE"))));
+
+        const mqtt::MqttMessage command{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-ROUTE-COMMAND",
+            .message_type = mqtt::MessageType::kControlCommand,
+            .source_id = "QT-ROUTE",
+            .timestamp = "2026-07-24T01:00:00Z",
+            .data =
+                mqtt::ControlCommandPayload{
+                    .request_id = "REQ-ROUTE-1",
+                    .command = mqtt::ControlCommand::kStart,
+                    .target_device_id = "PI-ROUTE",
+                    .component_id = "CONVEYOR-01",
+                    .params = mqtt::Json::object(),
+                },
+        };
+        assert(handler.Handle(mqtt::QtRequestTopic("QT-ROUTE"), Encode(command)));
+
+        const mqtt::MqttMessage response{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-ROUTE-RESPONSE",
+            .message_type = mqtt::MessageType::kCommandResponse,
+            .source_id = "PI-ROUTE",
+            .timestamp = "2026-07-24T01:00:01Z",
+            .data =
+                mqtt::CommandResponsePayload{
+                    .request_id = "REQ-ROUTE-1",
+                    .command = mqtt::ControlCommand::kStart,
+                    .result = mqtt::CommandResult::kSuccess,
+                    .error_code = std::nullopt,
+                    .message = "started",
+                },
+        };
+        assert(handler.Handle(mqtt::DeviceResponseTopic("PI-ROUTE"), Encode(response)));
+
+        const mqtt::MqttMessage status{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-ROUTE-STATUS",
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .source_id = "PI-ROUTE",
+            .timestamp = "2026-07-24T01:00:02Z",
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = "RUNNING",
+                    .job_id = std::nullopt,
+                    .error_code = std::nullopt,
+                },
+        };
+        assert(handler.Handle(mqtt::DeviceStatusTopic("PI-ROUTE"), Encode(status)));
+
+        const mqtt::MqttMessage error{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-ROUTE-ERROR",
+            .message_type = mqtt::MessageType::kErrorOccurred,
+            .source_id = "PI-ROUTE",
+            .timestamp = "2026-07-24T01:00:03Z",
+            .data =
+                mqtt::ErrorOccurredPayload{
+                    .job_id = std::nullopt,
+                    .error_code = "ERR-ROUTE-TEST",
+                    .error_level = "WARNING",
+                    .current_state = "RUNNING",
+                    .message = "routing test",
+                    .distance = std::nullopt,
+                },
+        };
+        assert(handler.Handle(mqtt::DeviceErrorTopic("PI-ROUTE"), Encode(error)));
+
+        assert(command_routes == std::vector{ mqtt::MessageType::kControlCommand });
+        assert(response_routes == std::vector{ mqtt::MessageType::kCommandResponse });
+        assert(status_routes == std::vector{ mqtt::MessageType::kDeviceStatus });
+        assert(error_routes == std::vector{ mqtt::MessageType::kErrorOccurred });
+    }
+    std::filesystem::remove_all(root);
+}
+
 }  // namespace
 
 int main() {
     TestRegistrationIsDecodedValidatedAndRouted();
     TestMalformedJsonIsRejected();
     TestTopicMessageMismatchIsRejected();
+    TestUnsupportedVersionAndMissingFieldsAreRejected();
     TestBarcodeIsEnrichedFromProductCatalog();
     TestHeartbeatIsForwardedToQtAsDeviceStatus();
+    TestMessageTypesUseDedicatedRouteHandlers();
     return 0;
 }
