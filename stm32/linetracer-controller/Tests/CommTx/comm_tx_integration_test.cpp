@@ -11,8 +11,7 @@ extern "C" {
 
 namespace {
 
-app_control_command_t MakeCommand(app_control_command_type_t type, std::uint32_t now_ms,
-                                  std::uint8_t sequence) {
+app_control_command_t MakeCommand(app_control_command_type_t type, std::uint32_t now_ms, std::uint8_t sequence) {
     app_control_command_t command{};
     command.type = type;
     command.received_at_ms = now_ms;
@@ -20,8 +19,7 @@ app_control_command_t MakeCommand(app_control_command_type_t type, std::uint32_t
     return command;
 }
 
-uart_frame_t Decode(const std::array<std::uint8_t, UART_MAX_FRAME_SIZE>& encoded,
-                    std::size_t length) {
+uart_frame_t Decode(const std::array<std::uint8_t, UART_MAX_FRAME_SIZE>& encoded, std::size_t length) {
     uart_frame_t frame{};
     assert(uart_decode_frame(encoded.data(), length, &frame) == UART_CODEC_OK);
     return frame;
@@ -50,13 +48,13 @@ void TestControlToCommTxLifecycleAndPersistentFault() {
     assign_route.route_id = UART_LINETRACER_ROUTE_C;
     const auto assign_result = ControlLogic_HandleCommand(&control, &assign_route, 20U);
     assert(assign_result.accepted != 0U);
-    assert(ControlLogic_BuildStartedEvent(&control, &assign_route, &assign_result,
-                                          UART_LINETRACER_LOAD_EMPTY, 20U, &tx_event) != 0U);
+    assert(ControlLogic_BuildStartedEvent(&control, &assign_route, &assign_result, UART_LINETRACER_LOAD_EMPTY, 20U,
+                                          &tx_event) != 0U);
     assert(tx_event.type == APP_TX_EVENT_STARTED);
     assert(tx_event.job_id == 77U);
     assert(tx_event.route_id == UART_LINETRACER_ROUTE_C);
-    assert(CommTxLogic_EncodeEvent(&tx_logic, &tx_event, encoded.data(), encoded.size(),
-                                   &encoded_length) == UART_CODEC_OK);
+    assert(CommTxLogic_EncodeEvent(&tx_logic, &tx_event, encoded.data(), encoded.size(), &encoded_length) ==
+           UART_CODEC_OK);
     auto frame = Decode(encoded, encoded_length);
     assert(frame.payload[UART_EVENT_ID_INDEX] == UART_LINETRACER_EVENT_STARTED);
     CommTxLogic_ObserveEvent(&observed, &tx_event);
@@ -73,17 +71,14 @@ void TestControlToCommTxLifecycleAndPersistentFault() {
     emergency.reason = LINETRACER_STOP_REASON_EMERGENCY;
     emergency.error_code = UART_ERROR_EMERGENCY_STOP;
     assert(ControlLogic_ApplySafetyEvent(&control, &emergency, 30U) != 0U);
-    assert(ControlLogic_BuildSafetyFaultEvent(&control, &emergency,
-                                              UART_LINETRACER_LOAD_EMPTY, 30U,
-                                              &tx_event) != 0U);
+    assert(ControlLogic_BuildSafetyFaultEvent(&control, &emergency, UART_LINETRACER_LOAD_EMPTY, 30U, &tx_event) != 0U);
     assert(tx_event.type == APP_TX_EVENT_FAULT);
     assert(tx_event.error_code == UART_ERROR_EMERGENCY_STOP);
-    assert(CommTxLogic_EncodeEvent(&tx_logic, &tx_event, encoded.data(), encoded.size(),
-                                   &encoded_length) == UART_CODEC_OK);
+    assert(CommTxLogic_EncodeEvent(&tx_logic, &tx_event, encoded.data(), encoded.size(), &encoded_length) ==
+           UART_CODEC_OK);
     frame = Decode(encoded, encoded_length);
     assert(frame.payload[UART_EVENT_ID_INDEX] == UART_LINETRACER_EVENT_FAULT);
-    assert(frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX] ==
-           UART_ERROR_EMERGENCY_STOP);
+    assert(frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX] == UART_ERROR_EMERGENCY_STOP);
     CommTxLogic_ObserveEvent(&observed, &tx_event);
 
     ControlLogic_MakeSnapshot(&control, UART_LINETRACER_LOAD_EMPTY, 30U, &control_snapshot);
@@ -97,8 +92,7 @@ void TestControlToCommTxLifecycleAndPersistentFault() {
     app_control_safety_event_t reset{};
     reset.type = APP_CONTROL_SAFETY_RESET_APPROVED;
     assert(ControlLogic_ApplySafetyEvent(&control, &reset, 40U) != 0U);
-    ControlLogic_MakeSnapshot(&control, UART_LINETRACER_LOAD_EMPTY, 40U,
-                              &control_snapshot);
+    ControlLogic_MakeSnapshot(&control, UART_LINETRACER_LOAD_EMPTY, 40U, &control_snapshot);
     CommTxLogic_ObserveControl(&observed, &control_snapshot);
     CommTxLogic_MakeHeartbeat(&observed, 4000U, UART_ERROR_NONE, &heartbeat);
     assert(heartbeat.state == UART_LINETRACER_STATE_IDLE);
