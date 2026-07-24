@@ -27,6 +27,19 @@ if(NOT LOGISTICS_BUILD_DEVICE_NODES)
     return()
 endif()
 
+add_library(device_sorting_node sorting-node/sorting_node.cpp)
+add_library(logistics::device_sorting_node ALIAS device_sorting_node)
+target_include_directories(device_sorting_node PUBLIC common/include)
+target_link_libraries(device_sorting_node PUBLIC logistics::contracts logistics::device_uart_session)
+logistics_enable_warnings(device_sorting_node)
+
+if(BUILD_TESTING)
+    add_executable(device_sorting_node_test tests/sorting_node_test.cpp)
+    target_link_libraries(device_sorting_node_test PRIVATE logistics::device_sorting_node)
+    logistics_enable_warnings(device_sorting_node_test)
+    add_test(NAME device_sorting_node_test COMMAND device_sorting_node_test)
+endif()
+
 add_library(
     device_mqtt_core
     common/config/mqtt_node_config.cpp
@@ -161,6 +174,7 @@ endfunction()
 add_device_node(logistics_input_node input-node/main.cpp)
 add_device_node(logistics_vision_node vision-node/main.cpp)
 add_device_node(logistics_sorting_node sorting-node/main.cpp)
+target_link_libraries(logistics_sorting_node PRIVATE logistics::device_sorting_node logistics::device_uart_session)
 add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
 
 if(BUILD_TESTING)
@@ -214,6 +228,12 @@ target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
 target_link_libraries(logistics_vision_node PRIVATE logistics::vision_mqtt_workflow)
 
 if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+    target_compile_definitions(logistics_sorting_node PRIVATE LOGISTICS_SORTING_DAEMON_ENABLED=1)
+    target_link_libraries(
+        logistics_sorting_node
+        PRIVATE logistics::device_mqtt_mosquitto logistics::device_status
+    )
+
     target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)
     target_link_libraries(
         logistics_vision_node

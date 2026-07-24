@@ -19,8 +19,10 @@ namespace logistics::device {
 enum class UartSessionEventType {
     kFrameReceived,
     kAckReceived,
+    kCommandResponseReceived,
     kDuplicateFrame,
     kUnexpectedAck,
+    kUnexpectedCommandResponse,
     kParserError,
     kCommandRetried,
     kAckTimeout,
@@ -64,6 +66,8 @@ struct UartSessionDiagnostics {
     std::uint64_t parser_errors{};
     std::uint64_t crc_errors{};
     std::uint64_t unexpected_acks{};
+    std::uint64_t command_responses{};
+    std::uint64_t unexpected_command_responses{};
     std::uint64_t command_retries{};
     std::uint64_t ack_timeouts{};
     std::uint64_t transport_disconnects{};
@@ -122,6 +126,7 @@ private:
     void ProcessBytes(std::span<const std::uint8_t> bytes);
     void HandleReadyFrame(const uart_frame_t& frame);
     void HandleAck(const uart_frame_t& frame);
+    void HandleCommandResponse(const uart_frame_t& frame);
     void HandleParserResult(uart_parser_result_t result);
     void HandleTransportFailure(UartIoResult result);
     void RetryPendingCommand();

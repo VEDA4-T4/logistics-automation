@@ -60,6 +60,9 @@ inline constexpr std::string_view kParamsField = "params";
 inline constexpr std::string_view kErrorLevelField = "errorLevel";
 inline constexpr std::string_view kMessageField = "message";
 inline constexpr std::string_view kDistanceField = "distance";
+inline constexpr std::string_view kSensorIdField = "sensorId";
+inline constexpr std::string_view kMeasurementStatusField = "measurementStatus";
+inline constexpr std::string_view kDistanceCmField = "distanceCm";
 
 [[nodiscard]] constexpr bool IsValidErrorLevel(std::string_view value) noexcept {
     return value == "INFO" || value == "WARNING" || value == "ERROR" || value == "CRITICAL";
@@ -67,6 +70,10 @@ inline constexpr std::string_view kDistanceField = "distance";
 
 [[nodiscard]] constexpr bool IsValidRecognitionStatus(std::string_view value) noexcept {
     return value == "SUCCESS" || value == "FAILED" || value == "MISSING_DATA";
+}
+
+[[nodiscard]] constexpr bool IsValidMeasurementStatus(std::string_view value) noexcept {
+    return value == "CLEAR" || value == "DETECTED" || value == "FAULT";
 }
 
 enum class CodecError : std::uint8_t {
@@ -151,6 +158,18 @@ struct BoxDetectedPayload {
 
     [[nodiscard]] bool IsValid() const noexcept {
         return detected && !image_name.empty();
+    }
+};
+
+struct SensorStatusPayload {
+    std::int32_t sensor_id{ 0 };
+    std::string measurement_status;
+    std::int32_t distance_cm{ 0 };
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return sensor_id > 0 && sensor_id <= std::numeric_limits<std::uint8_t>::max() &&
+               IsValidMeasurementStatus(measurement_status) && distance_cm >= 0 &&
+               distance_cm <= std::numeric_limits<std::uint16_t>::max();
     }
 };
 
@@ -341,7 +360,7 @@ using MessagePayload =
     std::variant<std::monostate, DeviceRegisterPayload, HeartbeatPayload, BoxDetectedPayload, WorkCreatedPayload,
                  WorkCompletedPayload, PositionDetectedPayload, BarcodeDetectedPayload, ProductImagePayload,
                  ProductInfoPayload, DestinationSetPayload, DeviceStatusPayload, ControlCommandPayload,
-                 ErrorOccurredPayload, EmergencyStopPayload, CommandResponsePayload>;
+                 ErrorOccurredPayload, EmergencyStopPayload, CommandResponsePayload, SensorStatusPayload>;
 
 struct MqttMessage {
     std::string protocol_version{ std::string(kCurrentProtocolVersion) };
@@ -548,6 +567,8 @@ struct MqttMessage {
             return std::holds_alternative<EmergencyStopPayload>(payload);
         case MessageType::kCommandResponse:
             return std::holds_alternative<CommandResponsePayload>(payload);
+        case MessageType::kSensorStatus:
+            return std::holds_alternative<SensorStatusPayload>(payload);
         case MessageType::kUnknown:
             return false;
     }
@@ -1005,6 +1026,14 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
     };
 }
 
+[[nodiscard]] inline Json SerializePayload(const SensorStatusPayload& payload) {
+    return {
+        { std::string(kSensorIdField), payload.sensor_id },
+        { std::string(kMeasurementStatusField), payload.measurement_status },
+        { std::string(kDistanceCmField), payload.distance_cm },
+    };
+}
+
 [[nodiscard]] inline Json SerializePayload(const WorkCreatedPayload& payload) {
     return {
         { std::string(kWorkIdField), payload.work_id },
@@ -1206,6 +1235,12 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
            ReadOptionalStringValue(data, kImagePathField, payload.image_path, status) &&
            ReadRequiredString(data, kChecksumField, payload.checksum, status) &&
            ReadRequiredString(data, kUploadStatusField, payload.upload_status, status);
+}
+
+[[nodiscard]] inline bool DeserializePayload(const Json& data, SensorStatusPayload& payload, CodecStatus& status) {
+    return ReadRequiredSignedInteger(data, kSensorIdField, payload.sensor_id, status) &&
+           ReadRequiredString(data, kMeasurementStatusField, payload.measurement_status, status) &&
+           ReadRequiredSignedInteger(data, kDistanceCmField, payload.distance_cm, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ProductInfoPayload& payload, CodecStatus& status) {
@@ -1478,6 +1513,9 @@ template <typename PayloadType>
             break;
         case MessageType::kCommandResponse:
             decoded = codec_detail::DecodeAndAssignPayload<CommandResponsePayload>(*data, result.value, result.status);
+            break;
+        case MessageType::kSensorStatus:
+            decoded = codec_detail::DecodeAndAssignPayload<SensorStatusPayload>(*data, result.value, result.status);
             break;
         case MessageType::kUnknown:
             result.status = codec_detail::MakeError(CodecError::kUnknownMessageType, kMessageTypeField,

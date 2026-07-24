@@ -176,7 +176,7 @@ std::uint8_t UartSession::PendingSequence() const noexcept {
 }
 
 std::uint8_t UartSession::PendingCommandCode() const noexcept {
-    return pending_.active ? pending_.frame.command : UART_CMD_NONE;
+    return pending_.active ? pending_.frame.command : static_cast<std::uint8_t>(UART_CMD_NONE);
 }
 
 const UartSessionDiagnostics& UartSession::Diagnostics() const noexcept {
@@ -209,12 +209,16 @@ void UartSession::HandleReadyFrame(const uart_frame_t& frame) {
         return;
     }
 
-    Remember(frame);
     ++diagnostics_.frames_received;
     if (frame.command == UART_CMD_ACK) {
         HandleAck(frame);
         return;
     }
+    if (frame.command == UART_CMD_OPERATION_RESULT || frame.command == UART_CMD_RESPONSE) {
+        HandleCommandResponse(frame);
+        return;
+    }
+    Remember(frame);
     Emit({ .type = UartSessionEventType::kFrameReceived, .frame = frame });
 }
 
@@ -235,6 +239,7 @@ void UartSession::HandleAck(const uart_frame_t& frame) {
         return;
     }
 
+    Remember(frame);
     const PendingCommand acknowledged = pending_;
     pending_ = {};
     Emit({ .type = UartSessionEventType::kAckReceived,
@@ -242,6 +247,40 @@ void UartSession::HandleAck(const uart_frame_t& frame) {
            .pending_sequence = acknowledged.frame.sequence,
            .pending_command = acknowledged.frame.command,
            .retry_count = acknowledged.retry_count });
+}
+
+void UartSession::HandleCommandResponse(const uart_frame_t& frame) {
+    bool payload_valid = false;
+    if (frame.command == UART_CMD_OPERATION_RESULT) {
+        payload_valid =
+            frame.length == UART_OPERATION_RESULT_PAYLOAD_SIZE &&
+            frame.payload[UART_OPERATION_RESULT_STATUS_INDEX] <= static_cast<std::uint8_t>(UART_STATUS_ERROR);
+    } else {
+        payload_valid = frame.length >= UART_RESPONSE_HEADER_SIZE &&
+                        frame.payload[UART_RESPONSE_STATUS_INDEX] <= static_cast<std::uint8_t>(UART_STATUS_ERROR) &&
+                        pending_.active && frame.payload[UART_RESPONSE_COMMAND_INDEX] == pending_.frame.command;
+    }
+
+    const bool matches_pending = payload_valid && pending_.active && frame.sequence == pending_.frame.sequence;
+    if (!matches_pending) {
+        ++diagnostics_.unexpected_command_responses;
+        Emit({ .type = UartSessionEventType::kUnexpectedCommandResponse,
+               .frame = frame,
+               .pending_sequence = PendingSequence(),
+               .pending_command = PendingCommandCode(),
+               .retry_count = pending_.retry_count });
+        return;
+    }
+
+    ++diagnostics_.command_responses;
+    Remember(frame);
+    const PendingCommand completed = pending_;
+    pending_ = {};
+    Emit({ .type = UartSessionEventType::kCommandResponseReceived,
+           .frame = frame,
+           .pending_sequence = completed.frame.sequence,
+           .pending_command = completed.frame.command,
+           .retry_count = completed.retry_count });
 }
 
 void UartSession::HandleParserResult(uart_parser_result_t result) {
@@ -268,7 +307,7 @@ void UartSession::HandleTransportFailure(UartIoResult result) {
     ResetLinkState();
     Emit({ .type = disconnected ? UartSessionEventType::kTransportDisconnected : UartSessionEventType::kTransportError,
            .io_result = result,
-           .pending_sequence = failed.active ? failed.frame.sequence : 0U,
+           .pending_sequence = failed.active ? failed.frame.sequence : static_cast<std::uint8_t>(0U),
            .pending_command = failed.active ? failed.frame.command : static_cast<std::uint8_t>(UART_CMD_NONE),
            .retry_count = failed.retry_count });
 }

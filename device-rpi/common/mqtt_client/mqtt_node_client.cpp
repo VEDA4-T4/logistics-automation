@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/mqtt_validation.hpp"
 #include "logistics/device/mqtt_message_processor.hpp"
 #include "logistics/device/mqtt_time.hpp"
 
@@ -200,20 +201,21 @@ public:
         return published;
     }
 
+    [[nodiscard]] bool PublishResponse(const mqtt::MqttMessage& message) {
+        processor_.RememberCommandResponse(message);
+        return PublishMessage(mqtt::DeviceResponseTopic(config_.device_id), message, 1, false, "command response");
+    }
+
+    [[nodiscard]] bool PublishStatus(const mqtt::MqttMessage& message) {
+        return PublishMessage(mqtt::DeviceStatusTopic(config_.device_id), message, 1, true, "device status");
+    }
+
     [[nodiscard]] bool PublishEvent(const mqtt::MqttMessage& message) {
-        if (!connected_ || client_ == nullptr) {
-            return false;
-        }
-        return PublishEncoded(mqtt::DeviceEventTopic(config_.device_id), processor_.EncodeDeviceEvent(message), 1,
-                              false, "device event");
+        return PublishMessage(mqtt::DeviceEventTopic(config_.device_id), message, 1, false, "device event");
     }
 
     [[nodiscard]] bool PublishError(const mqtt::MqttMessage& message) {
-        if (!connected_ || client_ == nullptr) {
-            return false;
-        }
-        return PublishEncoded(mqtt::DeviceErrorTopic(config_.device_id), processor_.EncodeDeviceError(message), 1, true,
-                              "device error");
+        return PublishMessage(mqtt::DeviceErrorTopic(config_.device_id), message, 1, false, "device error");
     }
 
 private:
@@ -239,6 +241,25 @@ private:
             return false;
         }
         return true;
+    }
+
+    [[nodiscard]] bool PublishMessage(const std::string& topic, const mqtt::MqttMessage& message, int qos, bool retain,
+                                      std::string_view description) {
+        if (!connected_ || client_ == nullptr) {
+            return false;
+        }
+
+        const auto validation = mqtt::ValidateTopicMessage(topic, message);
+        if (!validation.IsSuccess()) {
+            std::cerr << "[device][mqtt][ERROR] invalid " << description << ": " << validation.message << '\n';
+            return false;
+        }
+
+        const bool published = PublishEncoded(topic, mqtt::SerializeMessage(message), qos, retain, description);
+        if (published) {
+            device_status_->MarkCommunication(message.timestamp);
+        }
+        return published;
     }
 
     [[nodiscard]] bool PublishOnlineStatusAndRegistration(std::string_view timestamp) {
@@ -320,7 +341,16 @@ private:
             return;
         }
         if (decoded.duplicate) {
-            std::clog << "[device][mqtt][INFO] duplicate MQTT command ignored: " << decoded.message.message_id << '\n';
+            const auto cached_response = processor_.CachedCommandResponse(decoded.message);
+            if (cached_response.has_value()) {
+                static_cast<void>(PublishMessage(mqtt::DeviceResponseTopic(config_.device_id), *cached_response, 1,
+                                                 false, "cached command response"));
+                std::clog << "[device][mqtt][INFO] cached response replayed for duplicate MQTT command: "
+                          << decoded.message.message_id << '\n';
+            } else {
+                std::clog << "[device][mqtt][INFO] duplicate MQTT command is still pending: "
+                          << decoded.message.message_id << '\n';
+            }
             return;
         }
 
@@ -392,6 +422,14 @@ bool MqttNodeClient::IsConnected() const noexcept {
 
 bool MqttNodeClient::PublishHeartbeat(std::string message_id, std::string timestamp) {
     return impl_->PublishHeartbeat(std::move(message_id), std::move(timestamp));
+}
+
+bool MqttNodeClient::PublishResponse(const contracts::mqtt::MqttMessage& message) {
+    return impl_->PublishResponse(message);
+}
+
+bool MqttNodeClient::PublishStatus(const contracts::mqtt::MqttMessage& message) {
+    return impl_->PublishStatus(message);
 }
 
 bool MqttNodeClient::PublishEvent(const contracts::mqtt::MqttMessage& message) {
