@@ -314,6 +314,43 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
     return true;
 }
 
+bool MqttHandler::CheckHeartbeatTimeouts(std::string_view checked_at) {
+    const std::string effective_checked_at = checked_at.empty() ? CurrentIso8601Timestamp() : std::string(checked_at);
+    const auto changes = device_manager_.CheckHeartbeatTimeouts(effective_checked_at);
+    if (!device_manager_.LastError().empty()) {
+        Log(MqttHandlerLogLevel::kError, "device registry timeout update failed: " + device_manager_.LastError());
+    }
+
+    bool published = true;
+    for (const auto& device : changes) {
+        const mqtt::MqttMessage status_message{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "HEARTBEAT-" + std::string(mqtt::ToString(device.connection_state)) + "-" + device.device_id +
+                          "-" + std::to_string(++timeout_message_sequence_),
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .source_id = device.device_id,
+            .timestamp = effective_checked_at,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = device.connection_state,
+                    .current_state = device.current_state.empty() ? "UNKNOWN" : device.current_state,
+                    .job_id = device.job_id,
+                    .error_code = device.connection_state == mqtt::ConnectionState::kOffline
+                                      ? std::optional<std::string>("ERR-HEARTBEAT-TIMEOUT")
+                                      : device.error_code,
+                },
+        };
+        if (qt_status_handler_ && !qt_status_handler_(status_message)) {
+            published = false;
+            Log(MqttHandlerLogLevel::kError, "heartbeat timeout status publish failed for " + device.device_id);
+            continue;
+        }
+        Log(MqttHandlerLogLevel::kInfo, "device heartbeat state changed: " + device.device_id +
+                                            "; status=" + std::string(mqtt::ToString(device.connection_state)));
+    }
+    return published;
+}
+
 void MqttHandler::Log(MqttHandlerLogLevel level, std::string_view message) const {
     if (logger_) {
         logger_(level, message);

@@ -26,7 +26,9 @@ constexpr int kRegistryVersion = 1;
 
 }  // namespace
 
-DeviceManager::DeviceManager(std::filesystem::path registry_path) : registry_path_(std::move(registry_path)) {
+DeviceManager::DeviceManager(std::filesystem::path registry_path, NowProvider now_provider)
+    : registry_path_(std::move(registry_path)),
+      now_provider_(now_provider ? std::move(now_provider) : NowProvider([] { return Clock::now(); })) {
     LoadRegistry();
 }
 
@@ -65,6 +67,7 @@ bool DeviceManager::HandleMessage(const mqtt::ParsedTopic& topic, const mqtt::Mq
             if (payload->status == mqtt::ConnectionState::kOnline) {
                 device.disconnected_at.reset();
             }
+            heartbeat_observed_at_.insert_or_assign(device.device_id, now_provider_());
             should_persist = true;
             break;
         }
@@ -80,9 +83,11 @@ bool DeviceManager::HandleMessage(const mqtt::ParsedTopic& topic, const mqtt::Mq
             device.job_id = payload->job_id;
             device.error_code = payload->error_code;
             device.last_heartbeat_timestamp = message.timestamp;
+            heartbeat_observed_at_.insert_or_assign(device.device_id, now_provider_());
             if (payload->status == mqtt::ConnectionState::kOnline) {
                 device.disconnected_at.reset();
             }
+            should_persist = true;
             break;
         }
         case mqtt::MessageType::kDeviceStatus: {
@@ -97,6 +102,7 @@ bool DeviceManager::HandleMessage(const mqtt::ParsedTopic& topic, const mqtt::Mq
             device.error_code = payload->error_code;
             if (payload->status == mqtt::ConnectionState::kOffline) {
                 device.disconnected_at = received_at.empty() ? message.timestamp : std::string(received_at);
+                heartbeat_observed_at_.erase(device.device_id);
             } else if (payload->status == mqtt::ConnectionState::kOnline) {
                 device.disconnected_at.reset();
             }
@@ -130,6 +136,42 @@ bool DeviceManager::HandleMessage(const mqtt::ParsedTopic& topic, const mqtt::Mq
     device.last_message_id = message.message_id;
     last_error_.clear();
     return !device.registered || !should_persist || PersistRegistryLocked();
+}
+
+std::vector<DeviceSnapshot> DeviceManager::CheckHeartbeatTimeouts(std::string_view checked_at) {
+    std::lock_guard lock(mutex_);
+    std::vector<DeviceSnapshot> changes;
+    const auto now = now_provider_();
+
+    for (const auto& [device_id, observed_at] : heartbeat_observed_at_) {
+        auto device_iterator = devices_.find(device_id);
+        if (device_iterator == devices_.end() || !device_iterator->second.registered) {
+            continue;
+        }
+
+        DeviceSnapshot& device = device_iterator->second;
+        const auto heartbeat_age = std::chrono::duration_cast<std::chrono::seconds>(now - observed_at);
+        const auto next_state = mqtt::ConnectionStateForHeartbeatAge(heartbeat_age);
+        if (next_state == mqtt::ConnectionState::kOnline || device.connection_state == next_state) {
+            continue;
+        }
+
+        device.connection_state = next_state;
+        if (next_state == mqtt::ConnectionState::kOffline) {
+            device.disconnected_at = checked_at.empty() ? std::optional<std::string>(device.last_seen_timestamp)
+                                                        : std::optional<std::string>(checked_at);
+            device.error_code = "ERR-HEARTBEAT-TIMEOUT";
+        } else {
+            device.disconnected_at.reset();
+        }
+        changes.push_back(device);
+    }
+
+    last_error_.clear();
+    if (!changes.empty()) {
+        static_cast<void>(PersistRegistryLocked());
+    }
+    return changes;
 }
 
 std::size_t DeviceManager::RegisteredDeviceCount() const {

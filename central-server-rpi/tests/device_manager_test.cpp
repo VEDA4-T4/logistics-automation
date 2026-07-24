@@ -85,6 +85,57 @@ void TestHeartbeatDoesNotRegisterUnknownDevice() {
     assert(manager.FindDevice("PI-01").has_value());
 }
 
+void TestHeartbeatTimeoutTransitionsAndRecovery() {
+    central_server::DeviceManager::Clock::time_point now{};
+    central_server::DeviceManager manager({}, [&now] { return now; });
+    const auto registration = MakeMessage("MSG-REGISTER-TIMEOUT", mqtt::MessageType::kDeviceRegister,
+                                          mqtt::DeviceRegisterPayload{
+                                              .device_type = "camera-node",
+                                              .node_name = "camera-node-01",
+                                              .status = mqtt::ConnectionState::kOnline,
+                                              .ip_address = "192.168.0.21",
+                                              .uart_connected = true,
+                                          });
+    assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/register"), registration, "2026-07-15T08:30:00Z"));
+
+    now += std::chrono::seconds(9);
+    assert(manager.CheckHeartbeatTimeouts("2026-07-15T08:30:09Z").empty());
+
+    now += std::chrono::seconds(1);
+    const auto delayed = manager.CheckHeartbeatTimeouts("2026-07-15T08:30:10Z");
+    assert(delayed.size() == 1);
+    assert(delayed[0].connection_state == mqtt::ConnectionState::kDelayed);
+    assert(!delayed[0].disconnected_at.has_value());
+    assert(manager.CheckHeartbeatTimeouts("2026-07-15T08:30:10Z").empty());
+
+    now += std::chrono::seconds(5);
+    const auto offline = manager.CheckHeartbeatTimeouts("2026-07-15T08:30:15Z");
+    assert(offline.size() == 1);
+    assert(offline[0].connection_state == mqtt::ConnectionState::kOffline);
+    assert(offline[0].disconnected_at == std::optional<std::string>("2026-07-15T08:30:15Z"));
+    assert(offline[0].error_code == std::optional<std::string>("ERR-HEARTBEAT-TIMEOUT"));
+
+    auto heartbeat = MakeMessage("MSG-HEARTBEAT-RECOVERY", mqtt::MessageType::kHeartbeat,
+                                 mqtt::HeartbeatPayload{
+                                     .status = mqtt::ConnectionState::kOnline,
+                                     .current_state = "IDLE",
+                                     .uptime = 60,
+                                     .job_id = std::nullopt,
+                                     .error_code = std::nullopt,
+                                 });
+    heartbeat.timestamp = "2026-07-15T08:30:16Z";
+    assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/heartbeat"), heartbeat, heartbeat.timestamp));
+    const auto recovered = manager.FindDevice("PI-01");
+    assert(recovered.has_value());
+    assert(recovered->connection_state == mqtt::ConnectionState::kOnline);
+    assert(!recovered->disconnected_at.has_value());
+
+    now += std::chrono::seconds(10);
+    const auto delayed_again = manager.CheckHeartbeatTimeouts("2026-07-15T08:30:26Z");
+    assert(delayed_again.size() == 1);
+    assert(delayed_again[0].connection_state == mqtt::ConnectionState::kDelayed);
+}
+
 void TestRegisteredDevicesSurviveServerRestart() {
     const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto path =
@@ -169,6 +220,7 @@ void TestMalformedRegistryIsRejected() {
 int main() {
     TestDeviceRegistrationAndHeartbeat();
     TestHeartbeatDoesNotRegisterUnknownDevice();
+    TestHeartbeatTimeoutTransitionsAndRecovery();
     TestRegisteredDevicesSurviveServerRestart();
     TestMalformedRegistryIsRejected();
     return 0;

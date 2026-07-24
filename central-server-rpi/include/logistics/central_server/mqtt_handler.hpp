@@ -35,6 +35,7 @@ public:
     void SetQtErrorHandler(MessageRouteHandler handler);
 
     [[nodiscard]] bool Handle(std::string_view topic, std::string_view payload, std::string_view received_at = {});
+    [[nodiscard]] bool CheckHeartbeatTimeouts(std::string_view checked_at = {});
 
 private:
     void Log(MqttHandlerLogLevel level, std::string_view message) const;
@@ -48,6 +49,7 @@ private:
     MessageRouteHandler qt_response_handler_;
     MessageRouteHandler qt_status_handler_;
     MessageRouteHandler qt_error_handler_;
+    std::uint64_t timeout_message_sequence_{};
 };
 
 }  // namespace logistics::central_server

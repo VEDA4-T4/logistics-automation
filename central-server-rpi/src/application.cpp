@@ -472,6 +472,7 @@ int Application::Run(int argc, char* argv[]) {
 
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
     }
 
     upload_server.Stop();

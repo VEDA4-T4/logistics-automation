@@ -250,6 +250,39 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
     std::filesystem::remove_all(root);
 }
 
+void TestHeartbeatTimeoutChangesAreForwardedToQt() {
+    central_server::DeviceManager::Clock::time_point now{};
+    central_server::DeviceManager device_manager({}, [&now] { return now; });
+    central_server::MqttHandler handler(device_manager);
+    std::vector<mqtt::MqttMessage> qt_statuses;
+    handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
+        qt_statuses.push_back(message);
+        return true;
+    });
+
+    assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:00Z"));
+
+    now += std::chrono::seconds(10);
+    assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:10Z"));
+    assert(qt_statuses.size() == 1);
+    const auto* delayed = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
+    assert(delayed != nullptr);
+    assert(delayed->status == mqtt::ConnectionState::kDelayed);
+    assert(!delayed->error_code.has_value());
+    assert(mqtt::ValidateTopicMessage(mqtt::QtStatusTopic("control-center"), qt_statuses[0]).IsSuccess());
+
+    now += std::chrono::seconds(5);
+    assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:15Z"));
+    assert(qt_statuses.size() == 2);
+    const auto* offline = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[1]);
+    assert(offline != nullptr);
+    assert(offline->status == mqtt::ConnectionState::kOffline);
+    assert(offline->error_code == std::optional<std::string>("ERR-HEARTBEAT-TIMEOUT"));
+
+    assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:16Z"));
+    assert(qt_statuses.size() == 2);
+}
+
 void TestMessageTypesUseDedicatedRouteHandlers() {
     const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path() / ("logistics-routing-test-" + unique);
@@ -377,6 +410,7 @@ int main() {
     TestUnsupportedVersionAndMissingFieldsAreRejected();
     TestBarcodeIsEnrichedFromProductCatalog();
     TestHeartbeatIsForwardedToQtAsDeviceStatus();
+    TestHeartbeatTimeoutChangesAreForwardedToQt();
     TestMessageTypesUseDedicatedRouteHandlers();
     return 0;
 }
