@@ -17,6 +17,7 @@
 #include <thread>
 #include <utility>
 
+#include "logistics/central_server/command_manager.hpp"
 #include "logistics/central_server/database.hpp"
 #include "logistics/central_server/device_manager.hpp"
 #include "logistics/central_server/http_upload_server.hpp"
@@ -355,6 +356,7 @@ int Application::Run(int argc, char* argv[]) {
 
     PersistenceService persistence(database, server_config.storage);
     MqttHandler mqtt_handler(*device_manager, {}, &persistence);
+    CommandManager command_manager;
 
     MqttClient mqtt_client(std::move(mqtt_config), CreateMosquittoTransport());
 
@@ -379,10 +381,28 @@ int Application::Run(int argc, char* argv[]) {
             return mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         });
-    mqtt_handler.SetQtResponseHandler(
+    const auto publish_qt_response =
         [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
             return mqtt_client.PublishMessage(contracts::mqtt::QtResponseTopic(qt_client_id), message,
                                               contracts::mqtt::Qos::kAtLeastOnce);
+        };
+    mqtt_handler.SetQtResponseHandler(
+        [&command_manager, &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
+            const auto decision = command_manager.HandleResponse(message);
+            switch (decision.disposition) {
+                case CommandResponseDisposition::kForward:
+                    return decision.message.has_value() && publish_qt_response(*decision.message);
+                case CommandResponseDisposition::kDuplicate:
+                    std::clog << "[server][INFO] duplicate command response ignored: " << decision.reason << '\n';
+                    return true;
+                case CommandResponseDisposition::kUnknownRequest:
+                    std::clog << "[server][INFO] late or unknown command response ignored: " << decision.reason << '\n';
+                    return true;
+                case CommandResponseDisposition::kRejected:
+                    std::cerr << "[server][ERROR] command response rejected: " << decision.reason << '\n';
+                    return false;
+            }
+            return false;
         });
     mqtt_handler.SetQtStatusHandler(
         [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
@@ -394,54 +414,47 @@ int Application::Run(int argc, char* argv[]) {
             return mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(qt_client_id), message,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         });
-    mqtt_handler.SetCommandRouteHandler([&mqtt_client, &device_manager](const contracts::mqtt::MqttMessage& message) {
-        if (contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(message) != nullptr) {
-            auto forwarded = message;
-            auto* payload = contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(forwarded);
-            payload->target_device_id = "ALL";
-            return mqtt_client.PublishMessage(contracts::mqtt::kSystemBroadcastCommandTopic, forwarded,
-                                              contracts::mqtt::Qos::kAtLeastOnce);
-        }
-
-        std::string target_device_id;
-        bool line_tracer_only = false;
-        if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message)) {
-            target_device_id = command->target_device_id;
-        } else if (const auto* destination =
-                       contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(message)) {
-            target_device_id = destination->target_device_id;
-            line_tracer_only = true;
-        } else {
-            return false;
-        }
-
-        const auto publish_to_device = [&mqtt_client, &message](std::string_view device_id) {
-            auto forwarded = message;
-            forwarded.message_id += "-" + std::string(device_id);
-            if (auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(forwarded)) {
-                command->target_device_id = device_id;
-            } else if (auto* destination =
-                           contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(forwarded)) {
-                destination->target_device_id = device_id;
+    mqtt_handler.SetCommandRouteHandler(
+        [&mqtt_client, &device_manager, &command_manager](const contracts::mqtt::MqttMessage& message) {
+            const auto route = ResolveCommandTargets(message, device_manager->RegisteredDevices());
+            if (!route.IsValid()) {
+                std::cerr << "[server][ERROR] command has no reachable target devices\n";
+                return false;
             }
-            return mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), forwarded,
-                                              contracts::mqtt::Qos::kAtLeastOnce);
-        };
 
-        if (target_device_id != "SYSTEM" && target_device_id != "ALL") {
-            return publish_to_device(target_device_id);
-        }
-        bool attempted = false;
-        bool all_published = true;
-        for (const auto& device : device_manager->RegisteredDevices()) {
-            if (line_tracer_only && device.device_type != "linetracer") {
-                continue;
+            if (route.broadcast) {
+                auto forwarded = message;
+                auto* payload = contracts::mqtt::GetPayload<contracts::mqtt::EmergencyStopPayload>(forwarded);
+                if (payload == nullptr) {
+                    return false;
+                }
+                payload->target_device_id = "ALL";
+                if (!mqtt_client.PublishMessage(contracts::mqtt::kSystemBroadcastCommandTopic, forwarded,
+                                                contracts::mqtt::Qos::kAtLeastOnce)) {
+                    return false;
+                }
+                return command_manager.TrackCommand(message, route.target_device_ids);
             }
-            attempted = true;
-            all_published = publish_to_device(device.device_id) && all_published;
-        }
-        return attempted && all_published;
-    });
+
+            const auto publish_to_device = [&mqtt_client, &message](std::string_view device_id) {
+                auto forwarded = message;
+                forwarded.message_id += "-" + std::string(device_id);
+                if (auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(forwarded)) {
+                    command->target_device_id = device_id;
+                } else if (auto* destination =
+                               contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(forwarded)) {
+                    destination->target_device_id = device_id;
+                }
+                return mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), forwarded,
+                                                  contracts::mqtt::Qos::kAtLeastOnce);
+            };
+
+            bool all_published = true;
+            for (const auto& device_id : route.target_device_ids) {
+                all_published = publish_to_device(device_id) && all_published;
+            }
+            return all_published && command_manager.TrackCommand(message, route.target_device_ids);
+        });
 
     mqtt_client.SetMessageHandler([&mqtt_handler](std::string_view topic, std::string_view payload) {
         static_cast<void>(mqtt_handler.Handle(topic, payload));
@@ -473,6 +486,11 @@ int Application::Run(int argc, char* argv[]) {
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
+        for (const auto& timeout : command_manager.CheckTimeouts(CurrentIso8601Timestamp())) {
+            if (!publish_qt_response(timeout)) {
+                std::cerr << "[server][ERROR] command timeout publish failed\n";
+            }
+        }
     }
 
     upload_server.Stop();
