@@ -82,6 +82,7 @@ namespace mqtt = logistics::contracts::mqtt;
 void TestCommandTargetsAreResolvedByDeviceAndRole() {
     const std::vector devices{
         Device("PI-VISION-01", "vision"),
+        Device("PI-SORTING-01", "sorting"),
         Device("PI-LT-01", "linetracer"),
         Device("PI-OFFLINE", "linetracer", mqtt::ConnectionState::kOffline),
     };
@@ -91,10 +92,12 @@ void TestCommandTargetsAreResolvedByDeviceAndRole() {
     assert(!explicit_target.broadcast);
 
     const auto system_target = central_server::ResolveCommandTargets(MakeCommand("REQ-2", "SYSTEM"), devices);
-    assert((system_target.target_device_ids == std::vector<std::string>{ "PI-LT-01", "PI-VISION-01" }));
+    assert(
+        (system_target.target_device_ids == std::vector<std::string>{ "PI-LT-01", "PI-SORTING-01", "PI-VISION-01" }));
 
     const auto emergency_target = central_server::ResolveCommandTargets(MakeEmergencyStop(), devices);
-    assert((emergency_target.target_device_ids == std::vector<std::string>{ "PI-LT-01", "PI-VISION-01" }));
+    assert((emergency_target.target_device_ids ==
+            std::vector<std::string>{ "PI-LT-01", "PI-SORTING-01", "PI-VISION-01" }));
     assert(emergency_target.broadcast);
 
     auto destination = MakeCommand("REQ-3", "SYSTEM", mqtt::ControlCommand::kDestinationSet);
@@ -108,6 +111,13 @@ void TestCommandTargetsAreResolvedByDeviceAndRole() {
     };
     const auto destination_target = central_server::ResolveCommandTargets(destination, devices);
     assert(destination_target.target_device_ids == std::vector<std::string>{ "PI-LT-01" });
+
+    auto sorting_destination = destination;
+    auto* sorting_payload = mqtt::GetPayload<mqtt::DestinationSetPayload>(sorting_destination);
+    assert(sorting_payload != nullptr);
+    sorting_payload->target_device_id = "PI-SORTING-01";
+    const auto sorting_target = central_server::ResolveCommandTargets(sorting_destination, devices);
+    assert(sorting_target.target_device_ids == std::vector<std::string>{ "PI-SORTING-01" });
 }
 
 void TestResponsesAreAggregatedAndDuplicatesIgnored() {

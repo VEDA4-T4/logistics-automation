@@ -33,7 +33,7 @@ CommandRoutePlan ResolveCommandTargets(const mqtt::MqttMessage& message,
                                        const std::vector<DeviceSnapshot>& registered_devices) {
     CommandRoutePlan plan;
     std::string_view requested_target;
-    bool line_tracer_only = false;
+    bool system_destination_request = false;
 
     if (const auto* emergency_stop = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message)) {
         static_cast<void>(emergency_stop);
@@ -43,7 +43,7 @@ CommandRoutePlan ResolveCommandTargets(const mqtt::MqttMessage& message,
         requested_target = command->target_device_id;
     } else if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(message)) {
         requested_target = destination->target_device_id;
-        line_tracer_only = true;
+        system_destination_request = requested_target == "SYSTEM";
     } else {
         return plan;
     }
@@ -52,7 +52,7 @@ CommandRoutePlan ResolveCommandTargets(const mqtt::MqttMessage& message,
         if (!IsReachable(device)) {
             continue;
         }
-        if (line_tracer_only && device.device_type != "linetracer") {
+        if (system_destination_request && device.device_type != "linetracer") {
             continue;
         }
         if (requested_target != "SYSTEM" && requested_target != "ALL" && requested_target != device.device_id) {

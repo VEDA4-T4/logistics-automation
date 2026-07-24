@@ -8,6 +8,7 @@ namespace logistics::contracts {
 enum class DeviceRole : std::uint8_t {
     kInput,
     kVision,
+    kGripper,
     kSorting,
     kLineTracer,
 };
@@ -18,6 +19,8 @@ enum class DeviceRole : std::uint8_t {
             return "input";
         case DeviceRole::kVision:
             return "vision";
+        case DeviceRole::kGripper:
+            return "gripper";
         case DeviceRole::kSorting:
             return "sorting";
         case DeviceRole::kLineTracer:
