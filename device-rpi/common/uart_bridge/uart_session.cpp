@@ -179,7 +179,6 @@ std::uint8_t UartSession::PendingCommandCode() const noexcept {
     return pending_.active ? pending_.frame.command : static_cast<std::uint8_t>(UART_CMD_NONE);
 }
 
-
 const UartSessionDiagnostics& UartSession::Diagnostics() const noexcept {
     return diagnostics_;
 }
