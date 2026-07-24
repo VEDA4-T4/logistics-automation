@@ -73,7 +73,7 @@ void TestStatusResponseContainsCurrentState() {
     assert(frame.length == UART_LINETRACER_STATUS_PAYLOAD_SIZE);
     assert(frame.payload[UART_LINETRACER_STATUS_STATE_INDEX] == UART_LINETRACER_STATE_FOLLOWING_LINE);
     assert(uart_linetracer_read_job_id(frame.payload, UART_LINETRACER_STATUS_JOB_ID_LOW_INDEX,
-                                      UART_LINETRACER_STATUS_JOB_ID_HIGH_INDEX) == 0x1234U);
+                                       UART_LINETRACER_STATUS_JOB_ID_HIGH_INDEX) == 0x1234U);
     assert(frame.payload[UART_LINETRACER_STATUS_ROUTE_ID_INDEX] == UART_LINETRACER_ROUTE_B);
     assert(frame.payload[UART_LINETRACER_STATUS_LOAD_STATE_INDEX] == UART_LINETRACER_LOAD_PRESENT);
 }
@@ -124,8 +124,8 @@ void TestHeartbeatContainsUptimeStateSensorsAndError() {
     heartbeat.route_id = UART_LINETRACER_ROUTE_C;
     heartbeat.state = UART_LINETRACER_STATE_EMERGENCY_STOP;
     heartbeat.load_state = UART_LINETRACER_LOAD_PRESENT;
-    heartbeat.sensor_flags = UART_LINETRACER_FLAG_LINE_DETECTED | UART_LINETRACER_FLAG_LOAD_PRESENT |
-                             UART_LINETRACER_FLAG_ROUTE_ACTIVE;
+    heartbeat.sensor_flags =
+        UART_LINETRACER_FLAG_LINE_DETECTED | UART_LINETRACER_FLAG_LOAD_PRESENT | UART_LINETRACER_FLAG_ROUTE_ACTIVE;
     heartbeat.error_code = UART_ERROR_EMERGENCY_STOP;
 
     CommTxLogic_Init(&logic);
@@ -139,7 +139,7 @@ void TestHeartbeatContainsUptimeStateSensorsAndError() {
     assert(frame.payload[UART_LINETRACER_HEARTBEAT_LOAD_STATE_INDEX] == UART_LINETRACER_LOAD_PRESENT);
     assert(uart_linetracer_heartbeat_uptime_ms(frame.payload) == 0x78563412UL);
     assert(uart_linetracer_read_job_id(frame.payload, UART_LINETRACER_HEARTBEAT_JOB_ID_LOW_INDEX,
-                                      UART_LINETRACER_HEARTBEAT_JOB_ID_HIGH_INDEX) == 0x1234U);
+                                       UART_LINETRACER_HEARTBEAT_JOB_ID_HIGH_INDEX) == 0x1234U);
     assert(frame.payload[UART_LINETRACER_HEARTBEAT_ROUTE_ID_INDEX] == UART_LINETRACER_ROUTE_C);
     assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(frame.payload, frame.length) != 0U);
 }

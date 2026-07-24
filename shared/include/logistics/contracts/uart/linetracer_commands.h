@@ -148,9 +148,9 @@ typedef enum {
 #define UART_LINETRACER_HEARTBEAT_DATA_SIZE 11U
 #define UART_LINETRACER_HEARTBEAT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_LINETRACER_HEARTBEAT_DATA_SIZE)
 
-#define UART_LINETRACER_HEARTBEAT_KNOWN_FLAGS                                                       \
-    (UART_LINETRACER_FLAG_LINE_DETECTED | UART_LINETRACER_FLAG_OBSTACLE_DETECTED |                \
-     UART_LINETRACER_FLAG_LOAD_PRESENT | UART_LINETRACER_FLAG_ROUTE_ACTIVE)
+#define UART_LINETRACER_HEARTBEAT_KNOWN_FLAGS                                                                          \
+    (UART_LINETRACER_FLAG_LINE_DETECTED | UART_LINETRACER_FLAG_OBSTACLE_DETECTED | UART_LINETRACER_FLAG_LOAD_PRESENT | \
+     UART_LINETRACER_FLAG_ROUTE_ACTIVE)
 
 static inline uint8_t uart_linetracer_command_is_valid(uint32_t command) {
     switch (command) {
@@ -400,8 +400,8 @@ static inline uint8_t uart_linetracer_event_payload_is_valid(const uint8_t* payl
             }
             if (uart_linetracer_state_is_valid(payload[UART_LINETRACER_HEARTBEAT_STATE_INDEX]) == 0U ||
                 uart_linetracer_load_state_is_valid(payload[UART_LINETRACER_HEARTBEAT_LOAD_STATE_INDEX]) == 0U ||
-                (payload[UART_LINETRACER_HEARTBEAT_FLAGS_INDEX] &
-                 (uint8_t)(~UART_LINETRACER_HEARTBEAT_KNOWN_FLAGS)) != 0U) {
+                (payload[UART_LINETRACER_HEARTBEAT_FLAGS_INDEX] & (uint8_t)(~UART_LINETRACER_HEARTBEAT_KNOWN_FLAGS)) !=
+                    0U) {
                 return 0U;
             }
             if (payload[UART_LINETRACER_HEARTBEAT_ERROR_INDEX] != UART_ERROR_NONE &&
