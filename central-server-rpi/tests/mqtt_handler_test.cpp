@@ -261,6 +261,20 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     });
 
     assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:00Z"));
+    std::vector<mqtt::ConnectionState> process_previews;
+    std::vector<mqtt::ConnectionState> process_commits;
+    handler.SetProcessMessageGuard([&process_previews](const mqtt::MqttMessage& message) {
+        const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(message);
+        assert(status != nullptr);
+        process_previews.push_back(status->status);
+        return true;
+    });
+    handler.SetProcessMessageHandler([&process_commits](const mqtt::MqttMessage& message) {
+        const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(message);
+        assert(status != nullptr);
+        process_commits.push_back(status->status);
+        return true;
+    });
 
     now += std::chrono::seconds(10);
     assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:10Z"));
@@ -268,6 +282,8 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     const auto* delayed = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
     assert(delayed != nullptr);
     assert(delayed->status == mqtt::ConnectionState::kDelayed);
+    assert(process_previews == std::vector{ mqtt::ConnectionState::kDelayed });
+    assert(process_commits == std::vector{ mqtt::ConnectionState::kDelayed });
     assert(!delayed->error_code.has_value());
     assert(mqtt::ValidateTopicMessage(mqtt::QtStatusTopic("control-center"), qt_statuses[0]).IsSuccess());
 
@@ -278,6 +294,9 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     assert(offline != nullptr);
     assert(offline->status == mqtt::ConnectionState::kOffline);
     assert(offline->error_code == std::optional<std::string>("ERR-HEARTBEAT-TIMEOUT"));
+    const std::vector expected_process_states{ mqtt::ConnectionState::kDelayed, mqtt::ConnectionState::kOffline };
+    assert(process_previews == expected_process_states);
+    assert(process_commits == expected_process_states);
 
     assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:16Z"));
     assert(qt_statuses.size() == 2);

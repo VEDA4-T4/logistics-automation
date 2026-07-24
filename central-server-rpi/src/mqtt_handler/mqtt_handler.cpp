@@ -139,6 +139,14 @@ void MqttHandler::SetQtErrorHandler(MessageRouteHandler handler) {
     qt_error_handler_ = std::move(handler);
 }
 
+void MqttHandler::SetProcessMessageGuard(ProcessMessageHandler handler) {
+    process_message_guard_ = std::move(handler);
+}
+
+void MqttHandler::SetProcessMessageHandler(ProcessMessageHandler handler) {
+    process_message_handler_ = std::move(handler);
+}
+
 bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::string_view received_at) {
     const auto decoded = mqtt::DeserializeMessage(payload);
     if (!decoded.IsSuccess()) {
@@ -157,6 +165,10 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
     }
 
     const auto parsed_topic = mqtt::ParseTopic(topic);
+    if (process_message_guard_ && !process_message_guard_(decoded.value)) {
+        Log(MqttHandlerLogLevel::kError, "MQTT process transition rejected before persistence");
+        return false;
+    }
     if (persistence_service_ != nullptr) {
         const auto root = mqtt::Json::parse(payload.begin(), payload.end());
         const std::string details_json = root.at(std::string(mqtt::kDataField)).dump();
@@ -180,6 +192,10 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             envelope, MakeEventPayload(decoded.value, details_json), transport);
         if (!result.ok()) {
             Log(MqttHandlerLogLevel::kError, "MQTT persistence failed: " + result.message);
+            return false;
+        }
+        if (process_message_handler_ && !process_message_handler_(decoded.value)) {
+            Log(MqttHandlerLogLevel::kError, "MQTT process transition commit failed");
             return false;
         }
 
@@ -213,6 +229,10 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
                             .message = std::nullopt,
                         },
                 };
+                if (process_message_guard_ && !process_message_guard_(*catalog_product_message)) {
+                    Log(MqttHandlerLogLevel::kError, "catalog PRODUCT_INFO process transition rejected");
+                    return false;
+                }
                 const auto encoded_product = mqtt::SerializeMessage(*catalog_product_message);
                 if (!encoded_product.IsSuccess()) {
                     Log(MqttHandlerLogLevel::kError, "catalog PRODUCT_INFO serialization failed");
@@ -241,6 +261,10 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
                 if (!product_result.ok()) {
                     Log(MqttHandlerLogLevel::kError,
                         "catalog PRODUCT_INFO persistence failed: " + product_result.message);
+                    return false;
+                }
+                if (process_message_handler_ && !process_message_handler_(*catalog_product_message)) {
+                    Log(MqttHandlerLogLevel::kError, "catalog PRODUCT_INFO process transition commit failed");
                     return false;
                 }
             } else {
@@ -295,6 +319,9 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             Log(MqttHandlerLogLevel::kError, "MQTT message routing failed");
             return false;
         }
+    } else if (process_message_handler_ && !process_message_handler_(decoded.value)) {
+        Log(MqttHandlerLogLevel::kError, "MQTT process transition commit failed");
+        return false;
     }
     if (IsDeviceRegistryMessage(decoded.value.message_type)) {
         const std::string effective_received_at =
@@ -340,6 +367,17 @@ bool MqttHandler::CheckHeartbeatTimeouts(std::string_view checked_at) {
                                       : device.error_code,
                 },
         };
+        if (process_message_guard_ && !process_message_guard_(status_message)) {
+            published = false;
+            Log(MqttHandlerLogLevel::kError, "heartbeat timeout process transition rejected for " + device.device_id);
+            continue;
+        }
+        if (process_message_handler_ && !process_message_handler_(status_message)) {
+            published = false;
+            Log(MqttHandlerLogLevel::kError,
+                "heartbeat timeout process transition commit failed for " + device.device_id);
+            continue;
+        }
         if (qt_status_handler_ && !qt_status_handler_(status_message)) {
             published = false;
             Log(MqttHandlerLogLevel::kError, "heartbeat timeout status publish failed for " + device.device_id);

@@ -24,6 +24,7 @@ enum class ProcessSystemState : std::uint8_t {
 };
 
 enum class WorkStage : std::uint8_t {
+    kInputDetected,
     kVisionAssigned,
     kVisionProcessing,
     kBarcodeRecognized,
@@ -43,6 +44,7 @@ enum class WorkStage : std::uint8_t {
 
 enum class ProcessEventType : std::uint8_t {
     kWorkCreated,
+    kVisionCommandDispatched,
     kPositionDetected,
     kBarcodeSucceeded,
     kBarcodeFailed,
@@ -71,7 +73,7 @@ struct ProcessEvent final {
 
 struct WorkProcessSnapshot final {
     std::string work_id;
-    WorkStage stage{ WorkStage::kVisionAssigned };
+    WorkStage stage{ WorkStage::kInputDetected };
     std::optional<WorkStage> suspended_stage;
     std::string destination;
     std::string last_source_id;
@@ -99,6 +101,7 @@ class ProcessStateMachine final {
 public:
     [[nodiscard]] ProcessSystemState SystemState() const noexcept;
     [[nodiscard]] ProcessTransition Apply(const ProcessEvent& event);
+    [[nodiscard]] ProcessTransition ApplySystemFailure(std::string reason);
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
     [[nodiscard]] std::optional<WorkProcessSnapshot> FindWork(std::string_view work_id) const;
     [[nodiscard]] std::vector<WorkProcessSnapshot> ActiveWorks() const;

@@ -139,6 +139,26 @@ target_link_libraries(
 )
 logistics_enable_warnings(logistics_central_server_process_state_machine)
 
+add_library(
+    logistics_central_server_process_orchestrator
+    src/process_manager/process_orchestrator.cpp
+)
+add_library(
+    logistics::central_server_process_orchestrator
+    ALIAS logistics_central_server_process_orchestrator
+)
+target_include_directories(
+    logistics_central_server_process_orchestrator
+    PUBLIC include
+)
+target_link_libraries(
+    logistics_central_server_process_orchestrator
+    PUBLIC
+        logistics::central_server_process_state_machine
+        logistics::contracts
+)
+logistics_enable_warnings(logistics_central_server_process_orchestrator)
+
 # ------------------------------------------------------------------------------
 # MQTT handler
 # ------------------------------------------------------------------------------
@@ -259,6 +279,7 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
             logistics::central_storage
             logistics::central_http_upload_server
             logistics::central_server_command_manager
+            logistics::central_server_process_orchestrator
             logistics::central_server_mosquitto
             logistics::central_server_mqtt_handler
             Threads::Threads
@@ -356,6 +377,20 @@ if(BUILD_TESTING)
     add_test(
         NAME central_server_process_state_machine_test
         COMMAND central_server_process_state_machine_test
+    )
+
+    add_executable(
+        central_server_process_orchestrator_test
+        tests/process_orchestrator_test.cpp
+    )
+    target_link_libraries(
+        central_server_process_orchestrator_test
+        PRIVATE logistics::central_server_process_orchestrator
+    )
+    logistics_enable_warnings(central_server_process_orchestrator_test)
+    add_test(
+        NAME central_server_process_orchestrator_test
+        COMMAND central_server_process_orchestrator_test
     )
 
     add_executable(

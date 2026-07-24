@@ -49,7 +49,7 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
         } else {
             WorkProcessSnapshot work{
                 .work_id = event.work_id,
-                .stage = WorkStage::kVisionAssigned,
+                .stage = WorkStage::kInputDetected,
                 .suspended_stage = std::nullopt,
                 .destination = {},
                 .last_source_id = event.source_id,
@@ -60,7 +60,7 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
             transition = {
                 .disposition = TransitionDisposition::kApplied,
                 .previous_stage = std::nullopt,
-                .current_stage = WorkStage::kVisionAssigned,
+                .current_stage = WorkStage::kInputDetected,
                 .reason = {},
             };
         }
@@ -74,6 +74,23 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
         RememberMessage(event.message_id);
     }
     return transition;
+}
+
+ProcessTransition ProcessStateMachine::ApplySystemFailure(std::string reason) {
+    SuspendActiveWorks(WorkStage::kFailed);
+    for (auto& [work_id, work] : works_) {
+        static_cast<void>(work_id);
+        if (work.stage == WorkStage::kFailed) {
+            work.failure_reason = reason;
+        }
+    }
+    system_state_ = ProcessSystemState::kError;
+    return {
+        .disposition = TransitionDisposition::kApplied,
+        .previous_stage = std::nullopt,
+        .current_stage = std::nullopt,
+        .reason = {},
+    };
 }
 
 ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::ControlCommand command) {
@@ -184,6 +201,12 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
     }
 
     switch (event.type) {
+        case ProcessEventType::kVisionCommandDispatched:
+            if (work.stage != WorkStage::kInputDetected) {
+                return Reject("vision dispatch is only allowed after input detection");
+            }
+            return Move(work, WorkStage::kVisionAssigned, event.source_id);
+
         case ProcessEventType::kPositionDetected:
             if (!IsOneOf(work.stage, { WorkStage::kVisionAssigned, WorkStage::kVisionProcessing })) {
                 return Reject("POSITION_DETECTED is not allowed in the current work stage");
@@ -365,6 +388,8 @@ std::string_view ToString(ProcessSystemState state) noexcept {
 
 std::string_view ToString(WorkStage stage) noexcept {
     switch (stage) {
+        case WorkStage::kInputDetected:
+            return "INPUT_DETECTED";
         case WorkStage::kVisionAssigned:
             return "VISION_ASSIGNED";
         case WorkStage::kVisionProcessing:
@@ -403,6 +428,8 @@ std::string_view ToString(ProcessEventType type) noexcept {
     switch (type) {
         case ProcessEventType::kWorkCreated:
             return "WORK_CREATED";
+        case ProcessEventType::kVisionCommandDispatched:
+            return "VISION_COMMAND_DISPATCHED";
         case ProcessEventType::kPositionDetected:
             return "POSITION_DETECTED";
         case ProcessEventType::kBarcodeSucceeded:

@@ -27,6 +27,10 @@ void ApplyNormalFlow(central_server::ProcessStateMachine& machine, std::string_v
     auto created = Event(central_server::ProcessEventType::kWorkCreated, "MSG-WORK", std::string(work_id));
     assert(machine.Apply(created).Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(machine
+               .Apply(Event(central_server::ProcessEventType::kVisionCommandDispatched, "MSG-VISION-COMMAND",
+                            std::string(work_id), "central-server"))
+               .Applied());
 
     assert(
         machine.Apply(Event(central_server::ProcessEventType::kPositionDetected, "MSG-POSITION", std::string(work_id)))
@@ -89,7 +93,7 @@ void TestNormalFlowAndInvalidTransitions() {
     const auto out_of_order =
         machine.Apply(Event(central_server::ProcessEventType::kSortingStarted, "MSG-OUT-OF-ORDER"));
     assert(out_of_order.disposition == central_server::TransitionDisposition::kRejected);
-    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kVisionAssigned);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kInputDetected);
 
     const auto duplicate = machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-CREATE"));
     assert(duplicate.disposition == central_server::TransitionDisposition::kDuplicate);
@@ -109,6 +113,8 @@ void TestCompleteNormalFlow() {
 void TestStopAndRestartRestoreWork() {
     central_server::ProcessStateMachine machine;
     assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-STOP-WORK")).Applied());
+    assert(
+        machine.Apply(Event(central_server::ProcessEventType::kVisionCommandDispatched, "MSG-STOP-VISION")).Applied());
     assert(machine.Apply(Event(central_server::ProcessEventType::kPositionDetected, "MSG-STOP-POSITION")).Applied());
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStop).Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
@@ -142,7 +148,7 @@ void TestErrorEmergencyStopAndRecovery() {
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kInitialize).Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
-    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kVisionAssigned);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kInputDetected);
 
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kEmergencyStop);
@@ -154,11 +160,27 @@ void TestParallelWorksRemainIndependent() {
     central_server::ProcessStateMachine machine;
     assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-WORK-1", kWorkOne)).Applied());
     assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-WORK-2", kWorkTwo)).Applied());
+    assert(machine
+               .Apply(Event(central_server::ProcessEventType::kVisionCommandDispatched, "MSG-WORK-1-VISION", kWorkOne,
+                            "central-server"))
+               .Applied());
     assert(machine.Apply(Event(central_server::ProcessEventType::kBarcodeSucceeded, "MSG-WORK-1-BARCODE", kWorkOne))
                .Applied());
     assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kBarcodeRecognized);
-    assert(machine.FindWork(kWorkTwo)->stage == central_server::WorkStage::kVisionAssigned);
+    assert(machine.FindWork(kWorkTwo)->stage == central_server::WorkStage::kInputDetected);
     assert(machine.ActiveWorks().size() == 2);
+}
+
+void TestNodeFailureWithoutWorkStopsTheProcess() {
+    central_server::ProcessStateMachine machine;
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-INPUT-WORK")).Applied());
+    assert(machine.ApplySystemFailure("input conveyor fault").Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kError);
+    const auto work = machine.FindWork(kWorkOne);
+    assert(work.has_value());
+    assert(work->stage == central_server::WorkStage::kFailed);
+    assert(work->suspended_stage == central_server::WorkStage::kInputDetected);
+    assert(work->failure_reason == "input conveyor fault");
 }
 
 }  // namespace
@@ -170,5 +192,6 @@ int main() {
     TestStartEnablesAnIdleSystem();
     TestErrorEmergencyStopAndRecovery();
     TestParallelWorksRemainIndependent();
+    TestNodeFailureWithoutWorkStopsTheProcess();
     return 0;
 }
