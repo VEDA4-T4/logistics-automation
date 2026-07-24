@@ -22,6 +22,7 @@ public:
     explicit OperationalLogPanel(QWidget* parent = nullptr);
 
     void setState(const OperationalLogState& state);
+    void setEntryAcknowledged(const QString& id);
     void setAcknowledgeHandler(AcknowledgeHandler handler);
     void setAcknowledgeAllHandler(AcknowledgeAllHandler handler);
 
@@ -39,7 +40,6 @@ private:
     QCheckBox* unacknowledged_filter_{ nullptr };
     QPushButton* acknowledge_all_button_{ nullptr };
     QTableWidget* table_{ nullptr };
-    QString last_clicked_id_;
     OperationalLogState state_;
     AcknowledgeHandler acknowledge_handler_;
     AcknowledgeAllHandler acknowledge_all_handler_;

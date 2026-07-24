@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
     panel.setState(state);
     panel.setAcknowledgeHandler([&state, &panel](const QString& id) {
         assert(state.acknowledge(id));
-        panel.setState(state);
+        panel.setEntryAcknowledged(id);
     });
     panel.setAcknowledgeAllHandler([&state, &panel]() {
         assert(state.acknowledgeAllAlerts() > 0);
@@ -89,5 +89,18 @@ int main(int argc, char* argv[]) {
     table->cellClicked(0, 3);
     application.processEvents();
     assert(table->rowCount() == 1);
+
+    unacknowledged->setChecked(false);
+    for (qsizetype index = 0; index < OperationalLogState::kMaximumEntries; ++index) {
+        state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("PI-LOAD-01"), QStringLiteral("부하 테스트"),
+                          QStringLiteral("LOAD"), QStringLiteral("로그 %1").arg(index));
+    }
+    panel.setState(state);
+    application.processEvents();
+    assert(table->rowCount() == 200);
+    table->cellDoubleClicked(0, 3);
+    application.processEvents();
+    detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
+    assert(detail_dialog != nullptr && detail_dialog->isVisible());
     return 0;
 }

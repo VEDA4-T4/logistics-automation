@@ -540,7 +540,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(process_control_panel_, &ProcessControlPanel::commandRequested, this, &MainWindow::sendControlCommand);
     operational_log_panel_->setAcknowledgeHandler([this](const QString& id) {
         if (operational_log_state_.acknowledge(id)) {
-            refreshOperationalLogPanel();
+            operational_log_panel_->setEntryAcknowledged(id);
+            refreshOperationalLogBadge();
         }
     });
     operational_log_panel_->setAcknowledgeAllHandler([this]() {
@@ -1064,6 +1065,13 @@ void MainWindow::refreshOperationalLogPanel() {
         return;
     }
     operational_log_panel_->setState(operational_log_state_);
+    refreshOperationalLogBadge();
+}
+
+void MainWindow::refreshOperationalLogBadge() {
+    if (detail_tabs_ == nullptr) {
+        return;
+    }
     const auto alert_count = operational_log_state_.activeAlertCount();
     detail_tabs_->setTabText(
         1, alert_count > 0 ? QStringLiteral("운영 로그 (%1)").arg(alert_count) : QStringLiteral("운영 로그"));

@@ -51,6 +51,7 @@ private:
     void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,
                               const QString& code, const QString& message);
     void refreshOperationalLogPanel();
+    void refreshOperationalLogBadge();
 
     std::vector<QMediaPlayer*> players_{};
     std::vector<RtspH264Stream*> video_streams_{};
