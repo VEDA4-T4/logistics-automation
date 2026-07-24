@@ -82,6 +82,16 @@ namespace input_test {
     return frame;
 }
 
+[[nodiscard]] inline uart_frame_t MakeControllerEvent(std::uint8_t event_id) {
+    uart_frame_t frame{};
+    frame.version = UART_PROTOCOL_VERSION;
+    frame.sequence = 202U;
+    frame.command = UART_CMD_EVENT;
+    frame.length = UART_EVENT_HEADER_SIZE;
+    frame.payload[UART_EVENT_ID_INDEX] = event_id;
+    return frame;
+}
+
 // UART backend that decodes each written request frame and, using a
 // configurable responder, enqueues zero or more reply frames to be read back.
 class AutoResponderBackend final : public logistics::device::UartIoBackend {

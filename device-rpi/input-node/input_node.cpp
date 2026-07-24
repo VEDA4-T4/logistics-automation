@@ -403,10 +403,19 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     if (frame.length < UART_EVENT_HEADER_SIZE) {
         return;
     }
+    const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
+
+    // APP_EVENT_HEARTBEAT (stm32/conveyor-controller/Application/Inc/app_comm_tx.h) is a
+    // periodic CommTxTask liveness signal, not an operator-facing condition; there is no
+    // shared UART contract for these app-level event ids yet, so the value is duplicated here.
+    constexpr std::uint8_t kAppEventHeartbeat = 0x01U;
+    if (event_id == kAppEventHeartbeat) {
+        return;
+    }
+
     // The controller safety/health EVENT payload layout is not yet shared with
     // the server team, so surface it as a generic operator-visible error rather
     // than dropping it. The event id is reported so it can be correlated later.
-    const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
     EmitReport({
         .channel = InputReportChannel::kError,
         .message_type = mqtt::MessageType::kErrorOccurred,

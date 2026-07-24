@@ -268,6 +268,24 @@ void TestDeviceStatusReport() {
     assert(status->status == mqtt::ConnectionState::kOnline);
 }
 
+void TestHeartbeatEventIsNotReported() {
+    Fixture fixture;
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x01U));  // APP_EVENT_HEARTBEAT
+
+    assert(fixture.reports.empty());
+}
+
+void TestOtherControllerEventIsReportedAsError() {
+    Fixture fixture;
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U));  // APP_EVENT_SAFETY
+
+    assert(fixture.reports.size() == 1);
+    assert(fixture.reports.front().channel == InputReportChannel::kError);
+    const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.front().data);
+    assert(error != nullptr);
+    assert(error->error_code == "ERR-CONTROLLER-EVENT-3");
+}
+
 }  // namespace
 
 int main() {
@@ -285,5 +303,7 @@ int main() {
     TestSensorFaultReport();
     TestSensorReportsOnlyOnChange();
     TestDeviceStatusReport();
+    TestHeartbeatEventIsNotReported();
+    TestOtherControllerEventIsReportedAsError();
     return 0;
 }
