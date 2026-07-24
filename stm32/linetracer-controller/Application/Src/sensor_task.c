@@ -12,12 +12,7 @@
 #include "sensor_logic.h"
 #include "tim.h"
 
-typedef enum {
-    SENSOR_ADC_IDLE = 0,
-    SENSOR_ADC_BUSY,
-    SENSOR_ADC_READY,
-    SENSOR_ADC_ERROR
-} sensor_adc_state_t;
+typedef enum { SENSOR_ADC_IDLE = 0, SENSOR_ADC_BUSY, SENSOR_ADC_READY, SENSOR_ADC_ERROR } sensor_adc_state_t;
 
 typedef enum {
     ULTRASONIC_CAPTURE_IDLE = 0,
@@ -28,7 +23,7 @@ typedef enum {
 } ultrasonic_capture_state_t;
 
 typedef struct {
-    GPIO_TypeDef *trigger_port;
+    GPIO_TypeDef* trigger_port;
     uint16_t trigger_pin;
     uint32_t timer_channel;
     HAL_TIM_ActiveChannel active_channel;
@@ -95,31 +90,24 @@ static sensor_marker_event_t s_latest_marker_event;
 static volatile uint8_t s_latest_marker_event_valid;
 static volatile uint32_t s_marker_event_count;
 
-static uint8_t TimeElapsed(uint32_t now_ms,
-                           uint32_t since_ms,
-                           uint32_t duration_ms)
-{
+static uint8_t TimeElapsed(uint32_t now_ms, uint32_t since_ms, uint32_t duration_ms) {
     return ((uint32_t)(now_ms - since_ms) >= duration_ms) ? 1U : 0U;
 }
 
-static uint32_t EnterShortCriticalSection(void)
-{
+static uint32_t EnterShortCriticalSection(void) {
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
     return primask;
 }
 
-static void ExitShortCriticalSection(uint32_t primask)
-{
+static void ExitShortCriticalSection(uint32_t primask) {
     if (primask == 0U) {
         __enable_irq();
     }
 }
 
-static void StoreLatestState(const sensor_logic_context_t *logic,
-                             const app_sensor_snapshot_t *published_snapshot)
-{
-    const sensor_logic_diagnostics_t *diagnostics;
+static void StoreLatestState(const sensor_logic_context_t* logic, const app_sensor_snapshot_t* published_snapshot) {
+    const sensor_logic_diagnostics_t* diagnostics;
     sensor_marker_event_t marker_event;
     uint32_t primask;
 
@@ -149,8 +137,7 @@ static void StoreLatestState(const sensor_logic_context_t *logic,
     ExitShortCriticalSection(primask);
 }
 
-bool SensorTask_GetLatest(app_sensor_snapshot_t *snapshot)
-{
+bool SensorTask_GetLatest(app_sensor_snapshot_t* snapshot) {
     uint32_t primask;
 
     if (snapshot == NULL) {
@@ -168,11 +155,8 @@ bool SensorTask_GetLatest(app_sensor_snapshot_t *snapshot)
     return true;
 }
 
-static void PublishHealthEvent(app_health_event_type_t type,
-                               uint32_t now_ms,
-                               uint32_t detail)
-{
-    app_health_event_t event = {0};
+static void PublishHealthEvent(app_health_event_type_t type, uint32_t now_ms, uint32_t detail) {
+    app_health_event_t event = { 0 };
 
     if (healthEventQueue == NULL) {
         return;
@@ -185,13 +169,9 @@ static void PublishHealthEvent(app_health_event_type_t type,
     (void)osMessageQueuePut(healthEventQueue, &event, 0U, 0U);
 }
 
-static void PublishSafetyEvent(app_safety_event_type_t type,
-                               linetracer_stop_reason_t reason,
-                               uint32_t now_ms,
-                               uint8_t active,
-                               uint8_t error_code)
-{
-    app_safety_event_t event = {0};
+static void PublishSafetyEvent(app_safety_event_type_t type, linetracer_stop_reason_t reason, uint32_t now_ms,
+                               uint8_t active, uint8_t error_code) {
+    app_safety_event_t event = { 0 };
 
     if (safetyEventQueue == NULL) {
         return;
@@ -205,17 +185,13 @@ static void PublishSafetyEvent(app_safety_event_type_t type,
     event.active = active;
 
     if (osMessageQueuePut(safetyEventQueue, &event, 0U, 0U) != osOK) {
-        PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL,
-                           now_ms,
-                           (uint32_t)APP_TASK_SAFETY);
+        PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, now_ms, (uint32_t)APP_TASK_SAFETY);
     }
 }
 
-static void PublishLogicSafetyChanges(const sensor_logic_context_t *logic,
-                                      const sensor_logic_update_t *update,
-                                      uint32_t now_ms)
-{
-    const sensor_logic_diagnostics_t *diagnostics;
+static void PublishLogicSafetyChanges(const sensor_logic_context_t* logic, const sensor_logic_update_t* update,
+                                      uint32_t now_ms) {
+    const sensor_logic_diagnostics_t* diagnostics;
     uint32_t activated;
     uint32_t cleared;
 
@@ -232,54 +208,28 @@ static void PublishLogicSafetyChanges(const sensor_logic_context_t *logic,
     cleared = update->safety_cleared_flags;
 
     if ((activated & SENSOR_LOGIC_SAFETY_LINE_LOST) != 0U) {
-        PublishSafetyEvent(APP_SAFETY_EVENT_LINE_LOST,
-                           LINETRACER_STOP_REASON_LINE_LOST,
-                           now_ms,
-                           1U,
-                           0U);
+        PublishSafetyEvent(APP_SAFETY_EVENT_LINE_LOST, LINETRACER_STOP_REASON_LINE_LOST, now_ms, 1U, 0U);
     }
     if ((cleared & SENSOR_LOGIC_SAFETY_LINE_LOST) != 0U) {
-        PublishSafetyEvent(APP_SAFETY_EVENT_LINE_LOST,
-                           LINETRACER_STOP_REASON_LINE_LOST,
-                           now_ms,
-                           0U,
-                           0U);
+        PublishSafetyEvent(APP_SAFETY_EVENT_LINE_LOST, LINETRACER_STOP_REASON_LINE_LOST, now_ms, 0U, 0U);
     }
     if ((activated & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U) {
-        PublishSafetyEvent(APP_SAFETY_EVENT_OBSTACLE,
-                           LINETRACER_STOP_REASON_OBSTACLE,
-                           now_ms,
-                           1U,
+        PublishSafetyEvent(APP_SAFETY_EVENT_OBSTACLE, LINETRACER_STOP_REASON_OBSTACLE, now_ms, 1U,
                            diagnostics->obstacle_mask);
     }
     if ((cleared & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U) {
-        PublishSafetyEvent(APP_SAFETY_EVENT_OBSTACLE,
-                           LINETRACER_STOP_REASON_OBSTACLE,
-                           now_ms,
-                           0U,
-                           0U);
+        PublishSafetyEvent(APP_SAFETY_EVENT_OBSTACLE, LINETRACER_STOP_REASON_OBSTACLE, now_ms, 0U, 0U);
     }
     if ((activated & SENSOR_LOGIC_SAFETY_OVERLOAD) != 0U) {
-        PublishSafetyEvent(APP_SAFETY_EVENT_OVERLOAD,
-                           LINETRACER_STOP_REASON_OVERLOAD,
-                           now_ms,
-                           1U,
-                           0U);
+        PublishSafetyEvent(APP_SAFETY_EVENT_OVERLOAD, LINETRACER_STOP_REASON_OVERLOAD, now_ms, 1U, 0U);
     }
     if ((cleared & SENSOR_LOGIC_SAFETY_OVERLOAD) != 0U) {
-        PublishSafetyEvent(APP_SAFETY_EVENT_OVERLOAD,
-                           LINETRACER_STOP_REASON_OVERLOAD,
-                           now_ms,
-                           0U,
-                           0U);
+        PublishSafetyEvent(APP_SAFETY_EVENT_OVERLOAD, LINETRACER_STOP_REASON_OVERLOAD, now_ms, 0U, 0U);
     }
 }
 
-static void PublishSnapshot(sensor_task_context_t *context,
-                            uint32_t new_event_flags,
-                            uint32_t now_ms)
-{
-    const app_sensor_snapshot_t *latest;
+static void PublishSnapshot(sensor_task_context_t* context, uint32_t new_event_flags, uint32_t now_ms) {
+    const app_sensor_snapshot_t* latest;
     app_sensor_snapshot_t discarded;
     app_sensor_snapshot_t pending;
 
@@ -293,8 +243,7 @@ static void PublishSnapshot(sensor_task_context_t *context,
     }
 
     pending = *latest;
-    pending.event_flags = SensorEventLatch_Pend(&context->event_latch,
-                                                new_event_flags);
+    pending.event_flags = SensorEventLatch_Pend(&context->event_latch, new_event_flags);
     StoreLatestState(&context->logic, &pending);
 
     if (sensorSnapshotQueue == NULL) {
@@ -312,21 +261,17 @@ static void PublishSnapshot(sensor_task_context_t *context,
     }
 
     pending = *latest;
-    pending.event_flags = SensorEventLatch_Pend(&context->event_latch,
-                                                APP_SENSOR_EVENT_NONE);
+    pending.event_flags = SensorEventLatch_Pend(&context->event_latch, APP_SENSOR_EVENT_NONE);
     StoreLatestState(&context->logic, &pending);
 
     if (osMessageQueuePut(sensorSnapshotQueue, &pending, 0U, 0U) == osOK) {
         SensorEventLatch_Acknowledge(&context->event_latch, pending.event_flags);
     } else {
-        PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL,
-                           now_ms,
-                           (uint32_t)APP_TASK_CONTROL);
+        PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, now_ms, (uint32_t)APP_TASK_CONTROL);
     }
 }
 
-static uint8_t NormalizeLineInput(GPIO_PinState pin_state)
-{
+static uint8_t NormalizeLineInput(GPIO_PinState pin_state) {
 #if SENSOR_LINE_ACTIVE_LOW
     return (pin_state == GPIO_PIN_RESET) ? 1U : 0U;
 #else
@@ -334,8 +279,7 @@ static uint8_t NormalizeLineInput(GPIO_PinState pin_state)
 #endif
 }
 
-static uint8_t StartFsrConversion(uint32_t now_ms)
-{
+static uint8_t StartFsrConversion(uint32_t now_ms) {
     if (s_adc_state != SENSOR_ADC_IDLE) {
         return 0U;
     }
@@ -350,15 +294,10 @@ static uint8_t StartFsrConversion(uint32_t now_ms)
     return 1U;
 }
 
-static sensor_adc_state_t PollFsrConversion(uint32_t now_ms,
-                                            uint16_t *value)
-{
+static sensor_adc_state_t PollFsrConversion(uint32_t now_ms, uint16_t* value) {
     sensor_adc_state_t state = s_adc_state;
 
-    if ((state == SENSOR_ADC_BUSY) &&
-        (TimeElapsed(now_ms,
-                     s_adc_started_at_ms,
-                     SENSOR_FSR_ADC_TIMEOUT_MS) != 0U)) {
+    if ((state == SENSOR_ADC_BUSY) && (TimeElapsed(now_ms, s_adc_started_at_ms, SENSOR_FSR_ADC_TIMEOUT_MS) != 0U)) {
         (void)HAL_ADC_Stop_IT(&hadc1);
         s_adc_state = SENSOR_ADC_ERROR;
         state = SENSOR_ADC_ERROR;
@@ -376,8 +315,7 @@ static sensor_adc_state_t PollFsrConversion(uint32_t now_ms,
     return state;
 }
 
-static uint32_t GetTim1ClockHz(void)
-{
+static uint32_t GetTim1ClockHz(void) {
     uint32_t timer_clock_hz = HAL_RCC_GetPCLK2Freq();
 
     if ((RCC->CFGR & RCC_CFGR_PPRE2) != RCC_HCLK_DIV1) {
@@ -387,13 +325,11 @@ static uint32_t GetTim1ClockHz(void)
     return timer_clock_hz;
 }
 
-static uint8_t ConfigureUltrasonicTimer(void)
-{
+static uint8_t ConfigureUltrasonicTimer(void) {
     uint32_t timer_clock_hz = GetTim1ClockHz();
     uint32_t prescaler;
 
-    if ((timer_clock_hz < SENSOR_ULTRASONIC_TIMER_HZ) ||
-        ((timer_clock_hz % SENSOR_ULTRASONIC_TIMER_HZ) != 0U) ||
+    if ((timer_clock_hz < SENSOR_ULTRASONIC_TIMER_HZ) || ((timer_clock_hz % SENSOR_ULTRASONIC_TIMER_HZ) != 0U) ||
         (SENSOR_ULTRASONIC_TRIGGER_PULSE_US == 0U)) {
         return 0U;
     }
@@ -422,12 +358,10 @@ static uint8_t ConfigureUltrasonicTimer(void)
     return 1U;
 }
 
-static void StopUltrasonicTriggerPulse(void)
-{
-    const ultrasonic_sensor_descriptor_t *sensor;
+static void StopUltrasonicTriggerPulse(void) {
+    const ultrasonic_sensor_descriptor_t* sensor;
 
-    if ((s_ultrasonic_trigger_pulse_active == 0U) ||
-        (s_ultrasonic_active_index >= SENSOR_LOGIC_ULTRASONIC_COUNT)) {
+    if ((s_ultrasonic_trigger_pulse_active == 0U) || (s_ultrasonic_active_index >= SENSOR_LOGIC_ULTRASONIC_COUNT)) {
         return;
     }
 
@@ -439,13 +373,10 @@ static void StopUltrasonicTriggerPulse(void)
     __HAL_TIM_SET_COUNTER(&htim1, 0U);
 }
 
-static uint8_t StartUltrasonicMeasurement(uint8_t sensor_index,
-                                          uint32_t now_ms)
-{
-    const ultrasonic_sensor_descriptor_t *sensor;
+static uint8_t StartUltrasonicMeasurement(uint8_t sensor_index, uint32_t now_ms) {
+    const ultrasonic_sensor_descriptor_t* sensor;
 
-    if ((sensor_index >= SENSOR_LOGIC_ULTRASONIC_COUNT) ||
-        (s_ultrasonic_capture_state != ULTRASONIC_CAPTURE_IDLE)) {
+    if ((sensor_index >= SENSOR_LOGIC_ULTRASONIC_COUNT) || (s_ultrasonic_capture_state != ULTRASONIC_CAPTURE_IDLE)) {
         return 0U;
     }
 
@@ -460,9 +391,7 @@ static uint8_t StartUltrasonicMeasurement(uint8_t sensor_index,
     __HAL_TIM_SET_AUTORELOAD(&htim1, SENSOR_ULTRASONIC_TRIGGER_PULSE_US - 1U);
     __HAL_TIM_SET_COUNTER(&htim1, 0U);
     __HAL_TIM_CLEAR_FLAG(&htim1, TIM_FLAG_UPDATE);
-    __HAL_TIM_SET_CAPTUREPOLARITY(&htim1,
-                                  sensor->timer_channel,
-                                  TIM_INPUTCHANNELPOLARITY_RISING);
+    __HAL_TIM_SET_CAPTUREPOLARITY(&htim1, sensor->timer_channel, TIM_INPUTCHANNELPOLARITY_RISING);
     __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);
 
     HAL_GPIO_WritePin(sensor->trigger_port, sensor->trigger_pin, GPIO_PIN_SET);
@@ -476,19 +405,15 @@ static uint8_t StartUltrasonicMeasurement(uint8_t sensor_index,
     return 1U;
 }
 
-static void CheckUltrasonicCaptureTimeout(uint32_t now_ms)
-{
-    const ultrasonic_sensor_descriptor_t *sensor;
+static void CheckUltrasonicCaptureTimeout(uint32_t now_ms) {
+    const ultrasonic_sensor_descriptor_t* sensor;
     ultrasonic_capture_state_t state = s_ultrasonic_capture_state;
 
-    if ((state != ULTRASONIC_CAPTURE_WAIT_RISING) &&
-        (state != ULTRASONIC_CAPTURE_WAIT_FALLING)) {
+    if ((state != ULTRASONIC_CAPTURE_WAIT_RISING) && (state != ULTRASONIC_CAPTURE_WAIT_FALLING)) {
         return;
     }
 
-    if (TimeElapsed(now_ms,
-                    s_ultrasonic_started_at_ms,
-                    SENSOR_ULTRASONIC_ECHO_TIMEOUT_MS) == 0U) {
+    if (TimeElapsed(now_ms, s_ultrasonic_started_at_ms, SENSOR_ULTRASONIC_ECHO_TIMEOUT_MS) == 0U) {
         return;
     }
 
@@ -498,13 +423,10 @@ static void CheckUltrasonicCaptureTimeout(uint32_t now_ms)
     s_ultrasonic_capture_state = ULTRASONIC_CAPTURE_ERROR;
 }
 
-static uint8_t TakeUltrasonicResult(ultrasonic_result_t *result)
-{
+static uint8_t TakeUltrasonicResult(ultrasonic_result_t* result) {
     ultrasonic_capture_state_t state = s_ultrasonic_capture_state;
 
-    if ((result == NULL) ||
-        ((state != ULTRASONIC_CAPTURE_READY) &&
-         (state != ULTRASONIC_CAPTURE_ERROR))) {
+    if ((result == NULL) || ((state != ULTRASONIC_CAPTURE_READY) && (state != ULTRASONIC_CAPTURE_ERROR))) {
         return 0U;
     }
 
@@ -515,15 +437,12 @@ static uint8_t TakeUltrasonicResult(ultrasonic_result_t *result)
     return 1U;
 }
 
-static uint16_t PulseWidthToMillimeters(uint32_t pulse_width_us)
-{
+static uint16_t PulseWidthToMillimeters(uint32_t pulse_width_us) {
     return (uint16_t)(((pulse_width_us * 10U) + 29U) / 58U);
 }
 
-static void UpdateCommonSensorError(sensor_task_context_t *context,
-                                    uint32_t now_ms)
-{
-    const sensor_logic_diagnostics_t *diagnostics;
+static void UpdateCommonSensorError(sensor_task_context_t* context, uint32_t now_ms) {
+    const sensor_logic_diagnostics_t* diagnostics;
     uint32_t current_errors;
 
     diagnostics = SensorLogic_GetDiagnostics(&context->logic);
@@ -537,30 +456,18 @@ static void UpdateCommonSensorError(sensor_task_context_t *context,
     }
 
     if (current_errors == SENSOR_LOGIC_ERROR_NONE) {
-        PublishSafetyEvent(APP_SAFETY_EVENT_SENSOR_FAULT,
-                           LINETRACER_STOP_REASON_SENSOR_FAULT,
-                           now_ms,
-                           0U,
-                           0U);
+        PublishSafetyEvent(APP_SAFETY_EVENT_SENSOR_FAULT, LINETRACER_STOP_REASON_SENSOR_FAULT, now_ms, 0U, 0U);
     } else {
-        PublishSafetyEvent(APP_SAFETY_EVENT_SENSOR_FAULT,
-                           LINETRACER_STOP_REASON_SENSOR_FAULT,
-                           now_ms,
-                           1U,
+        PublishSafetyEvent(APP_SAFETY_EVENT_SENSOR_FAULT, LINETRACER_STOP_REASON_SENSOR_FAULT, now_ms, 1U,
                            (uint8_t)current_errors);
-        PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR,
-                           now_ms,
-                           current_errors);
+        PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR, now_ms, current_errors);
     }
 
     context->reported_error_flags = current_errors;
 }
 
-static uint8_t InitializeSensorHardware(void)
-{
-    HAL_GPIO_WritePin(GPIOB,
-                      GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_10,
-                      GPIO_PIN_RESET);
+static uint8_t InitializeSensorHardware(void) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_10, GPIO_PIN_RESET);
 
     HAL_NVIC_SetPriority(ADC_IRQn, 6U, 0U);
     HAL_NVIC_EnableIRQ(ADC_IRQn);
@@ -572,9 +479,7 @@ static uint8_t InitializeSensorHardware(void)
     return s_ultrasonic_timer_ready;
 }
 
-static void InitializeContext(sensor_task_context_t *context,
-                              uint32_t now_ms)
-{
+static void InitializeContext(sensor_task_context_t* context, uint32_t now_ms) {
     app_sensor_snapshot_t initial_snapshot;
 
     (void)memset(context, 0, sizeof(*context));
@@ -593,8 +498,7 @@ static void InitializeContext(sensor_task_context_t *context,
     StoreLatestState(&context->logic, &initial_snapshot);
 }
 
-void StartSensorTask(void *argument)
-{
+void StartSensorTask(void* argument) {
     sensor_task_context_t context;
     sensor_logic_update_t update;
     ultrasonic_result_t ultrasonic_result;
@@ -622,24 +526,15 @@ void StartSensorTask(void *argument)
         now_ms = osKernelGetTickCount();
         (void)memset(&update, 0, sizeof(update));
 
-        SensorLogic_UpdateLine(
-            &context.logic,
-            NormalizeLineInput(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4)),
-            NormalizeLineInput(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5)),
-            now_ms,
-            &update);
+        SensorLogic_UpdateLine(&context.logic, NormalizeLineInput(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4)),
+                               NormalizeLineInput(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5)), now_ms, &update);
 
         adc_state = PollFsrConversion(now_ms, &fsr_value);
         if (adc_state == SENSOR_ADC_READY) {
-            SensorLogic_UpdateFsr(&context.logic,
-                                  fsr_value,
-                                  now_ms,
-                                  &update);
+            SensorLogic_UpdateFsr(&context.logic, fsr_value, now_ms, &update);
             (void)StartFsrConversion(now_ms);
         } else if (adc_state == SENSOR_ADC_ERROR) {
-            SensorLogic_MarkFsrError(&context.logic,
-                                     SENSOR_LOGIC_ERROR_FSR_ADC,
-                                     now_ms);
+            SensorLogic_MarkFsrError(&context.logic, SENSOR_LOGIC_ERROR_FSR_ADC, now_ms);
             (void)StartFsrConversion(now_ms);
         } else if (adc_state == SENSOR_ADC_IDLE) {
             (void)StartFsrConversion(now_ms);
@@ -647,30 +542,20 @@ void StartSensorTask(void *argument)
 
         CheckUltrasonicCaptureTimeout(now_ms);
         if (TakeUltrasonicResult(&ultrasonic_result) != 0U) {
-            SensorLogic_UpdateUltrasonic(
-                &context.logic,
-                ultrasonic_result.sensor_index,
-                PulseWidthToMillimeters(ultrasonic_result.pulse_width_us),
-                ultrasonic_result.valid,
-                now_ms,
-                &update);
+            SensorLogic_UpdateUltrasonic(&context.logic, ultrasonic_result.sensor_index,
+                                         PulseWidthToMillimeters(ultrasonic_result.pulse_width_us),
+                                         ultrasonic_result.valid, now_ms, &update);
             context.next_ultrasonic_index =
-                (uint8_t)((ultrasonic_result.sensor_index + 1U) %
-                          SENSOR_LOGIC_ULTRASONIC_COUNT);
+                (uint8_t)((ultrasonic_result.sensor_index + 1U) % SENSOR_LOGIC_ULTRASONIC_COUNT);
         }
 
-        if ((ultrasonic_timer_ready != 0U) &&
-            (s_ultrasonic_capture_state == ULTRASONIC_CAPTURE_IDLE) &&
-            (TimeElapsed(now_ms,
-                         context.last_ultrasonic_start_ms,
-                         APP_TIMING_ULTRASONIC_PERIOD_MS) != 0U)) {
+        if ((ultrasonic_timer_ready != 0U) && (s_ultrasonic_capture_state == ULTRASONIC_CAPTURE_IDLE) &&
+            (TimeElapsed(now_ms, context.last_ultrasonic_start_ms, APP_TIMING_ULTRASONIC_PERIOD_MS) != 0U)) {
             uint8_t sensor_index = context.next_ultrasonic_index;
 
             context.last_ultrasonic_start_ms = now_ms;
             if (StartUltrasonicMeasurement(sensor_index, now_ms) != 0U) {
-                SensorLogic_MarkUltrasonicStarted(&context.logic,
-                                                  sensor_index,
-                                                  now_ms);
+                SensorLogic_MarkUltrasonicStarted(&context.logic, sensor_index, now_ms);
             }
         }
 
@@ -681,12 +566,8 @@ void StartSensorTask(void *argument)
         context.logic.snapshot.sampled_at_ms = now_ms;
         PublishSnapshot(&context, update.event_flags, now_ms);
 
-        if (TimeElapsed(now_ms,
-                        last_alive_ms,
-                        APP_TIMING_HEALTH_PERIOD_MS) != 0U) {
-            PublishHealthEvent(APP_HEALTH_EVENT_TASK_ALIVE,
-                               now_ms,
-                               context.reported_error_flags);
+        if (TimeElapsed(now_ms, last_alive_ms, APP_TIMING_HEALTH_PERIOD_MS) != 0U) {
+            PublishHealthEvent(APP_HEALTH_EVENT_TASK_ALIVE, now_ms, context.reported_error_flags);
             last_alive_ms = now_ms;
         }
 
@@ -697,18 +578,15 @@ void StartSensorTask(void *argument)
     }
 }
 
-void ADC_IRQHandler(void)
-{
+void ADC_IRQHandler(void) {
     HAL_ADC_IRQHandler(&hadc1);
 }
 
-void TIM1_CC_IRQHandler(void)
-{
+void TIM1_CC_IRQHandler(void) {
     HAL_TIM_IRQHandler(&htim1);
 }
 
-void TIM1_UP_TIM10_IRQHandler(void)
-{
+void TIM1_UP_TIM10_IRQHandler(void) {
     if ((__HAL_TIM_GET_FLAG(&htim1, TIM_FLAG_UPDATE) != RESET) &&
         (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_UPDATE) != RESET)) {
         __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_UPDATE);
@@ -716,8 +594,7 @@ void TIM1_UP_TIM10_IRQHandler(void)
     }
 }
 
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
-{
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
     if (hadc != &hadc1) {
         return;
     }
@@ -727,8 +604,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
     s_adc_state = SENSOR_ADC_READY;
 }
 
-void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
-{
+void HAL_ADC_ErrorCallback(ADC_HandleTypeDef* hadc) {
     if (hadc != &hadc1) {
         return;
     }
@@ -737,14 +613,12 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
     s_adc_state = SENSOR_ADC_ERROR;
 }
 
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
-{
-    const ultrasonic_sensor_descriptor_t *sensor;
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef* htim) {
+    const ultrasonic_sensor_descriptor_t* sensor;
     uint32_t falling_capture;
     uint32_t timer_period;
 
-    if ((htim != &htim1) ||
-        (s_ultrasonic_active_index >= SENSOR_LOGIC_ULTRASONIC_COUNT)) {
+    if ((htim != &htim1) || (s_ultrasonic_active_index >= SENSOR_LOGIC_ULTRASONIC_COUNT)) {
         return;
     }
 
@@ -754,11 +628,8 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
     }
 
     if (s_ultrasonic_capture_state == ULTRASONIC_CAPTURE_WAIT_RISING) {
-        s_ultrasonic_rising_capture =
-            HAL_TIM_ReadCapturedValue(htim, sensor->timer_channel);
-        __HAL_TIM_SET_CAPTUREPOLARITY(htim,
-                                      sensor->timer_channel,
-                                      TIM_INPUTCHANNELPOLARITY_FALLING);
+        s_ultrasonic_rising_capture = HAL_TIM_ReadCapturedValue(htim, sensor->timer_channel);
+        __HAL_TIM_SET_CAPTUREPOLARITY(htim, sensor->timer_channel, TIM_INPUTCHANNELPOLARITY_FALLING);
         s_ultrasonic_capture_state = ULTRASONIC_CAPTURE_WAIT_FALLING;
         return;
     }
@@ -773,8 +644,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
     if (falling_capture >= s_ultrasonic_rising_capture) {
         s_ultrasonic_pulse_width_us = falling_capture - s_ultrasonic_rising_capture;
     } else {
-        s_ultrasonic_pulse_width_us =
-            (timer_period - s_ultrasonic_rising_capture) + falling_capture;
+        s_ultrasonic_pulse_width_us = (timer_period - s_ultrasonic_rising_capture) + falling_capture;
     }
 
     (void)HAL_TIM_IC_Stop_IT(htim, sensor->timer_channel);
