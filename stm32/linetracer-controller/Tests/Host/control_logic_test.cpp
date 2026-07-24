@@ -410,8 +410,8 @@ void TestTelemetrySnapshotAndLifecycleEvents() {
     assign.route_id = UART_LINETRACER_ROUTE_C;
     const auto assign_result = ControlLogic_HandleCommand(&context, &assign, 20U);
     assert(assign_result.accepted != 0U);
-    assert(ControlLogic_BuildStartedEvent(&context, &assign, &assign_result, UART_LINETRACER_LOAD_EMPTY,
-                                          20U, &tx_event) != 0U);
+    assert(ControlLogic_BuildStartedEvent(&context, &assign, &assign_result, UART_LINETRACER_LOAD_EMPTY, 20U,
+                                          &tx_event) != 0U);
     assert(tx_event.type == APP_TX_EVENT_STARTED);
     assert(tx_event.job_id == 77U);
     assert(tx_event.route_id == UART_LINETRACER_ROUTE_C);
@@ -429,8 +429,8 @@ void TestTelemetrySnapshotAndLifecycleEvents() {
     emergency.reason = LINETRACER_STOP_REASON_EMERGENCY;
     emergency.error_code = UART_ERROR_EMERGENCY_STOP;
     assert(ControlLogic_ApplySafetyEvent(&context, &emergency, 30U) != 0U);
-    assert(ControlLogic_BuildSafetyFaultEvent(&context, &emergency, UART_LINETRACER_LOAD_PRESENT, 30U,
-                                              &tx_event) != 0U);
+    assert(ControlLogic_BuildSafetyFaultEvent(&context, &emergency, UART_LINETRACER_LOAD_PRESENT, 30U, &tx_event) !=
+           0U);
     assert(tx_event.type == APP_TX_EVENT_FAULT);
     assert(tx_event.error_code == UART_ERROR_EMERGENCY_STOP);
 
