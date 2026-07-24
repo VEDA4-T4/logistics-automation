@@ -118,6 +118,28 @@ target_link_libraries(
 logistics_enable_warnings(logistics_central_server_command_manager)
 
 # ------------------------------------------------------------------------------
+# Process state machine
+# ------------------------------------------------------------------------------
+
+add_library(
+    logistics_central_server_process_state_machine
+    src/process_manager/process_state_machine.cpp
+)
+add_library(
+    logistics::central_server_process_state_machine
+    ALIAS logistics_central_server_process_state_machine
+)
+target_include_directories(
+    logistics_central_server_process_state_machine
+    PUBLIC include
+)
+target_link_libraries(
+    logistics_central_server_process_state_machine
+    PUBLIC logistics::contracts
+)
+logistics_enable_warnings(logistics_central_server_process_state_machine)
+
+# ------------------------------------------------------------------------------
 # MQTT handler
 # ------------------------------------------------------------------------------
 
@@ -320,6 +342,20 @@ if(BUILD_TESTING)
     add_test(
         NAME central_server_command_manager_test
         COMMAND central_server_command_manager_test
+    )
+
+    add_executable(
+        central_server_process_state_machine_test
+        tests/process_state_machine_test.cpp
+    )
+    target_link_libraries(
+        central_server_process_state_machine_test
+        PRIVATE logistics::central_server_process_state_machine
+    )
+    logistics_enable_warnings(central_server_process_state_machine_test)
+    add_test(
+        NAME central_server_process_state_machine_test
+        COMMAND central_server_process_state_machine_test
     )
 
     add_executable(
