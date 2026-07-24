@@ -12,6 +12,7 @@ option(LOGISTICS_BUILD_CONTROL_CENTER "Build the Qt control center" OFF)
 option(LOGISTICS_BUILD_CENTRAL_SERVER "Build the central Raspberry Pi server" ON)
 option(LOGISTICS_BUILD_DEVICE_NODES "Build Raspberry Pi device nodes" ON)
 option(LOGISTICS_BUILD_DEVICE_UART_TRANSPORT "Build the Raspberry Pi UART transport" ON)
+option(LOGISTICS_BUILD_VISION_NODE "Build the Raspberry Pi vision node" ON)
 option(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT "Build MQTT clients with libmosquitto" ON)
 
 add_subdirectory(shared)

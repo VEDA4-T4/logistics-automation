@@ -87,11 +87,13 @@ target_include_directories(device_status PUBLIC common/include)
 target_link_libraries(device_status PUBLIC logistics::contracts)
 logistics_enable_warnings(device_status)
 
-add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
-add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
-target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
-target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
-logistics_enable_warnings(vision_mqtt_workflow)
+if(LOGISTICS_BUILD_VISION_NODE)
+    add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
+    add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
+    target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
+    target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
+    logistics_enable_warnings(vision_mqtt_workflow)
+endif()
 
 add_library(
     device_runtime
@@ -172,10 +174,13 @@ function(add_device_node target_name source_file)
 endfunction()
 
 add_device_node(logistics_input_node input-node/main.cpp)
-add_device_node(logistics_vision_node vision-node/main.cpp)
 add_device_node(logistics_sorting_node sorting-node/main.cpp)
 target_link_libraries(logistics_sorting_node PRIVATE logistics::device_sorting_node logistics::device_uart_session)
 add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
+
+if(LOGISTICS_BUILD_VISION_NODE)
+    add_device_node(logistics_vision_node vision-node/main.cpp)
+endif()
 
 if(BUILD_TESTING)
     add_executable(device_mqtt_message_processor_test tests/mqtt_message_processor_test.cpp)
@@ -198,10 +203,12 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_log_spool_test)
     add_test(NAME device_log_spool_test COMMAND device_log_spool_test)
 
-    add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
-    target_link_libraries(vision_mqtt_workflow_test PRIVATE logistics::vision_mqtt_workflow)
-    logistics_enable_warnings(vision_mqtt_workflow_test)
-    add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
+    if(LOGISTICS_BUILD_VISION_NODE)
+        add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
+        target_link_libraries(vision_mqtt_workflow_test PRIVATE logistics::vision_mqtt_workflow)
+        logistics_enable_warnings(vision_mqtt_workflow_test)
+        add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
+    endif()
 
     add_executable(device_image_uploader_test tests/image_uploader_test.cpp)
     target_link_libraries(device_image_uploader_test PRIVATE logistics::device_image_upload)
@@ -215,17 +222,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     logistics_enable_warnings(vedauart_cli_test)
 endif()
 
-target_sources(
-    logistics_vision_node
-    PRIVATE
-        vision-node/detection.cpp
-        vision-node/detection.hpp
-)
+if(LOGISTICS_BUILD_VISION_NODE)
+    target_sources(
+        logistics_vision_node
+        PRIVATE
+            vision-node/detection.cpp
+            vision-node/detection.hpp
+    )
 
-find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgcodecs imgproc objdetect videoio)
-target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
-target_link_libraries(logistics_vision_node PRIVATE logistics::vision_mqtt_workflow)
+    find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgcodecs imgproc objdetect videoio)
+    target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
+    target_link_libraries(logistics_vision_node PRIVATE logistics::vision_mqtt_workflow)
+endif()
 
 if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
     target_compile_definitions(logistics_sorting_node PRIVATE LOGISTICS_SORTING_DAEMON_ENABLED=1)
@@ -234,9 +243,11 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         PRIVATE logistics::device_mqtt_mosquitto logistics::device_status
     )
 
-    target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)
-    target_link_libraries(
-        logistics_vision_node
-        PRIVATE logistics::device_mqtt_mosquitto logistics::device_status logistics::device_image_upload
-    )
+    if(LOGISTICS_BUILD_VISION_NODE)
+        target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)
+        target_link_libraries(
+            logistics_vision_node
+            PRIVATE logistics::device_mqtt_mosquitto logistics::device_status logistics::device_image_upload
+        )
+    endif()
 endif()
