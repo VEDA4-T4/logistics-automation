@@ -5,8 +5,17 @@ STM32의 처리 결과와 비동기 장치 상태는 다시 MQTT 응답·상태�
 
 ## 실행
 
+최초 실행 전 예제 설정을 복사하고, 파일 내 주석에 따라 장치 IP와 MQTT broker 정보를 수정한다.
+
 ```bash
-./logistics_sorting_node [node.ini] [/dev/vedauart]
+cp device-rpi/config/sorting-node.ini.example device-rpi/config/sorting-node.ini
+nano device-rpi/config/sorting-node.ini
+```
+
+실제 `sorting-node.ini`는 배포 환경의 IP 주소와 MQTT 인증 정보를 포함할 수 있으므로 Git에 커밋하지 않는다.
+
+```bash
+./logistics_sorting_node [sorting-node.ini] [/dev/vedauart]
 ```
 
 인자를 생략하면 `device-rpi/config/node.ini`와 `/dev/vedauart`를 사용한다. 다음 환경 변수로도 경로를 지정할
