@@ -82,12 +82,11 @@ int main(int argc, char* argv[]) {
                                                "Session: video-session;timeout=60\r\n"
                                                "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n"));
                 } else if (request.startsWith("PLAY ") && request.contains("Session: video-session")) {
-                    socket->write(
-                        rtspResponse(request_count, "Session: video-session\r\n") +
-                        interleavedH264Packet(QByteArray::fromHex("419a10"), 1, 90000, true) +
-                        interleavedH264Packet(QByteArray::fromHex("419a20"), 3, 93000, true) +
-                        interleavedH264Packet(QByteArray::fromHex("7c858884"), 4, 96000, false) +
-                        interleavedH264Packet(QByteArray::fromHex("7c4521a0"), 5, 96000, true));
+                    socket->write(rtspResponse(request_count, "Session: video-session\r\n") +
+                                  interleavedH264Packet(QByteArray::fromHex("419a10"), 1, 90000, true) +
+                                  interleavedH264Packet(QByteArray::fromHex("419a20"), 3, 93000, true) +
+                                  interleavedH264Packet(QByteArray::fromHex("7c858884"), 4, 96000, false) +
+                                  interleavedH264Packet(QByteArray::fromHex("7c4521a0"), 5, 96000, true));
                 } else {
                     app.exit(2);
                 }
@@ -103,10 +102,9 @@ int main(int argc, char* argv[]) {
     });
     QObject::connect(&stream, &logistics::control_center::RtspH264Stream::streamError, &app,
                      [&](const QString&) { app.exit(3); });
-    QObject::connect(&stream, &logistics::control_center::RtspH264Stream::packetLossDetected, &app,
-                     [&](quint16 expected, quint16 received) {
-                         packet_loss_detected = expected == 2 && received == 3;
-                     });
+    QObject::connect(
+        &stream, &logistics::control_center::RtspH264Stream::packetLossDetected, &app,
+        [&](quint16 expected, quint16 received) { packet_loss_detected = expected == 2 && received == 3; });
     QTimer::singleShot(3000, &app, [&]() { app.exit(4); });
 
     stream.start(QUrl(QStringLiteral("rtsp://user:password@127.0.0.1:%1/stream").arg(server.serverPort())));

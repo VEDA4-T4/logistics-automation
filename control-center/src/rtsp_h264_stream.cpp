@@ -260,9 +260,8 @@ void RtspH264Stream::processRtspResponse(const QByteArray& header, const QByteAr
         return;
     }
     if (status < 200 || status >= 300) {
-        fail(QStringLiteral("RTSP %1 요청 실패: RTSP %2")
-                 .arg(QString::fromLatin1(pending_request_.method))
-                 .arg(status));
+        fail(
+            QStringLiteral("RTSP %1 요청 실패: RTSP %2").arg(QString::fromLatin1(pending_request_.method)).arg(status));
         return;
     }
 
@@ -379,8 +378,7 @@ void RtspH264Stream::processH264Payload(const QByteArray& payload, bool marker) 
     } else if (nal_type == 24) {
         qsizetype offset = 1;
         while (offset + 2 <= payload.size()) {
-            const auto size = (static_cast<quint8>(payload[offset]) << 8U) |
-                              static_cast<quint8>(payload[offset + 1]);
+            const auto size = (static_cast<quint8>(payload[offset]) << 8U) | static_cast<quint8>(payload[offset + 1]);
             offset += 2;
             if (size == 0 || offset + size > payload.size()) {
                 access_unit_.clear();
@@ -612,9 +610,9 @@ bool RtspH264Stream::selectH264Track(const QByteArray& sdp, const QUrl& content_
         QRegularExpression(QStringLiteral("(?=^m=)"), QRegularExpression::MultilineOption), Qt::SkipEmptyParts);
     for (const auto& section : sections) {
         if (!section.startsWith(QStringLiteral("m=video")) ||
-            !section.contains(QRegularExpression(QStringLiteral("^a=rtpmap:\\d+ H264/90000"),
-                                                 QRegularExpression::CaseInsensitiveOption |
-                                                     QRegularExpression::MultilineOption))) {
+            !section.contains(
+                QRegularExpression(QStringLiteral("^a=rtpmap:\\d+ H264/90000"),
+                                   QRegularExpression::CaseInsensitiveOption | QRegularExpression::MultilineOption))) {
             continue;
         }
 

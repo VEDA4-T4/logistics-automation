@@ -286,10 +286,8 @@ ControlCenterConfig loadControlCenterConfig() {
         config.warnings.append(QStringLiteral("rtsp/low_latency는 true 또는 false여야 하므로 true를 사용합니다."));
     }
 
-    const auto transport = settings.value(QStringLiteral("rtsp/transport"), QStringLiteral("tcp"))
-                               .toString()
-                               .trimmed()
-                               .toLower();
+    const auto transport =
+        settings.value(QStringLiteral("rtsp/transport"), QStringLiteral("tcp")).toString().trimmed().toLower();
     if (transport != QStringLiteral("tcp")) {
         config.warnings.append(QStringLiteral("rtsp/transport는 현재 tcp만 지원하므로 RTSP/TCP를 사용합니다."));
     }
@@ -702,26 +700,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                             << QStringLiteral("[VIDEO][CH %1][RTSP/TCP] %2").arg(channel + 1).arg(detail);
                     }
                 });
-        connect(video_streams_[channel], &RtspH264Stream::streamError, this,
-                [this, channel](const QString& detail) {
-                    reconnecting_[channel] = false;
-                    players_[channel]->stop();
-                    players_[channel]->setSource({});
-                    setChannelState(channel, ChannelState::Error, detail);
-                });
+        connect(video_streams_[channel], &RtspH264Stream::streamError, this, [this, channel](const QString& detail) {
+            reconnecting_[channel] = false;
+            players_[channel]->stop();
+            players_[channel]->setSource({});
+            setChannelState(channel, ChannelState::Error, detail);
+        });
         connect(video_streams_[channel], &RtspH264Stream::packetLossDetected, this,
                 [channel](quint16 expected, quint16 received) {
-                    qWarning().noquote()
-                        << QStringLiteral("[VIDEO][CH %1][RTP] 패킷 순서 불일치 · expected=%2 · received=%3 · "
-                                          "다음 IDR 프레임까지 폐기")
-                               .arg(channel + 1)
-                               .arg(expected)
-                               .arg(received);
+                    qWarning().noquote() << QStringLiteral(
+                                                "[VIDEO][CH %1][RTP] 패킷 순서 불일치 · expected=%2 · received=%3 · "
+                                                "다음 IDR 프레임까지 폐기")
+                                                .arg(channel + 1)
+                                                .arg(expected)
+                                                .arg(received);
                 });
-        connect(video_streams_[channel], &RtspH264Stream::diagnosticMessage, this,
-                [channel](const QString& message) {
-                    qInfo().noquote() << QStringLiteral("[VIDEO][CH %1][RTSP/TCP] %2").arg(channel + 1).arg(message);
-                });
+        connect(video_streams_[channel], &RtspH264Stream::diagnosticMessage, this, [channel](const QString& message) {
+            qInfo().noquote() << QStringLiteral("[VIDEO][CH %1][RTSP/TCP] %2").arg(channel + 1).arg(message);
+        });
 
         if (onvif_metadata_enabled_ && !metadata_stream_urls_[channel].isEmpty()) {
             metadata_clients_[channel] = new OnvifRtspMetadataClient(this);
@@ -829,10 +825,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                             QStringLiteral("영상 스트림이 종료되었습니다"));
                             break;
                         case QMediaPlayer::InvalidMedia:
-                            qWarning().noquote()
-                                << QStringLiteral("[VIDEO][CH %1][DECODER] 잘못된 영상 스트림 · %2")
-                                       .arg(channel + 1)
-                                       .arg(players_[channel]->errorString());
+                            qWarning().noquote() << QStringLiteral("[VIDEO][CH %1][DECODER] 잘못된 영상 스트림 · %2")
+                                                        .arg(channel + 1)
+                                                        .arg(players_[channel]->errorString());
                             setChannelState(channel, ChannelState::Error, players_[channel]->errorString());
                             break;
                         case QMediaPlayer::NoMedia:
