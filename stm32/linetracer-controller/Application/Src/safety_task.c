@@ -20,6 +20,7 @@ extern osThreadId_t SafetyTaskHandle;
 #define SAFETY_HAZARD_MARKER_SEQUENCE (1UL << 6U)
 #define SAFETY_HAZARD_COMM_TIMEOUT (1UL << 7U)
 #define SAFETY_HAZARD_SENSOR_FAULT (1UL << 8U)
+#define SAFETY_HAZARD_HEALTH_FAULT (1UL << 9U)
 
 typedef struct {
     uint32_t active_hazard_mask;
@@ -90,6 +91,9 @@ static uint32_t SafetyTask_EventToHazardMask(app_safety_event_type_t type) {
         case APP_SAFETY_EVENT_SENSOR_FAULT:
             return SAFETY_HAZARD_SENSOR_FAULT;
 
+        case APP_SAFETY_EVENT_HEALTH_FAULT:
+            return SAFETY_HAZARD_HEALTH_FAULT;
+
         case APP_SAFETY_EVENT_NONE:
         case APP_SAFETY_EVENT_RESET_REQUEST:
         default:
@@ -126,6 +130,9 @@ static linetracer_stop_reason_t SafetyTask_EventToReason(app_safety_event_type_t
         case APP_SAFETY_EVENT_SENSOR_FAULT:
             return LINETRACER_STOP_REASON_SENSOR_FAULT;
 
+        case APP_SAFETY_EVENT_HEALTH_FAULT:
+            return LINETRACER_STOP_REASON_HEALTH_FAULT;
+
         case APP_SAFETY_EVENT_NONE:
         case APP_SAFETY_EVENT_RESET_REQUEST:
         default:
@@ -136,6 +143,9 @@ static linetracer_stop_reason_t SafetyTask_EventToReason(app_safety_event_type_t
 static uint8_t SafetyTask_ReasonPriority(linetracer_stop_reason_t reason) {
     switch (reason) {
         case LINETRACER_STOP_REASON_EMERGENCY:
+            return 10U;
+
+        case LINETRACER_STOP_REASON_HEALTH_FAULT:
             return 9U;
 
         case LINETRACER_STOP_REASON_SENSOR_FAULT:
@@ -197,6 +207,42 @@ static uint8_t SafetyTask_ReasonToUartError(linetracer_stop_reason_t reason) {
         default:
             return (uint8_t)UART_ERROR_INTERNAL;
     }
+}
+
+static uint8_t SafetyTask_HealthErrorCode(uint8_t error_code) {
+    switch ((uart_error_t)error_code) {
+        case UART_ERROR_BUSY:
+        case UART_ERROR_TIMEOUT:
+        case UART_ERROR_INTERNAL:
+            return error_code;
+
+        default:
+            return (uint8_t)UART_ERROR_INTERNAL;
+    }
+}
+
+static uint8_t SafetyTask_HealthErrorPriority(uint8_t error_code) {
+    switch ((uart_error_t)error_code) {
+        case UART_ERROR_INTERNAL:
+            return 3U;
+
+        case UART_ERROR_TIMEOUT:
+            return 2U;
+
+        case UART_ERROR_BUSY:
+            return 1U;
+
+        default:
+            return 0U;
+    }
+}
+
+static uint8_t SafetyTask_EventToUartError(const app_safety_event_t* event, linetracer_stop_reason_t reason) {
+    if ((event != NULL) && (event->type == APP_SAFETY_EVENT_HEALTH_FAULT)) {
+        return SafetyTask_HealthErrorCode(event->error_code);
+    }
+
+    return SafetyTask_ReasonToUartError(reason);
 }
 
 static void SafetyTask_StoreLatestControlEvent(const app_control_safety_event_t* event) {
@@ -277,6 +323,7 @@ static void SafetyTask_ClearLatch(void) {
 static void SafetyTask_ActivateHazard(const app_safety_event_t* event) {
     uint32_t hazard_mask;
     linetracer_stop_reason_t reason;
+    uint8_t event_error_code;
     uint8_t was_latched;
 
     if (event == NULL) {
@@ -285,12 +332,22 @@ static void SafetyTask_ActivateHazard(const app_safety_event_t* event) {
 
     hazard_mask = SafetyTask_EventToHazardMask(event->type);
     reason = SafetyTask_EventToReason(event->type);
+    event_error_code = SafetyTask_EventToUartError(event, reason);
     if ((hazard_mask == 0U) || (reason == LINETRACER_STOP_REASON_NONE)) {
         ++s_invalid_event_count;
         return;
     }
 
     if ((s_safety_context.active_hazard_mask & hazard_mask) != 0U) {
+        if ((reason == LINETRACER_STOP_REASON_HEALTH_FAULT) &&
+            (s_safety_context.latched_reason == LINETRACER_STOP_REASON_HEALTH_FAULT) &&
+            (SafetyTask_HealthErrorPriority(event_error_code) >
+             SafetyTask_HealthErrorPriority(s_safety_context.error_code))) {
+            s_safety_context.error_code = event_error_code;
+            SafetyTask_PublishLatched(event);
+            return;
+        }
+
         ++s_duplicate_event_count;
         return;
     }
@@ -303,7 +360,7 @@ static void SafetyTask_ActivateHazard(const app_safety_event_t* event) {
     if ((was_latched == 0U) ||
         (SafetyTask_ReasonPriority(reason) > SafetyTask_ReasonPriority(s_safety_context.latched_reason))) {
         s_safety_context.latched_reason = reason;
-        s_safety_context.error_code = SafetyTask_ReasonToUartError(reason);
+        s_safety_context.error_code = event_error_code;
     }
 
     if (was_latched == 0U) {
