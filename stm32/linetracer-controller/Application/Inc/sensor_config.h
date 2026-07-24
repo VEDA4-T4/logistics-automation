@@ -7,7 +7,7 @@
  * TCRT5000 digital modules commonly drive LOW on black. Set this to 0U if
  * hardware calibration shows that black produces HIGH.
  */
-#define SENSOR_LINE_ACTIVE_LOW 1U
+#define SENSOR_LINE_ACTIVE_LOW 0U
 
 /* A physical marker is a short CENTERED -> WHITE_GAP -> CENTERED sequence. */
 #define SENSOR_MARKER_MIN_GAP_MS 20U

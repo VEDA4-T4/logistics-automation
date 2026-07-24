@@ -6,12 +6,14 @@
 #include "cmsis_os2.h"
 #include "control_config.h"
 #include "control_logic.h"
+#include "main.h"
 #include "motor_control.h"
 
 static control_context_t controlTaskContext;
 static uart_linetracer_load_state_t controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
 static linetracer_line_state_t controlTaskLineState = LINETRACER_LINE_UNKNOWN;
 static uint8_t controlTaskMotorReady;
+static volatile uint8_t controlTaskInitialized;
 
 typedef struct {
     app_tx_event_t event;
@@ -20,6 +22,39 @@ typedef struct {
 } control_pending_response_t;
 
 static control_pending_response_t controlPendingResponses[CONTROL_TASK_PENDING_RESPONSE_CAPACITY];
+
+static uint32_t ControlTask_EnterShortCriticalSection(void) {
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    return primask;
+}
+
+static void ControlTask_ExitShortCriticalSection(uint32_t primask) {
+    if (primask == 0U) {
+        __enable_irq();
+    }
+}
+
+bool ControlTask_GetLatest(app_control_snapshot_t* snapshot) {
+    uint32_t primask;
+    uint32_t now_ms;
+
+    if (snapshot == NULL) {
+        return false;
+    }
+
+    now_ms = osKernelGetTickCount();
+    primask = ControlTask_EnterShortCriticalSection();
+    if (controlTaskInitialized == 0U) {
+        ControlTask_ExitShortCriticalSection(primask);
+        return false;
+    }
+
+    ControlLogic_MakeSnapshot(&controlTaskContext, controlTaskLoadState, now_ms, snapshot);
+    ControlTask_ExitShortCriticalSection(primask);
+    return true;
+}
 
 static void ControlTask_PublishHealthEvent(app_health_event_type_t type, uint32_t detail, uint32_t now_ms) {
     app_health_event_t event = { 0 };
@@ -154,6 +189,12 @@ static void ControlTask_ProcessSafetyEvents(void) {
 
         MotorControl_ForceStop();
         if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
+            app_tx_event_t fault_event;
+
+            if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
+                                                   &fault_event) != 0U) {
+                ControlTask_PublishTxEvent(&fault_event, now_ms);
+            }
             ControlTask_PublishSafetyResetResult(&event, now_ms);
         }
         ++processed;
@@ -381,10 +422,16 @@ static void ControlTask_ProcessSensorSnapshots(void) {
 }
 
 static void ControlTask_PublishCommandResult(const app_control_command_t* command,
-                                             const control_command_result_t* result, uint32_t now_ms) {
+                                              const control_command_result_t* result, uint32_t now_ms) {
     app_tx_event_t event = ControlTask_MakeTxEvent(APP_TX_EVENT_COMMAND_ACK, command, result, now_ms);
+    app_tx_event_t started_event;
 
     ControlTask_PublishTxEvent(&event, now_ms);
+
+    if (ControlLogic_BuildStartedEvent(&controlTaskContext, command, result, controlTaskLoadState, now_ms,
+                                       &started_event) != 0U) {
+        ControlTask_PublishTxEvent(&started_event, now_ms);
+    }
 
     if (result->status_requested != 0U && result->accepted != 0U) {
         event.type = APP_TX_EVENT_STATUS;
@@ -436,6 +483,7 @@ void StartControlTask(void* argument) {
     uint32_t last_alive_tick;
 
     (void)argument;
+    controlTaskInitialized = 0U;
     next_wake_tick = osKernelGetTickCount();
     last_alive_tick = next_wake_tick;
     ControlLogic_Init(&controlTaskContext, next_wake_tick);
@@ -453,6 +501,7 @@ void StartControlTask(void* argument) {
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR, CONTROL_HEALTH_MOTOR_INIT_FAILED,
                                        next_wake_tick);
     }
+    controlTaskInitialized = 1U;
 
     for (;;) {
         uint32_t now_ms;

@@ -394,6 +394,52 @@ void TestLoadOffDuringReturnIsFault() {
     assert(context.stop_reason == LINETRACER_STOP_REASON_LOAD_LOST);
 }
 
+void TestTelemetrySnapshotAndLifecycleEvents() {
+    control_context_t context{};
+    app_control_snapshot_t snapshot{};
+    app_tx_event_t tx_event{};
+
+    ControlLogic_Init(&context, 0U);
+
+    auto position = MakeCommand(APP_CONTROL_COMMAND_SET_CURRENT_POSITION, 10U, 1U);
+    position.position = UART_LINETRACER_POSITION_DEST_A;
+    assert(ControlLogic_HandleCommand(&context, &position, 10U).accepted != 0U);
+
+    auto assign = MakeCommand(APP_CONTROL_COMMAND_ASSIGN_ROUTE, 20U, 2U);
+    assign.job_id = 77U;
+    assign.route_id = UART_LINETRACER_ROUTE_C;
+    const auto assign_result = ControlLogic_HandleCommand(&context, &assign, 20U);
+    assert(assign_result.accepted != 0U);
+    assert(ControlLogic_BuildStartedEvent(&context, &assign, &assign_result, UART_LINETRACER_LOAD_EMPTY, 20U,
+                                          &tx_event) != 0U);
+    assert(tx_event.type == APP_TX_EVENT_STARTED);
+    assert(tx_event.job_id == 77U);
+    assert(tx_event.route_id == UART_LINETRACER_ROUTE_C);
+
+    ControlLogic_MakeSnapshot(&context, UART_LINETRACER_LOAD_PRESENT, 25U, &snapshot);
+    assert(snapshot.updated_at_ms == 25U);
+    assert(snapshot.job_id == 77U);
+    assert(snapshot.route_id == UART_LINETRACER_ROUTE_C);
+    assert(snapshot.load_state == UART_LINETRACER_LOAD_PRESENT);
+    assert(snapshot.error_code == UART_ERROR_NONE);
+    assert(snapshot.safety_latched == 0U);
+
+    app_control_safety_event_t emergency{};
+    emergency.type = APP_CONTROL_SAFETY_LATCHED;
+    emergency.reason = LINETRACER_STOP_REASON_EMERGENCY;
+    emergency.error_code = UART_ERROR_EMERGENCY_STOP;
+    assert(ControlLogic_ApplySafetyEvent(&context, &emergency, 30U) != 0U);
+    assert(ControlLogic_BuildSafetyFaultEvent(&context, &emergency, UART_LINETRACER_LOAD_PRESENT, 30U, &tx_event) !=
+           0U);
+    assert(tx_event.type == APP_TX_EVENT_FAULT);
+    assert(tx_event.error_code == UART_ERROR_EMERGENCY_STOP);
+
+    ControlLogic_MakeSnapshot(&context, UART_LINETRACER_LOAD_PRESENT, 30U, &snapshot);
+    assert(snapshot.state == UART_LINETRACER_STATE_EMERGENCY_STOP);
+    assert(snapshot.error_code == UART_ERROR_EMERGENCY_STOP);
+    assert(snapshot.safety_latched != 0U);
+}
+
 }  // namespace
 
 int main() {
@@ -410,5 +456,6 @@ int main() {
     TestCompletionOutsideUnloadingDoesNothing();
     TestMarkerAndLoadEventsDriveRouteB();
     TestLoadOffDuringReturnIsFault();
+    TestTelemetrySnapshotAndLifecycleEvents();
     return 0;
 }
