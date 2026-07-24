@@ -11,14 +11,12 @@
 #include "logistics/control_center/operational_log_state.hpp"
 #include "logistics/control_center/operations_dashboard_state.hpp"
 
-class QAudioOutput;
 class QJsonObject;
 class QLabel;
 class QMediaPlayer;
 class QStackedLayout;
 class QTabWidget;
 class QTimer;
-class QVideoWidget;
 class QWidget;
 
 namespace logistics::control_center {
@@ -28,6 +26,9 @@ class OperationalLogPanel;
 class OperationsDashboardPanel;
 class ProductResultPanel;
 class ProcessControlPanel;
+class DetectionOverlay;
+class OnvifRtspMetadataClient;
+class RtspH264Stream;
 
 class MainWindow final : public QMainWindow {
 public:
@@ -52,14 +53,16 @@ private:
     void refreshOperationalLogPanel();
 
     std::vector<QMediaPlayer*> players_{};
-    std::vector<QVideoWidget*> video_widgets_{};
-    std::vector<QAudioOutput*> audio_outputs_{};
+    std::vector<RtspH264Stream*> video_streams_{};
     std::vector<QLabel*> status_labels_{};
     std::vector<QStackedLayout*> channel_stacks_{};
     std::vector<QWidget*> video_layers_{};
     std::vector<QWidget*> state_overlays_{};
     std::vector<QTimer*> reconnect_timers_{};
+    std::vector<DetectionOverlay*> detection_overlays_{};
+    std::vector<OnvifRtspMetadataClient*> metadata_clients_{};
     std::vector<QUrl> stream_urls_{};
+    std::vector<QUrl> metadata_stream_urls_{};
     std::vector<ChannelState> channel_states_{};
     std::vector<bool> reconnecting_{};
     MqttClient* mqtt_client_{ nullptr };
@@ -78,6 +81,13 @@ private:
     OperationsDashboardState operations_dashboard_state_;
     std::size_t channel_count_{ 4 };
     int reconnect_interval_ms_{ 3000 };
+    bool rtsp_low_latency_{ true };
+    int rtsp_network_timeout_ms_{ 3000 };
+    qsizetype rtsp_probe_size_bytes_{ 32768 };
+    qsizetype rtsp_maximum_buffer_size_bytes_{ 2 * 1024 * 1024 };
+    bool onvif_metadata_enabled_{ true };
+    bool onvif_log_payload_{ false };
+    int metadata_stale_timeout_ms_{ 1500 };
 };
 
 }  // namespace logistics::control_center

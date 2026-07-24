@@ -99,7 +99,38 @@ linetracer_device_id=PI-LT-01
 
 [http]
 image_base_url=http://127.0.0.1:8080/
+
+[rtsp]
+channel_count=4
+reconnect_interval_ms=3000
+transport=tcp
+low_latency=true
+network_timeout_ms=3000
+probe_size_bytes=32768
+max_buffer_size_bytes=2097152
+onvif_metadata_enabled=true
+onvif_log_payload=false
+metadata_stale_timeout_ms=1500
 ```
+
+영상 수신기는 RTSP `SETUP`에서 `RTP/AVP/TCP;interleaved`를 요청하여 영상 RTP를 TCP 연결로 강제합니다.
+현재 `rtsp/transport`는 `tcp`만 지원하며, H.264 RTP를 Annex-B 스트림으로 재조립한 뒤 Qt Multimedia의
+FFmpeg 디코더에 전달합니다. RTP 순서가 어긋나거나 내부 입력 버퍼가 `max_buffer_size_bytes`를 넘으면
+손상된 종속 프레임을 버리고 다음 IDR 프레임부터 SPS/PPS와 함께 재생을 복구합니다.
+
+`rtsp/low_latency=true`이면 Qt Multimedia의 저지연 디코딩 모드를 적용합니다. `network_timeout_ms` 동안
+RTSP 응답 또는 영상 패킷이 없으면 채널을 오류로 전환하고 `reconnect_interval_ms` 간격으로 다시 연결합니다.
+`probe_size_bytes`는 디코더가 재생 전에 분석할 스트림 데이터 크기이며 기본값 32768은 시작 대기를 줄이기
+위한 값입니다. 스트림 정보 인식에 실패하면 값을 늘립니다.
+
+`rtsp/onvif_metadata_enabled=true`이면 각 채널 URL의 RTSP `application` 트랙에서
+`vnd.onvif.metadata` XML을 구독하고 객체의 바운딩 박스, 분류명, 신뢰도를 영상 위에 표시합니다.
+메타데이터가 별도 프로파일에 있다면 `channel_N_metadata_url`을 지정하고, 생략하면 `channel_N_url`을
+그대로 사용합니다. 현재 비압축 ONVIF XML을 지원하며 GZIP/EXI 메타데이터는 지원하지 않습니다.
+`metadata_stale_timeout_ms` 동안 새 프레임이 없으면 오래된 박스를 자동으로 지웁니다.
+`onvif_log_payload=true`이면 Qt Creator의 **Application Output**에 원본 XML과 파싱된 객체
+ID·클래스·신뢰도·바운딩 박스를 채널별 `[ONVIF][CH N]` 형식으로 출력합니다. 이 로그는 프레임마다
+발생하여 UI 렌더링을 지연시킬 수 있으므로 기본값은 `false`이며 진단할 때만 활성화합니다.
 
 `dashboard`의 장치 ID는 각 장치가 MQTT envelope의 `sourceId`로 보내는 값과 같아야 합니다. 각 공정은
 자신의 `jobId`를 독립적으로 표시하므로 서로 다른 상품을 동시에 처리할 수 있습니다.

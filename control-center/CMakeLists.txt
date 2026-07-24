@@ -15,7 +15,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     )
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Mqtt Multimedia MultimediaWidgets Network Widgets)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Mqtt Multimedia Network Widgets)
 
 qt_standard_project_setup()
 
@@ -25,27 +25,35 @@ qt_add_executable(
     src/main_window.cpp
     src/command_response.cpp
     src/current_product_state.cpp
+    src/detection_overlay.cpp
     src/mqtt_client.cpp
     src/mqtt_message_validator.cpp
     src/operational_log_panel.cpp
     src/operational_log_state.cpp
     src/operations_dashboard_panel.cpp
     src/operations_dashboard_state.cpp
+    src/onvif_metadata.cpp
+    src/onvif_rtsp_metadata_client.cpp
     src/product_result_panel.cpp
     src/process_control_panel.cpp
+    src/rtsp_h264_stream.cpp
     src/ui_dialog.cpp
     include/logistics/control_center/main_window.hpp
     include/logistics/control_center/command_response.hpp
     include/logistics/control_center/current_product_state.hpp
+    include/logistics/control_center/detection_overlay.hpp
     include/logistics/control_center/mqtt_client.hpp
     include/logistics/control_center/mqtt_message_validator.hpp
     include/logistics/control_center/operational_log_panel.hpp
     include/logistics/control_center/operational_log_state.hpp
     include/logistics/control_center/operations_dashboard_panel.hpp
     include/logistics/control_center/operations_dashboard_state.hpp
+    include/logistics/control_center/onvif_metadata.hpp
+    include/logistics/control_center/onvif_rtsp_metadata_client.hpp
     include/logistics/control_center/product_result_panel.hpp
     include/logistics/control_center/process_control_panel.hpp
     include/logistics/control_center/process_control_state.hpp
+    include/logistics/control_center/rtsp_h264_stream.hpp
     include/logistics/control_center/ui_dialog.hpp
 )
 
@@ -67,7 +75,6 @@ target_link_libraries(
     PRIVATE
         Qt6::Mqtt
         Qt6::Multimedia
-        Qt6::MultimediaWidgets
         Qt6::Network
         Qt6::Widgets
         logistics::contracts
@@ -109,6 +116,56 @@ if(BUILD_TESTING)
     target_link_libraries(control_center_current_product_state_test PRIVATE Qt6::Core logistics::contracts)
     logistics_enable_warnings(control_center_current_product_state_test)
     add_test(NAME control_center_current_product_state_test COMMAND control_center_current_product_state_test)
+
+    add_executable(
+        control_center_onvif_metadata_test
+        tests/onvif_metadata_test.cpp
+        src/onvif_metadata.cpp
+        include/logistics/control_center/onvif_metadata.hpp
+    )
+    target_include_directories(control_center_onvif_metadata_test PRIVATE include)
+    target_link_libraries(control_center_onvif_metadata_test PRIVATE Qt6::Core)
+    logistics_enable_warnings(control_center_onvif_metadata_test)
+    add_test(NAME control_center_onvif_metadata_test COMMAND control_center_onvif_metadata_test)
+
+    add_executable(
+        control_center_detection_overlay_test
+        tests/detection_overlay_test.cpp
+        src/detection_overlay.cpp
+        src/onvif_metadata.cpp
+        include/logistics/control_center/detection_overlay.hpp
+        include/logistics/control_center/onvif_metadata.hpp
+    )
+    target_include_directories(control_center_detection_overlay_test PRIVATE include)
+    target_link_libraries(control_center_detection_overlay_test PRIVATE Qt6::Multimedia Qt6::Widgets)
+    logistics_enable_warnings(control_center_detection_overlay_test)
+    add_test(NAME control_center_detection_overlay_test COMMAND control_center_detection_overlay_test)
+
+    add_executable(
+        control_center_onvif_rtsp_metadata_client_test
+        tests/onvif_rtsp_metadata_client_test.cpp
+        src/onvif_rtsp_metadata_client.cpp
+        include/logistics/control_center/onvif_rtsp_metadata_client.hpp
+    )
+
+    target_include_directories(control_center_onvif_rtsp_metadata_client_test PRIVATE include)
+    target_link_libraries(control_center_onvif_rtsp_metadata_client_test PRIVATE Qt6::Core Qt6::Network)
+    logistics_enable_warnings(control_center_onvif_rtsp_metadata_client_test)
+    add_test(
+        NAME control_center_onvif_rtsp_metadata_client_test
+        COMMAND control_center_onvif_rtsp_metadata_client_test
+    )
+
+    add_executable(
+        control_center_rtsp_h264_stream_test
+        tests/rtsp_h264_stream_test.cpp
+        src/rtsp_h264_stream.cpp
+        include/logistics/control_center/rtsp_h264_stream.hpp
+    )
+    target_include_directories(control_center_rtsp_h264_stream_test PRIVATE include)
+    target_link_libraries(control_center_rtsp_h264_stream_test PRIVATE Qt6::Core Qt6::Network)
+    logistics_enable_warnings(control_center_rtsp_h264_stream_test)
+    add_test(NAME control_center_rtsp_h264_stream_test COMMAND control_center_rtsp_h264_stream_test)
 
     add_executable(
         control_center_process_control_state_test
