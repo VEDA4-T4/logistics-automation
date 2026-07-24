@@ -36,8 +36,10 @@
 #define VEDAUART_RX_BUFFER_SIZE 65536U
 #define VEDAUART_MAX_WRITE_SIZE 4096U
 
-/* serdev changed receive_buf() from int to ssize_t in Linux 6.8. */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+/* serdev receive_buf() return type changed across kernel versions. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
+typedef size_t vedauart_receive_result_t;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
 typedef ssize_t vedauart_receive_result_t;
 #else
 typedef int vedauart_receive_result_t;

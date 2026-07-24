@@ -15,6 +15,10 @@ option(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT "Build MQTT clients with libmosquitt
 
 add_subdirectory(shared)
 
+if(BUILD_TESTING)
+    add_subdirectory(stm32/conveyor-controller/tests)
+endif()
+
 if(LOGISTICS_BUILD_CONTROL_CENTER)
     add_subdirectory(control-center)
 endif()

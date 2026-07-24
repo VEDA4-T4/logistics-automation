@@ -166,6 +166,13 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_image_uploader_test)
     add_test(NAME device_image_uploader_test COMMAND device_image_uploader_test)
 endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(vedauart_cli_test common/uart_bridge/vedauart_cli_test.c)
+    target_link_libraries(vedauart_cli_test PRIVATE logistics::uart)
+    logistics_enable_warnings(vedauart_cli_test)
+endif()
+
 target_sources(
     logistics_vision_node
     PRIVATE
