@@ -218,13 +218,7 @@ InputCommandResult InputNode::HandleEmergencyStop(const mqtt::EmergencyStopPaylo
         return result;
     }
 
-    // The controller answers UART_CMD_EMERGENCY_STOP with an asynchronous
-    // EVENT/DEVICE_STATUS broadcast, not a sequence-matched RESPONSE/
-    // OPERATION_RESULT, so this goes through SendCommand() (fire-and-forget)
-    // rather than Execute()/Transact(), which would time out and retry,
-    // re-triggering the controller's safety broadcast on every retry.
-    result.uart_result = uart_session_.SendCommand(UART_CMD_EMERGENCY_STOP, {});
-    result.status = CommandStatusFromTransact(result.uart_result.status);
+    result = ExecuteAsync(std::move(result), UART_CMD_EMERGENCY_STOP, {});
     EmitCommandResponse(result, "input conveyor emergency stop");
     return result;
 }
@@ -268,9 +262,19 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
             EmitCommandResponse(result, "input conveyor status");
             return result;
         case mqtt::ControlCommand::kInitialize:
-        case mqtt::ControlCommand::kRecovery:
+            // Soft reset: clears control-level errors and stops the conveyor. The
+            // controller answers this synchronously and rejects it while an
+            // emergency stop is latched (use RECOVERY to clear the latch).
             result = Execute(std::move(result), UART_CMD_INPUT_CONTROL_RESET, {});
             EmitCommandResponse(result, "input controller reset");
+            return result;
+        case mqtt::ControlCommand::kRecovery:
+            // Full device recovery: releases the emergency-stop latch via the
+            // controller's SafetyTask. Like EMERGENCY_STOP, RESET_DEVICE is
+            // answered with an asynchronous EVENT/DEVICE_STATUS broadcast rather
+            // than a sequence-matched reply, so it must be fire-and-forget.
+            result = ExecuteAsync(std::move(result), UART_CMD_RESET_DEVICE, {});
+            EmitCommandResponse(result, "input controller recovery");
             return result;
         case mqtt::ControlCommand::kRestart:
         case mqtt::ControlCommand::kDestinationSet:
@@ -287,6 +291,14 @@ InputCommandResult InputNode::Execute(InputCommandResult result, std::uint8_t co
                                       std::span<const std::uint8_t> payload) {
     result.uart_command = command;
     result.uart_result = uart_session_.Transact(command, payload);
+    result.status = CommandStatusFromTransact(result.uart_result.status);
+    return result;
+}
+
+InputCommandResult InputNode::ExecuteAsync(InputCommandResult result, std::uint8_t command,
+                                           std::span<const std::uint8_t> payload) {
+    result.uart_command = command;
+    result.uart_result = uart_session_.SendCommand(command, payload);
     result.status = CommandStatusFromTransact(result.uart_result.status);
     return result;
 }

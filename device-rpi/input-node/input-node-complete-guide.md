@@ -134,8 +134,9 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 | `kStart` | `CONVEYOR_START` (+선택적 `SET_SPEED`) | `params.speed`(0~100) 있으면 SET_SPEED 먼저 |
 | `kStop` | `CONVEYOR_STOP` | |
 | `kStatusRequest` | `CONVEYOR_GET_STATUS` | 응답의 컨베이어 상태를 별도 status로도 발행 |
-| `kInitialize` / `kRecovery` | `CONTROL_RESET` | |
-| `EmergencyStop` | `EMERGENCY_STOP` | 별도 payload 타입 |
+| `kInitialize` | `INPUT_CONTROL_RESET` | 소프트 리셋(제어 오류 초기화). 동기 응답. 비상정지 latch 걸려있으면 STM32가 `ERR-EMERGENCY-STOP`으로 거부 |
+| `kRecovery` | `RESET_DEVICE` | 비상정지 latch 해제(SafetyTask 경유). EMERGENCY_STOP처럼 STM32가 비동기 EVENT/DEVICE_STATUS로만 응답 → **fire-and-forget(`ExecuteAsync`)** |
+| `EmergencyStop` | `EMERGENCY_STOP` | 별도 payload 타입. 비동기 응답 → **fire-and-forget** |
 | `kRestart` / `kDestinationSet` | — (미지원) | UART 안 보내고 즉시 `kRejected` 응답 |
 
 **UART 자발적 프레임 → MQTT 보고 매핑:**

@@ -76,6 +76,11 @@ private:
     [[nodiscard]] InputCommandResult HandleEmergencyStop(const contracts::mqtt::EmergencyStopPayload& command);
     [[nodiscard]] InputCommandResult Execute(InputCommandResult result, std::uint8_t command,
                                              std::span<const std::uint8_t> payload);
+    // For commands the controller answers with an asynchronous EVENT/DEVICE_STATUS
+    // broadcast instead of a sequence-matched reply (EMERGENCY_STOP, RESET_DEVICE):
+    // write once and do not wait, so the session does not time out and retry.
+    [[nodiscard]] InputCommandResult ExecuteAsync(InputCommandResult result, std::uint8_t command,
+                                                  std::span<const std::uint8_t> payload);
     void EmitConveyorStatus(const uart_frame_t& response) const;
     void EmitCommandResponse(const InputCommandResult& result, std::string message) const;
     void EmitReport(InputReport report) const;

@@ -157,6 +157,24 @@ void TestReset() {
     assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONTROL_RESET);
 }
 
+void TestRecoveryReleasesLatchFireAndForget() {
+    // RECOVERY maps to RESET_DEVICE, which the controller's SafetyTask answers
+    // with an asynchronous broadcast, not a sequence-matched reply. Confirm it
+    // reports success from a single write with no responder (no retry storm).
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t&) { return std::vector<uart_frame_t>{}; };
+
+    const InputCommandResult result =
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, std::string(kDeviceId)));
+
+    assert(result.status == InputCommandStatus::kSuccess);
+    assert(fixture.backend->last_written.command == UART_CMD_RESET_DEVICE);
+    assert(fixture.backend->write_calls == 1);
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr);
+    assert(response->result == mqtt::CommandResult::kSuccess);
+}
+
 void TestControllerRejection() {
     Fixture fixture;
     fixture.backend->responder = [](const uart_frame_t& request) {
@@ -311,6 +329,7 @@ int main() {
     TestStop();
     TestStatusRequest();
     TestReset();
+    TestRecoveryReleasesLatchFireAndForget();
     TestControllerRejection();
     TestUnsupportedCommand();
     TestEmergencyStop();
