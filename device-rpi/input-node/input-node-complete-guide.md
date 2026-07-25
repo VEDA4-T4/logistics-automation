@@ -146,7 +146,11 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 | `SENSOR_STATUS` (CLEAR/DETECTED) | status / `DEVICE_STATUS` | `current_state = SENSOR_CLEAR / OBJECT_DETECTED` (상태 변화 시에만) |
 | `SENSOR_STATUS` (FAULT) | error / `ERROR_OCCURRED` | `error_code=ERR-SENSOR`, `distance` 포함 |
 | `DEVICE_STATUS` | status / `DEVICE_STATUS` | 장치 상태명 + 오류코드 |
-| `EVENT` | error / `ERROR_OCCURRED` | safety/health 이벤트를 generic 오류로 surface (payload 규격 미공유 상태) |
+| `EVENT` (heartbeat, id=1) | — (무시) | CommTxTask 생존 신호라 보고 안 함 |
+| `EVENT` (safety, id=3) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-SAFETY-ESTOP-LATCHED` / `INFO-SAFETY-RESET-COMPLETE` / `ERR-SAFETY-RESET-REJECTED` |
+| `EVENT` (health, id=4) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-HEALTH-UART-CHANNEL-TIMEOUT` / `ERR-HEALTH-QUEUE-OVERFLOW` / `ERR-HEALTH-SENSOR-STALE` |
+
+> EVENT의 `(id, kind, cause)`가 바뀔 때만 보고(중복 재발 억제). async EVENT는 `current_state`를 덮지 않고 `error_code`만 갱신(heartbeat의 운영 상태 보존). 이벤트 id/kind 상수는 공유 계약이 아니라 STM32 app 헤더(`app_comm_tx.h`/`safety_task.h`/`health_task.h`)에서 복제한 것 — 펌웨어가 값 바꾸면 같이 수정 필요.
 
 `UART` 오류코드 → MQTT `error_code` 매핑, `InputTransactStatus` → `CommandResult` 매핑도 여기서 담당.
 

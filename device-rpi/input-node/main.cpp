@@ -118,7 +118,10 @@ void UpdateDeviceStatus(const InputReport& report, DeviceStatus& device_status) 
         return;
     }
     if (const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&report.data); error != nullptr) {
-        device_status.SetCurrentState(error->current_state);
+        // An async error/event updates the active error code but must not overwrite
+        // the operational current_state (conveyor/sensor state from DeviceStatus
+        // reports); otherwise a transient controller event would mask the real
+        // state in the heartbeat until the next operational update.
         device_status.SetErrorCode(error->error_code);
     }
 }

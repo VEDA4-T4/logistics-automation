@@ -310,15 +310,41 @@ void TestHeartbeatEventIsNotReported() {
     assert(fixture.reports.empty());
 }
 
-void TestOtherControllerEventIsReportedAsError() {
+void TestHealthEventIsDecoded() {
     Fixture fixture;
-    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U));  // APP_EVENT_SAFETY
+    // APP_EVENT_HEALTH=0x04, kind=3 (SENSOR_STALE), cause=0 (input channel).
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U));
 
     assert(fixture.reports.size() == 1);
     assert(fixture.reports.front().channel == InputReportChannel::kError);
     const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.front().data);
     assert(error != nullptr);
-    assert(error->error_code == "ERR-CONTROLLER-EVENT-3");
+    assert(error->error_code == "ERR-HEALTH-SENSOR-STALE");
+}
+
+void TestSafetyEventIsDecoded() {
+    Fixture fixture;
+    // APP_EVENT_SAFETY=0x03, kind=1 (ESTOP_LATCHED).
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 1U, 0U));
+
+    assert(fixture.reports.size() == 1);
+    const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.front().data);
+    assert(error != nullptr);
+    assert(error->error_code == "ERR-SAFETY-ESTOP-LATCHED");
+    assert(error->error_level == "ERROR");
+}
+
+void TestRepeatedControllerEventIsDeduplicated() {
+    Fixture fixture;
+    // The same latched health condition re-emitted repeatedly must report once.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U));
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U));
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U));
+    assert(fixture.reports.size() == 1);
+
+    // A different condition (kind or cause changes) is a new report.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 1U, 1U));
+    assert(fixture.reports.size() == 2);
 }
 
 }  // namespace
@@ -341,6 +367,8 @@ int main() {
     TestSensorReportsOnlyOnChange();
     TestDeviceStatusReport();
     TestHeartbeatEventIsNotReported();
-    TestOtherControllerEventIsReportedAsError();
+    TestHealthEventIsDecoded();
+    TestSafetyEventIsDecoded();
+    TestRepeatedControllerEventIsDeduplicated();
     return 0;
 }

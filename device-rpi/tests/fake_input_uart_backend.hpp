@@ -82,13 +82,16 @@ namespace input_test {
     return frame;
 }
 
-[[nodiscard]] inline uart_frame_t MakeControllerEvent(std::uint8_t event_id) {
+[[nodiscard]] inline uart_frame_t MakeControllerEvent(std::uint8_t event_id, std::uint8_t kind = 0U,
+                                                     std::uint8_t cause = 0U) {
     uart_frame_t frame{};
     frame.version = UART_PROTOCOL_VERSION;
     frame.sequence = 202U;
     frame.command = UART_CMD_EVENT;
-    frame.length = UART_EVENT_HEADER_SIZE;
+    frame.length = 3U;  // event_id + kind + cause (app-level SAFETY/HEALTH layout)
     frame.payload[UART_EVENT_ID_INDEX] = event_id;
+    frame.payload[1] = kind;
+    frame.payload[2] = cause;
     return frame;
 }
 

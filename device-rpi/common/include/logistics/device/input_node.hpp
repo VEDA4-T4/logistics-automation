@@ -94,6 +94,7 @@ private:
     InputUartSession& uart_session_;
     InputReportHandler report_handler_;
     std::optional<std::uint8_t> last_sensor_state_;
+    std::optional<std::uint32_t> last_controller_event_signature_;
 };
 
 }  // namespace logistics::device

@@ -169,6 +169,59 @@ namespace mqtt = contracts::mqtt;
     return static_cast<std::int32_t>(distance);
 }
 
+// App-level UART_CMD_EVENT ids and payload layout. These are defined by the controller
+// firmware, not the shared UART contract, so the values are mirrored from
+// stm32/conveyor-controller/Application/Inc/{app_comm_tx,safety_task,health_task}.h and must
+// be kept in sync if the firmware renumbers them.
+constexpr std::uint8_t kAppEventHeartbeat = 0x01U;  // periodic CommTxTask liveness ping
+constexpr std::uint8_t kAppEventSafety = 0x03U;     // SafetyTask event
+constexpr std::uint8_t kAppEventHealth = 0x04U;     // HealthTask event
+constexpr std::size_t kAppEventKindIndex = 1U;      // safety/health payload[1] = kind
+constexpr std::size_t kAppEventCauseIndex = 2U;     // safety/health payload[2] = cause/channel
+
+struct ControllerEventDescription {
+    std::string error_code;
+    std::string error_level;
+    std::string message;
+};
+
+[[nodiscard]] ControllerEventDescription DescribeControllerEvent(std::uint8_t event_id, std::uint8_t kind,
+                                                                 std::uint8_t cause) {
+    const std::string cause_suffix = " (cause=" + std::to_string(static_cast<int>(cause)) + ")";
+    switch (event_id) {
+        case kAppEventSafety:
+            switch (kind) {
+                case 1U:  // SAFETY_EVENT_ESTOP_LATCHED
+                    return { "ERR-SAFETY-ESTOP-LATCHED", "ERROR", "input controller latched an emergency stop" };
+                case 2U:  // SAFETY_EVENT_RESET_COMPLETE
+                    return { "INFO-SAFETY-RESET-COMPLETE", "INFO", "input controller completed safety reset" };
+                case 3U:  // SAFETY_EVENT_RESET_REJECTED
+                    return { "ERR-SAFETY-RESET-REJECTED", "ERROR", "input controller rejected safety reset" };
+                default:
+                    return { "ERR-SAFETY-EVENT-" + std::to_string(static_cast<int>(kind)), "WARNING",
+                             "input controller safety event" + cause_suffix };
+            }
+        case kAppEventHealth:
+            switch (kind) {
+                case 1U:  // HEALTH_ISSUE_UART_CHANNEL_TIMEOUT
+                    return { "ERR-HEALTH-UART-CHANNEL-TIMEOUT", "WARNING",
+                             "input controller reported a UART channel timeout" + cause_suffix };
+                case 2U:  // HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT
+                    return { "ERR-HEALTH-QUEUE-OVERFLOW", "WARNING",
+                             "input controller reported a transient queue overflow" + cause_suffix };
+                case 3U:  // HEALTH_ISSUE_SENSOR_STALE
+                    return { "ERR-HEALTH-SENSOR-STALE", "WARNING",
+                             "input controller reported a stale sensor" + cause_suffix };
+                default:
+                    return { "ERR-HEALTH-EVENT-" + std::to_string(static_cast<int>(kind)), "WARNING",
+                             "input controller health event" + cause_suffix };
+            }
+        default:
+            return { "ERR-CONTROLLER-EVENT-" + std::to_string(static_cast<int>(event_id)), "WARNING",
+                     "input controller reported an asynchronous event" };
+    }
+}
+
 }  // namespace
 
 InputNode::InputNode(std::string device_id, InputUartSession& uart_session)
@@ -424,27 +477,37 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     }
     const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
 
-    // APP_EVENT_HEARTBEAT (stm32/conveyor-controller/Application/Inc/app_comm_tx.h) is a
-    // periodic CommTxTask liveness signal, not an operator-facing condition; there is no
-    // shared UART contract for these app-level event ids yet, so the value is duplicated here.
-    constexpr std::uint8_t kAppEventHeartbeat = 0x01U;
+    // APP_EVENT_HEARTBEAT is a periodic CommTxTask liveness ping, not an
+    // operator-facing condition.
     if (event_id == kAppEventHeartbeat) {
         return;
     }
 
-    // The controller safety/health EVENT payload layout is not yet shared with
-    // the server team, so surface it as a generic operator-visible error rather
-    // than dropping it. The event id is reported so it can be correlated later.
+    const bool has_detail = frame.length > kAppEventCauseIndex;
+    const std::uint8_t kind = has_detail ? frame.payload[kAppEventKindIndex] : 0U;
+    const std::uint8_t cause = has_detail ? frame.payload[kAppEventCauseIndex] : 0U;
+
+    // Report only when the (event, kind, cause) changes. The controller re-latches
+    // and re-emits some health conditions (e.g. an oscillating sensor-stale) every
+    // few seconds; without this, each re-emission would flood device/{id}/error.
+    const std::uint32_t signature = (static_cast<std::uint32_t>(event_id) << 16U) |
+                                    (static_cast<std::uint32_t>(kind) << 8U) | static_cast<std::uint32_t>(cause);
+    if (last_controller_event_signature_.has_value() && *last_controller_event_signature_ == signature) {
+        return;
+    }
+    last_controller_event_signature_ = signature;
+
+    const ControllerEventDescription description = DescribeControllerEvent(event_id, kind, cause);
     EmitReport({
         .channel = InputReportChannel::kError,
         .message_type = mqtt::MessageType::kErrorOccurred,
         .data =
             mqtt::ErrorOccurredPayload{
                 .job_id = std::nullopt,
-                .error_code = "ERR-CONTROLLER-EVENT-" + std::to_string(static_cast<int>(event_id)),
-                .error_level = "WARNING",
+                .error_code = description.error_code,
+                .error_level = description.error_level,
                 .current_state = "CONTROLLER_EVENT",
-                .message = "input controller reported an asynchronous event",
+                .message = description.message,
                 .distance = std::nullopt,
             },
     });
