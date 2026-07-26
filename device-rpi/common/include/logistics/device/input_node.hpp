@@ -81,6 +81,10 @@ private:
     // write once and do not wait, so the session does not time out and retry.
     [[nodiscard]] InputCommandResult ExecuteAsync(InputCommandResult result, std::uint8_t command,
                                                   std::span<const std::uint8_t> payload);
+    // Reads the conveyor state back with an extra GET_STATUS round trip and emits
+    // it, so a successful START/STOP reports the resulting state without the
+    // server having to poll. Best effort: a failed read emits nothing.
+    void PublishConveyorStatus();
     void EmitConveyorStatus(const uart_frame_t& response) const;
     void EmitCommandResponse(const InputCommandResult& result, std::string message) const;
     void EmitReport(InputReport report) const;

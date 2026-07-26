@@ -308,11 +308,17 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
                 }
             }
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_START, conveyor_payload);
+            if (result.Succeeded()) {
+                PublishConveyorStatus();
+            }
             EmitCommandResponse(result, "input conveyor start");
             return result;
         }
         case mqtt::ControlCommand::kStop:
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_STOP, conveyor_payload);
+            if (result.Succeeded()) {
+                PublishConveyorStatus();
+            }
             EmitCommandResponse(result, "input conveyor stop");
             return result;
         case mqtt::ControlCommand::kStatusRequest:
@@ -362,6 +368,20 @@ InputCommandResult InputNode::ExecuteAsync(InputCommandResult result, std::uint8
     result.uart_result = uart_session_.SendCommand(command, payload);
     result.status = CommandStatusFromTransact(result.uart_result.status);
     return result;
+}
+
+void InputNode::PublishConveyorStatus() {
+    // START/STOP are answered with OPERATION_RESULT, which carries only status and
+    // error — not the conveyor state — so read the state back with an extra
+    // GET_STATUS round trip. This is best effort: if the read fails the command
+    // itself still succeeded, so the caller's COMMAND_RESPONSE is left untouched
+    // and only the status report is skipped.
+    const InputTransactResult status_result =
+        uart_session_.Transact(UART_CMD_INPUT_CONVEYOR_GET_STATUS,
+                               std::array<std::uint8_t, UART_INPUT_CONVEYOR_COMMAND_PAYLOAD_SIZE>{});
+    if (status_result.Succeeded()) {
+        EmitConveyorStatus(status_result.response_frame);
+    }
 }
 
 void InputNode::EmitConveyorStatus(const uart_frame_t& response) const {
