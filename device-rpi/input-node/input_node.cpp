@@ -173,11 +173,19 @@ namespace mqtt = contracts::mqtt;
 // firmware, not the shared UART contract, so the values are mirrored from
 // stm32/conveyor-controller/Application/Inc/{app_comm_tx,safety_task,health_task}.h and must
 // be kept in sync if the firmware renumbers them.
-constexpr std::uint8_t kAppEventHeartbeat = 0x01U;  // periodic CommTxTask liveness ping
+constexpr std::uint8_t kAppEventHeartbeat = 0x01U;  // periodic CommTxTask liveness + status ping
 constexpr std::uint8_t kAppEventSafety = 0x03U;     // SafetyTask event
 constexpr std::uint8_t kAppEventHealth = 0x04U;     // HealthTask event
 constexpr std::size_t kAppEventKindIndex = 1U;      // safety/health payload[1] = kind
 constexpr std::size_t kAppEventCauseIndex = 2U;     // safety/health payload[2] = cause/channel
+
+// APP_EVENT_HEARTBEAT payload (app_comm_tx.h APP_HEARTBEAT_*):
+//   [1] device_state, [2] error_code, [3..6] uptime seconds (LE u32),
+//   [7] input sensor state, [8] sorting sensor state
+constexpr std::size_t kHeartbeatStateIndex = 1U;
+constexpr std::size_t kHeartbeatErrorIndex = 2U;
+constexpr std::size_t kHeartbeatInputSensorIndex = 7U;
+constexpr std::size_t kHeartbeatPayloadSize = 9U;
 
 struct ControllerEventDescription {
     std::string error_code;
@@ -471,15 +479,45 @@ void InputNode::HandleDeviceStatus(const uart_frame_t& frame) {
     });
 }
 
+void InputNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
+    // The controller's periodic heartbeat carries the authoritative device state,
+    // active error and input sensor state, so decode it rather than dropping it.
+    // It arrives about once a second; report only on change to avoid flooding.
+    if (frame.length != kHeartbeatPayloadSize) {
+        return;
+    }
+    const std::uint8_t device_state = frame.payload[kHeartbeatStateIndex];
+    const std::uint8_t error_code = frame.payload[kHeartbeatErrorIndex];
+    const std::uint8_t sensor_state = frame.payload[kHeartbeatInputSensorIndex];
+
+    if (last_heartbeat_state_.has_value() && last_heartbeat_state_->device_state == device_state &&
+        last_heartbeat_state_->error_code == error_code && last_heartbeat_state_->sensor_state == sensor_state) {
+        return;
+    }
+    last_heartbeat_state_ = HeartbeatState{ device_state, error_code, sensor_state };
+
+    const bool has_error = error_code != UART_ERROR_NONE;
+    EmitReport({
+        .channel = InputReportChannel::kStatus,
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = has_error ? mqtt::ConnectionState::kUartError : mqtt::ConnectionState::kOnline,
+                .current_state = DeviceStateName(device_state),
+                .job_id = std::nullopt,
+                .error_code = has_error ? std::optional<std::string>{ UartErrorCode(error_code) } : std::nullopt,
+            },
+    });
+}
+
 void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     if (frame.length < UART_EVENT_HEADER_SIZE) {
         return;
     }
     const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
 
-    // APP_EVENT_HEARTBEAT is a periodic CommTxTask liveness ping, not an
-    // operator-facing condition.
     if (event_id == kAppEventHeartbeat) {
+        HandleControllerHeartbeat(frame);
         return;
     }
 

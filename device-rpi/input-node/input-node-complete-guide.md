@@ -146,7 +146,7 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 | `SENSOR_STATUS` (CLEAR/DETECTED) | status / `DEVICE_STATUS` | `current_state = SENSOR_CLEAR / OBJECT_DETECTED` (상태 변화 시에만) |
 | `SENSOR_STATUS` (FAULT) | error / `ERROR_OCCURRED` | `error_code=ERR-SENSOR`, `distance` 포함 |
 | `DEVICE_STATUS` | status / `DEVICE_STATUS` | 장치 상태명 + 오류코드 |
-| `EVENT` (heartbeat, id=1) | — (무시) | CommTxTask 생존 신호라 보고 안 함 |
+| `EVENT` (heartbeat, id=1) | status / `DEVICE_STATUS` | 9바이트 payload 디코딩: `device_state`/`error_code`/uptime/투입·분류 센서 상태. 상태 변화 시에만 보고(uptime만 바뀌면 무시) |
 | `EVENT` (safety, id=3) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-SAFETY-ESTOP-LATCHED` / `INFO-SAFETY-RESET-COMPLETE` / `ERR-SAFETY-RESET-REJECTED` |
 | `EVENT` (health, id=4) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-HEALTH-UART-CHANNEL-TIMEOUT` / `ERR-HEALTH-QUEUE-OVERFLOW` / `ERR-HEALTH-SENSOR-STALE` |
 

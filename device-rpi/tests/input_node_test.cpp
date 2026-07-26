@@ -303,11 +303,58 @@ void TestDeviceStatusReport() {
     assert(status->status == mqtt::ConnectionState::kOnline);
 }
 
-void TestHeartbeatEventIsNotReported() {
+void TestMalformedHeartbeatIsIgnored() {
     Fixture fixture;
-    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x01U));  // APP_EVENT_HEARTBEAT
+    // event_id=1 but without the full 9-byte APP_HEARTBEAT payload.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x01U));
 
     assert(fixture.reports.empty());
+}
+
+void TestHeartbeatIsDecodedToDeviceStatus() {
+    Fixture fixture;
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR, 42U));
+
+    assert(fixture.reports.size() == 1);
+    assert(fixture.reports.front().channel == InputReportChannel::kStatus);
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(status != nullptr);
+    assert(status->current_state == "RUNNING");
+    assert(status->status == mqtt::ConnectionState::kOnline);
+    assert(!status->error_code.has_value());
+}
+
+void TestHeartbeatErrorIsSurfaced() {
+    Fixture fixture;
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_ERROR, UART_ERROR_MOTOR, UART_SENSOR_CLEAR));
+
+    assert(fixture.reports.size() == 1);
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(status != nullptr);
+    assert(status->status == mqtt::ConnectionState::kUartError);
+    assert(status->error_code.has_value() && *status->error_code == "ERR-MOTOR");
+}
+
+void TestHeartbeatReportsOnlyOnChange() {
+    Fixture fixture;
+    // The controller emits this roughly once a second; only changes should be reported.
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR, 1U));
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR, 2U));
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR, 3U));
+    assert(fixture.reports.size() == 1);  // uptime alone is not a state change
+
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR, 4U));
+    assert(fixture.reports.size() == 2);
+
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_DETECTED, 5U));
+    assert(fixture.reports.size() == 3);  // sensor state change is reported too
 }
 
 void TestHealthEventIsDecoded() {
@@ -366,7 +413,10 @@ int main() {
     TestSensorFaultReport();
     TestSensorReportsOnlyOnChange();
     TestDeviceStatusReport();
-    TestHeartbeatEventIsNotReported();
+    TestMalformedHeartbeatIsIgnored();
+    TestHeartbeatIsDecodedToDeviceStatus();
+    TestHeartbeatErrorIsSurfaced();
+    TestHeartbeatReportsOnlyOnChange();
     TestHealthEventIsDecoded();
     TestSafetyEventIsDecoded();
     TestRepeatedControllerEventIsDeduplicated();

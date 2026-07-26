@@ -82,6 +82,28 @@ namespace input_test {
     return frame;
 }
 
+// APP_EVENT_HEARTBEAT frame (app_comm_tx.h APP_HEARTBEAT_*): 9-byte payload carrying
+// device state, active error, uptime seconds (LE u32) and both sensor states.
+[[nodiscard]] inline uart_frame_t MakeControllerHeartbeat(std::uint8_t device_state, std::uint8_t error_code,
+                                                          std::uint8_t input_sensor_state,
+                                                          std::uint32_t uptime_seconds = 0U) {
+    uart_frame_t frame{};
+    frame.version = UART_PROTOCOL_VERSION;
+    frame.sequence = 203U;
+    frame.command = UART_CMD_EVENT;
+    frame.length = 9U;
+    frame.payload[UART_EVENT_ID_INDEX] = 0x01U;  // APP_EVENT_HEARTBEAT
+    frame.payload[1] = device_state;
+    frame.payload[2] = error_code;
+    frame.payload[3] = static_cast<std::uint8_t>(uptime_seconds & 0xFFU);
+    frame.payload[4] = static_cast<std::uint8_t>((uptime_seconds >> 8U) & 0xFFU);
+    frame.payload[5] = static_cast<std::uint8_t>((uptime_seconds >> 16U) & 0xFFU);
+    frame.payload[6] = static_cast<std::uint8_t>((uptime_seconds >> 24U) & 0xFFU);
+    frame.payload[7] = input_sensor_state;
+    frame.payload[8] = UART_SENSOR_CLEAR;  // sorting sensor state (not used by the input node)
+    return frame;
+}
+
 [[nodiscard]] inline uart_frame_t MakeControllerEvent(std::uint8_t event_id, std::uint8_t kind = 0U,
                                                      std::uint8_t cause = 0U) {
     uart_frame_t frame{};

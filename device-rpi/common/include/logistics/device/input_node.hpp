@@ -88,13 +88,21 @@ private:
 
     void HandleSensorStatus(const uart_frame_t& frame);
     void HandleDeviceStatus(const uart_frame_t& frame);
+    void HandleControllerHeartbeat(const uart_frame_t& frame);
     void HandleControllerEvent(const uart_frame_t& frame);
+
+    struct HeartbeatState {
+        std::uint8_t device_state{};
+        std::uint8_t error_code{};
+        std::uint8_t sensor_state{};
+    };
 
     std::string device_id_;
     InputUartSession& uart_session_;
     InputReportHandler report_handler_;
     std::optional<std::uint8_t> last_sensor_state_;
     std::optional<std::uint32_t> last_controller_event_signature_;
+    std::optional<HeartbeatState> last_heartbeat_state_;
 };
 
 }  // namespace logistics::device
