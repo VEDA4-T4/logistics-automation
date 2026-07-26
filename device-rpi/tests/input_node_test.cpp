@@ -430,6 +430,33 @@ void TestSafetyEventIsDecoded() {
     assert(error->error_level == "ERROR");
 }
 
+void TestSafetyResetCompleteIsReportedAsStatus() {
+    Fixture fixture;
+    // APP_EVENT_SAFETY=0x03, kind=2 (RESET_COMPLETE) is a successful recovery, so it
+    // must be a status report rather than an error.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 2U, 0U));
+
+    assert(fixture.reports.size() == 1);
+    assert(fixture.reports.front().channel == InputReportChannel::kStatus);
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(status != nullptr);
+    assert(status->current_state == "READY");
+    assert(status->status == mqtt::ConnectionState::kOnline);
+    assert(!status->error_code.has_value());
+}
+
+void TestSafetyResetRejectedIsStillAnError() {
+    Fixture fixture;
+    // kind=3 (RESET_REJECTED) is a genuine failure and stays on the error channel.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 3U, 0U));
+
+    assert(fixture.reports.size() == 1);
+    assert(fixture.reports.front().channel == InputReportChannel::kError);
+    const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.front().data);
+    assert(error != nullptr);
+    assert(error->error_code == "ERR-SAFETY-RESET-REJECTED");
+}
+
 void TestRepeatedControllerEventIsDeduplicated() {
     Fixture fixture;
     // The same latched health condition re-emitted repeatedly must report once.
@@ -470,6 +497,8 @@ int main() {
     TestHeartbeatReportsOnlyOnChange();
     TestHealthEventIsDecoded();
     TestSafetyEventIsDecoded();
+    TestSafetyResetCompleteIsReportedAsStatus();
+    TestSafetyResetRejectedIsStillAnError();
     TestRepeatedControllerEventIsDeduplicated();
     return 0;
 }

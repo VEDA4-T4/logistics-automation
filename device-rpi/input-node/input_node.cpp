@@ -179,6 +179,8 @@ constexpr std::uint8_t kAppEventHealth = 0x04U;     // HealthTask event
 constexpr std::size_t kAppEventKindIndex = 1U;      // safety/health payload[1] = kind
 constexpr std::size_t kAppEventCauseIndex = 2U;     // safety/health payload[2] = cause/channel
 
+constexpr std::uint8_t kSafetyEventResetComplete = 0x02U;  // SAFETY_EVENT_RESET_COMPLETE
+
 // APP_EVENT_HEARTBEAT payload (app_comm_tx.h APP_HEARTBEAT_*):
 //   [1] device_state, [2] error_code, [3..6] uptime seconds (LE u32),
 //   [7] input sensor state, [8] sorting sensor state
@@ -201,8 +203,8 @@ struct ControllerEventDescription {
             switch (kind) {
                 case 1U:  // SAFETY_EVENT_ESTOP_LATCHED
                     return { "ERR-SAFETY-ESTOP-LATCHED", "ERROR", "input controller latched an emergency stop" };
-                case 2U:  // SAFETY_EVENT_RESET_COMPLETE
-                    return { "INFO-SAFETY-RESET-COMPLETE", "INFO", "input controller completed safety reset" };
+                // SAFETY_EVENT_RESET_COMPLETE (2) is a success notification and is
+                // reported as a status by the caller, so it never reaches here.
                 case 3U:  // SAFETY_EVENT_RESET_REJECTED
                     return { "ERR-SAFETY-RESET-REJECTED", "ERROR", "input controller rejected safety reset" };
                 default:
@@ -554,6 +556,25 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
         return;
     }
     last_controller_event_signature_ = signature;
+
+    if (event_id == kAppEventSafety && kind == kSafetyEventResetComplete) {
+        // The emergency-stop latch was released successfully. That is a recovery,
+        // not a fault, so report the resulting state instead of publishing good
+        // news on the error channel. The controller sets DEVICE_READY at the same
+        // moment (safety_task.c), so mirror that state here.
+        EmitReport({
+            .channel = InputReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = DeviceStateName(UART_DEVICE_READY),
+                    .job_id = std::nullopt,
+                    .error_code = std::nullopt,
+                },
+        });
+        return;
+    }
 
     const ControllerEventDescription description = DescribeControllerEvent(event_id, kind, cause);
     EmitReport({

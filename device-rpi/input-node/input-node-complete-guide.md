@@ -152,7 +152,8 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 | `SENSOR_STATUS` (FAULT) | error / `ERROR_OCCURRED` | `error_code=ERR-SENSOR`, `distance` 포함 |
 | `DEVICE_STATUS` | status / `DEVICE_STATUS` | 장치 상태명 + 오류코드 |
 | `EVENT` (heartbeat, id=1) | status / `DEVICE_STATUS` | 9바이트 payload 디코딩: `device_state`/`error_code`/uptime/투입·분류 센서 상태. 상태 변화 시에만 보고(uptime만 바뀌면 무시) |
-| `EVENT` (safety, id=3) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-SAFETY-ESTOP-LATCHED` / `INFO-SAFETY-RESET-COMPLETE` / `ERR-SAFETY-RESET-REJECTED` |
+| `EVENT` (safety, id=3, kind=1/3) | error / `ERROR_OCCURRED` | `ERR-SAFETY-ESTOP-LATCHED`(비상정지 latch) / `ERR-SAFETY-RESET-REJECTED`(해제 거부) |
+| `EVENT` (safety, id=3, kind=2) | status / `DEVICE_STATUS` | 비상정지 해제 **성공**이라 에러가 아닌 상태로 발행(`current_state=READY`). STM32도 같은 시점에 `DEVICE_READY`로 전환함 |
 | `EVENT` (health, id=4) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-HEALTH-UART-CHANNEL-TIMEOUT` / `ERR-HEALTH-QUEUE-OVERFLOW` / `ERR-HEALTH-SENSOR-STALE` |
 
 > EVENT의 `(id, kind, cause)`가 바뀔 때만 보고(중복 재발 억제). async EVENT는 `current_state`를 덮지 않고 `error_code`만 갱신(heartbeat의 운영 상태 보존). 이벤트 id/kind 상수는 공유 계약이 아니라 STM32 app 헤더(`app_comm_tx.h`/`safety_task.h`/`health_task.h`)에서 복제한 것 — 펌웨어가 값 바꾸면 같이 수정 필요.
