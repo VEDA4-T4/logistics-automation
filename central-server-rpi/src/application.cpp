@@ -438,24 +438,45 @@ int Application::Run(int argc, char* argv[]) {
             return mqtt_client.PublishMessage(contracts::mqtt::QtResponseTopic(qt_client_id), message,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         };
-    mqtt_handler.SetQtResponseHandler(
-        [&command_manager, &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
-            const auto decision = command_manager.HandleResponse(message);
-            switch (decision.disposition) {
-                case CommandResponseDisposition::kForward:
-                    return decision.message.has_value() && publish_qt_response(*decision.message);
-                case CommandResponseDisposition::kDuplicate:
-                    std::clog << "[server][INFO] duplicate command response ignored: " << decision.reason << '\n';
-                    return true;
-                case CommandResponseDisposition::kUnknownRequest:
-                    std::clog << "[server][INFO] late or unknown command response ignored: " << decision.reason << '\n';
-                    return true;
-                case CommandResponseDisposition::kRejected:
-                    std::cerr << "[server][ERROR] command response rejected: " << decision.reason << '\n';
+    std::optional<std::string> active_system_recovery_request_id;
+    mqtt_handler.SetQtResponseHandler([&command_manager, &process_orchestrator, &active_system_recovery_request_id,
+                                       &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
+        const auto decision = command_manager.HandleResponse(message);
+        switch (decision.disposition) {
+            case CommandResponseDisposition::kForward: {
+                if (!decision.message.has_value()) {
                     return false;
+                }
+                const auto* response =
+                    contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(*decision.message);
+                if (response != nullptr && response->command == contracts::mqtt::ControlCommand::kRecovery &&
+                    response->result == contracts::mqtt::CommandResult::kSuccess &&
+                    active_system_recovery_request_id == response->request_id) {
+                    const auto transition = process_orchestrator.CompleteSystemRecovery();
+                    if (transition.disposition == TransitionDisposition::kRejected) {
+                        std::cerr << "[server][ERROR] system recovery completion failed: " << transition.reason << '\n';
+                        return false;
+                    }
+                    active_system_recovery_request_id.reset();
+                } else if (response != nullptr && response->command == contracts::mqtt::ControlCommand::kRecovery &&
+                           contracts::mqtt::IsTerminal(response->result) &&
+                           active_system_recovery_request_id == response->request_id) {
+                    active_system_recovery_request_id.reset();
+                }
+                return publish_qt_response(*decision.message);
             }
-            return false;
-        });
+            case CommandResponseDisposition::kDuplicate:
+                std::clog << "[server][INFO] duplicate command response ignored: " << decision.reason << '\n';
+                return true;
+            case CommandResponseDisposition::kUnknownRequest:
+                std::clog << "[server][INFO] late or unknown command response ignored: " << decision.reason << '\n';
+                return true;
+            case CommandResponseDisposition::kRejected:
+                std::cerr << "[server][ERROR] command response rejected: " << decision.reason << '\n';
+                return false;
+        }
+        return false;
+    });
     mqtt_handler.SetQtStatusHandler(
         [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
             return mqtt_client.PublishMessage(contracts::mqtt::QtStatusTopic(qt_client_id), message,
@@ -476,6 +497,7 @@ int Application::Run(int argc, char* argv[]) {
     });
 
     const auto dispatch_command = [&mqtt_client, &device_manager, &command_manager, &process_orchestrator,
+                                   &active_system_recovery_request_id,
                                    &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
         std::optional<contracts::mqtt::ControlCommand> system_command;
         if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
@@ -566,7 +588,11 @@ int Application::Run(int argc, char* argv[]) {
             }
         }
         if (failed_devices.empty()) {
-            return commit_system_command();
+            const bool committed = commit_system_command();
+            if (committed && system_command == contracts::mqtt::ControlCommand::kRecovery) {
+                active_system_recovery_request_id = request_id;
+            }
+            return committed;
         }
         const auto failure =
             command_manager.HandleDispatchFailures(request_id, failed_devices, CurrentIso8601Timestamp());

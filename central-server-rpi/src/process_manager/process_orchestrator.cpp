@@ -175,6 +175,18 @@ ProcessTransition ProcessOrchestrator::ApplySystemCommand(mqtt::ControlCommand c
     return state_machine_.ApplySystemCommand(command);
 }
 
+ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
+    if (!config_.enabled) {
+        return {
+            .disposition = TransitionDisposition::kApplied,
+            .previous_stage = std::nullopt,
+            .current_stage = std::nullopt,
+            .reason = {},
+        };
+    }
+    return state_machine_.CompleteSystemRecovery();
+}
+
 ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& machine,
                                                            const mqtt::MqttMessage& message, bool create_commands) {
     ProcessEvent event;

@@ -49,6 +49,7 @@ public:
     [[nodiscard]] ProcessTransition FailDispatch(const ProcessCommandIntent& intent, std::string reason);
     [[nodiscard]] ProcessTransition PreviewSystemCommand(contracts::mqtt::ControlCommand command) const;
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
+    [[nodiscard]] ProcessTransition CompleteSystemRecovery();
 
 private:
     [[nodiscard]] ProcessOrchestrationResult HandleWith(ProcessStateMachine& machine,

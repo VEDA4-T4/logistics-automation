@@ -144,6 +144,11 @@ void TestErrorEmergencyStopAndRecovery() {
     assert(machine.SystemState() == central_server::ProcessSystemState::kError);
     assert(machine.FindWork(kWorkOne)->failure_reason == "gripper timeout");
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kRecovery);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kRecovering);
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).disposition ==
+           central_server::TransitionDisposition::kDuplicate);
+    assert(machine.CompleteSystemRecovery().Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
     assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kInitialize).disposition ==
@@ -155,6 +160,9 @@ void TestErrorEmergencyStopAndRecovery() {
     assert(machine.SystemState() == central_server::ProcessSystemState::kEmergencyStop);
     assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kEmergencyStopped);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kRecovery);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kRecovering);
+    assert(machine.CompleteSystemRecovery().Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
     assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
 }

@@ -144,11 +144,19 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
                      .reason = {} };
 
         case ControlCommand::kRecovery:
+            if (system_state_ == ProcessSystemState::kRecovery) {
+                return {
+                    .disposition = TransitionDisposition::kDuplicate,
+                    .previous_stage = std::nullopt,
+                    .current_stage = std::nullopt,
+                    .reason = "system recovery is already in progress; command may be retried",
+                };
+            }
             if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop) {
                 return Reject("RECOVERY is only allowed from ERROR or EMERGENCY_STOP");
             }
-            SuspendActiveWorks(WorkStage::kStopped);
-            system_state_ = ProcessSystemState::kStopped;
+            SuspendActiveWorks(WorkStage::kRecovering);
+            system_state_ = ProcessSystemState::kRecovery;
             return { .disposition = TransitionDisposition::kApplied,
                      .previous_stage = std::nullopt,
                      .current_stage = std::nullopt,
@@ -176,6 +184,25 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
             return Reject("command does not change the system process state");
     }
     return Reject("unsupported system command");
+}
+
+ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
+    if (system_state_ != ProcessSystemState::kRecovery) {
+        return Reject("system recovery is not in progress");
+    }
+    for (auto& [work_id, work] : works_) {
+        static_cast<void>(work_id);
+        if (work.stage == WorkStage::kRecovering) {
+            work.stage = WorkStage::kStopped;
+        }
+    }
+    system_state_ = ProcessSystemState::kStopped;
+    return {
+        .disposition = TransitionDisposition::kApplied,
+        .previous_stage = std::nullopt,
+        .current_stage = std::nullopt,
+        .reason = {},
+    };
 }
 
 std::optional<WorkProcessSnapshot> ProcessStateMachine::FindWork(std::string_view work_id) const {

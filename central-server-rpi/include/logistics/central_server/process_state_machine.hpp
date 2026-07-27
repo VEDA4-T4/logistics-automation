@@ -103,6 +103,7 @@ public:
     [[nodiscard]] ProcessTransition Apply(const ProcessEvent& event);
     [[nodiscard]] ProcessTransition ApplySystemFailure(std::string reason);
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
+    [[nodiscard]] ProcessTransition CompleteSystemRecovery();
     [[nodiscard]] std::optional<WorkProcessSnapshot> FindWork(std::string_view work_id) const;
     [[nodiscard]] std::vector<WorkProcessSnapshot> ActiveWorks() const;
 
