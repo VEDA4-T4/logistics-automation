@@ -25,7 +25,13 @@ using logistics::device::UartTransport;
 constexpr auto kResponseTimeout = 500ms;
 constexpr auto kHomeTimeout = 4s;
 constexpr auto kMotionTimeout = 3s;
+constexpr auto kSafetyEventTimeout = 1s;
+constexpr auto kSafetySettleDelay = 100ms;
 constexpr std::uint8_t kMaxAttempts = UART_MAX_RETRY_COUNT + 1U;
+constexpr std::uint8_t kSafetyEventId = 0x02U;
+constexpr std::uint8_t kSafetyEventLatchedIndex = 1U;
+constexpr std::uint8_t kSafetyEventCauseIndex = 2U;
+constexpr std::uint8_t kSafetyEventPayloadSize = 3U;
 
 struct StatusSnapshot {
     std::uint8_t state{};
@@ -57,10 +63,14 @@ void WriteU16(std::uint8_t* payload, std::size_t low_index, std::uint16_t value)
             return "HOME";
         case UART_CMD_GRIPPER_GET_STATUS:
             return "GET_STATUS";
+        case UART_CMD_RESET_DEVICE:
+            return "RESET_DEVICE";
         case UART_CMD_RESPONSE:
             return "RESPONSE";
         case UART_CMD_EVENT:
             return "EVENT";
+        case UART_CMD_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
         default:
             return "OTHER";
     }
@@ -130,15 +140,9 @@ public:
     }
 
     [[nodiscard]] bool Transact(std::uint8_t sequence, std::uint8_t command, std::span<const std::uint8_t> payload,
-                                std::uint8_t expected_status, uart_frame_t* response = nullptr) {
-        uart_frame_t request{};
-        request.version = UART_PROTOCOL_VERSION;
-        request.sequence = sequence;
-        request.command = command;
-        request.length = static_cast<std::uint8_t>(payload.size());
-        if (!payload.empty()) {
-            std::copy(payload.begin(), payload.end(), request.payload);
-        }
+                                std::uint8_t expected_status, uart_frame_t* response = nullptr,
+                                std::uint8_t expected_error = UART_ERROR_NONE) {
+        const uart_frame_t request = BuildRequest(sequence, command, payload);
 
         for (std::uint8_t attempt = 1U; attempt <= kMaxAttempts; ++attempt) {
             if (!Send(request)) {
@@ -147,9 +151,13 @@ public:
             uart_frame_t received{};
             if (WaitForResponse(sequence, command, kResponseTimeout, &received)) {
                 const std::uint8_t status = received.payload[UART_RESPONSE_STATUS_INDEX];
-                if (status != expected_status || received.payload[UART_RESPONSE_ERROR_INDEX] != UART_ERROR_NONE) {
-                    std::fprintf(stderr, "  remote rejected %s: status=%s error=0x%02X\n", CommandName(command),
-                                 StatusName(status), received.payload[UART_RESPONSE_ERROR_INDEX]);
+                const std::uint8_t error = received.payload[UART_RESPONSE_ERROR_INDEX];
+                if (status != expected_status || error != expected_error) {
+                    std::fprintf(stderr,
+                                 "  unexpected response for %s: status=%s error=0x%02X "
+                                 "(expected status=%s error=0x%02X)\n",
+                                 CommandName(command), StatusName(status), error, StatusName(expected_status),
+                                 expected_error);
                     return false;
                 }
                 if (response != nullptr) {
@@ -162,6 +170,32 @@ public:
             }
         }
         std::fprintf(stderr, "  response timeout: %s sequence=%u\n", CommandName(command), sequence);
+        return false;
+    }
+
+    [[nodiscard]] bool SendWithoutResponse(std::uint8_t sequence, std::uint8_t command,
+                                           std::span<const std::uint8_t> payload = {}) {
+        return Send(BuildRequest(sequence, command, payload));
+    }
+
+    [[nodiscard]] bool WaitForSafetyEvent(std::uint8_t expected_latched, std::uint8_t expected_cause,
+                                          std::chrono::milliseconds timeout) {
+        const auto deadline = Clock::now() + timeout;
+        while (Clock::now() < deadline) {
+            uart_frame_t frame{};
+            if (!ReadFrame(&frame, Remaining(deadline))) {
+                continue;
+            }
+            PrintFrame("RX", frame);
+            if (frame.command == UART_CMD_EVENT && frame.length == kSafetyEventPayloadSize &&
+                frame.payload[UART_EVENT_ID_INDEX] == kSafetyEventId &&
+                frame.payload[kSafetyEventLatchedIndex] == expected_latched &&
+                frame.payload[kSafetyEventCauseIndex] == expected_cause) {
+                std::printf("  safety state: latched=%u cause=0x%02X\n", expected_latched, expected_cause);
+                return true;
+            }
+        }
+        std::fprintf(stderr, "  safety event timeout: latched=%u cause=0x%02X\n", expected_latched, expected_cause);
         return false;
     }
 
@@ -198,6 +232,19 @@ public:
     }
 
 private:
+    [[nodiscard]] static uart_frame_t BuildRequest(std::uint8_t sequence, std::uint8_t command,
+                                                   std::span<const std::uint8_t> payload) {
+        uart_frame_t request{};
+        request.version = UART_PROTOCOL_VERSION;
+        request.sequence = sequence;
+        request.command = command;
+        request.length = static_cast<std::uint8_t>(payload.size());
+        if (!payload.empty()) {
+            std::copy(payload.begin(), payload.end(), request.payload);
+        }
+        return request;
+    }
+
     [[nodiscard]] static std::chrono::milliseconds Remaining(Clock::time_point deadline) {
         const auto now = Clock::now();
         if (now >= deadline) {
@@ -324,7 +371,7 @@ int main(int argc, char** argv) {
 
     uart_frame_t response{};
     StatusSnapshot status{};
-    std::printf("[1/10] Initial status\n");
+    std::printf("[1/20] Initial status\n");
     if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
         !DecodeStatus(response, &status)) {
         return 1;
@@ -336,25 +383,25 @@ int main(int argc, char** argv) {
     constexpr std::uint16_t kHomeMotionId = 1U;
     WriteU16(home.data(), UART_GRIPPER_HOME_MOTION_ID_LOW_INDEX, kHomeMotionId);
     const std::uint8_t home_sequence = sequence++;
-    std::printf("[2/10] HOME accepted\n");
+    std::printf("[2/20] HOME accepted\n");
     if (!roundtrip.Transact(home_sequence, UART_CMD_GRIPPER_HOME, home, UART_STATUS_ACK)) {
         return 1;
     }
     ++passed;
 
-    std::printf("[3/10] Duplicate HOME cached-response replay\n");
+    std::printf("[3/20] Duplicate HOME cached-response replay\n");
     if (!roundtrip.Transact(home_sequence, UART_CMD_GRIPPER_HOME, home, UART_STATUS_ACK)) {
         return 1;
     }
     ++passed;
 
-    std::printf("[4/10] HOME completion event\n");
+    std::printf("[4/20] HOME completion event\n");
     if (!roundtrip.WaitForMotion(kHomeMotionId, UART_GRIPPER_MOTION_HOME, kHomeTimeout)) {
         return 1;
     }
     ++passed;
 
-    std::printf("[5/10] Homed status\n");
+    std::printf("[5/20] Homed status\n");
     if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
         !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE || status.homed != 1U) {
         return 1;
@@ -369,13 +416,13 @@ int main(int argc, char** argv) {
     WriteU16(move.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, 900U);
     WriteU16(move.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, 800U);
     WriteU16(move.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, 500U);
-    std::printf("[6/10] MOVE_ARM accepted\n");
+    std::printf("[6/20] MOVE_ARM accepted\n");
     if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_MOVE_ARM, move, UART_STATUS_ACK)) {
         return 1;
     }
     ++passed;
 
-    std::printf("[7/10] MOVE_ARM completion event\n");
+    std::printf("[7/20] MOVE_ARM completion event\n");
     if (!roundtrip.WaitForMotion(kArmMotionId, UART_GRIPPER_MOTION_ARM, kMotionTimeout)) {
         return 1;
     }
@@ -386,20 +433,20 @@ int main(int argc, char** argv) {
     WriteU16(grip.data(), UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, kGripMotionId);
     grip[UART_GRIPPER_SET_POSITION_INDEX] = 50U;
     WriteU16(grip.data(), UART_GRIPPER_SET_DURATION_LOW_INDEX, 500U);
-    std::printf("[8/10] SET_GRIPPER accepted\n");
+    std::printf("[8/20] SET_GRIPPER accepted\n");
     if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_SET_GRIPPER, grip, UART_STATUS_ACK)) {
         return 1;
     }
     ++passed;
 
-    std::printf("[9/10] SET_GRIPPER completion event\n");
+    std::printf("[9/20] SET_GRIPPER completion event\n");
     if (!roundtrip.WaitForMotion(kGripMotionId, UART_GRIPPER_MOTION_GRIPPER, kMotionTimeout)) {
         return 1;
     }
     ++passed;
 
-    std::printf("[10/10] Final status\n");
-    if (!roundtrip.Transact(sequence, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+    std::printf("[10/20] Final normal-operation status\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
         !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE || status.homed != 1U ||
         status.base_angle != 1000U || status.shoulder_angle != 900U || status.elbow_angle != 800U ||
         status.gripper_position != 50U) {
@@ -408,6 +455,94 @@ int main(int argc, char** argv) {
     PrintStatus(status);
     ++passed;
 
-    std::printf("\nGRIPPER UART ROUND-TRIP SUMMARY: %d/10 PASS\n", passed);
-    return (passed == 10) ? 0 : 1;
+    std::array<std::uint8_t, UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE> interrupted_move{};
+    constexpr std::uint16_t kInterruptedMotionId = 4U;
+    WriteU16(interrupted_move.data(), UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, kInterruptedMotionId);
+    WriteU16(interrupted_move.data(), UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, 1200U);
+    WriteU16(interrupted_move.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, 1000U);
+    WriteU16(interrupted_move.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, 900U);
+    WriteU16(interrupted_move.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, 2000U);
+    std::printf("[11/20] Long MOVE_ARM accepted before E-Stop\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_MOVE_ARM, interrupted_move, UART_STATUS_ACK)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[12/20] EMERGENCY_STOP safety event\n");
+    if (!roundtrip.SendWithoutResponse(sequence++, UART_CMD_EMERGENCY_STOP) ||
+        !roundtrip.WaitForSafetyEvent(1U, UART_CMD_EMERGENCY_STOP, kSafetyEventTimeout)) {
+        return 1;
+    }
+    std::this_thread::sleep_for(kSafetySettleDelay);
+    ++passed;
+
+    std::printf("[13/20] E-Stop status and interrupted motion cleared\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_EMERGENCY_STOP || status.homed != 0U ||
+        status.motion_id != UART_GRIPPER_MOTION_ID_NONE) {
+        return 1;
+    }
+    PrintStatus(status);
+    ++passed;
+
+    std::array<std::uint8_t, UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE> blocked_move = move;
+    constexpr std::uint16_t kBlockedMotionId = 5U;
+    WriteU16(blocked_move.data(), UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, kBlockedMotionId);
+    std::printf("[14/20] Motion rejected while E-Stop is latched\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_MOVE_ARM, blocked_move, UART_STATUS_ERROR, nullptr,
+                            UART_ERROR_EMERGENCY_STOP)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[15/20] RESET_DEVICE safety release event\n");
+    if (!roundtrip.SendWithoutResponse(sequence++, UART_CMD_RESET_DEVICE) ||
+        !roundtrip.WaitForSafetyEvent(0U, UART_CMD_RESET_DEVICE, kSafetyEventTimeout)) {
+        return 1;
+    }
+    std::this_thread::sleep_for(kSafetySettleDelay);
+    ++passed;
+
+    std::printf("[16/20] Released controller remains STOPPED and not homed\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_STOPPED || status.homed != 0U ||
+        status.motion_id != UART_GRIPPER_MOTION_ID_NONE) {
+        return 1;
+    }
+    PrintStatus(status);
+    ++passed;
+
+    std::printf("[17/20] Motion rejected until HOME is repeated\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_MOVE_ARM, blocked_move, UART_STATUS_ERROR, nullptr,
+                            UART_GRIPPER_ERROR_NOT_HOMED)) {
+        return 1;
+    }
+    ++passed;
+
+    std::array<std::uint8_t, UART_GRIPPER_HOME_PAYLOAD_SIZE> recovery_home{};
+    constexpr std::uint16_t kRecoveryHomeMotionId = 6U;
+    WriteU16(recovery_home.data(), UART_GRIPPER_HOME_MOTION_ID_LOW_INDEX, kRecoveryHomeMotionId);
+    std::printf("[18/20] Recovery HOME accepted\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_HOME, recovery_home, UART_STATUS_ACK)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[19/20] Recovery HOME completion event\n");
+    if (!roundtrip.WaitForMotion(kRecoveryHomeMotionId, UART_GRIPPER_MOTION_HOME, kHomeTimeout)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[20/20] Recovered status\n");
+    if (!roundtrip.Transact(sequence, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE || status.homed != 1U ||
+        status.motion_id != UART_GRIPPER_MOTION_ID_NONE) {
+        return 1;
+    }
+    PrintStatus(status);
+    ++passed;
+
+    std::printf("\nGRIPPER UART ROUND-TRIP SUMMARY: %d/20 PASS\n", passed);
+    return (passed == 20) ? 0 : 1;
 }
