@@ -277,25 +277,31 @@ static void ControlTask_PublishStateChanged(uint32_t now_ms) {
 static void ControlTask_PublishSafetyFault(linetracer_stop_reason_t reason, uint32_t now_ms) {
     app_safety_event_t safety_event = { 0 };
     app_safety_event_type_t type;
+    uart_error_t error_code;
 
     if (reason == LINETRACER_STOP_REASON_LOAD_LOST) {
         type = APP_SAFETY_EVENT_LOAD_LOST;
+        error_code = UART_ERROR_SENSOR;
+    } else if (reason == LINETRACER_STOP_REASON_TURN_TIMEOUT) {
+        type = APP_SAFETY_EVENT_TURN_TIMEOUT;
+        error_code = UART_ERROR_TIMEOUT;
     } else {
         type = APP_SAFETY_EVENT_MARKER_SEQUENCE;
+        error_code = UART_ERROR_SENSOR;
     }
 
     safety_event.type = type;
     safety_event.occurred_at_ms = now_ms;
     safety_event.reason = reason;
     safety_event.source_task = APP_TASK_CONTROL;
-    safety_event.error_code = UART_ERROR_SENSOR;
+    safety_event.error_code = error_code;
     safety_event.active = 1U;
     if (osMessageQueuePut(safetyEventQueue, &safety_event, 0U, 0U) != osOK) {
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)type, now_ms);
     }
 
     ControlTask_PublishLifecycleEvent(APP_TX_EVENT_FAULT, controlTaskContext.active_job_id,
-                                      controlTaskContext.active_route, UART_STATUS_ERROR, UART_ERROR_SENSOR, now_ms);
+                                      controlTaskContext.active_route, UART_STATUS_ERROR, error_code, now_ms);
 }
 
 static void ControlTask_StartUnload(uint32_t now_ms) {
@@ -350,7 +356,10 @@ static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_con
             break;
 
         case ROUTE_ACTION_ERROR:
-            ControlTask_PublishSafetyFault(LINETRACER_STOP_REASON_MARKER_SEQUENCE, now_ms);
+            ControlTask_PublishSafetyFault((controlTaskContext.stop_reason != LINETRACER_STOP_REASON_NONE)
+                                               ? controlTaskContext.stop_reason
+                                               : LINETRACER_STOP_REASON_MARKER_SEQUENCE,
+                                           now_ms);
             break;
 
         case ROUTE_ACTION_NONE:
@@ -395,7 +404,8 @@ static void ControlTask_ProcessSensorSnapshots(void) {
 
         if ((snapshot.event_flags & APP_SENSOR_EVENT_MARKER) != 0U && controlTaskContext.route_active != 0U) {
             linetracer_control_state_t previous_state = controlTaskContext.state;
-            route_action_t action = ControlLogic_HandleMarker(&controlTaskContext, now_ms);
+            route_action_t action = ControlLogic_HandleMarker(&controlTaskContext, snapshot.marker_code,
+                                                              snapshot.marker_detected_at_ms, now_ms);
 
             ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
         }
@@ -421,8 +431,17 @@ static void ControlTask_ProcessSensorSnapshots(void) {
     }
 }
 
+static void ControlTask_CheckRouteTimeout(uint32_t now_ms) {
+    linetracer_control_state_t previous_state = controlTaskContext.state;
+    linetracer_stop_reason_t reason = ControlLogic_CheckRouteTimeout(&controlTaskContext, now_ms);
+
+    if (reason != LINETRACER_STOP_REASON_NONE) {
+        ControlTask_ProcessRouteAction(ROUTE_ACTION_ERROR, previous_state, NULL, now_ms);
+    }
+}
+
 static void ControlTask_PublishCommandResult(const app_control_command_t* command,
-                                              const control_command_result_t* result, uint32_t now_ms) {
+                                             const control_command_result_t* result, uint32_t now_ms) {
     app_tx_event_t event = ControlTask_MakeTxEvent(APP_TX_EVENT_COMMAND_ACK, command, result, now_ms);
     app_tx_event_t started_event;
 
@@ -512,6 +531,7 @@ void StartControlTask(void* argument) {
         ControlTask_ProcessSensorSnapshots();
         ControlTask_ProcessCommands();
         now_ms = osKernelGetTickCount();
+        ControlTask_CheckRouteTimeout(now_ms);
         ControlTask_UpdateMotorOutput(now_ms);
 
         if ((uint32_t)(now_ms - last_alive_tick) >= CONTROL_TASK_ALIVE_INTERVAL_MS) {
