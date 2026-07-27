@@ -12,7 +12,6 @@
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
-#include <algorithm>
 
 #include "logistics/contracts/mqtt_message.hpp"
 
@@ -66,6 +65,10 @@ StatusPresentation ProcessPresentation(const ProcessUnitStatus& process) {
     if (process.has_error) {
         return { QStringLiteral("오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
                  QStringLiteral("#6e2b2f") };
+    }
+    if (process.has_warning) {
+        return { QStringLiteral("센서 경고"), QStringLiteral("#3a3000"), QStringLiteral("#cca700"),
+                 QStringLiteral("#6b5d00") };
     }
     switch (process.connection_state) {
         case mqtt::ConnectionState::kOnline:
@@ -177,8 +180,6 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
         "#overallProcessCard[selectedControlTarget=\"true\"],#processUnitCard[selectedControlTarget=\"true\"]{"
         "background:#172534;border:2px solid #4daafc;}"
         "#overallProcessCard:hover,#processUnitCard:hover{border-color:#75beff;}"
-        "#conveyorSystemGroup{background:#15191d;border:1px solid #3c4b59;border-radius:7px;}"
-        "#conveyorSystemGroup[containsSelectedTarget=\"true\"]{border-color:#4daafc;}"
         "#processStatusSection,#processStatusContent{background:#1f1f1f;border:0;}"
         "QLabel{color:#cccccc;}");
 
@@ -320,9 +321,9 @@ bool OperationsDashboardPanel::eventFilter(QObject* watched, QEvent* event) {
 }
 
 OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createProcessCard(
-    const ProcessUnitStatus& process, QWidget* parent) {
+    const ProcessUnitStatus& process) {
     ProcessCardWidgets widgets;
-    widgets.card = new QFrame(parent);
+    widgets.card = new QFrame(this);
     widgets.card->setObjectName(QStringLiteral("processUnitCard"));
     widgets.card->setAttribute(Qt::WA_StyledBackground);
     widgets.card->setMinimumWidth(170);
@@ -358,64 +359,14 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     return widgets;
 }
 
-bool OperationsDashboardPanel::isConveyorTarget(const QString& target_device_id) const {
-    return std::any_of(processes_.cbegin(), processes_.cend(), [&target_device_id](const ProcessUnitStatus& process) {
-        return (process.key == QString::fromLatin1(kInputProcessKey) ||
-                process.key == QString::fromLatin1(kSortingProcessKey)) &&
-               process.device_id == target_device_id;
-    });
-}
-
 void OperationsDashboardPanel::rebuildProcessCards() {
     process_cards_.clear();
-    conveyor_group_ = nullptr;
     while (auto* item = process_layout_->takeAt(0)) {
         delete item->widget();
         delete item;
     }
-
-    QList<ProcessUnitStatus> conveyor_processes;
-    QList<ProcessUnitStatus> other_processes;
     for (const auto& process : processes_) {
-        if (process.key == QString::fromLatin1(kInputProcessKey) ||
-            process.key == QString::fromLatin1(kSortingProcessKey)) {
-            conveyor_processes.append(process);
-        } else {
-            other_processes.append(process);
-        }
-    }
-
-    if (!conveyor_processes.isEmpty()) {
-        conveyor_group_ = new QFrame(this);
-        conveyor_group_->setObjectName(QStringLiteral("conveyorSystemGroup"));
-        conveyor_group_->setAttribute(Qt::WA_StyledBackground);
-        conveyor_group_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        conveyor_group_->setToolTip(
-            QStringLiteral("투입·분류 컨베이어는 하나의 STM32와 모터 드라이버 안전 상태를 공유합니다."));
-        auto* group_layout = new QVBoxLayout(conveyor_group_);
-        group_layout->setContentsMargins(4, 2, 4, 4);
-        group_layout->setSpacing(2);
-
-        auto* group_title = new QLabel(QStringLiteral("컨베이어 시스템 · 공통 안전 제어"), conveyor_group_);
-        group_title->setObjectName(QStringLiteral("conveyorSystemGroupTitle"));
-        group_title->setStyleSheet("color:#9cdcfe;font-size:8px;font-weight:700;padding-left:3px;");
-        group_title->setAttribute(Qt::WA_TransparentForMouseEvents);
-        group_layout->addWidget(group_title);
-
-        auto* card_layout = new QHBoxLayout();
-        card_layout->setContentsMargins(0, 0, 0, 0);
-        card_layout->setSpacing(4);
-        for (const auto& process : conveyor_processes) {
-            auto widgets = createProcessCard(process, conveyor_group_);
-            card_layout->addWidget(widgets.card, 1);
-            process_cards_.insert(process.key, widgets);
-        }
-        group_layout->addLayout(card_layout);
-        process_layout_->addWidget(conveyor_group_, static_cast<int>(conveyor_processes.size()));
-    }
-
-    for (const auto& process : other_processes) {
-        auto widgets = createProcessCard(process, this);
+        auto widgets = createProcessCard(process);
         process_layout_->addWidget(widgets.card, 1);
         process_cards_.insert(process.key, widgets);
     }
@@ -453,13 +404,19 @@ void OperationsDashboardPanel::refreshProcesses() {
                                                ? QStringLiteral("오류 발생")
                                                : QStringLiteral("오류 · %1").arg(process.error_code));
             widgets.work_or_error->setStyleSheet("color:#f14c4c;font-size:9px;");
+        } else if (process.has_warning) {
+            widgets.work_or_error->setText(IsSensorStaleErrorCode(process.error_code)
+                                               ? QStringLiteral("경고 · 센서 응답 지연")
+                                               : QStringLiteral("경고 · %1").arg(process.error_code));
+            widgets.work_or_error->setStyleSheet("color:#cca700;font-size:9px;");
         } else {
             widgets.work_or_error->setText(process.work_id.isEmpty()
                                                ? QStringLiteral("작업 · 없음")
                                                : QStringLiteral("작업 · %1").arg(process.work_id));
             widgets.work_or_error->setStyleSheet("color:#9d9d9d;font-size:9px;");
         }
-        widgets.work_or_error->setToolTip(process.work_id);
+        widgets.work_or_error->setToolTip(process.has_error || process.has_warning ? process.error_code
+                                                                                   : process.work_id);
         widgets.device_and_updated_at->setText(
             QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
         widgets.device_and_updated_at->setToolTip(process.updated_at.toLocalTime().toString(Qt::ISODateWithMs));
@@ -491,12 +448,6 @@ void OperationsDashboardPanel::refreshControlTargetSelection() {
     update_card(overall_card_);
     for (const auto& widgets : process_cards_) {
         update_card(widgets.card);
-    }
-    if (conveyor_group_ != nullptr) {
-        conveyor_group_->setProperty("containsSelectedTarget", isConveyorTarget(selected_control_target_));
-        conveyor_group_->style()->unpolish(conveyor_group_);
-        conveyor_group_->style()->polish(conveyor_group_);
-        conveyor_group_->update();
     }
 }
 

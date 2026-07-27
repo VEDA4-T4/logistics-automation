@@ -52,12 +52,7 @@ int main(int argc, char* argv[]) {
     assert(panel.minimumHeight() == 112);
     assert(panel.maximumHeight() == 112);
     assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
-    const auto* conveyor_group = panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup"));
-    const auto* conveyor_title = panel.findChild<QLabel*>(QStringLiteral("conveyorSystemGroupTitle"));
-    assert(conveyor_group != nullptr);
-    assert(conveyor_title != nullptr);
-    assert(conveyor_title->text() == QStringLiteral("컨베이어 시스템 · 공통 안전 제어"));
-    assert(conveyor_group->findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 2);
+    assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
     bool has_gripper_title = false;
     bool has_transfer_state = false;
     for (const auto* label : panel.findChildren<QLabel*>()) {
@@ -66,6 +61,34 @@ int main(int argc, char* argv[]) {
     }
     assert(has_gripper_title);
     assert(has_transfer_state);
+
+    assert(state
+               .applyEnvelope({
+                   { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+                   { QStringLiteral("messageId"), QStringLiteral("SORTING-SENSOR-STALE") },
+                   { QStringLiteral("messageType"), QStringLiteral("ERROR_OCCURRED") },
+                   { QStringLiteral("sourceId"), QStringLiteral("PI-SORTING-01") },
+                   { QStringLiteral("timestamp"), QStringLiteral("2026-07-23T01:00:04.500Z") },
+                   { QStringLiteral("data"),
+                     QJsonObject{
+                         { QStringLiteral("errorCode"), QStringLiteral("ERR-HEALTH-SENSOR-STALE") },
+                         { QStringLiteral("errorLevel"), QStringLiteral("WARNING") },
+                         { QStringLiteral("currentState"), QStringLiteral("CONTROLLER_HEALTH") },
+                         { QStringLiteral("message"), QStringLiteral("sensor stale") },
+                     } },
+               })
+               .applied);
+    panel.setState(state);
+    application.processEvents();
+    bool has_sensor_warning = false;
+    bool has_sensor_warning_detail = false;
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        has_sensor_warning = has_sensor_warning || label->text() == QStringLiteral("센서 경고");
+        has_sensor_warning_detail =
+            has_sensor_warning_detail || label->text() == QStringLiteral("경고 · 센서 응답 지연");
+    }
+    assert(has_sensor_warning);
+    assert(has_sensor_warning_detail);
 
     assert(state.applyEnvelope(DeviceEnvelope("VISION-WAITING", "PI-VISION-01", "WAITING_FOR_PRODUCT", "", 5)).applied);
     panel.setState(state);
@@ -93,7 +116,6 @@ int main(int argc, char* argv[]) {
     QApplication::sendEvent(vision_card, &select_vision);
     assert(selected_target == QStringLiteral("PI-VISION-01"));
     assert(vision_card->property("selectedControlTarget").toBool());
-    assert(!conveyor_group->property("containsSelectedTarget").toBool());
 
     QFrame* input_card = nullptr;
     for (auto* card : panel.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
@@ -107,7 +129,7 @@ int main(int argc, char* argv[]) {
                              Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(input_card, &select_input);
     assert(selected_target == QStringLiteral("PI-INPUT-01"));
-    assert(conveyor_group->property("containsSelectedTarget").toBool());
+    assert(input_card->property("selectedControlTarget").toBool());
 
     state.markMqttDisconnected(QDateTime::currentDateTimeUtc());
     panel.setState(state);

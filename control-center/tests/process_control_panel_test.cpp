@@ -64,13 +64,12 @@ int main(int argc, char* argv[]) {
     assert(!recovery->isEnabled());
 
     QString emergency_target;
-    QObject::connect(
-        &panel, &logistics::control_center::ProcessControlPanel::commandRequested,
-        [&emergency_target](logistics::contracts::mqtt::ControlCommand command, const QString& target, const QString&) {
-            if (command == logistics::contracts::mqtt::ControlCommand::kEmergencyStop) {
-                emergency_target = target;
-            }
-        });
+    QObject::connect(&panel, &logistics::control_center::ProcessControlPanel::commandRequested,
+                     [&emergency_target](logistics::contracts::mqtt::ControlCommand command, const QString& target) {
+                         if (command == logistics::contracts::mqtt::ControlCommand::kEmergencyStop) {
+                             emergency_target = target;
+                         }
+                     });
     emergency_stop->click();
     assert(emergency_target == QStringLiteral("SYSTEM"));
 
@@ -120,18 +119,15 @@ int main(int argc, char* argv[]) {
     };
     panel.setProcessStates(logistics::control_center::OverallProcessState::EmergencyStop, processes);
     panel.setControlTarget(QStringLiteral("PI-SORTING-01"), QStringLiteral("분류 컨베이어"));
-    assert(target_label->text() == QStringLiteral("제어 대상 · 분류 컨베이어  |  복구 · 컨베이어 시스템"));
-    assert(recovery->text() == QStringLiteral("컨베이어 복구"));
+    assert(target_label->text() == QStringLiteral("제어 대상 · 분류 컨베이어"));
+    assert(recovery->text() == QStringLiteral("복구"));
     assert(recovery->isEnabled());
 
     QString recovery_target;
-    QString recovery_component;
     QObject::connect(&panel, &logistics::control_center::ProcessControlPanel::commandRequested,
-                     [&recovery_target, &recovery_component](logistics::contracts::mqtt::ControlCommand command,
-                                                             const QString& target, const QString& component) {
+                     [&recovery_target](logistics::contracts::mqtt::ControlCommand command, const QString& target) {
                          if (command == logistics::contracts::mqtt::ControlCommand::kRecovery) {
                              recovery_target = target;
-                             recovery_component = component;
                          }
                      });
     QTimer::singleShot(0, []() {
@@ -142,7 +138,19 @@ int main(int argc, char* argv[]) {
         accept->click();
     });
     recovery->click();
-    assert(recovery_target == QStringLiteral("PI-INPUT-01"));
-    assert(recovery_component == QStringLiteral("SAFETY"));
+    assert(recovery_target == QStringLiteral("PI-SORTING-01"));
+
+    processes[1].current_state = QStringLiteral("STOPPED");
+    processes[1].error_code = QStringLiteral("ERR-HEALTH-SENSOR-STALE");
+    processes[1].has_warning = true;
+    panel.setProcessStates(logistics::control_center::OverallProcessState::Stopped, processes);
+    assert(!start->isEnabled());
+    assert(!recovery->isEnabled());
+    assert(recovery->toolTip() == QStringLiteral("센서 응답이 정상화되어야 복구할 수 있습니다."));
+
+    processes[1].error_code.clear();
+    processes[1].has_warning = false;
+    panel.setProcessStates(logistics::control_center::OverallProcessState::Stopped, processes);
+    assert(start->isEnabled());
     return 0;
 }

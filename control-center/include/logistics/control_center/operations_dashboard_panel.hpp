@@ -38,8 +38,7 @@ private:
         QLabel* device_and_updated_at{ nullptr };
     };
 
-    ProcessCardWidgets createProcessCard(const ProcessUnitStatus& process, QWidget* parent);
-    [[nodiscard]] bool isConveyorTarget(const QString& target_device_id) const;
+    ProcessCardWidgets createProcessCard(const ProcessUnitStatus& process);
     void rebuildProcessCards();
     void refreshOverall();
     void refreshProcesses();
@@ -47,7 +46,6 @@ private:
     void refreshControlTargetSelection();
 
     QFrame* overall_card_{ nullptr };
-    QFrame* conveyor_group_{ nullptr };
     QLabel* live_status_{ nullptr };
     QLabel* overall_status_{ nullptr };
     QLabel* overall_summary_{ nullptr };

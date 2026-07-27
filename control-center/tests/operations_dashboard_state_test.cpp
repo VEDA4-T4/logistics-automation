@@ -85,6 +85,39 @@ int main() {
     assert(state.overall().active_unit_count == 5);
     assert(state.overall().active_work_count == 5);
 
+    result = state.applyEnvelope(
+        Envelope("SORTING-SENSOR-STALE", "ERROR_OCCURRED",
+                 { { QStringLiteral("errorCode"), QStringLiteral("err_health_sensor_stale") },
+                   { QStringLiteral("errorLevel"), QStringLiteral("ERROR") },
+                   { QStringLiteral("currentState"), QStringLiteral("CONTROLLER_HEALTH") },
+                   { QStringLiteral("message"), QStringLiteral("sorting controller reported a stale sensor") } },
+                 "PI-SORTING-01", "2026-07-23T01:00:04.250Z"));
+    assert(result.applied);
+    assert(ProcessByKey(state, QStringLiteral("sorting")).has_warning);
+    assert(!ProcessByKey(state, QStringLiteral("sorting")).has_error);
+    assert(ProcessByKey(state, QStringLiteral("sorting")).current_state == QStringLiteral("SORTING"));
+    assert(ProcessByKey(state, QStringLiteral("sorting")).error_code == QStringLiteral("err_health_sensor_stale"));
+    assert(state.overall().state == OverallProcessState::Running);
+
+    result = state.applyEnvelope(
+        Envelope("SORTING-SENSOR-STALE-STATUS", "DEVICE_STATUS",
+                 DeviceStatus("UART_ERROR", "CONTROLLER_HEALTH", "WORK-102", "ERR-HEALTH-SENSOR-STALE"),
+                 "PI-SORTING-01", "2026-07-23T01:00:04.375Z"));
+    assert(result.applied);
+    assert(ProcessByKey(state, QStringLiteral("sorting")).has_warning);
+    assert(!ProcessByKey(state, QStringLiteral("sorting")).has_error);
+    assert(ProcessByKey(state, QStringLiteral("sorting")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOnline);
+    assert(ProcessByKey(state, QStringLiteral("sorting")).current_state == QStringLiteral("SORTING"));
+    assert(state.overall().state == OverallProcessState::Running);
+
+    result = state.applyEnvelope(Envelope("SORTING-SENSOR-RECOVERED", "DEVICE_STATUS",
+                                          DeviceStatus("ONLINE", "SORTING", "WORK-102"), "PI-SORTING-01",
+                                          "2026-07-23T01:00:04.500Z"));
+    assert(result.applied);
+    assert(!ProcessByKey(state, QStringLiteral("sorting")).has_warning);
+    assert(ProcessByKey(state, QStringLiteral("sorting")).error_code.isEmpty());
+
     OperationsDashboardState mqtt_transition_state;
     result = mqtt_transition_state.applyEnvelope(
         Envelope("MQTT-INPUT", "DEVICE_STATUS", DeviceStatus("ONLINE", "RUNNING", "WORK-MQTT"), "PI-INPUT-01"));
@@ -97,6 +130,7 @@ int main() {
         assert(process.work_id.isEmpty());
         assert(process.error_code.isEmpty());
         assert(!process.has_error);
+        assert(!process.has_warning);
         assert(process.updated_at == disconnected_at);
     }
     assert(mqtt_transition_state.overall().state == OverallProcessState::Idle);
@@ -111,6 +145,7 @@ int main() {
         assert(process.connection_state == logistics::contracts::mqtt::ConnectionState::kUnknown);
         assert(process.current_state == QStringLiteral("상태 수신 대기"));
         assert(!process.has_error);
+        assert(!process.has_warning);
     }
     assert(mqtt_transition_state.overall().stage == QStringLiteral("공정 상태 수신 대기"));
     assert(mqtt_transition_state.overall().detail == QStringLiteral("MQTT 연결됨 · 노드 상태 수신 대기"));

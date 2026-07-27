@@ -29,13 +29,11 @@ public:
     [[nodiscard]] QString selectedTargetDeviceId() const;
 
 signals:
-    void commandRequested(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id,
-                          const QString& component_id);
+    void commandRequested(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id);
 
 private:
     void requestCommand(logistics::contracts::mqtt::ControlCommand command, const QString& confirmation);
-    [[nodiscard]] bool isConveyorTarget() const;
-    [[nodiscard]] QString conveyorRecoveryTarget() const;
+    [[nodiscard]] bool hasBlockingSensorWarning() const;
     void updateTargetPresentation();
     void applySelectedTargetState();
     void updateButtonStates();

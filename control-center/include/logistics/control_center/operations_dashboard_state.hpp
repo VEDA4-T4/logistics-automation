@@ -19,6 +19,12 @@ inline constexpr auto kGripperProcessKey = "gripper";
 inline constexpr auto kSortingProcessKey = "sorting";
 inline constexpr auto kLineTracerProcessKey = "linetracer";
 
+[[nodiscard]] inline bool IsSensorStaleErrorCode(const QString& error_code) {
+    auto normalized = error_code.trimmed().toUpper();
+    normalized.replace(QLatin1Char('_'), QLatin1Char('-'));
+    return normalized == QStringLiteral("ERR-HEALTH-SENSOR-STALE");
+}
+
 enum class OverallProcessState {
     Idle,
     Running,
@@ -47,6 +53,7 @@ struct ProcessUnitStatus {
     QString error_code;
     QDateTime updated_at;
     bool has_error{ false };
+    bool has_warning{ false };
 };
 
 struct ProcessDashboardStatus {

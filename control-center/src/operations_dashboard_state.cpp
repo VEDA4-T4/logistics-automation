@@ -241,6 +241,7 @@ bool OperationsDashboardState::expireStaleProcesses(const QDateTime& timestamp) 
         process.error_code = QStringLiteral("ERR-HEARTBEAT-TIMEOUT");
         process.updated_at = timestamp;
         process.has_error = true;
+        process.has_warning = false;
         changed = true;
     }
     if (!changed) {
@@ -301,9 +302,12 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             if (!work_id.isEmpty() && !updateProcessWork(process, work_id)) {
                 return result;
             }
-            process.status.current_state = current_state;
             process.status.error_code = error_code;
-            process.status.has_error = true;
+            process.status.has_warning = IsSensorStaleErrorCode(error_code);
+            process.status.has_error = !process.status.has_warning;
+            if (!process.status.has_warning) {
+                process.status.current_state = current_state;
+            }
             process.status.updated_at = timestamp;
         } else {
             const auto state_text = StringValue(data, "status");
@@ -316,11 +320,20 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             if (!updateProcessWork(process, work_id)) {
                 return result;
             }
-            process.status.connection_state = connection_state;
-            process.status.current_state = current_state;
-            process.status.error_code = StringValue(data, "errorCode");
-            process.status.has_error = IsConnectionError(connection_state) || !process.status.error_code.isEmpty() ||
-                                       IsProcessErrorState(current_state);
+            const auto error_code = StringValue(data, "errorCode");
+            const bool sensor_stale = IsSensorStaleErrorCode(error_code);
+            process.status.connection_state = sensor_stale && connection_state == mqtt::ConnectionState::kUartError
+                                                  ? (process.status.connection_state == mqtt::ConnectionState::kUnknown
+                                                         ? mqtt::ConnectionState::kOnline
+                                                         : process.status.connection_state)
+                                                  : connection_state;
+            if (!sensor_stale || !process.status.updated_at.isValid()) {
+                process.status.current_state = current_state;
+            }
+            process.status.error_code = error_code;
+            process.status.has_warning = sensor_stale;
+            process.status.has_error = !sensor_stale && (IsConnectionError(connection_state) || !error_code.isEmpty() ||
+                                                         IsProcessErrorState(current_state));
             process.status.updated_at = timestamp;
         }
         process.last_received_at = effective_received_at;
@@ -392,6 +405,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             if (type == mqtt::MessageType::kWorkCompleted &&
                 StringValue(data, "result").toUpper() == QStringLiteral("FAILED")) {
                 process.status.has_error = true;
+                process.status.has_warning = false;
                 process.status.error_code = QStringLiteral("WORK_FAILED");
             }
             process.last_event_at = timestamp;
@@ -640,6 +654,7 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         process.status.work_id.clear();
         process.status.error_code.clear();
         process.status.has_error = false;
+        process.status.has_warning = false;
         process.status.updated_at = timestamp;
         process.last_received_at = {};
         process.last_event_at = {};
