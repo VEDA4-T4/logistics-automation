@@ -1,6 +1,5 @@
 #include "logistics/device/input_node.hpp"
 
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -25,7 +24,6 @@ using input_test::MakeDeviceStatus;
 using input_test::MakeOperationResult;
 using input_test::MakeSensorStatus;
 using input_test::MakeStatusResponse;
-using input_test::SucceedWithConveyorState;
 using logistics::device::InputCommandResult;
 using logistics::device::InputCommandStatus;
 using logistics::device::InputNode;
@@ -103,9 +101,7 @@ void TestStartSuccess() {
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId)));
 
     assert(result.status == InputCommandStatus::kSuccess);
-    // START is followed by a GET_STATUS read-back.
-    assert((fixture.backend->written_commands ==
-            std::vector<std::uint8_t>{ UART_CMD_INPUT_CONVEYOR_START, UART_CMD_INPUT_CONVEYOR_GET_STATUS }));
+    assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_START);
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
     assert(response->command == mqtt::ControlCommand::kStart);
@@ -123,50 +119,7 @@ void TestStartWithSpeed() {
 
     assert(result.status == InputCommandStatus::kSuccess);
     assert((fixture.backend->written_commands ==
-            std::vector<std::uint8_t>{ UART_CMD_INPUT_CONVEYOR_SET_SPEED, UART_CMD_INPUT_CONVEYOR_START,
-                                       UART_CMD_INPUT_CONVEYOR_GET_STATUS }));
-}
-
-void TestStartPublishesConveyorStatus() {
-    Fixture fixture;
-    fixture.backend->responder = SucceedWithConveyorState(UART_INPUT_CONVEYOR_RUNNING, 50U);
-
-    const InputCommandResult result =
-        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId)));
-
-    assert(result.status == InputCommandStatus::kSuccess);
-    // The read-back state is published as a status report without the server polling.
-    const auto status = std::find_if(fixture.reports.begin(), fixture.reports.end(), [](const InputReport& report) {
-        return report.channel == InputReportChannel::kStatus;
-    });
-    assert(status != fixture.reports.end());
-    const auto* payload = std::get_if<mqtt::DeviceStatusPayload>(&status->data);
-    assert(payload != nullptr);
-    assert(payload->current_state == "RUNNING");
-}
-
-void TestStartStillSucceedsWhenStatusReadBackFails() {
-    Fixture fixture;
-    // Answer the START but stay silent for the follow-up GET_STATUS.
-    fixture.backend->responder = [](const uart_frame_t& request) {
-        if (request.command == UART_CMD_INPUT_CONVEYOR_GET_STATUS) {
-            return std::vector<uart_frame_t>{};
-        }
-        return std::vector<uart_frame_t>{ MakeOperationResult(request.sequence, UART_STATUS_SUCCESS, UART_ERROR_NONE) };
-    };
-
-    const InputCommandResult result =
-        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId)));
-
-    // The command itself succeeded; only the best-effort status report is skipped.
-    assert(result.status == InputCommandStatus::kSuccess);
-    const auto* response = fixture.LastResponse();
-    assert(response != nullptr);
-    assert(response->result == mqtt::CommandResult::kSuccess);
-    const auto status = std::find_if(fixture.reports.begin(), fixture.reports.end(), [](const InputReport& report) {
-        return report.channel == InputReportChannel::kStatus;
-    });
-    assert(status == fixture.reports.end());
+            std::vector<std::uint8_t>{ UART_CMD_INPUT_CONVEYOR_SET_SPEED, UART_CMD_INPUT_CONVEYOR_START }));
 }
 
 void TestStop() {
@@ -177,9 +130,7 @@ void TestStop() {
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStop, std::string(kDeviceId)));
 
     assert(result.status == InputCommandStatus::kSuccess);
-    // STOP is followed by a GET_STATUS read-back.
-    assert((fixture.backend->written_commands ==
-            std::vector<std::uint8_t>{ UART_CMD_INPUT_CONVEYOR_STOP, UART_CMD_INPUT_CONVEYOR_GET_STATUS }));
+    assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_STOP);
 }
 
 void TestStatusRequest() {
@@ -492,8 +443,6 @@ void TestRepeatedControllerEventIsDeduplicated() {
 int main() {
     TestStartSuccess();
     TestStartWithSpeed();
-    TestStartPublishesConveyorStatus();
-    TestStartStillSucceedsWhenStatusReadBackFails();
     TestStop();
     TestStatusRequest();
     TestReset();

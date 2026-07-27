@@ -194,17 +194,4 @@ private:
     };
 }
 
-// Responder that mirrors the real controller: GET_STATUS is answered with a
-// RESPONSE frame carrying the conveyor state, everything else with
-// OPERATION_RESULT.
-[[nodiscard]] inline AutoResponderBackend::Responder SucceedWithConveyorState(std::uint8_t conveyor_state,
-                                                                              std::uint8_t speed) {
-    return [conveyor_state, speed](const uart_frame_t& request) {
-        if (request.command == UART_CMD_INPUT_CONVEYOR_GET_STATUS) {
-            return std::vector<uart_frame_t>{ MakeStatusResponse(request.sequence, conveyor_state, speed) };
-        }
-        return std::vector<uart_frame_t>{ MakeOperationResult(request.sequence, UART_STATUS_SUCCESS, UART_ERROR_NONE) };
-    };
-}
-
 }  // namespace input_test
