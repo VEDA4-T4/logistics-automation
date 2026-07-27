@@ -53,7 +53,20 @@ void DefaultLog(MqttHandlerLogLevel level, std::string_view message) {
 [[nodiscard]] constexpr bool IsQtProductEvent(mqtt::MessageType type) noexcept {
     return type == mqtt::MessageType::kBarcodeDetected || type == mqtt::MessageType::kProductImage ||
            type == mqtt::MessageType::kProductInfo || type == mqtt::MessageType::kDestinationSet ||
-           type == mqtt::MessageType::kWorkCompleted;
+           type == mqtt::MessageType::kWorkCompleted || type == mqtt::MessageType::kSensorStatus;
+}
+
+[[nodiscard]] std::string RejectedMessageContext(std::string_view topic, std::string_view payload) {
+    std::string context = "; topic=" + std::string(topic);
+    const auto root = mqtt::Json::parse(payload.begin(), payload.end(), nullptr, false);
+    if (!root.is_object()) {
+        return context;
+    }
+    const auto message_type = root.find(std::string(mqtt::kMessageTypeField));
+    if (message_type != root.end() && message_type->is_string()) {
+        context += "; receivedMessageType=" + message_type->get<std::string>();
+    }
+    return context;
 }
 
 [[nodiscard]] EventPayload MakeEventPayload(const mqtt::MqttMessage& message, std::string details_json) {
@@ -151,8 +164,8 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
     const auto decoded = mqtt::DeserializeMessage(payload);
     if (!decoded.IsSuccess()) {
         Log(MqttHandlerLogLevel::kError,
-            "invalid MQTT JSON; error=" + std::string(mqtt::ToString(decoded.status.error)) +
-                "; field=" + decoded.status.field + "; message=" + decoded.status.message);
+            "invalid MQTT JSON; error=" + std::string(mqtt::ToString(decoded.status.error)) + "; field=" +
+                decoded.status.field + "; message=" + decoded.status.message + RejectedMessageContext(topic, payload));
         return false;
     }
 

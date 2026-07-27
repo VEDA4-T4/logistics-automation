@@ -39,6 +39,7 @@ enum class MessageType : std::uint8_t {
     kErrorOccurred,
     kEmergencyStop,
     kCommandResponse,
+    kSensorStatus,
 };
 
 enum class ControlCommand : std::uint8_t {
@@ -180,6 +181,8 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
             return "EMERGENCY_STOP";
         case MessageType::kCommandResponse:
             return "COMMAND_RESPONSE";
+        case MessageType::kSensorStatus:
+            return "SENSOR_STATUS";
         case MessageType::kUnknown:
             break;
     }
@@ -193,6 +196,7 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
         MessageType::kBarcodeDetected, MessageType::kProductImage,  MessageType::kProductInfo,
         MessageType::kDestinationSet,  MessageType::kDeviceStatus,  MessageType::kControlCommand,
         MessageType::kErrorOccurred,   MessageType::kEmergencyStop, MessageType::kCommandResponse,
+        MessageType::kSensorStatus,
     };
     for (const auto type : values) {
         if (ToString(type) == value) {
