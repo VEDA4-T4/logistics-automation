@@ -63,7 +63,7 @@ static void ControlTask_PublishHealthEvent(app_health_event_type_t type, uint32_
     event.occurred_at_ms = now_ms;
     event.detail = detail;
     event.source_task = APP_TASK_CONTROL;
-    (void)osMessageQueuePut(healthEventQueue, &event, 0U, 0U);
+    (void)AppQueues_TryPutHealth(&event);
 }
 
 static uint8_t ControlTask_TimeReached(uint32_t now_ms, uint32_t deadline_ms) {

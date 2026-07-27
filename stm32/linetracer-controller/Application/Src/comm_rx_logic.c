@@ -77,6 +77,7 @@ void CommRxLogic_LinkInit(comm_rx_link_monitor_t* monitor, uint32_t now_ms) {
     monitor->last_raw_activity_ms = now_ms;
     monitor->last_valid_frame_ms = now_ms;
     monitor->timeout_reported = 0U;
+    monitor->monitoring_required = 0U;
 }
 
 void CommRxLogic_LinkRecordRaw(comm_rx_link_monitor_t* monitor, uint32_t now_ms) {
@@ -94,8 +95,28 @@ void CommRxLogic_LinkRecordValidFrame(comm_rx_link_monitor_t* monitor, uint32_t 
     monitor->timeout_reported = 0U;
 }
 
+uint8_t CommRxLogic_LinkSetMonitoringRequired(comm_rx_link_monitor_t* monitor, uint8_t required, uint32_t now_ms) {
+    uint8_t timeout_was_active;
+
+    if (monitor == NULL) {
+        return 0U;
+    }
+
+    required = (required != 0U) ? 1U : 0U;
+    if (monitor->monitoring_required == required) {
+        return 0U;
+    }
+
+    timeout_was_active = monitor->timeout_reported;
+    monitor->monitoring_required = required;
+    monitor->last_valid_frame_ms = now_ms;
+    monitor->timeout_reported = 0U;
+    return ((required == 0U) && (timeout_was_active != 0U)) ? 1U : 0U;
+}
+
 uint8_t CommRxLogic_LinkCheckTimeout(comm_rx_link_monitor_t* monitor, uint32_t now_ms, uint32_t timeout_ms) {
-    if (monitor == NULL || monitor->timeout_reported != 0U || timeout_ms == 0U) {
+    if (monitor == NULL || monitor->monitoring_required == 0U || monitor->timeout_reported != 0U ||
+        timeout_ms == 0U) {
         return 0U;
     }
 

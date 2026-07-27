@@ -45,6 +45,9 @@ uint8_t AppQueues_AreReady(void);
 osStatus_t AppQueues_TryPutTx(const app_tx_event_t* event);
 /* CommTxTask calls this repeatedly; faults are returned before responses and events. */
 osStatus_t AppQueues_TryGetNextTx(app_tx_event_t* event);
+/* Records a per-producer drop count if the shared Health queue is full. */
+osStatus_t AppQueues_TryPutHealth(const app_health_event_t* event);
+uint32_t AppQueues_GetHealthDropCount(app_task_id_t source_task);
 
 #ifdef __cplusplus
 }
