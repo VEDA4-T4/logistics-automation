@@ -29,13 +29,14 @@ nano device-rpi/config/sorting-node.ini
 | MQTT 메시지/명령 | STM32 UART 명령 | Payload |
 |---|---|---|
 | `DESTINATION_SET` | `SORTING_ROUTE_ITEM (0x30)` | 로컬 `uint16_t cycle_id` + 목적지 `1..3` |
-| `START`, `RESTART` | `SORTING_CONVEYOR_START (0x34)` | 없음 |
+| `START`, `RESTART` + `params.speed=1..100` | `SORTING_CONVEYOR_SET_SPEED (0x36)` 성공 후 `SORTING_CONVEYOR_START (0x34)` | 속도 `uint8_t` 후 START payload 없음 |
 | `STOP` | `SORTING_CONVEYOR_STOP (0x35)` | 없음 |
 | `INITIALIZE` | `SORTING_RESET (0x33)` | 없음 |
 | `STATUS_REQUEST` | `SORTING_GET_STATUS (0x31)` | 없음 |
 | `STATUS_REQUEST`, component=`CONVEYOR` | `SORTING_CONVEYOR_GET_STATUS (0x37)` | 없음 |
-| `RECOVERY` | `SORTING_RETURN_HOME (0x38)` | 활성 `cycle_id` |
-| `EMERGENCY_STOP` | `EMERGENCY_STOP (0xF0)` | 없음 |
+| `RECOVERY` (component 생략 또는 `GATE`) | `SORTING_RETURN_HOME (0x38)` | 활성 `cycle_id` |
+| `RECOVERY`, component=`SAFETY` | `RESET_DEVICE (0x03)` | 없음, 1회 송신 후 Safety EVENT로 결과 확인 |
+| `EMERGENCY_STOP` | `EMERGENCY_STOP (0xF0)` | 없음, 대기 명령 선점 후 1회 송신 |
 
 목적지는 `1`, `2`, `3`을 기본값으로 사용하며 `DEST-01..03`, `A..C`도 같은 값으로 정규화한다. 서버의 UUID
 `work_id`는 UART에 직접 넣지 않고, 노드가 활성 작업 동안 로컬 `uint16_t cycle_id`와 1:1로 연결한다.
@@ -48,14 +49,14 @@ nano device-rpi/config/sorting-node.ini
 | 분류·컨베이어 상태 응답 | `device/{id}/status`의 `DEVICE_STATUS` |
 | `CYCLE_COMPLETE` | `device/{id}/event`의 `WORK_COMPLETED` |
 | `SENSOR_STATUS` | `device/{id}/event`의 `SENSOR_STATUS(sensorId, measurementStatus, distanceCm)` |
-| `DEVICE_STATUS`, heartbeat·Safety 이벤트 | 상태 갱신 및 필요 시 `ERROR_OCCURRED` |
+| `DEVICE_STATUS`, heartbeat, Safety·Health 이벤트 | 상태 갱신 및 필요 시 `ERROR_OCCURRED` |
 | CRC·Parser 오류, 응답 타임아웃, UART 단절 | `device/{id}/error` 및 UART 오류 상태 |
 
 ## 순서·중복·복구 정책
 
-1. MQTT callback은 명령을 최대 64개의 FIFO에 넣고, 포화 시 `ERR-COMMAND-QUEUE-FULL` 거부 응답을 즉시 발행한다.
+1. MQTT callback은 명령을 최대 64개의 큐에 넣고, E-Stop은 일반 FIFO와 분리해 가장 먼저 꺼낸다. 포화 시 `ERR-COMMAND-QUEUE-FULL` 거부 응답을 즉시 발행한다.
 2. 메인 루프는 STM32 응답 대기 중이 아닐 때 한 명령만 꺼낸다.
-3. 응답이 없으면 같은 UART frame과 sequence를 최대 3회 재전송한다.
+3. 일반 명령은 응답이 없으면 같은 UART frame과 sequence를 최대 3회 재전송한다. E-Stop과 Safety Reset은 비동기 Safety 이벤트를 내는 명령이므로 1회만 송신한다.
 4. 성공·실패 응답 또는 최종 타임아웃 뒤에만 다음 MQTT 명령을 처리한다.
 5. 같은 MQTT `message_id`가 다시 오면 모터 명령은 반복하지 않고 request ID별 최종 응답 캐시를 재발행한다.
 6. 활성 `work_id`와 목적지가 같은 재요청은 UART 동작을 반복하지 않고 `DUPLICATED`로 응답한다.
