@@ -11,6 +11,15 @@ target_include_directories(device_uart_session PUBLIC common/include)
 target_link_libraries(device_uart_session PUBLIC logistics::device_uart_transport logistics::uart)
 logistics_enable_warnings(device_uart_session)
 
+if(LOGISTICS_BUILD_DEVICE_UART_TRANSPORT)
+    add_executable(logistics_gripper_uart_roundtrip tools/gripper_uart_roundtrip.cpp)
+    target_link_libraries(
+        logistics_gripper_uart_roundtrip
+        PRIVATE logistics::device_uart_transport logistics::uart
+    )
+    logistics_enable_warnings(logistics_gripper_uart_roundtrip)
+endif()
+
 add_library(device_linetracer_node linetracer-node/linetracer_node.cpp)
 add_library(logistics::device_linetracer_node ALIAS device_linetracer_node)
 target_include_directories(device_linetracer_node PUBLIC common/include)

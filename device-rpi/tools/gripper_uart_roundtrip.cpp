@@ -1,0 +1,413 @@
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <span>
+#include <string_view>
+#include <system_error>
+#include <thread>
+
+#include "logistics/contracts/uart/gripper_commands.h"
+#include "logistics/contracts/uart_codec.h"
+#include "logistics/contracts/uart_parser.h"
+#include "logistics/device/uart_transport.hpp"
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+using namespace std::chrono_literals;
+using logistics::device::UartIoStatus;
+using logistics::device::UartTransport;
+
+constexpr auto kResponseTimeout = 500ms;
+constexpr auto kHomeTimeout = 4s;
+constexpr auto kMotionTimeout = 3s;
+constexpr std::uint8_t kMaxAttempts = UART_MAX_RETRY_COUNT + 1U;
+
+struct StatusSnapshot {
+    std::uint8_t state{};
+    std::uint16_t motion_id{};
+    std::uint16_t base_angle{};
+    std::uint16_t shoulder_angle{};
+    std::uint16_t elbow_angle{};
+    std::uint8_t gripper_position{};
+    std::uint8_t homed{};
+};
+
+[[nodiscard]] std::uint16_t ReadU16(const std::uint8_t* payload, std::size_t low_index) {
+    return static_cast<std::uint16_t>(payload[low_index]) |
+           static_cast<std::uint16_t>(static_cast<std::uint16_t>(payload[low_index + 1U]) << 8U);
+}
+
+void WriteU16(std::uint8_t* payload, std::size_t low_index, std::uint16_t value) {
+    payload[low_index] = static_cast<std::uint8_t>(value & 0xFFU);
+    payload[low_index + 1U] = static_cast<std::uint8_t>(value >> 8U);
+}
+
+[[nodiscard]] const char* CommandName(std::uint8_t command) {
+    switch (command) {
+        case UART_CMD_GRIPPER_MOVE_ARM:
+            return "MOVE_ARM";
+        case UART_CMD_GRIPPER_SET_GRIPPER:
+            return "SET_GRIPPER";
+        case UART_CMD_GRIPPER_HOME:
+            return "HOME";
+        case UART_CMD_GRIPPER_GET_STATUS:
+            return "GET_STATUS";
+        case UART_CMD_RESPONSE:
+            return "RESPONSE";
+        case UART_CMD_EVENT:
+            return "EVENT";
+        default:
+            return "OTHER";
+    }
+}
+
+[[nodiscard]] const char* StatusName(std::uint8_t status) {
+    switch (status) {
+        case UART_STATUS_ACK:
+            return "ACK";
+        case UART_STATUS_NACK:
+            return "NACK";
+        case UART_STATUS_BUSY:
+            return "BUSY";
+        case UART_STATUS_SUCCESS:
+            return "SUCCESS";
+        case UART_STATUS_ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+[[nodiscard]] const char* StateName(std::uint8_t state) {
+    switch (state) {
+        case UART_GRIPPER_STATE_IDLE:
+            return "IDLE";
+        case UART_GRIPPER_STATE_MOVING_ARM:
+            return "MOVING_ARM";
+        case UART_GRIPPER_STATE_MOVING_GRIPPER:
+            return "MOVING_GRIPPER";
+        case UART_GRIPPER_STATE_HOMING:
+            return "HOMING";
+        case UART_GRIPPER_STATE_STOPPED:
+            return "STOPPED";
+        case UART_GRIPPER_STATE_FAULT:
+            return "FAULT";
+        case UART_GRIPPER_STATE_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+void PrintFrame(const char* direction, const uart_frame_t& frame) {
+    std::printf("  %s seq=%u command=%s(0x%02X) length=%u", direction, frame.sequence, CommandName(frame.command),
+                frame.command, frame.length);
+    if (frame.command == UART_CMD_RESPONSE && frame.length >= UART_RESPONSE_HEADER_SIZE) {
+        std::printf(" status=%s original=0x%02X error=0x%02X", StatusName(frame.payload[UART_RESPONSE_STATUS_INDEX]),
+                    frame.payload[UART_RESPONSE_COMMAND_INDEX], frame.payload[UART_RESPONSE_ERROR_INDEX]);
+    }
+    std::putchar('\n');
+}
+
+class Roundtrip final {
+public:
+    Roundtrip() {
+        uart_parser_init(&parser_);
+    }
+
+    [[nodiscard]] bool Open(std::string_view path) {
+        if (!transport_.Open(path)) {
+            std::fprintf(stderr, "open %.*s failed: status=%d error=%d\n", static_cast<int>(path.size()), path.data(),
+                         static_cast<int>(transport_.LastStatus()), transport_.LastError());
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool Transact(std::uint8_t sequence, std::uint8_t command, std::span<const std::uint8_t> payload,
+                                std::uint8_t expected_status, uart_frame_t* response = nullptr) {
+        uart_frame_t request{};
+        request.version = UART_PROTOCOL_VERSION;
+        request.sequence = sequence;
+        request.command = command;
+        request.length = static_cast<std::uint8_t>(payload.size());
+        if (!payload.empty()) {
+            std::copy(payload.begin(), payload.end(), request.payload);
+        }
+
+        for (std::uint8_t attempt = 1U; attempt <= kMaxAttempts; ++attempt) {
+            if (!Send(request)) {
+                return false;
+            }
+            uart_frame_t received{};
+            if (WaitForResponse(sequence, command, kResponseTimeout, &received)) {
+                const std::uint8_t status = received.payload[UART_RESPONSE_STATUS_INDEX];
+                if (status != expected_status || received.payload[UART_RESPONSE_ERROR_INDEX] != UART_ERROR_NONE) {
+                    std::fprintf(stderr, "  remote rejected %s: status=%s error=0x%02X\n", CommandName(command),
+                                 StatusName(status), received.payload[UART_RESPONSE_ERROR_INDEX]);
+                    return false;
+                }
+                if (response != nullptr) {
+                    *response = received;
+                }
+                return true;
+            }
+            if (attempt < kMaxAttempts) {
+                std::printf("  timeout; retrying same sequence (%u/%u)\n", attempt, kMaxAttempts - 1U);
+            }
+        }
+        std::fprintf(stderr, "  response timeout: %s sequence=%u\n", CommandName(command), sequence);
+        return false;
+    }
+
+    [[nodiscard]] bool WaitForMotion(std::uint16_t motion_id, std::uint8_t motion_type,
+                                     std::chrono::milliseconds timeout) {
+        const auto deadline = Clock::now() + timeout;
+        while (Clock::now() < deadline) {
+            uart_frame_t frame{};
+            if (!ReadFrame(&frame, Remaining(deadline))) {
+                continue;
+            }
+            PrintFrame("RX", frame);
+            if (frame.command != UART_CMD_EVENT) {
+                continue;
+            }
+            if (frame.length == UART_GRIPPER_FAULT_EVENT_PAYLOAD_SIZE &&
+                frame.payload[UART_EVENT_ID_INDEX] == UART_GRIPPER_EVENT_FAULT) {
+                std::fprintf(stderr, "  motion fault: id=%u type=%u error=0x%02X\n",
+                             ReadU16(frame.payload, UART_GRIPPER_EVENT_MOTION_ID_LOW_INDEX),
+                             frame.payload[UART_GRIPPER_EVENT_MOTION_TYPE_INDEX],
+                             frame.payload[UART_GRIPPER_FAULT_EVENT_ERROR_INDEX]);
+                return false;
+            }
+            if (frame.length == UART_GRIPPER_MOTION_EVENT_PAYLOAD_SIZE &&
+                frame.payload[UART_EVENT_ID_INDEX] == UART_GRIPPER_EVENT_MOTION_COMPLETE &&
+                ReadU16(frame.payload, UART_GRIPPER_EVENT_MOTION_ID_LOW_INDEX) == motion_id &&
+                frame.payload[UART_GRIPPER_EVENT_MOTION_TYPE_INDEX] == motion_type) {
+                std::printf("  motion complete: id=%u type=%u\n", motion_id, motion_type);
+                return true;
+            }
+        }
+        std::fprintf(stderr, "  motion completion timeout: id=%u type=%u\n", motion_id, motion_type);
+        return false;
+    }
+
+private:
+    [[nodiscard]] static std::chrono::milliseconds Remaining(Clock::time_point deadline) {
+        const auto now = Clock::now();
+        if (now >= deadline) {
+            return 0ms;
+        }
+        return std::max(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now), 1ms);
+    }
+
+    [[nodiscard]] bool Send(const uart_frame_t& frame) {
+        std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+        std::size_t encoded_length{};
+        if (uart_encode_frame(&frame, encoded.data(), encoded.size(), &encoded_length) != UART_CODEC_OK) {
+            std::fprintf(stderr, "encode failed for %s\n", CommandName(frame.command));
+            return false;
+        }
+        const auto result = transport_.WriteAll(std::span<const std::uint8_t>(encoded.data(), encoded_length), 500ms);
+        if (!result.Succeeded()) {
+            std::fprintf(stderr, "write failed: status=%d error=%d\n", static_cast<int>(result.status),
+                         result.error_code);
+            return false;
+        }
+        PrintFrame("TX", frame);
+        return true;
+    }
+
+    [[nodiscard]] bool ReadFrame(uart_frame_t* frame, std::chrono::milliseconds timeout) {
+        const auto deadline = Clock::now() + timeout;
+        std::array<std::uint8_t, 1> byte{};
+        while (Clock::now() < deadline) {
+            const auto result = transport_.Read(byte, Remaining(deadline));
+            if (result.status == UartIoStatus::kTimeout || result.status == UartIoStatus::kWouldBlock) {
+                return false;
+            }
+            if (!result.Succeeded()) {
+                std::fprintf(stderr, "read failed: status=%d error=%d\n", static_cast<int>(result.status),
+                             result.error_code);
+                return false;
+            }
+            const uart_parser_result_t parser_result = uart_parser_feed(&parser_, byte[0], frame);
+            if (parser_result == UART_PARSER_FRAME_READY) {
+                return true;
+            }
+            if (parser_result < UART_PARSER_NO_FRAME) {
+                std::fprintf(stderr, "parser error: %d\n", static_cast<int>(parser_result));
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool WaitForResponse(std::uint8_t sequence, std::uint8_t original_command,
+                                       std::chrono::milliseconds timeout, uart_frame_t* response) {
+        const auto deadline = Clock::now() + timeout;
+        while (Clock::now() < deadline) {
+            uart_frame_t frame{};
+            if (!ReadFrame(&frame, Remaining(deadline))) {
+                continue;
+            }
+            PrintFrame("RX", frame);
+            if (frame.command == UART_CMD_RESPONSE && frame.sequence == sequence &&
+                frame.length >= UART_RESPONSE_HEADER_SIZE &&
+                frame.payload[UART_RESPONSE_COMMAND_INDEX] == original_command) {
+                *response = frame;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    UartTransport transport_{};
+    uart_parser_t parser_{};
+};
+
+[[nodiscard]] bool ParseSequence(std::string_view text, std::uint8_t* sequence) {
+    unsigned int value{};
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || value > 255U) {
+        return false;
+    }
+    *sequence = static_cast<std::uint8_t>(value);
+    return true;
+}
+
+[[nodiscard]] bool DecodeStatus(const uart_frame_t& response, StatusSnapshot* status) {
+    if (response.command != UART_CMD_RESPONSE || response.length != UART_GRIPPER_STATUS_PAYLOAD_SIZE ||
+        response.payload[UART_RESPONSE_STATUS_INDEX] != UART_STATUS_SUCCESS ||
+        response.payload[UART_RESPONSE_COMMAND_INDEX] != UART_CMD_GRIPPER_GET_STATUS ||
+        response.payload[UART_RESPONSE_ERROR_INDEX] != UART_ERROR_NONE) {
+        return false;
+    }
+    status->state = response.payload[UART_GRIPPER_STATUS_STATE_INDEX];
+    status->motion_id = ReadU16(response.payload, UART_GRIPPER_STATUS_MOTION_ID_LOW_INDEX);
+    status->base_angle = ReadU16(response.payload, UART_GRIPPER_STATUS_BASE_ANGLE_LOW_INDEX);
+    status->shoulder_angle = ReadU16(response.payload, UART_GRIPPER_STATUS_SHOULDER_ANGLE_LOW_INDEX);
+    status->elbow_angle = ReadU16(response.payload, UART_GRIPPER_STATUS_ELBOW_ANGLE_LOW_INDEX);
+    status->gripper_position = response.payload[UART_GRIPPER_STATUS_POSITION_INDEX];
+    status->homed = response.payload[UART_GRIPPER_STATUS_HOMED_INDEX];
+    return true;
+}
+
+void PrintStatus(const StatusSnapshot& status) {
+    std::printf("  state=%s motion_id=%u angles=[%.1f, %.1f, %.1f] gripper=%u%% homed=%u\n", StateName(status.state),
+                status.motion_id, static_cast<double>(status.base_angle) / 10.0,
+                static_cast<double>(status.shoulder_angle) / 10.0, static_cast<double>(status.elbow_angle) / 10.0,
+                status.gripper_position, status.homed);
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    const std::string_view device = (argc >= 2) ? argv[1] : "/dev/vedauart";
+    std::uint8_t sequence = 10U;
+    if (argc >= 3 && !ParseSequence(argv[2], &sequence)) {
+        std::fprintf(stderr, "usage: %s [device] [initial_sequence:0..255]\n", argv[0]);
+        return 2;
+    }
+
+    Roundtrip roundtrip;
+    if (!roundtrip.Open(device)) {
+        return 1;
+    }
+
+    int passed = 0;
+    std::printf("GRIPPER UART ROUND-TRIP TEST\nDevice: %.*s\n\n", static_cast<int>(device.size()), device.data());
+
+    uart_frame_t response{};
+    StatusSnapshot status{};
+    std::printf("[1/10] Initial status\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status)) {
+        return 1;
+    }
+    PrintStatus(status);
+    ++passed;
+
+    std::array<std::uint8_t, UART_GRIPPER_HOME_PAYLOAD_SIZE> home{};
+    constexpr std::uint16_t kHomeMotionId = 1U;
+    WriteU16(home.data(), UART_GRIPPER_HOME_MOTION_ID_LOW_INDEX, kHomeMotionId);
+    const std::uint8_t home_sequence = sequence++;
+    std::printf("[2/10] HOME accepted\n");
+    if (!roundtrip.Transact(home_sequence, UART_CMD_GRIPPER_HOME, home, UART_STATUS_ACK)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[3/10] Duplicate HOME cached-response replay\n");
+    if (!roundtrip.Transact(home_sequence, UART_CMD_GRIPPER_HOME, home, UART_STATUS_ACK)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[4/10] HOME completion event\n");
+    if (!roundtrip.WaitForMotion(kHomeMotionId, UART_GRIPPER_MOTION_HOME, kHomeTimeout)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[5/10] Homed status\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE || status.homed != 1U) {
+        return 1;
+    }
+    PrintStatus(status);
+    ++passed;
+
+    std::array<std::uint8_t, UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE> move{};
+    constexpr std::uint16_t kArmMotionId = 2U;
+    WriteU16(move.data(), UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, kArmMotionId);
+    WriteU16(move.data(), UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, 1000U);
+    WriteU16(move.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, 900U);
+    WriteU16(move.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, 800U);
+    WriteU16(move.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, 500U);
+    std::printf("[6/10] MOVE_ARM accepted\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_MOVE_ARM, move, UART_STATUS_ACK)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[7/10] MOVE_ARM completion event\n");
+    if (!roundtrip.WaitForMotion(kArmMotionId, UART_GRIPPER_MOTION_ARM, kMotionTimeout)) {
+        return 1;
+    }
+    ++passed;
+
+    std::array<std::uint8_t, UART_GRIPPER_SET_GRIPPER_PAYLOAD_SIZE> grip{};
+    constexpr std::uint16_t kGripMotionId = 3U;
+    WriteU16(grip.data(), UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, kGripMotionId);
+    grip[UART_GRIPPER_SET_POSITION_INDEX] = 50U;
+    WriteU16(grip.data(), UART_GRIPPER_SET_DURATION_LOW_INDEX, 500U);
+    std::printf("[8/10] SET_GRIPPER accepted\n");
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_SET_GRIPPER, grip, UART_STATUS_ACK)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[9/10] SET_GRIPPER completion event\n");
+    if (!roundtrip.WaitForMotion(kGripMotionId, UART_GRIPPER_MOTION_GRIPPER, kMotionTimeout)) {
+        return 1;
+    }
+    ++passed;
+
+    std::printf("[10/10] Final status\n");
+    if (!roundtrip.Transact(sequence, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE || status.homed != 1U ||
+        status.base_angle != 1000U || status.shoulder_angle != 900U || status.elbow_angle != 800U ||
+        status.gripper_position != 50U) {
+        return 1;
+    }
+    PrintStatus(status);
+    ++passed;
+
+    std::printf("\nGRIPPER UART ROUND-TRIP SUMMARY: %d/10 PASS\n", passed);
+    return (passed == 10) ? 0 : 1;
+}
