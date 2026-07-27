@@ -108,6 +108,8 @@ int32_t CommTx_Send(comm_tx_channel_t channel, uint8_t command, const uint8_t* p
 static uint32_t fakeSensorLastSampleTick[4];
 static comm_tx_channel_t fakeSensorProcess[4] = { COMM_TX_CH_INPUT, COMM_TX_CH_SORTING, COMM_TX_CH_SORTING,
                                                   COMM_TX_CH_SORTING };
+/* 실기기 매핑과 동일: US1(input)=1, US2(sorting dest1)=1, US3(dest2)=2, US4(dest3)=3. */
+static uint8_t fakeSensorId[4] = { 1U, 1U, 2U, 3U };
 
 uint8_t SensorTask_GetChannelCount(void) {
     return 4U;
@@ -119,6 +121,10 @@ uint32_t SensorTask_GetChannelLastSampleTick(uint8_t index) {
 
 comm_tx_channel_t SensorTask_GetChannelProcess(uint8_t index) {
     return fakeSensorProcess[index];
+}
+
+uint8_t SensorTask_GetChannelSensorId(uint8_t index) {
+    return fakeSensorId[index];
 }
 
 /* ---- fake: HealthHw(레지스터 접근 계층) ---- */
@@ -298,6 +304,7 @@ static void test_uart_channel_timeout_reports_to_opposite_channel(void) {
     assert(commTxSendCalls[0].payload[UART_EVENT_ID_INDEX] == APP_EVENT_HEALTH);
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] == (uint8_t)HEALTH_ISSUE_UART_CHANNEL_TIMEOUT);
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_CAUSE_INDEX] == (uint8_t)COMM_TX_CH_INPUT);
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] == HEALTH_ISSUE_SENSOR_ID_NONE);
 
     /* 같은 상태가 지속돼도 재전송하지 않는다(latch). */
     fakeTick += 100U;
@@ -332,6 +339,8 @@ static void test_sensor_staleness_reports_to_owning_process(void) {
     assert(commTxSendCalls[0].channel == COMM_TX_CH_SORTING);
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] == (uint8_t)HEALTH_ISSUE_SENSOR_STALE);
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_CAUSE_INDEX] == (uint8_t)COMM_TX_CH_SORTING);
+    /* index3=US4, fakeSensorId[3]=3 -> 분류 쪽 3개 센서 중 어느 것인지 구분 가능해야 함. */
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] == 3U);
 }
 
 /*
@@ -354,6 +363,7 @@ static void test_transient_queue_overflow_reports_without_fatal(void) {
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] ==
            (uint8_t)HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT);
     assert(commTxSendCalls[0].channel == COMM_TX_CH_INPUT); /* InputControlTask -> 투입 공정 */
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] == HEALTH_ISSUE_SENSOR_ID_NONE);
 
     /* drop이 더 안 늘면 streak가 리셋된다(연속이 아니므로 fatal로 안 감). */
     fakeTick += 100U;

@@ -157,6 +157,10 @@ comm_tx_channel_t SensorTask_GetChannelProcess(uint8_t index) {
     return sensorChannels[index].txChannel;
 }
 
+uint8_t SensorTask_GetChannelSensorId(uint8_t index) {
+    return sensorChannels[index].sensorId;
+}
+
 /*
  * freertos.c의 __weak StartSensorTask를 덮는 실제 구현.
  */

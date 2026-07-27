@@ -144,7 +144,7 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 | UART 프레임 | MQTT 채널 / 타입 | 내용 |
 |---|---|---|
 | `SENSOR_STATUS` (모든 측정) | event / `SENSOR_STATUS` | `{sensorId, measurementStatus, distanceCm}`. `measurementStatus`는 계약상 `CLEAR`/`DETECTED`/`FAULT`만 허용. 거리값이 매번 바뀌므로 **측정마다 발행** |
-| `SENSOR_STATUS` (FAULT로 전환 시) | error / `ERROR_OCCURRED` | 위 telemetry에 더해 `error_code=ERR-SENSOR` 알림도 발행 |
+| `SENSOR_STATUS` (FAULT로 전환 시) | error / `ERROR_OCCURRED` | 위 telemetry에 더해 `error_code=ERR-SENSOR` 알림도 발행. `current_state="SENSOR_{id}_FAULT"`로 sensorId를 실어 보냄(투입 쪽은 센서가 1개뿐이라 항상 id=1) |
 
 > 센서 값은 telemetry라 `DEVICE_STATUS`가 아니라 **`SENSOR_STATUS` 이벤트**로 나간다(`device/{id}/event`,
 > `mqtt_validation.hpp`가 SENSOR_STATUS를 device event로 분류). 덕분에 센서 활동이 장치 운영 상태
@@ -153,9 +153,9 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 | `EVENT` (heartbeat, id=1) | status / `DEVICE_STATUS` | 9바이트 payload 디코딩: `device_state`/`error_code`/uptime/투입·분류 센서 상태. 상태 변화 시에만 보고(uptime만 바뀌면 무시) |
 | `EVENT` (safety, id=3, kind=1/3) | error / `ERROR_OCCURRED` | `ERR-SAFETY-ESTOP-LATCHED`(비상정지 latch) / `ERR-SAFETY-RESET-REJECTED`(해제 거부) |
 | `EVENT` (safety, id=3, kind=2) | status / `DEVICE_STATUS` | 비상정지 해제 **성공**이라 에러가 아닌 상태로 발행(`current_state=READY`). STM32도 같은 시점에 `DEVICE_READY`로 전환함 |
-| `EVENT` (health, id=4) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-HEALTH-UART-CHANNEL-TIMEOUT` / `ERR-HEALTH-QUEUE-OVERFLOW` / `ERR-HEALTH-SENSOR-STALE` |
+| `EVENT` (health, id=4) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-HEALTH-UART-CHANNEL-TIMEOUT` / `ERR-HEALTH-QUEUE-OVERFLOW` / `ERR-HEALTH-SENSOR-STALE`(kind=3일 때 payload[3]의 sensorId를 `message`에 `sensorId=N`으로 포함) |
 
-> EVENT의 `(id, kind, cause)`가 바뀔 때만 보고(중복 재발 억제). async EVENT는 `current_state`를 덮지 않고 `error_code`만 갱신(heartbeat의 운영 상태 보존). 이벤트 id/kind 상수는 공유 계약이 아니라 STM32 app 헤더(`app_comm_tx.h`/`safety_task.h`/`health_task.h`)에서 복제한 것 — 펌웨어가 값 바꾸면 같이 수정 필요.
+> EVENT의 `(id, kind, cause, sensorId)`가 바뀔 때만 보고(중복 재발 억제). sensorId는 HEALTH/SENSOR_STALE에서만 의미 있고(그 외 kind와 SAFETY 이벤트는 항상 dedup 시그니처에 NONE=0xFF로 들어감), 이걸 시그니처에 포함시킨 이유는 분류 쪽처럼 센서 여러 개가 같은 채널(cause)을 공유할 때 "다른 센서의 새 stale"이 "같은 센서의 재발"로 오인되어 억제되는 걸 막기 위함. async EVENT는 `current_state`를 덮지 않고 `error_code`만 갱신(heartbeat의 운영 상태 보존). 이벤트 id/kind/sensorId 상수는 공유 계약이 아니라 STM32 app 헤더(`app_comm_tx.h`/`safety_task.h`/`health_task.h`)에서 복제한 것 — 펌웨어가 값 바꾸면 같이 수정 필요. HEALTH EVENT payload는 이제 8바이트(`[0]event_id [1]kind [2]cause [3]sensorId [4..7]timestamp`, 기존엔 7바이트로 sensorId 없이 timestamp가 [3..6]이었음).
 
 `UART` 오류코드 → MQTT `error_code` 매핑, `InputTransactStatus` → `CommandResult` 매핑도 여기서 담당.
 

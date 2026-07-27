@@ -89,9 +89,11 @@
 
 #define APP_HEALTH_EVENT_KIND_INDEX 1U
 #define APP_HEALTH_EVENT_CAUSE_INDEX 2U
-#define APP_HEALTH_EVENT_TIMESTAMP_INDEX 3U
-#define APP_HEALTH_EVENT_PAYLOAD_SIZE 7U
+#define APP_HEALTH_EVENT_SENSOR_ID_INDEX 3U
+#define APP_HEALTH_EVENT_TIMESTAMP_INDEX 4U
+#define APP_HEALTH_EVENT_PAYLOAD_SIZE 8U
 #define HEALTH_ISSUE_CAUSE_DEVICE_WIDE 0xFFU
+#define HEALTH_ISSUE_SENSOR_ID_NONE 0xFFU
 
 /* 기본 수신 시간 */
 #define DEFAULT_DURATION_S 30.0
@@ -493,6 +495,7 @@ int main(int argc, char** argv) {
                     } else {
                         uint8_t kind = frame.payload[APP_HEALTH_EVENT_KIND_INDEX];
                         uint8_t cause = frame.payload[APP_HEALTH_EVENT_CAUSE_INDEX];
+                        uint8_t sensor_id = frame.payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX];
                         uint32_t timestamp_ms = (uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX] |
                                                 ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 1U]
                                                  << 8U) |
@@ -501,9 +504,15 @@ int main(int argc, char** argv) {
                                                 ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 3U]
                                                  << 24U);
 
-                        printf("  헬스 EVENT: kind=%s(%u) cause=%s(%u) timestamp=%ums seq=%u\n",
-                               health_issue_kind_name(kind), kind, health_cause_name(cause), cause, timestamp_ms,
-                               frame.sequence);
+                        if (sensor_id == HEALTH_ISSUE_SENSOR_ID_NONE) {
+                            printf("  헬스 EVENT: kind=%s(%u) cause=%s(%u) timestamp=%ums seq=%u\n",
+                                   health_issue_kind_name(kind), kind, health_cause_name(cause), cause, timestamp_ms,
+                                   frame.sequence);
+                        } else {
+                            printf("  헬스 EVENT: kind=%s(%u) cause=%s(%u) sensorId=%u timestamp=%ums seq=%u\n",
+                                   health_issue_kind_name(kind), kind, health_cause_name(cause), cause, sensor_id,
+                                   timestamp_ms, frame.sequence);
+                        }
                     }
                 } else {
                     stats.other++;

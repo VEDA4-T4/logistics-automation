@@ -435,6 +435,30 @@ void TestHealthEventIsDecoded() {
     assert(error->error_code == "ERR-HEALTH-SENSOR-STALE");
 }
 
+void TestHealthEventIncludesSensorId() {
+    Fixture fixture;
+    // APP_EVENT_HEALTH=0x04, kind=3 (SENSOR_STALE), cause=0 (input channel), sensorId=1.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U, 1U));
+
+    assert(fixture.reports.size() == 1);
+    const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.front().data);
+    assert(error != nullptr);
+    assert(error->error_code == "ERR-HEALTH-SENSOR-STALE");
+    assert(error->message.find("sensorId=1") != std::string::npos);
+
+    // A different sensorId on the same (kind, cause) must not be deduplicated away -
+    // it is a distinct sensor, not a repeat of the same condition.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U, 2U));
+    assert(fixture.reports.size() == 2);
+    const auto* second = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.back().data);
+    assert(second != nullptr);
+    assert(second->message.find("sensorId=2") != std::string::npos);
+
+    // The same sensorId repeated is still deduplicated.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U, 2U));
+    assert(fixture.reports.size() == 2);
+}
+
 void TestSafetyEventIsDecoded() {
     Fixture fixture;
     // APP_EVENT_SAFETY=0x03, kind=1 (ESTOP_LATCHED).
@@ -531,6 +555,7 @@ int main() {
     TestHeartbeatReportsOnlyOnChange();
     TestHeartbeatDoesNotDuplicateSensorTransition();
     TestHealthEventIsDecoded();
+    TestHealthEventIncludesSensorId();
     TestSafetyEventIsDecoded();
     TestSafetyResetCompleteIsReportedAsStatus();
     TestSafetyResetRejectedIsStillAnError();

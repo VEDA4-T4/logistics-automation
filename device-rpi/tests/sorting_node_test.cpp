@@ -171,17 +171,20 @@ struct Fixture {
         assert(session->PollOnce().Succeeded());
     }
 
-    void PushControllerEvent(std::uint8_t event_id, std::uint8_t kind, std::uint8_t cause, std::uint8_t result = 0U) {
+    void PushControllerEvent(std::uint8_t event_id, std::uint8_t kind, std::uint8_t cause, std::uint8_t result = 0U,
+                             std::uint8_t sensor_id = 0xFFU) {
         uart_frame_t event{};
         event.version = UART_PROTOCOL_VERSION;
         event.sequence = next_event_sequence++;
         event.command = UART_CMD_EVENT;
-        event.length = event_id == 0x03U ? 8U : 7U;
+        event.length = 8U;  // SAFETY and HEALTH app-level payloads are both 8 bytes.
         event.payload[UART_EVENT_ID_INDEX] = event_id;
         event.payload[1U] = kind;
         event.payload[2U] = cause;
-        if (event.length == 8U) {
+        if (event_id == 0x03U) {
             event.payload[7U] = result;
+        } else {
+            event.payload[3U] = sensor_id;  // HEALTH/SENSOR_STALE only; ignored by other kinds.
         }
         backend->PushRead(Encode(event));
         assert(session->PollOnce().Succeeded());
@@ -497,6 +500,28 @@ void TestSafetyAndHealthEventsAreDecodedAndDeduplicated() {
     assert(fixture.reports.size() == 3U);
 }
 
+void TestHealthSensorStaleIncludesSensorId() {
+    Fixture fixture;
+
+    // kind=3 (SENSOR_STALE), cause=1 (sorting channel), sensorId=UART_SORTING_SENSOR_ID_1.
+    fixture.PushControllerEvent(0x04U, 3U, 1U, 0U, UART_SORTING_SENSOR_ID_1);
+    assert(fixture.reports.size() == 1U);
+    const auto& first = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.front());
+    assert(first.error_code == "ERR-HEALTH-SENSOR-STALE");
+    assert(first.message.find("sensorId=" + std::to_string(UART_SORTING_SENSOR_ID_1)) != std::string::npos);
+
+    // A different sensor on the same channel/kind must not be swallowed as a duplicate -
+    // US2/US3/US4 all share cause=SORTING, so sensorId is what actually tells them apart.
+    fixture.PushControllerEvent(0x04U, 3U, 1U, 0U, UART_SORTING_SENSOR_ID_2);
+    assert(fixture.reports.size() == 2U);
+    const auto& second = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.back());
+    assert(second.message.find("sensorId=" + std::to_string(UART_SORTING_SENSOR_ID_2)) != std::string::npos);
+
+    // The same sensorId repeated is still deduplicated.
+    fixture.PushControllerEvent(0x04U, 3U, 1U, 0U, UART_SORTING_SENSOR_ID_2);
+    assert(fixture.reports.size() == 2U);
+}
+
 void TestCommandTimeoutReportsTimeout() {
     Fixture fixture;
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
@@ -539,6 +564,7 @@ int main() {
     TestReconnectStatusRejectsDestinationMappingMismatch();
     TestSensorStatusPublishesEveryDistanceMeasurement();
     TestSafetyAndHealthEventsAreDecodedAndDeduplicated();
+    TestHealthSensorStaleIncludesSensorId();
     TestCommandTimeoutReportsTimeout();
     return 0;
 }

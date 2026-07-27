@@ -36,4 +36,9 @@ uint32_t SensorTask_GetChannelLastSampleTick(uint8_t index);
 /* index 채널이 보고하는 대상 공정(투입/분류). */
 comm_tx_channel_t SensorTask_GetChannelProcess(uint8_t index);
 
+/* index 채널의 UART sensorId(UART_INPUT_SENSOR_ID_1 또는
+ * UART_SORTING_SENSOR_ID_1..3). SENSOR_STALE HEALTH EVENT에 실어 보내
+ * 분류 쪽 센서 3개(US2/US3/US4)를 서로 구분하는 데 쓴다. */
+uint8_t SensorTask_GetChannelSensorId(uint8_t index);
+
 #endif /* SENSOR_TASK_H */

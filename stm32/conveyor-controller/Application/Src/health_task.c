@@ -107,13 +107,14 @@ static void health_send_payload(comm_tx_channel_t channel, const uint8_t* payloa
  * 해당 공정의 UART 자체는 살아있다고 보고 그 채널로 보고한다.
  * cause==DEVICE_WIDE면 양쪽에 best-effort로 보고한다.
  */
-static void health_report_event(health_issue_kind_t kind, uint8_t cause) {
+static void health_report_event(health_issue_kind_t kind, uint8_t cause, uint8_t sensorId) {
     uint8_t payload[APP_HEALTH_EVENT_PAYLOAD_SIZE];
     uint32_t tick = HAL_GetTick();
 
     payload[UART_EVENT_ID_INDEX] = APP_EVENT_HEALTH;
     payload[APP_HEALTH_EVENT_KIND_INDEX] = (uint8_t)kind;
     payload[APP_HEALTH_EVENT_CAUSE_INDEX] = cause;
+    payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = sensorId;
     payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX] = (uint8_t)(tick & 0xFFU);
     payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 1U] = (uint8_t)((tick >> 8U) & 0xFFU);
     payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 2U] = (uint8_t)((tick >> 16U) & 0xFFU);
@@ -229,7 +230,8 @@ static void health_check_queue_overflow(void) {
                 }
             } else {
                 healthStats.queueOverflowTransient++;
-                health_report_event(HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT, health_report_cause(id));
+                health_report_event(HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT, health_report_cause(id),
+                                    HEALTH_ISSUE_SENSOR_ID_NONE);
             }
         } else {
             healthQueueOverflowStreak[id] = 0U;
@@ -249,7 +251,7 @@ static void health_check_uart_channels(uint32_t now) {
             if (healthUartLatch[channel].reported == 0U) {
                 healthUartLatch[channel].reported = 1U;
                 healthStats.uartChannelTimeouts[channel]++;
-                health_report_event(HEALTH_ISSUE_UART_CHANNEL_TIMEOUT, channel);
+                health_report_event(HEALTH_ISSUE_UART_CHANNEL_TIMEOUT, channel, HEALTH_ISSUE_SENSOR_ID_NONE);
             }
         } else {
             healthUartLatch[channel].reported = 0U;
@@ -272,7 +274,8 @@ static void health_check_sensor_staleness(uint32_t now) {
             if (healthSensorLatch[i].reported == 0U) {
                 healthSensorLatch[i].reported = 1U;
                 healthStats.sensorStaleEvents++;
-                health_report_event(HEALTH_ISSUE_SENSOR_STALE, (uint8_t)SensorTask_GetChannelProcess(i));
+                health_report_event(HEALTH_ISSUE_SENSOR_STALE, (uint8_t)SensorTask_GetChannelProcess(i),
+                                    SensorTask_GetChannelSensorId(i));
             }
         } else {
             healthSensorLatch[i].reported = 0U;

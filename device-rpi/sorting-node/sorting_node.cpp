@@ -30,10 +30,12 @@ inline constexpr std::uint8_t kSafetyResetComplete = 2U;
 inline constexpr std::uint8_t kSafetyResetRejected = 3U;
 inline constexpr std::uint8_t kHealthKindIndex = 1U;
 inline constexpr std::uint8_t kHealthCauseIndex = 2U;
-inline constexpr std::uint8_t kHealthPayloadSize = 7U;
+inline constexpr std::uint8_t kHealthSensorIdIndex = 3U;
+inline constexpr std::uint8_t kHealthPayloadSize = 8U;
 inline constexpr std::uint8_t kHealthUartChannelTimeout = 1U;
 inline constexpr std::uint8_t kHealthQueueOverflow = 2U;
 inline constexpr std::uint8_t kHealthSensorStale = 3U;
+inline constexpr std::uint8_t kHealthSensorIdNone = 0xFFU;
 
 [[nodiscard]] SortingCommandStatus ToCommandStatus(UartSessionSendStatus status) noexcept {
     switch (status) {
@@ -783,7 +785,8 @@ void SortingNode::HandleSensorStatus(const uart_frame_t& frame) noexcept {
     EmitStatus("SENSOR_" + std::to_string(sensor_id) + '_' + SensorStateName(state),
                state == UART_SENSOR_FAULT ? std::optional<std::string>{ "ERR-SENSOR" } : std::nullopt);
     if (state == UART_SENSOR_FAULT) {
-        EmitError("ERR-SENSOR", "ERROR", "SENSOR_FAULT", "sorting ultrasonic sensor reported a fault",
+        EmitError("ERR-SENSOR", "ERROR", "SENSOR_" + std::to_string(sensor_id) + "_FAULT",
+                  "sorting ultrasonic sensor reported a fault",
                   distance == UART_SENSOR_DISTANCE_UNKNOWN
                       ? std::nullopt
                       : std::optional<std::int32_t>{ static_cast<std::int32_t>(distance) });
@@ -837,7 +840,8 @@ void SortingNode::HandleHealthEvent(const uart_frame_t& frame) noexcept {
     }
     const std::uint8_t kind = frame.payload[kHealthKindIndex];
     const std::uint8_t cause = frame.payload[kHealthCauseIndex];
-    if (IsRepeatedControllerEvent(kHealthEvent, kind, cause, 0U)) {
+    const std::uint8_t sensor_id = frame.payload[kHealthSensorIdIndex];
+    if (IsRepeatedControllerEvent(kHealthEvent, kind, cause, sensor_id)) {
         return;
     }
 
@@ -855,6 +859,12 @@ void SortingNode::HandleHealthEvent(const uart_frame_t& frame) noexcept {
         case kHealthSensorStale:
             error_code = "ERR-HEALTH-SENSOR-STALE";
             message = "sorting controller reported a stale sensor";
+            // cause only says which Pi channel (INPUT/SORTING); on the sorting side 3
+            // sensors (US2/US3/US4) share that channel, so sensor_id is what actually
+            // tells them apart.
+            if (sensor_id != kHealthSensorIdNone) {
+                message += " sensorId=" + std::to_string(sensor_id);
+            }
             break;
         default:
             error_code = "ERR-HEALTH-EVENT-" + std::to_string(kind);

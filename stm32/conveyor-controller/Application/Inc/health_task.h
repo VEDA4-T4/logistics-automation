@@ -104,16 +104,22 @@ typedef struct {
  *   [0]    event_id = APP_EVENT_HEALTH
  *   [1]    health_issue_kind_t
  *   [2]    cause: comm_tx_channel_t(공정별) 또는 HEALTH_ISSUE_CAUSE_DEVICE_WIDE
- *   [3..6] timestamp_ms (Little-endian uint32, HAL_GetTick)
+ *   [3]    sensorId: HEALTH_ISSUE_SENSOR_STALE일 때만 SensorTask 채널의
+ *          sensorId(UART_INPUT_SENSOR_ID_1/UART_SORTING_SENSOR_ID_1..3), 그 외
+ *          kind에서는 HEALTH_ISSUE_SENSOR_ID_NONE. cause는 공정(INPUT/SORTING)
+ *          단위라 분류 쪽 센서 3개(US2/US3/US4)를 구분 못 해서 추가함.
+ *   [4..7] timestamp_ms (Little-endian uint32, HAL_GetTick)
  */
 #define APP_EVENT_HEALTH 0x04U
 
 #define APP_HEALTH_EVENT_KIND_INDEX 1U
 #define APP_HEALTH_EVENT_CAUSE_INDEX 2U
-#define APP_HEALTH_EVENT_TIMESTAMP_INDEX 3U
-#define APP_HEALTH_EVENT_PAYLOAD_SIZE 7U
+#define APP_HEALTH_EVENT_SENSOR_ID_INDEX 3U
+#define APP_HEALTH_EVENT_TIMESTAMP_INDEX 4U
+#define APP_HEALTH_EVENT_PAYLOAD_SIZE 8U
 
 #define HEALTH_ISSUE_CAUSE_DEVICE_WIDE 0xFFU
+#define HEALTH_ISSUE_SENSOR_ID_NONE 0xFFU
 
 typedef enum {
     HEALTH_ISSUE_UART_CHANNEL_TIMEOUT = 1U,

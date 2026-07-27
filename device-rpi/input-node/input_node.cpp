@@ -179,6 +179,11 @@ constexpr std::uint8_t kAppEventSafety = 0x03U;     // SafetyTask event
 constexpr std::uint8_t kAppEventHealth = 0x04U;     // HealthTask event
 constexpr std::size_t kAppEventKindIndex = 1U;      // safety/health payload[1] = kind
 constexpr std::size_t kAppEventCauseIndex = 2U;     // safety/health payload[2] = cause/channel
+// health payload[3] = sensorId, HEALTH_ISSUE_SENSOR_STALE only (other health kinds and all
+// safety events carry a timestamp byte there instead, so this index must stay kind-gated).
+constexpr std::size_t kAppHealthSensorIdIndex = 3U;
+constexpr std::uint8_t kHealthIssueSensorStale = 3U;  // HEALTH_ISSUE_SENSOR_STALE
+constexpr std::uint8_t kHealthSensorIdNone = 0xFFU;   // HEALTH_ISSUE_SENSOR_ID_NONE
 
 constexpr std::uint8_t kSafetyEventResetComplete = 0x02U;  // SAFETY_EVENT_RESET_COMPLETE
 
@@ -197,7 +202,8 @@ struct ControllerEventDescription {
 };
 
 [[nodiscard]] ControllerEventDescription DescribeControllerEvent(std::uint8_t event_id, std::uint8_t kind,
-                                                                 std::uint8_t cause) {
+                                                                 std::uint8_t cause,
+                                                                 std::optional<std::uint8_t> sensor_id) {
     const std::string cause_suffix = " (cause=" + std::to_string(static_cast<int>(cause)) + ")";
     switch (event_id) {
         case kAppEventSafety:
@@ -220,9 +226,14 @@ struct ControllerEventDescription {
                 case 2U:  // HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT
                     return { "ERR-HEALTH-QUEUE-OVERFLOW", "WARNING",
                              "input controller reported a transient queue overflow" + cause_suffix };
-                case 3U:  // HEALTH_ISSUE_SENSOR_STALE
+                case kHealthIssueSensorStale: {
+                    const std::string sensor_suffix =
+                        sensor_id.has_value()
+                            ? " sensorId=" + std::to_string(static_cast<int>(*sensor_id))
+                            : "";
                     return { "ERR-HEALTH-SENSOR-STALE", "WARNING",
-                             "input controller reported a stale sensor" + cause_suffix };
+                             "input controller reported a stale sensor" + sensor_suffix + cause_suffix };
+                }
                 default:
                     return { "ERR-HEALTH-EVENT-" + std::to_string(static_cast<int>(kind)), "WARNING",
                              "input controller health event" + cause_suffix };
@@ -460,7 +471,7 @@ void InputNode::HandleSensorStatus(const uart_frame_t& frame) {
                     .job_id = std::nullopt,
                     .error_code = "ERR-SENSOR",
                     .error_level = "ERROR",
-                    .current_state = "SENSOR_FAULT",
+                    .current_state = "SENSOR_" + std::to_string(sensor_id) + "_FAULT",
                     .message = "input ultrasonic sensor reported a fault",
                     .distance = SensorDistanceCm(frame),
                 },
@@ -544,11 +555,24 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     const std::uint8_t kind = has_detail ? frame.payload[kAppEventKindIndex] : 0U;
     const std::uint8_t cause = has_detail ? frame.payload[kAppEventCauseIndex] : 0U;
 
-    // Report only when the (event, kind, cause) changes. The controller re-latches
-    // and re-emits some health conditions (e.g. an oscillating sensor-stale) every
-    // few seconds; without this, each re-emission would flood device/{id}/error.
-    const std::uint32_t signature = (static_cast<std::uint32_t>(event_id) << 16U) |
-                                    (static_cast<std::uint32_t>(kind) << 8U) | static_cast<std::uint32_t>(cause);
+    // sensor_id is only meaningful for a HEALTH/SENSOR_STALE event; every other event
+    // (including all SAFETY events) has a timestamp byte at that same offset instead.
+    const bool is_health_sensor_stale = event_id == kAppEventHealth && kind == kHealthIssueSensorStale;
+    const std::optional<std::uint8_t> sensor_id =
+        (is_health_sensor_stale && frame.length > kAppHealthSensorIdIndex)
+            ? std::optional<std::uint8_t>{ frame.payload[kAppHealthSensorIdIndex] }
+            : std::nullopt;
+    const std::uint8_t sensor_id_for_signature = sensor_id.value_or(kHealthSensorIdNone);
+
+    // Report only when the (event, kind, cause, sensorId) changes. The controller
+    // re-latches and re-emits some health conditions (e.g. an oscillating
+    // sensor-stale) every few seconds; without this, each re-emission would flood
+    // device/{id}/error. sensorId is folded in so a different stale sensor on the
+    // same (kind, cause) is never mistaken for a repeat of the previous one.
+    const std::uint32_t signature = (static_cast<std::uint32_t>(event_id) << 24U) |
+                                    (static_cast<std::uint32_t>(kind) << 16U) |
+                                    (static_cast<std::uint32_t>(cause) << 8U) |
+                                    static_cast<std::uint32_t>(sensor_id_for_signature);
     if (last_controller_event_signature_.has_value() && *last_controller_event_signature_ == signature) {
         return;
     }
@@ -583,7 +607,7 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
         return;
     }
 
-    const ControllerEventDescription description = DescribeControllerEvent(event_id, kind, cause);
+    const ControllerEventDescription description = DescribeControllerEvent(event_id, kind, cause, sensor_id);
     EmitReport({
         .channel = InputReportChannel::kError,
         .message_type = mqtt::MessageType::kErrorOccurred,
