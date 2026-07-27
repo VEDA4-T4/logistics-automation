@@ -19,6 +19,8 @@ typedef enum {
     HEALTH_FAULT_UART_RX_TIMEOUT,
     HEALTH_FAULT_UART_TX_TIMEOUT,
     HEALTH_FAULT_INTERNAL_ERROR,
+    HEALTH_FAULT_UART_RX_ERROR,
+    HEALTH_FAULT_UART_TX_ERROR,
     HEALTH_FAULT_COUNT
 } health_fault_reason_t;
 
@@ -66,7 +68,7 @@ uint8_t HealthLogic_Evaluate(health_logic_context_t* context, uint32_t now_ms, u
                              uint32_t alive_timeout_ms, uint32_t stack_min_words, health_fault_record_t* fault);
 
 /*
- * Queue pressure and a TX failure are transient when they stop recurring.
+ * Queue pressure and recoverable UART failures are transient when quiet.
  * RX timeout is cleared only by the explicit RX_RECOVERED event.
  */
 uint32_t HealthLogic_ClearExpiredTransientFaults(health_logic_context_t* context, uint32_t now_ms,

@@ -215,6 +215,11 @@ uint8_t HealthHw_LoadPersistedRecord(health_persisted_record_t* record) {
             record->fault.error_code = (uint8_t)UART_ERROR_TIMEOUT;
             record->fault.watchdog_blocking = 0U;
             break;
+        case HEALTH_FAULT_UART_RX_ERROR:
+        case HEALTH_FAULT_UART_TX_ERROR:
+            record->fault.error_code = (uint8_t)UART_ERROR_INTERNAL;
+            record->fault.watchdog_blocking = 0U;
+            break;
         case HEALTH_FAULT_TASK_STALLED:
         case HEALTH_FAULT_STACK_LOW:
         case HEALTH_FAULT_INTERNAL_ERROR:

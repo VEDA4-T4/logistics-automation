@@ -1,5 +1,7 @@
 #include "app_queues.h"
 
+#include <string.h>
+
 #include "comm_tx_task.h"
 
 osMessageQueueId_t controlCommandQueue;
@@ -11,6 +13,7 @@ osMessageQueueId_t txSafetyQueue;
 osMessageQueueId_t txResponseQueue;
 osMessageQueueId_t txEventQueue;
 osMessageQueueId_t healthEventQueue;
+static volatile uint32_t healthEventDropCounts[APP_TASK_COUNT];
 
 static const osMessageQueueAttr_t controlCommandQueueAttributes = {
     .name = "controlCommandQueue",
@@ -62,6 +65,7 @@ uint8_t AppQueues_Init(void) {
         return 1U;
     }
 
+    (void)memset((void*)healthEventDropCounts, 0, sizeof(healthEventDropCounts));
     controlCommandQueue = osMessageQueueNew(APP_CONTROL_COMMAND_QUEUE_DEPTH, sizeof(app_control_command_t),
                                             &controlCommandQueueAttributes);
     sensorSnapshotQueue = osMessageQueueNew(APP_SENSOR_SNAPSHOT_QUEUE_DEPTH, sizeof(app_sensor_snapshot_t),
@@ -130,4 +134,31 @@ osStatus_t AppQueues_TryGetNextTx(app_tx_event_t* event) {
     }
 
     return osMessageQueueGet(txEventQueue, event, NULL, 0U);
+}
+
+osStatus_t AppQueues_TryPutHealth(const app_health_event_t* event) {
+    osStatus_t status;
+
+    if (event == NULL || (uint32_t)event->source_task >= (uint32_t)APP_TASK_COUNT) {
+        return osErrorParameter;
+    }
+
+    if (healthEventQueue == NULL) {
+        ++healthEventDropCounts[event->source_task];
+        return osErrorResource;
+    }
+
+    status = osMessageQueuePut(healthEventQueue, event, 0U, 0U);
+    if (status != osOK) {
+        ++healthEventDropCounts[event->source_task];
+    }
+    return status;
+}
+
+uint32_t AppQueues_GetHealthDropCount(app_task_id_t source_task) {
+    if ((uint32_t)source_task >= (uint32_t)APP_TASK_COUNT) {
+        return 0U;
+    }
+
+    return healthEventDropCounts[source_task];
 }

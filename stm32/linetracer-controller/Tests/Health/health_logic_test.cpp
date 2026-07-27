@@ -126,6 +126,18 @@ static void TestEventKindsRemainDistinct(void) {
     assert(fault.reason == HEALTH_FAULT_UART_TX_TIMEOUT);
     assert(fault.error_code == UART_ERROR_TIMEOUT);
     assert(fault.watchdog_blocking == 0U);
+
+    event = MakeEvent(APP_TASK_COMM_RX, APP_HEALTH_EVENT_UART_RX_ERROR, 40U, 7U);
+    assert(HealthLogic_HandleEvent(&context, &event, &fault) != 0U);
+    assert(fault.reason == HEALTH_FAULT_UART_RX_ERROR);
+    assert(fault.error_code == UART_ERROR_INTERNAL);
+    assert(fault.watchdog_blocking == 0U);
+
+    event = MakeEvent(APP_TASK_COMM_TX, APP_HEALTH_EVENT_UART_TX_ERROR, 50U, 8U);
+    assert(HealthLogic_HandleEvent(&context, &event, &fault) != 0U);
+    assert(fault.reason == HEALTH_FAULT_UART_TX_ERROR);
+    assert(fault.error_code == UART_ERROR_INTERNAL);
+    assert(fault.watchdog_blocking == 0U);
     assert(HealthLogic_HasActiveFaults(&context) != 0U);
 }
 
@@ -182,6 +194,24 @@ static void TestOneRecoveryDoesNotClearAnotherFault(void) {
 
     assert(HealthLogic_ClearExpiredTransientFaults(&context, 200U + HEALTH_TRANSIENT_FAULT_CLEAR_MS,
                                                    HEALTH_TRANSIENT_FAULT_CLEAR_MS) == 1U);
+    assert(HealthLogic_HasActiveFaults(&context) == 0U);
+}
+
+static void TestUartRecoveryClearsTimeoutAndRecoverableError(void) {
+    health_logic_context_t context{};
+    health_fault_record_t fault{};
+    app_health_event_t event =
+        MakeEvent(APP_TASK_COMM_RX, APP_HEALTH_EVENT_UART_RX_TIMEOUT, 100U, 5000U);
+
+    HealthLogic_Init(&context, HEALTH_REQUIRED_TASK_MASK, 0U);
+    assert(HealthLogic_HandleEvent(&context, &event, &fault) != 0U);
+
+    event = MakeEvent(APP_TASK_COMM_RX, APP_HEALTH_EVENT_UART_RX_ERROR, 200U, 7U);
+    assert(HealthLogic_HandleEvent(&context, &event, &fault) != 0U);
+    assert(HealthLogic_HasActiveFaults(&context) != 0U);
+
+    event = MakeEvent(APP_TASK_COMM_RX, APP_HEALTH_EVENT_UART_RX_RECOVERED, 300U, 1U);
+    assert(HealthLogic_HandleEvent(&context, &event, &fault) == 0U);
     assert(HealthLogic_HasActiveFaults(&context) == 0U);
 }
 
@@ -245,6 +275,7 @@ int main() {
     TestQueueFaultClearsAfterQuietPeriodAndCanRepeat();
     TestUartRxTimeoutRequiresExplicitRecovery();
     TestOneRecoveryDoesNotClearAnotherFault();
+    TestUartRecoveryClearsTimeoutAndRecoverableError();
     TestInternalErrorBlocksAndSuppressesDuplicate();
     TestUnloadIsDeferred();
     TestTickWraparound();
