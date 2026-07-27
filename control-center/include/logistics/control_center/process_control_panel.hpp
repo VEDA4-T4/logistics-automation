@@ -3,6 +3,7 @@
 #include <QWidget>
 
 #include "logistics/contracts/mqtt_message.hpp"
+#include "logistics/control_center/operations_dashboard_state.hpp"
 #include "logistics/control_center/process_control_state.hpp"
 
 class QLabel;
@@ -17,6 +18,7 @@ public:
     explicit ProcessControlPanel(QWidget* parent = nullptr);
 
     void setMqttConnected(bool connected);
+    void setProcessState(OverallProcessState state);
     void setCommandPending(logistics::contracts::mqtt::ControlCommand command);
     void setCommandProgress(logistics::contracts::mqtt::ControlCommand command,
                             logistics::contracts::mqtt::CommandResult result, const QString& detail = {});

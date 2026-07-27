@@ -177,7 +177,7 @@ void TestVisionControlLifecycle() {
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 7);
-    assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kProcessing);
     assert(control.State() == device::DeviceOperatingState::kRecovering);
     assert(control.ConsumeResetRequest());
     assert(!control.ConsumeResetRequest());
@@ -188,6 +188,15 @@ void TestVisionControlLifecycle() {
     assert(ResponsePayload(decision).error_code == "ERR-CAMERA-UNAVAILABLE");
 
     control.SetReady(true);
+    const auto recovery_completed = control.CompleteRecovery("MSG-RECOVERY-COMPLETE", "2026-07-21T11:00:03Z");
+    assert(recovery_completed.has_value());
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceResponseTopic("PI-VISION-01"), *recovery_completed).IsSuccess());
+    const auto* recovery_response = mqtt::GetPayload<mqtt::CommandResponsePayload>(*recovery_completed);
+    assert(recovery_response != nullptr);
+    assert(recovery_response->request_id == "REQ-VISION-01");
+    assert(recovery_response->command == mqtt::ControlCommand::kRecovery);
+    assert(recovery_response->result == mqtt::CommandResult::kSuccess);
+    assert(!control.CompleteRecovery("IGNORED", "2026-07-21T11:00:04Z").has_value());
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 9);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
     assert(control.State() == device::DeviceOperatingState::kStopped);

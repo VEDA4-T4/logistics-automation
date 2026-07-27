@@ -112,12 +112,21 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                     break;
                 case mqtt::ControlCommand::kEmergencyStop:
                     state_ = DeviceOperatingState::kEmergencyStop;
+                    pending_recovery_request_id_.reset();
                     clear_work = true;
                     response_text = config_.component_name + " emergency-stopped";
                     break;
                 case mqtt::ControlCommand::kRecovery:
                     if (state_ == DeviceOperatingState::kRecovering) {
-                        response_text = config_.component_name + " recovery is already in progress";
+                        if (ready_) {
+                            pending_recovery_request_id_.reset();
+                            response_text = config_.component_name + " recovery completed";
+                        } else {
+                            result = mqtt::CommandResult::kProcessing;
+                            pending_recovery_request_id_ = std::string(request->request_id);
+                            reset_requested_ = true;
+                            response_text = config_.component_name + " recovery is in progress";
+                        }
                     } else if (state_ != DeviceOperatingState::kEmergencyStop &&
                                state_ != DeviceOperatingState::kError) {
                         result = mqtt::CommandResult::kRejected;
@@ -127,7 +136,9 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         state_ = DeviceOperatingState::kRecovering;
                         ready_ = false;
                         reset_requested_ = true;
+                        pending_recovery_request_id_ = std::string(request->request_id);
                         clear_work = true;
+                        result = mqtt::CommandResult::kProcessing;
                         response_text = config_.component_name + " recovery started";
                     }
                     break;
@@ -144,6 +155,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " has not recovered";
                     } else {
                         state_ = DeviceOperatingState::kStopped;
+                        pending_recovery_request_id_.reset();
                         clear_work = true;
                         response_text = config_.component_name + " initialized";
                     }
@@ -162,24 +174,24 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
     }
 
     return DeviceControlDecision{
-        .response =
-            mqtt::MqttMessage{
-                .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-                .message_id = std::move(response_message_id),
-                .message_type = mqtt::MessageType::kCommandResponse,
-                .source_id = config_.device_id,
-                .timestamp = std::move(timestamp),
-                .data =
-                    mqtt::CommandResponsePayload{
-                        .request_id = std::string(request->request_id),
-                        .command = request->command,
-                        .result = result,
-                        .error_code = std::move(error_code),
-                        .message = std::move(response_text),
-                    },
-            },
+        .response = MakeResponse(request->request_id, request->command, result, std::move(error_code),
+                                 std::move(response_text), std::move(response_message_id), std::move(timestamp)),
         .clear_work = clear_work,
     };
+}
+
+std::optional<mqtt::MqttMessage> DeviceControlState::CompleteRecovery(std::string response_message_id,
+                                                                      std::string timestamp) {
+    std::lock_guard lock(mutex_);
+    if (state_ != DeviceOperatingState::kRecovering || !ready_ || !pending_recovery_request_id_.has_value()) {
+        return std::nullopt;
+    }
+
+    auto response = MakeResponse(
+        *pending_recovery_request_id_, mqtt::ControlCommand::kRecovery, mqtt::CommandResult::kSuccess, std::nullopt,
+        config_.component_name + " recovery completed", std::move(response_message_id), std::move(timestamp));
+    pending_recovery_request_id_.reset();
+    return response;
 }
 
 void DeviceControlState::SetReady(const bool ready) {
@@ -214,6 +226,27 @@ std::string DeviceControlState::CurrentState() const {
 
 bool DeviceControlState::IsTargetedToThisNode(const std::string_view target_device_id) const noexcept {
     return target_device_id == config_.device_id || target_device_id == "ALL" || target_device_id == "SYSTEM";
+}
+
+mqtt::MqttMessage DeviceControlState::MakeResponse(std::string_view request_id, const mqtt::ControlCommand command,
+                                                   const mqtt::CommandResult result,
+                                                   std::optional<std::string> error_code, std::string message,
+                                                   std::string response_message_id, std::string timestamp) const {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = std::move(response_message_id),
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .source_id = config_.device_id,
+        .timestamp = std::move(timestamp),
+        .data =
+            mqtt::CommandResponsePayload{
+                .request_id = std::string(request_id),
+                .command = command,
+                .result = result,
+                .error_code = std::move(error_code),
+                .message = std::move(message),
+            },
+    };
 }
 
 }  // namespace logistics::device

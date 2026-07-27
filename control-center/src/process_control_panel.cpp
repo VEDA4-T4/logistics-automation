@@ -164,6 +164,33 @@ void ProcessControlPanel::setMqttConnected(bool connected) {
     updateButtonStates();
 }
 
+void ProcessControlPanel::setProcessState(const OverallProcessState state) {
+    switch (state) {
+        case OverallProcessState::Idle:
+            control_state_.setPhase(ProcessControlPhase::Idle);
+            break;
+        case OverallProcessState::Running:
+        case OverallProcessState::Completed:
+            control_state_.setPhase(ProcessControlPhase::Running);
+            break;
+        case OverallProcessState::Stopped:
+            control_state_.setPhase(ProcessControlPhase::Stopped);
+            break;
+        case OverallProcessState::Error:
+            control_state_.setPhase(ProcessControlPhase::Error);
+            break;
+        case OverallProcessState::EmergencyStop:
+            control_state_.setPhase(ProcessControlPhase::EmergencyStop);
+            break;
+        case OverallProcessState::Recovery:
+            if (control_state_.phase() != ProcessControlPhase::RecoveryReady) {
+                control_state_.setPhase(ProcessControlPhase::Recovering);
+            }
+            break;
+    }
+    updateButtonStates();
+}
+
 void ProcessControlPanel::setCommandPending(mqtt::ControlCommand command) {
     control_state_.setCommandPending();
     command_status_->setText(QStringLiteral("%1 명령 전송됨\n응답 대기 중").arg(CommandLabel(command)));
@@ -195,6 +222,30 @@ void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt:
     command_status_->setText(text);
 
     const bool succeeded = result == mqtt::CommandResult::kSuccess;
+    if (succeeded) {
+        switch (command) {
+            case mqtt::ControlCommand::kStart:
+            case mqtt::ControlCommand::kRestart:
+                control_state_.setPhase(ProcessControlPhase::Running);
+                break;
+            case mqtt::ControlCommand::kStop:
+                control_state_.setPhase(ProcessControlPhase::Stopped);
+                break;
+            case mqtt::ControlCommand::kEmergencyStop:
+                control_state_.setPhase(ProcessControlPhase::EmergencyStop);
+                break;
+            case mqtt::ControlCommand::kRecovery:
+                control_state_.setPhase(ProcessControlPhase::RecoveryReady);
+                break;
+            case mqtt::ControlCommand::kInitialize:
+                control_state_.setPhase(ProcessControlPhase::Idle);
+                break;
+            case mqtt::ControlCommand::kStatusRequest:
+            case mqtt::ControlCommand::kDestinationSet:
+            case mqtt::ControlCommand::kUnknown:
+                break;
+        }
+    }
     command_status_->setStyleSheet(
         succeeded ? "background-color:#1f3325;color:#89d185;border:1px solid #385a40;border-radius:4px;padding:4px;"
                   : "background-color:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;padding:4px;");
@@ -211,11 +262,11 @@ void ProcessControlPanel::requestCommand(mqtt::ControlCommand command, const QSt
 }
 
 void ProcessControlPanel::updateButtonStates() {
-    start_button_->setEnabled(control_state_.normalCommandsEnabled());
-    stop_button_->setEnabled(control_state_.normalCommandsEnabled());
-    restart_button_->setEnabled(control_state_.normalCommandsEnabled());
-    recovery_button_->setEnabled(control_state_.normalCommandsEnabled());
-    initialize_button_->setEnabled(control_state_.normalCommandsEnabled());
+    start_button_->setEnabled(control_state_.startEnabled());
+    stop_button_->setEnabled(control_state_.stopEnabled());
+    restart_button_->setEnabled(control_state_.restartEnabled());
+    recovery_button_->setEnabled(control_state_.recoveryEnabled());
+    initialize_button_->setEnabled(control_state_.initializeEnabled());
 
     // Emergency stop stays available while a normal command is pending so it can always take priority.
     emergency_stop_button_->setEnabled(control_state_.emergencyStopEnabled());

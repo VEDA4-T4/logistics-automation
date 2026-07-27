@@ -456,6 +456,13 @@ int main(const int argc, char* argv[]) {
             control_state.SetReady(true);
             device_status->SetCurrentState(control_state.CurrentState());
             device_status->SetErrorCode(std::nullopt);
+            if (auto recovery = control_state.CompleteRecovery(
+                    logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                     mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                    logistics::device::CurrentIso8601Timestamp());
+                recovery.has_value() && !mqtt_client.PublishResponse(*recovery)) {
+                std::cerr << "[vision][mqtt][ERROR] failed to publish recovery completion\n";
+            }
 #endif
         }
 

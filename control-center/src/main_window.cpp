@@ -620,9 +620,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 pending_command_ = command;
                 process_control_panel_->setCommandPending(command);
 
-                const auto timeout = command == logistics::contracts::mqtt::ControlCommand::kEmergencyStop
-                                         ? logistics::contracts::mqtt::kEmergencyStopConfirmationTimeout
-                                         : logistics::contracts::mqtt::kMqttResponseTimeout;
+                const auto timeout = logistics::contracts::mqtt::CommandResponseTimeout(command);
                 command_response_timer_->start(
                     static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
             });
@@ -991,6 +989,7 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
     const auto dashboard_update = operations_dashboard_state_.applyEnvelope(envelope);
     if (dashboard_update.applied) {
         operations_dashboard_panel_->setState(operations_dashboard_state_);
+        process_control_panel_->setProcessState(operations_dashboard_state_.overall().state);
     } else if (dashboard_update.handled && !dashboard_update.error.isEmpty()) {
         statusBar()->showMessage(dashboard_update.error, 4000);
     }
@@ -1039,9 +1038,7 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
     }
 
     process_control_panel_->setCommandProgress(response.command, response.result, detail);
-    const auto timeout = response.command == logistics::contracts::mqtt::ControlCommand::kEmergencyStop
-                             ? logistics::contracts::mqtt::kEmergencyStopConfirmationTimeout
-                             : logistics::contracts::mqtt::kMqttResponseTimeout;
+    const auto timeout = logistics::contracts::mqtt::CommandResponseTimeout(response.command);
     command_response_timer_->start(
         static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
 }
