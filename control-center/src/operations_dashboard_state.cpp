@@ -120,7 +120,8 @@ bool IsEmergencyState(const QString& current_state) {
 }
 
 bool IsRecoveryState(const QString& current_state) {
-    return current_state.trimmed().compare(QStringLiteral("RECOVERY"), Qt::CaseInsensitive) == 0;
+    const auto state = current_state.trimmed().toUpper();
+    return state == QStringLiteral("RECOVERY") || state == QStringLiteral("RECOVERY_READY");
 }
 
 bool IsStoppedState(const QString& current_state) {

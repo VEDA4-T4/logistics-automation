@@ -1,11 +1,9 @@
 #include "logistics/control_center/process_control_panel.hpp"
 
-#include <QComboBox>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -73,6 +71,9 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
     if (state == QStringLiteral("RECOVERY") || state == QStringLiteral("RECOVERING")) {
         return ProcessControlPhase::Recovering;
     }
+    if (state == QStringLiteral("RECOVERY_READY")) {
+        return ProcessControlPhase::RecoveryReady;
+    }
     if (state == QStringLiteral("STOPPED")) {
         return ProcessControlPhase::Stopped;
     }
@@ -108,13 +109,7 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "QPushButton#initializeButton{color:#c586c0;}"
         "QPushButton#emergencyStopButton{min-height:34px;background-color:#a1260d;color:#ffffff;"
         "font-size:13px;border:1px solid #c42b1c;}"
-        "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}"
-        "QComboBox{min-height:25px;background-color:#252526;color:#f0f0f0;border:1px solid #3c3c3c;"
-        "border-radius:4px;padding:1px 8px;}"
-        "QComboBox:hover{border-color:#4daafc;}"
-        "QComboBox::drop-down{border:0;width:22px;}"
-        "QComboBox QAbstractItemView{background-color:#252526;color:#f0f0f0;border:1px solid #454545;"
-        "selection-background-color:#094771;selection-color:#ffffff;}");
+        "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(12, 8, 12, 8);
@@ -122,17 +117,19 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
     title->setStyleSheet("color:#f0f0f0;font-size:14px;font-weight:700;");
-    target_selector_ = new QComboBox(this);
-    target_selector_->setObjectName(QStringLiteral("processTargetSelector"));
-    target_selector_->setMinimumWidth(210);
-    target_selector_->setToolTip(
-        QStringLiteral("일반 공정 명령을 보낼 대상을 선택합니다. 비상정지는 항상 전체 공정에 적용됩니다."));
+    target_label_ = new QLabel(QStringLiteral("제어 대상 · 전체 공정"), this);
+    target_label_->setObjectName(QStringLiteral("processControlTarget"));
+    target_label_->setStyleSheet(
+        "background:#172534;color:#75beff;border:1px solid #285a7e;border-radius:4px;"
+        "font-size:10px;font-weight:700;padding:4px 8px;");
+    target_label_->setToolTip(
+        QStringLiteral("상단 공정 카드를 클릭하여 대상을 변경합니다. 비상정지는 항상 전체 공정에 적용됩니다."));
     auto* title_row = new QHBoxLayout();
     title_row->setContentsMargins(0, 0, 0, 0);
     title_row->setSpacing(8);
     title_row->addWidget(title);
     title_row->addStretch();
-    title_row->addWidget(target_selector_);
+    title_row->addWidget(target_label_);
     connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
     connection_hint_->setWordWrap(true);
     connection_hint_->setStyleSheet("color:#9d9d9d;font-size:10px;");
@@ -171,12 +168,9 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         requestCommand(mqtt::ControlCommand::kInitialize,
                        QStringLiteral("선택한 대상의 복구가 완료되었습니까?\n공정을 초기화하시겠습니까?"));
     });
-    connect(emergency_stop_button_, &QPushButton::clicked, this,
-            [this]() { emit commandRequested(mqtt::ControlCommand::kEmergencyStop, QStringLiteral("SYSTEM")); });
-    connect(target_selector_, &QComboBox::currentIndexChanged, this, [this]() {
-        if (!control_state_.isCommandPending()) {
-            applySelectedTargetState();
-        }
+    connect(emergency_stop_button_, &QPushButton::clicked, this, [this]() {
+        command_target_device_id_ = QStringLiteral("SYSTEM");
+        emit commandRequested(mqtt::ControlCommand::kEmergencyStop, command_target_device_id_);
     });
 
     layout->addLayout(title_row);
@@ -201,23 +195,10 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     updateButtonStates();
 }
 
-void ProcessControlPanel::configureTargets(const QString& default_target_device_id,
-                                           const QList<ProcessDefinition>& processes) {
-    const QSignalBlocker blocker(target_selector_);
-    target_selector_->clear();
-    target_selector_->addItem(QStringLiteral("전체 공정 (SYSTEM)"), QStringLiteral("SYSTEM"));
-    for (const auto& process : processes) {
-        target_selector_->addItem(QStringLiteral("%1 (%2)").arg(process.display_name, process.device_id),
-                                  process.device_id);
-    }
-
-    auto target_index = target_selector_->findData(default_target_device_id);
-    if (target_index < 0 && !default_target_device_id.isEmpty()) {
-        target_selector_->addItem(QStringLiteral("설정 대상 (%1)").arg(default_target_device_id),
-                                  default_target_device_id);
-        target_index = target_selector_->count() - 1;
-    }
-    target_selector_->setCurrentIndex(target_index < 0 ? 0 : target_index);
+void ProcessControlPanel::setControlTarget(const QString& target_device_id, const QString& display_name) {
+    selected_target_device_id_ = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
+    selected_target_display_name_ = display_name.isEmpty() ? selected_target_device_id_ : display_name;
+    target_label_->setText(QStringLiteral("제어 대상 · %1").arg(selected_target_display_name_));
     applySelectedTargetState();
 }
 
@@ -230,6 +211,7 @@ void ProcessControlPanel::setMqttConnected(bool connected) {
         command_status_->setStyleSheet(
             "background-color:#1f1f1f;color:#cccccc;border:1px solid #2b2b2b;border-radius:4px;padding:4px;");
     } else if (!connected) {
+        command_target_device_id_.clear();
         command_status_->setText(QStringLiteral("MQTT 연결 끊김"));
         command_status_->setStyleSheet(
             "background-color:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;padding:4px;");
@@ -277,6 +259,9 @@ void ProcessControlPanel::setProcessStates(const OverallProcessState overall_sta
 }
 
 void ProcessControlPanel::setCommandPending(mqtt::ControlCommand command) {
+    if (command_target_device_id_.isEmpty()) {
+        command_target_device_id_ = selectedTargetDeviceId();
+    }
     control_state_.setCommandPending();
     command_status_->setText(QStringLiteral("%1 명령 전송됨\n응답 대기 중").arg(CommandLabel(command)));
     command_status_->setStyleSheet(
@@ -307,7 +292,9 @@ void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt:
     command_status_->setText(text);
 
     const bool succeeded = result == mqtt::CommandResult::kSuccess;
-    if (succeeded) {
+    const bool applies_to_selected_target =
+        command_target_device_id_.isEmpty() || command_target_device_id_ == selectedTargetDeviceId();
+    if (succeeded && applies_to_selected_target) {
         switch (command) {
             case mqtt::ControlCommand::kStart:
             case mqtt::ControlCommand::kRestart:
@@ -330,7 +317,10 @@ void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt:
             case mqtt::ControlCommand::kUnknown:
                 break;
         }
+    } else if (!applies_to_selected_target) {
+        applySelectedTargetState();
     }
+    command_target_device_id_.clear();
     command_status_->setStyleSheet(
         succeeded ? "background-color:#1f3325;color:#89d185;border:1px solid #385a40;border-radius:4px;padding:4px;"
                   : "background-color:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;padding:4px;");
@@ -341,16 +331,18 @@ void ProcessControlPanel::requestCommand(mqtt::ControlCommand command, const QSt
     if (!control_state_.isMqttConnected() || control_state_.isCommandPending()) {
         return;
     }
-    const auto target_description = target_selector_->currentText();
+    const auto target_description =
+        QStringLiteral("%1 (%2)").arg(selected_target_display_name_, selectedTargetDeviceId());
     if (ShowConfirmationDialog(this, QStringLiteral("공정 제어 확인"),
                                QStringLiteral("%1\n\n대상: %2").arg(confirmation, target_description),
                                CommandLabel(command))) {
-        emit commandRequested(command, selectedTargetDeviceId());
+        command_target_device_id_ = selectedTargetDeviceId();
+        emit commandRequested(command, command_target_device_id_);
     }
 }
 
 QString ProcessControlPanel::selectedTargetDeviceId() const {
-    return target_selector_ == nullptr ? QStringLiteral("SYSTEM") : target_selector_->currentData().toString();
+    return selected_target_device_id_;
 }
 
 void ProcessControlPanel::applySelectedTargetState() {
@@ -375,7 +367,6 @@ void ProcessControlPanel::applySelectedTargetState() {
 }
 
 void ProcessControlPanel::updateButtonStates() {
-    target_selector_->setEnabled(!control_state_.isCommandPending());
     start_button_->setEnabled(control_state_.startEnabled());
     stop_button_->setEnabled(control_state_.stopEnabled());
     restart_button_->setEnabled(control_state_.restartEnabled());

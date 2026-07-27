@@ -14,11 +14,20 @@ class QTimer;
 namespace logistics::control_center {
 
 class OperationsDashboardPanel final : public QWidget {
+    Q_OBJECT
+
 public:
     explicit OperationsDashboardPanel(QWidget* parent = nullptr);
 
     void setState(const OperationsDashboardState& state);
     void setMqttConnected(bool connected);
+    void setControlTarget(const QString& target_device_id);
+
+signals:
+    void controlTargetSelected(const QString& target_device_id, const QString& display_name);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     struct ProcessCardWidgets {
@@ -34,7 +43,9 @@ private:
     void refreshOverall();
     void refreshProcesses();
     void refreshTimestamps();
+    void refreshControlTargetSelection();
 
+    QFrame* overall_card_{ nullptr };
     QLabel* live_status_{ nullptr };
     QLabel* overall_status_{ nullptr };
     QLabel* overall_summary_{ nullptr };
@@ -46,6 +57,7 @@ private:
     ProcessDashboardStatus overall_;
     QList<ProcessUnitStatus> processes_;
     QMap<QString, ProcessCardWidgets> process_cards_;
+    QString selected_control_target_{ QStringLiteral("SYSTEM") };
 };
 
 }  // namespace logistics::control_center

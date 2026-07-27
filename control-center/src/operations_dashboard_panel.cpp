@@ -1,12 +1,15 @@
 #include "logistics/control_center/operations_dashboard_panel.hpp"
 
 #include <QDateTime>
+#include <QEvent>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
+#include <QMouseEvent>
 #include <QScrollArea>
 #include <QSizePolicy>
+#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -146,6 +149,8 @@ QString CurrentStateText(const QString& current_state) {
         return QStringLiteral("정지");
     if (state == QStringLiteral("RECOVERY"))
         return QStringLiteral("복구 중");
+    if (state == QStringLiteral("RECOVERY_READY"))
+        return QStringLiteral("복구 완료 · 초기화 대기");
     if (state == QStringLiteral("DISCONNECTED"))
         return QStringLiteral("연결 끊김");
     if (state == QStringLiteral("CAMERA_ERROR"))
@@ -166,6 +171,9 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     setStyleSheet(
         "#operationsDashboard{background:#1f1f1f;border-bottom:1px solid #2b2b2b;}"
         "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
+        "#overallProcessCard[selectedControlTarget=\"true\"],#processUnitCard[selectedControlTarget=\"true\"]{"
+        "background:#172534;border:2px solid #4daafc;}"
+        "#overallProcessCard:hover,#processUnitCard:hover{border-color:#75beff;}"
         "#processStatusSection,#processStatusContent{background:#1f1f1f;border:0;}"
         "QLabel{color:#cccccc;}");
 
@@ -173,34 +181,40 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     layout->setContentsMargins(10, 7, 10, 7);
     layout->setSpacing(8);
 
-    auto* overall_card = new QFrame(this);
-    overall_card->setObjectName(QStringLiteral("overallProcessCard"));
-    overall_card->setFixedWidth(250);
-    auto* overall_layout = new QVBoxLayout(overall_card);
+    overall_card_ = new QFrame(this);
+    overall_card_->setObjectName(QStringLiteral("overallProcessCard"));
+    overall_card_->setFixedWidth(250);
+    overall_card_->setCursor(Qt::PointingHandCursor);
+    overall_card_->setProperty("controlTargetDeviceId", QStringLiteral("SYSTEM"));
+    overall_card_->installEventFilter(this);
+    auto* overall_layout = new QVBoxLayout(overall_card_);
     overall_layout->setContentsMargins(9, 6, 9, 6);
     overall_layout->setSpacing(2);
     auto* overall_header = new QHBoxLayout();
     overall_header->setContentsMargins(0, 0, 0, 0);
-    auto* overall_title = new QLabel(QStringLiteral("전체 공정"), overall_card);
+    auto* overall_title = new QLabel(QStringLiteral("전체 공정"), overall_card_);
     overall_title->setStyleSheet("color:#f0f0f0;font-size:12px;font-weight:700;");
-    overall_status_ = new QLabel(overall_card);
+    overall_status_ = new QLabel(overall_card_);
     overall_header->addWidget(overall_title);
     overall_header->addStretch();
     overall_header->addWidget(overall_status_);
-    overall_summary_ = new QLabel(overall_card);
+    overall_summary_ = new QLabel(overall_card_);
     overall_summary_->setStyleSheet("color:#75beff;font-size:11px;font-weight:700;");
-    overall_work_count_ = new QLabel(overall_card);
+    overall_work_count_ = new QLabel(overall_card_);
     overall_work_count_->setStyleSheet("color:#cccccc;font-size:9px;");
-    overall_detail_ = new QLabel(overall_card);
+    overall_detail_ = new QLabel(overall_card_);
     overall_detail_->setStyleSheet("color:#f14c4c;font-size:9px;");
-    overall_updated_at_ = new QLabel(overall_card);
+    overall_updated_at_ = new QLabel(overall_card_);
     overall_updated_at_->setStyleSheet("color:#7f7f7f;font-size:9px;");
     overall_layout->addLayout(overall_header);
     overall_layout->addWidget(overall_summary_);
     overall_layout->addWidget(overall_work_count_);
     overall_layout->addWidget(overall_detail_);
     overall_layout->addWidget(overall_updated_at_);
-    layout->addWidget(overall_card);
+    for (auto* label : overall_card_->findChildren<QLabel*>()) {
+        label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+    layout->addWidget(overall_card_);
 
     auto* process_section = new QWidget(this);
     process_section->setObjectName(QStringLiteral("processStatusSection"));
@@ -247,6 +261,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     connect(timestamp_timer_, &QTimer::timeout, this, &OperationsDashboardPanel::refreshTimestamps);
     timestamp_timer_->start();
     refreshOverall();
+    refreshControlTargetSelection();
 }
 
 void OperationsDashboardPanel::setState(const OperationsDashboardState& state) {
@@ -275,6 +290,30 @@ void OperationsDashboardPanel::setMqttConnected(bool connected) {
                                           : QStringLiteral("color:#9d9d9d;font-size:9px;font-weight:700;"));
 }
 
+void OperationsDashboardPanel::setControlTarget(const QString& target_device_id) {
+    selected_control_target_ = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
+    refreshControlTargetSelection();
+}
+
+bool OperationsDashboardPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonRelease && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+        const auto target_device_id = watched->property("controlTargetDeviceId").toString();
+        if (!target_device_id.isEmpty()) {
+            QString display_name = QStringLiteral("전체 공정");
+            for (const auto& process : processes_) {
+                if (process.device_id == target_device_id) {
+                    display_name = process.display_name;
+                    break;
+                }
+            }
+            setControlTarget(target_device_id);
+            emit controlTargetSelected(target_device_id, display_name);
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createProcessCard(
     const ProcessUnitStatus& process) {
     ProcessCardWidgets widgets;
@@ -283,7 +322,10 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.card->setAttribute(Qt::WA_StyledBackground);
     widgets.card->setMinimumWidth(170);
     widgets.card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    widgets.card->setToolTip(QStringLiteral("장치 ID: %1").arg(process.device_id));
+    widgets.card->setCursor(Qt::PointingHandCursor);
+    widgets.card->setProperty("controlTargetDeviceId", process.device_id);
+    widgets.card->installEventFilter(this);
+    widgets.card->setToolTip(QStringLiteral("클릭하여 제어 대상으로 선택 · %1").arg(process.device_id));
     auto* layout = new QVBoxLayout(widgets.card);
     layout->setContentsMargins(8, 5, 8, 5);
     layout->setSpacing(1);
@@ -305,6 +347,9 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     layout->addWidget(widgets.current_state);
     layout->addWidget(widgets.work_or_error);
     layout->addWidget(widgets.device_and_updated_at);
+    for (auto* label : widgets.card->findChildren<QLabel*>()) {
+        label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
     return widgets;
 }
 
@@ -319,6 +364,7 @@ void OperationsDashboardPanel::rebuildProcessCards() {
         process_layout_->addWidget(widgets.card, 1);
         process_cards_.insert(process.key, widgets);
     }
+    refreshControlTargetSelection();
 }
 
 void OperationsDashboardPanel::refreshOverall() {
@@ -373,6 +419,23 @@ void OperationsDashboardPanel::refreshTimestamps() {
             iterator->device_and_updated_at->setText(
                 QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
         }
+    }
+}
+
+void OperationsDashboardPanel::refreshControlTargetSelection() {
+    const auto update_card = [this](QFrame* card) {
+        if (card == nullptr) {
+            return;
+        }
+        card->setProperty("selectedControlTarget",
+                          card->property("controlTargetDeviceId").toString() == selected_control_target_);
+        card->style()->unpolish(card);
+        card->style()->polish(card);
+        card->update();
+    };
+    update_card(overall_card_);
+    for (const auto& widgets : process_cards_) {
+        update_card(widgets.card);
     }
 }
 

@@ -11,7 +11,7 @@ reconnect_interval_ms=3000
 keep_alive_seconds=30
 
 [control]
-; Initial GUI selection. The operator can switch between SYSTEM and individual process nodes at runtime.
+; Initial GUI selection. Click the top SYSTEM/process cards to change the target at runtime.
 ; Emergency stop is always sent to SYSTEM regardless of this selection.
 target_device_id=SYSTEM
 

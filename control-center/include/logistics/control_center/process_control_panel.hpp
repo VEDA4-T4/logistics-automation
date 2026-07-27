@@ -8,7 +8,6 @@
 
 class QLabel;
 class QPushButton;
-class QComboBox;
 
 namespace logistics::control_center {
 
@@ -18,7 +17,7 @@ class ProcessControlPanel final : public QWidget {
 public:
     explicit ProcessControlPanel(QWidget* parent = nullptr);
 
-    void configureTargets(const QString& default_target_device_id, const QList<ProcessDefinition>& processes);
+    void setControlTarget(const QString& target_device_id, const QString& display_name);
     void setMqttConnected(bool connected);
     void setProcessState(OverallProcessState state);
     void setProcessStates(OverallProcessState overall_state, const QList<ProcessUnitStatus>& processes);
@@ -39,7 +38,7 @@ private:
 
     QLabel* connection_hint_{ nullptr };
     QLabel* command_status_{ nullptr };
-    QComboBox* target_selector_{ nullptr };
+    QLabel* target_label_{ nullptr };
     QPushButton* start_button_{ nullptr };
     QPushButton* stop_button_{ nullptr };
     QPushButton* restart_button_{ nullptr };
@@ -49,6 +48,9 @@ private:
     ProcessControlState control_state_;
     OverallProcessState overall_state_{ OverallProcessState::Idle };
     QList<ProcessUnitStatus> process_statuses_;
+    QString selected_target_device_id_{ QStringLiteral("SYSTEM") };
+    QString selected_target_display_name_{ QStringLiteral("전체 공정") };
+    QString command_target_device_id_;
 };
 
 }  // namespace logistics::control_center

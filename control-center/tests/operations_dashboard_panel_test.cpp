@@ -4,6 +4,7 @@
 #include <QFrame>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMouseEvent>
 #include <cassert>
 
 namespace {
@@ -59,6 +60,24 @@ int main(int argc, char* argv[]) {
     }
     assert(has_gripper_title);
     assert(has_transfer_state);
+
+    QString selected_target;
+    QObject::connect(
+        &panel, &logistics::control_center::OperationsDashboardPanel::controlTargetSelected,
+        [&selected_target](const QString& target_device_id, const QString&) { selected_target = target_device_id; });
+    QFrame* vision_card = nullptr;
+    for (auto* card : panel.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
+        if (card->property("controlTargetDeviceId").toString() == QStringLiteral("PI-VISION-01")) {
+            vision_card = card;
+            break;
+        }
+    }
+    assert(vision_card != nullptr);
+    QMouseEvent select_vision(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(vision_card, &select_vision);
+    assert(selected_target == QStringLiteral("PI-VISION-01"));
+    assert(vision_card->property("selectedControlTarget").toBool());
 
     state.markMqttDisconnected(QDateTime::currentDateTimeUtc());
     panel.setState(state);

@@ -210,6 +210,13 @@ int main() {
                                           "central-server", "2026-07-23T01:00:14.000Z"));
     assert(result.applied && state.overall().state == OverallProcessState::Recovery);
 
+    result =
+        state.applyEnvelope(Envelope("VISION-RECOVERY-READY", "DEVICE_STATUS", DeviceStatus("ONLINE", "RECOVERY_READY"),
+                                     "PI-VISION-01", "2026-07-23T01:00:14.500Z"));
+    assert(result.applied);
+    assert(ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("RECOVERY_READY"));
+    assert(state.overall().state == OverallProcessState::Recovery);
+
     result = state.applyEnvelope(Envelope("COMMAND-2", "COMMAND_RESPONSE",
                                           { { QStringLiteral("requestId"), QStringLiteral("REQ-2") },
                                             { QStringLiteral("command"), QStringLiteral("STOP") },

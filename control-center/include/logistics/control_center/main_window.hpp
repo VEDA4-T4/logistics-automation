@@ -46,6 +46,7 @@ private:
     void reconnectChannel(std::size_t channel);
     void sendControlCommand(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id);
     void handleMqttMessage(const QString& topic, const QJsonObject& envelope);
+    void completePendingRecoveryFromDeviceState();
     void handleCommandTimeout();
     void clearPendingCommand();
     void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,

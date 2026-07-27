@@ -1,7 +1,7 @@
 #include "logistics/control_center/process_control_panel.hpp"
 
 #include <QApplication>
-#include <QComboBox>
+#include <QLabel>
 #include <QPushButton>
 #include <cassert>
 
@@ -14,12 +14,12 @@ int main(int argc, char* argv[]) {
     auto* recovery = panel.findChild<QPushButton*>(QStringLiteral("recoveryButton"));
     auto* initialize = panel.findChild<QPushButton*>(QStringLiteral("initializeButton"));
     auto* emergency_stop = panel.findChild<QPushButton*>(QStringLiteral("emergencyStopButton"));
-    auto* target_selector = panel.findChild<QComboBox*>(QStringLiteral("processTargetSelector"));
+    auto* target_label = panel.findChild<QLabel*>(QStringLiteral("processControlTarget"));
     assert(start != nullptr);
     assert(recovery != nullptr);
     assert(initialize != nullptr);
     assert(emergency_stop != nullptr);
-    assert(target_selector != nullptr);
+    assert(target_label != nullptr);
     assert(recovery->text() == QStringLiteral("복구"));
     assert(initialize->text() == QStringLiteral("초기화"));
     assert(!recovery->isEnabled());
@@ -30,11 +30,8 @@ int main(int argc, char* argv[]) {
     assert(!recovery->isEnabled());
     assert(!initialize->isEnabled());
 
-    panel.configureTargets(QStringLiteral("SYSTEM"), {
-                                                         { QStringLiteral("vision"), QStringLiteral("비전 처리"),
-                                                           QStringLiteral("PI-VISION-01") },
-                                                     });
-    const QList<logistics::control_center::ProcessUnitStatus> processes{
+    panel.setControlTarget(QStringLiteral("SYSTEM"), QStringLiteral("전체 공정"));
+    QList<logistics::control_center::ProcessUnitStatus> processes{
         {
             .key = QStringLiteral("vision"),
             .display_name = QStringLiteral("비전 처리"),
@@ -48,10 +45,16 @@ int main(int argc, char* argv[]) {
         },
     };
     panel.setProcessStates(logistics::control_center::OverallProcessState::Error, processes);
-    target_selector->setCurrentIndex(target_selector->findData(QStringLiteral("PI-VISION-01")));
+    panel.setControlTarget(QStringLiteral("PI-VISION-01"), QStringLiteral("비전 처리"));
     assert(panel.selectedTargetDeviceId() == QStringLiteral("PI-VISION-01"));
+    assert(target_label->text() == QStringLiteral("제어 대상 · 비전 처리"));
     assert(start->isEnabled());
     assert(!recovery->isEnabled());
+
+    processes[0].current_state = QStringLiteral("RECOVERY_READY");
+    panel.setProcessStates(logistics::control_center::OverallProcessState::Recovery, processes);
+    assert(!start->isEnabled());
+    assert(initialize->isEnabled());
 
     QString emergency_target;
     QObject::connect(&panel, &logistics::control_center::ProcessControlPanel::commandRequested,
@@ -63,7 +66,7 @@ int main(int argc, char* argv[]) {
     emergency_stop->click();
     assert(emergency_target == QStringLiteral("SYSTEM"));
 
-    target_selector->setCurrentIndex(target_selector->findData(QStringLiteral("SYSTEM")));
+    panel.setControlTarget(QStringLiteral("SYSTEM"), QStringLiteral("전체 공정"));
     panel.setProcessState(logistics::control_center::OverallProcessState::EmergencyStop);
     assert(recovery->isEnabled());
     assert(!initialize->isEnabled());
@@ -72,11 +75,9 @@ int main(int argc, char* argv[]) {
     assert(!recovery->isEnabled());
     assert(!initialize->isEnabled());
     assert(emergency_stop->isEnabled());
-    assert(!target_selector->isEnabled());
 
     panel.setCommandFinished(logistics::contracts::mqtt::ControlCommand::kRecovery,
                              logistics::contracts::mqtt::CommandResult::kSuccess);
-    assert(target_selector->isEnabled());
     assert(!recovery->isEnabled());
     assert(initialize->isEnabled());
     panel.setProcessState(logistics::control_center::OverallProcessState::Recovery);

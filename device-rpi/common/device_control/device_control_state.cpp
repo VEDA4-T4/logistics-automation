@@ -46,6 +46,8 @@ std::string_view ToString(const DeviceOperatingState state) noexcept {
             return "EMERGENCY_STOP";
         case DeviceOperatingState::kRecovering:
             return "RECOVERY";
+        case DeviceOperatingState::kRecoveryReady:
+            return "RECOVERY_READY";
         case DeviceOperatingState::kError:
             return "ERROR";
     }
@@ -117,8 +119,11 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                     response_text = config_.component_name + " emergency-stopped";
                     break;
                 case mqtt::ControlCommand::kRecovery:
-                    if (state_ == DeviceOperatingState::kRecovering) {
+                    if (state_ == DeviceOperatingState::kRecoveryReady) {
+                        response_text = config_.component_name + " recovery is already complete";
+                    } else if (state_ == DeviceOperatingState::kRecovering) {
                         if (ready_) {
+                            state_ = DeviceOperatingState::kRecoveryReady;
                             pending_recovery_request_id_.reset();
                             response_text = config_.component_name + " recovery completed";
                         } else {
@@ -145,14 +150,14 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                 case mqtt::ControlCommand::kInitialize:
                     if (state_ == DeviceOperatingState::kStopped) {
                         response_text = config_.component_name + " is already initialized";
-                    } else if (state_ != DeviceOperatingState::kRecovering) {
-                        result = mqtt::CommandResult::kRejected;
-                        error_code = "ERR-INVALID-STATE";
-                        response_text = config_.component_name + " initialization requires RECOVERY";
-                    } else if (!ready_) {
+                    } else if (state_ == DeviceOperatingState::kRecovering) {
                         result = mqtt::CommandResult::kRejected;
                         error_code = config_.not_ready_error_code;
                         response_text = config_.component_name + " has not recovered";
+                    } else if (state_ != DeviceOperatingState::kRecoveryReady) {
+                        result = mqtt::CommandResult::kRejected;
+                        error_code = "ERR-INVALID-STATE";
+                        response_text = config_.component_name + " initialization requires RECOVERY_READY";
                     } else {
                         state_ = DeviceOperatingState::kStopped;
                         pending_recovery_request_id_.reset();
@@ -190,6 +195,7 @@ std::optional<mqtt::MqttMessage> DeviceControlState::CompleteRecovery(std::strin
     auto response = MakeResponse(
         *pending_recovery_request_id_, mqtt::ControlCommand::kRecovery, mqtt::CommandResult::kSuccess, std::nullopt,
         config_.component_name + " recovery completed", std::move(response_message_id), std::move(timestamp));
+    state_ = DeviceOperatingState::kRecoveryReady;
     pending_recovery_request_id_.reset();
     return response;
 }
@@ -197,7 +203,8 @@ std::optional<mqtt::MqttMessage> DeviceControlState::CompleteRecovery(std::strin
 void DeviceControlState::SetReady(const bool ready) {
     std::lock_guard lock(mutex_);
     ready_ = ready;
-    if (!ready && (state_ == DeviceOperatingState::kRunning || state_ == DeviceOperatingState::kStopped)) {
+    if (!ready && (state_ == DeviceOperatingState::kRunning || state_ == DeviceOperatingState::kStopped ||
+                   state_ == DeviceOperatingState::kRecoveryReady)) {
         state_ = DeviceOperatingState::kError;
     }
 }

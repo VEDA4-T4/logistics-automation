@@ -159,6 +159,7 @@ void TestVisionControlLifecycle() {
     assert(control.ConsumeResetRequest());
     control.SetReady(true);
     assert(control.CompleteRecovery("MSG-INITIAL-RECOVERY", "2026-07-21T11:00:00Z").has_value());
+    assert(control.State() == device::DeviceOperatingState::kRecoveryReady);
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 2);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
     assert(control.State() == device::DeviceOperatingState::kStopped);
@@ -173,6 +174,7 @@ void TestVisionControlLifecycle() {
     assert(control.ConsumeResetRequest());
     control.SetReady(true);
     assert(control.CompleteRecovery("MSG-READY-RECOVERY", "2026-07-21T11:00:01Z").has_value());
+    assert(control.State() == device::DeviceOperatingState::kRecoveryReady);
     static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 5));
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 6);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
@@ -213,6 +215,7 @@ void TestVisionControlLifecycle() {
     assert(recovery_response->request_id == "REQ-VISION-01");
     assert(recovery_response->command == mqtt::ControlCommand::kRecovery);
     assert(recovery_response->result == mqtt::CommandResult::kSuccess);
+    assert(control.State() == device::DeviceOperatingState::kRecoveryReady);
     assert(!control.CompleteRecovery("IGNORED", "2026-07-21T11:00:04Z").has_value());
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 13);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);

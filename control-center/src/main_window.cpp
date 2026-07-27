@@ -475,6 +475,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
     operations_dashboard_panel_->setState(operations_dashboard_state_);
+    operations_dashboard_panel_->setControlTarget(config.control_target_device_id);
     root_layout->addWidget(operations_dashboard_panel_);
 
     auto* content = new QWidget(central_widget);
@@ -517,7 +518,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));
     detail_tabs_->addTab(operational_log_panel_, QStringLiteral("운영 로그"));
     process_control_panel_ = new ProcessControlPanel(side_panel);
-    process_control_panel_->configureTargets(config.control_target_device_id, config.process_definitions);
+    QString initial_control_target_name = QStringLiteral("전체 공정");
+    for (const auto& process : config.process_definitions) {
+        if (process.device_id == config.control_target_device_id) {
+            initial_control_target_name = process.display_name;
+            break;
+        }
+    }
+    process_control_panel_->setControlTarget(config.control_target_device_id, initial_control_target_name);
     process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
                                              operations_dashboard_state_.processes());
     side_layout->addWidget(detail_tabs_, 1);
@@ -541,6 +549,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     command_response_timer_->setSingleShot(true);
     connect(command_response_timer_, &QTimer::timeout, this, &MainWindow::handleCommandTimeout);
     connect(process_control_panel_, &ProcessControlPanel::commandRequested, this, &MainWindow::sendControlCommand);
+    connect(operations_dashboard_panel_, &OperationsDashboardPanel::controlTargetSelected, this,
+            [this](const QString& target_device_id, const QString& display_name) {
+                control_target_device_id_ = target_device_id;
+                process_control_panel_->setControlTarget(target_device_id, display_name);
+            });
     operational_log_panel_->setAcknowledgeHandler([this](const QString& id) {
         if (operational_log_state_.acknowledge(id)) {
             operational_log_panel_->setEntryAcknowledged(id);
@@ -1008,6 +1021,7 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
         operations_dashboard_panel_->setState(operations_dashboard_state_);
         process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
                                                  operations_dashboard_state_.processes());
+        completePendingRecoveryFromDeviceState();
     } else if (dashboard_update.handled && !dashboard_update.error.isEmpty()) {
         statusBar()->showMessage(dashboard_update.error, 4000);
     }
@@ -1059,6 +1073,28 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
     const auto timeout = logistics::contracts::mqtt::CommandResponseTimeout(response.command);
     command_response_timer_->start(
         static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
+}
+
+void MainWindow::completePendingRecoveryFromDeviceState() {
+    if (pending_command_ != logistics::contracts::mqtt::ControlCommand::kRecovery ||
+        pending_target_device_id_.isEmpty() || pending_target_device_id_ == QStringLiteral("SYSTEM") ||
+        pending_target_device_id_ == QStringLiteral("ALL")) {
+        return;
+    }
+    for (const auto& process : operations_dashboard_state_.processes()) {
+        if (process.device_id != pending_target_device_id_ ||
+            process.current_state.trimmed().compare(QStringLiteral("RECOVERY_READY"), Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        process_control_panel_->setCommandFinished(pending_command_,
+                                                   logistics::contracts::mqtt::CommandResult::kSuccess,
+                                                   QStringLiteral("장치 상태에서 복구 완료를 확인했습니다."));
+        appendOperationalLog(OperationalLogSeverity::Info, pending_target_device_id_, QStringLiteral("관제 명령"),
+                             QStringLiteral("RECOVERY_READY"),
+                             QStringLiteral("최종 응답과 별개로 장치 상태에서 복구 완료를 확인했습니다."));
+        clearPendingCommand();
+        return;
+    }
 }
 
 void MainWindow::handleCommandTimeout() {
