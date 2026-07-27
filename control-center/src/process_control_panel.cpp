@@ -21,6 +21,10 @@ QString CommandLabel(mqtt::ControlCommand command) {
             return QStringLiteral("공정 정지");
         case mqtt::ControlCommand::kRestart:
             return QStringLiteral("공정 재시작");
+        case mqtt::ControlCommand::kRecovery:
+            return QStringLiteral("공정 복구");
+        case mqtt::ControlCommand::kInitialize:
+            return QStringLiteral("공정 초기화");
         case mqtt::ControlCommand::kEmergencyStop:
             return QStringLiteral("비상정지");
         default:
@@ -68,6 +72,8 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "QPushButton#startButton{background-color:#0e639c;border-color:#1177bb;}"
         "QPushButton#startButton:hover:enabled{background-color:#1177bb;}"
         "QPushButton#stopButton{color:#cca700;}"
+        "QPushButton#recoveryButton{color:#75beff;}"
+        "QPushButton#initializeButton{color:#c586c0;}"
         "QPushButton#emergencyStopButton{min-height:34px;background-color:#a1260d;color:#ffffff;"
         "font-size:13px;border:1px solid #c42b1c;}"
         "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
@@ -96,6 +102,10 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     stop_button_->setObjectName(QStringLiteral("stopButton"));
     restart_button_ = new QPushButton(QStringLiteral("재시작"), this);
     restart_button_->setObjectName(QStringLiteral("restartButton"));
+    recovery_button_ = new QPushButton(QStringLiteral("복구"), this);
+    recovery_button_->setObjectName(QStringLiteral("recoveryButton"));
+    initialize_button_ = new QPushButton(QStringLiteral("초기화"), this);
+    initialize_button_->setObjectName(QStringLiteral("initializeButton"));
     emergency_stop_button_ = new QPushButton(QStringLiteral("비상정지\nEMERGENCY STOP"), this);
     emergency_stop_button_->setObjectName(QStringLiteral("emergencyStopButton"));
 
@@ -105,6 +115,14 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
             [this]() { requestCommand(mqtt::ControlCommand::kStop, QStringLiteral("공정을 정지하시겠습니까?")); });
     connect(restart_button_, &QPushButton::clicked, this,
             [this]() { requestCommand(mqtt::ControlCommand::kRestart, QStringLiteral("공정을 재시작하시겠습니까?")); });
+    connect(recovery_button_, &QPushButton::clicked, this, [this]() {
+        requestCommand(mqtt::ControlCommand::kRecovery,
+                       QStringLiteral("비상정지 또는 오류 상태에서 공정 복구를 시작하시겠습니까?"));
+    });
+    connect(initialize_button_, &QPushButton::clicked, this, [this]() {
+        requestCommand(mqtt::ControlCommand::kInitialize,
+                       QStringLiteral("모든 장치의 복구가 완료되었습니까?\n공정을 초기화하시겠습니까?"));
+    });
     connect(emergency_stop_button_, &QPushButton::clicked, this,
             [this]() { emit commandRequested(mqtt::ControlCommand::kEmergencyStop); });
 
@@ -117,6 +135,8 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     normal_commands->addWidget(start_button_);
     normal_commands->addWidget(stop_button_);
     normal_commands->addWidget(restart_button_);
+    normal_commands->addWidget(recovery_button_);
+    normal_commands->addWidget(initialize_button_);
     layout->addLayout(normal_commands);
 
     auto* divider = new QFrame(this);
@@ -194,6 +214,8 @@ void ProcessControlPanel::updateButtonStates() {
     start_button_->setEnabled(control_state_.normalCommandsEnabled());
     stop_button_->setEnabled(control_state_.normalCommandsEnabled());
     restart_button_->setEnabled(control_state_.normalCommandsEnabled());
+    recovery_button_->setEnabled(control_state_.normalCommandsEnabled());
+    initialize_button_->setEnabled(control_state_.normalCommandsEnabled());
 
     // Emergency stop stays available while a normal command is pending so it can always take priority.
     emergency_stop_button_->setEnabled(control_state_.emergencyStopEnabled());
