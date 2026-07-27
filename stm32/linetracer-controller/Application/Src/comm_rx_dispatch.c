@@ -131,31 +131,23 @@ void CommRxDispatch_Frame(comm_rx_dispatch_t* dispatcher, const comm_rx_dispatch
         }
         ++effects->control_commands;
     } else if (decoded.destination == COMM_RX_DESTINATION_SAFETY) {
-        uint8_t emergency_notified = 0U;
         uint8_t queue_priority = 0U;
 
         if (decoded.safety_event.type == APP_SAFETY_EVENT_EMERGENCY_STOP) {
             queue_priority = APP_TX_PRIORITY_SAFETY;
             if (port->notify_emergency != NULL && port->notify_emergency(port->context) != 0U) {
-                emergency_notified = 1U;
-            } else {
-                CommRxDispatch_ReportHealth(port, APP_HEALTH_EVENT_INTERNAL_ERROR, COMM_RX_HEALTH_SAFETY_NOTIFY_FAILED,
-                                            now_ms);
+                /*
+                 * The thread flag is the primary low-latency delivery path.
+                 * Do not enqueue the same E-stop as well, otherwise SafetyTask
+                 * observes one physical command twice.
+                 */
+                ++effects->safety_commands;
+                CommRxLogic_CommitSequence(&dispatcher->sequence_history, frame->sequence, now_ms);
+                return;
             }
         }
 
         if (port->put_safety == NULL || port->put_safety(port->context, &decoded.safety_event, queue_priority) == 0U) {
-            if (emergency_notified != 0U) {
-                ++effects->queue_drops;
-                ++effects->safety_commands;
-                CommRxDispatch_ReportHealth(port, APP_HEALTH_EVENT_QUEUE_FULL, COMM_RX_HEALTH_SAFETY_QUEUE_FULL,
-                                            now_ms);
-                (void)CommRxDispatch_PublishResponse(dispatcher, port, frame, UART_STATUS_ACK, UART_ERROR_NONE, now_ms,
-                                                     effects);
-                CommRxLogic_CommitSequence(&dispatcher->sequence_history, frame->sequence, now_ms);
-                return;
-            }
-
             CommRxDispatch_ReportQueueFull(dispatcher, port, COMM_RX_HEALTH_SAFETY_QUEUE_FULL, frame, now_ms, effects);
             return;
         }
