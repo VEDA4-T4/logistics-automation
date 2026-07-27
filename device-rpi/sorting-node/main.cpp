@@ -72,11 +72,25 @@ class CommandInbox final {
 public:
     [[nodiscard]] bool Push(const mqtt::MqttMessage& message) {
         std::lock_guard lock(mutex_);
-        if (messages_.size() >= kCommandQueueCapacity) {
+        if (emergency_messages_.size() + messages_.size() >= kCommandQueueCapacity) {
             return false;
         }
-        messages_.push_back(message);
+        if (mqtt::GetPayload<mqtt::EmergencyStopPayload>(message) != nullptr) {
+            emergency_messages_.push_back(message);
+        } else {
+            messages_.push_back(message);
+        }
         return true;
+    }
+
+    [[nodiscard]] std::optional<mqtt::MqttMessage> TryPopEmergency() {
+        std::lock_guard lock(mutex_);
+        if (emergency_messages_.empty()) {
+            return std::nullopt;
+        }
+        mqtt::MqttMessage message = std::move(emergency_messages_.front());
+        emergency_messages_.pop_front();
+        return message;
     }
 
     [[nodiscard]] std::optional<mqtt::MqttMessage> TryPop() {
@@ -91,6 +105,7 @@ public:
 
 private:
     std::mutex mutex_;
+    std::deque<mqtt::MqttMessage> emergency_messages_;
     std::deque<mqtt::MqttMessage> messages_;
 };
 
@@ -190,6 +205,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
             return mqtt::CommandResult::kDuplicated;
         case SortingCommandStatus::kInvalidTarget:
         case SortingCommandStatus::kInvalidDestination:
+        case SortingCommandStatus::kInvalidSpeed:
         case SortingCommandStatus::kActiveCycleConflict:
         case SortingCommandStatus::kNoActiveCycle:
         case SortingCommandStatus::kUnsupportedMessage:
@@ -202,6 +218,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
             return mqtt::CommandResult::kFailed;
         case SortingCommandStatus::kSent:
             return mqtt::CommandResult::kProcessing;
+        case SortingCommandStatus::kSentNoReply:
+            return mqtt::CommandResult::kSuccess;
     }
     return mqtt::CommandResult::kFailed;
 }
@@ -209,6 +227,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
 [[nodiscard]] std::optional<std::string> LocalCommandError(SortingCommandStatus status) {
     switch (status) {
         case SortingCommandStatus::kSent:
+        case SortingCommandStatus::kSentNoReply:
         case SortingCommandStatus::kDuplicate:
             return std::nullopt;
         case SortingCommandStatus::kInvalidMessage:
@@ -217,6 +236,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
             return "ERR-MQTT-INVALID-TARGET";
         case SortingCommandStatus::kInvalidDestination:
             return "ERR-MQTT-INVALID-DESTINATION";
+        case SortingCommandStatus::kInvalidSpeed:
+            return "ERR-SPEED-REQUIRED";
         case SortingCommandStatus::kActiveCycleConflict:
             return "ERR-ACTIVE-CYCLE-CONFLICT";
         case SortingCommandStatus::kNoActiveCycle:
@@ -235,7 +256,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
 }
 
 [[nodiscard]] std::optional<SortingReport> MakeLocalCommandResponse(const SortingCommandResult& result) {
-    if (result.Succeeded() || result.request_id.empty() || result.mqtt_command == mqtt::ControlCommand::kUnknown) {
+    if (result.status == SortingCommandStatus::kSent || result.request_id.empty() ||
+        result.mqtt_command == mqtt::ControlCommand::kUnknown) {
         return std::nullopt;
     }
 
@@ -250,6 +272,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
                 .error_code = LocalCommandError(result.status),
                 .message = result.status == SortingCommandStatus::kDuplicate
                                ? "sorting command already applied; motor action was not repeated"
+                           : result.status == SortingCommandStatus::kSentNoReply
+                               ? "sorting safety command was sent once; controller state follows asynchronously"
                                : "sorting command was rejected before STM32 completion",
             },
     };
@@ -387,6 +411,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
     std::clog << "[sorting][INFO] daemon started: id=" << device_id << "; uart=" << uart_path << '\n';
 
     while (stop_requested == 0) {
+        bool emergency_processed = false;
         const auto now = Clock::now();
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick);
         last_tick = now;
@@ -412,6 +437,16 @@ int RunSortingDaemon(int argc, char* argv[]) {
         }
 
         if (uart_session.IsOpen()) {
+            if (auto command = command_inbox.TryPopEmergency(); command.has_value()) {
+                const SortingCommandResult result = sorting_node.HandleMqttCommand(*command);
+                if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
+                    queue_report(*response);
+                }
+                emergency_processed = true;
+            }
+        }
+
+        if (uart_session.IsOpen()) {
             const UartIoResult read_result = uart_session.PollOnce(kUartPollTimeout);
             if (read_result.status == UartIoStatus::kDisconnected || read_result.status == UartIoStatus::kNotOpen ||
                 read_result.status == UartIoStatus::kIoError) {
@@ -419,7 +454,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
-        if (uart_session.IsOpen() && !uart_session.HasPendingCommand() && uart_resync_pending) {
+        if (!emergency_processed && uart_session.IsOpen() && !uart_session.HasPendingCommand() && uart_resync_pending) {
             const SortingCommandResult status_result = sorting_node.RequestControllerStatus();
             if (status_result.Succeeded()) {
                 uart_resync_pending = false;
@@ -428,7 +463,8 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
-        if (uart_session.IsOpen() && !uart_session.HasPendingCommand() && !uart_resync_pending) {
+        if (!emergency_processed && uart_session.IsOpen() && !uart_session.HasPendingCommand() &&
+            !uart_resync_pending) {
             if (auto command = command_inbox.TryPop(); command.has_value()) {
                 const SortingCommandResult result = sorting_node.HandleMqttCommand(*command);
                 if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {

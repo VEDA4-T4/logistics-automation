@@ -16,10 +16,12 @@ namespace logistics::device {
 
 enum class SortingCommandStatus {
     kSent,
+    kSentNoReply,
     kDuplicate,
     kInvalidMessage,
     kInvalidTarget,
     kInvalidDestination,
+    kInvalidSpeed,
     kActiveCycleConflict,
     kNoActiveCycle,
     kUnsupportedMessage,
@@ -84,6 +86,7 @@ private:
         kNone,
         kActivateCycle,
         kClearCycle,
+        kStartAfterSpeed,
     };
 
     struct PendingContext {
@@ -96,6 +99,7 @@ private:
         std::string work_id;
         std::uint16_t uart_cycle_id{};
         std::uint8_t uart_destination{};
+        std::uint8_t requested_speed{};
     };
 
     [[nodiscard]] SortingCommandResult HandleDestinationSet(const contracts::mqtt::DestinationSetPayload& command);
@@ -103,9 +107,11 @@ private:
     [[nodiscard]] SortingCommandResult HandleEmergencyStop(const contracts::mqtt::EmergencyStopPayload& command);
     [[nodiscard]] SortingCommandResult Send(SortingCommandResult result, std::uint8_t command,
                                             const std::uint8_t* payload, std::size_t payload_length);
+    [[nodiscard]] SortingCommandResult SendOneWay(SortingCommandResult result, std::uint8_t command,
+                                                  const std::uint8_t* payload, std::size_t payload_length);
     [[nodiscard]] bool IsTargetedToThisNode(std::string_view target_device_id) const noexcept;
     [[nodiscard]] std::uint16_t AllocateCycleId() noexcept;
-    void RememberPending(PendingEffect effect, const SortingCommandResult& result);
+    void RememberPending(PendingEffect effect, const SortingCommandResult& result, std::uint8_t requested_speed = 0U);
     void ClearPending() noexcept;
     void ClearActiveCycle() noexcept;
     void HandleCommandResponse(const UartSessionEvent& event) noexcept;
@@ -116,6 +122,10 @@ private:
     void HandleSensorStatus(const uart_frame_t& frame) noexcept;
     void HandleDeviceStatus(const uart_frame_t& frame) noexcept;
     void HandleSafetyEvent(const uart_frame_t& frame) noexcept;
+    void HandleHealthEvent(const uart_frame_t& frame) noexcept;
+    [[nodiscard]] bool IsRepeatedControllerEvent(std::uint8_t event_id, std::uint8_t kind, std::uint8_t cause,
+                                                 std::uint8_t result) noexcept;
+    void ClearControllerEventDedupIfHealthy(std::uint8_t state, std::uint8_t error) noexcept;
     void EmitPendingResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
                              std::string message) const noexcept;
     void EmitStatus(std::string current_state, std::optional<std::string> error_code = std::nullopt) const noexcept;
@@ -133,6 +143,8 @@ private:
     std::array<std::uint8_t, 3U> sensor_states_{ 0xffU, 0xffU, 0xffU };
     std::uint8_t last_device_state_{ 0xffU };
     std::uint8_t last_device_error_{ 0xffU };
+    std::uint8_t configured_speed_{};
+    std::optional<std::uint32_t> last_controller_event_signature_;
     SortingReportHandler report_handler_;
 };
 
