@@ -176,6 +176,14 @@ bool HasFaultedSensor(const ProcessUnitStatus& process) {
     });
 }
 
+void ResetSensors(ProcessUnitStatus& process) {
+    for (auto& sensor : process.sensors) {
+        sensor.measurement_status = QStringLiteral("UNKNOWN");
+        sensor.distance_cm = -1;
+        sensor.updated_at = {};
+    }
+}
+
 void UpdateSensor(ProcessUnitStatus& process, int sensor_id, const QString& measurement_status, int distance_cm,
                   const QDateTime& timestamp) {
     auto sensor = std::find_if(process.sensors.begin(), process.sensors.end(),
@@ -326,11 +334,7 @@ bool OperationsDashboardState::expireStaleProcesses(const QDateTime& timestamp) 
         process.updated_at = timestamp;
         process.has_error = true;
         process.has_warning = false;
-        for (auto& sensor : process.sensors) {
-            sensor.measurement_status = QStringLiteral("UNKNOWN");
-            sensor.distance_cm = -1;
-            sensor.updated_at = {};
-        }
+        ResetSensors(process);
         changed = true;
     }
     if (!changed) {
@@ -432,6 +436,9 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             process.status.error_code = error_code;
             process.status.has_warning = IsSensorStaleErrorCode(error_code);
             process.status.has_error = !process.status.has_warning;
+            if (process.status.has_warning) {
+                ResetSensors(process.status);
+            }
             if (!process.status.has_warning && SensorMeasurementForCurrentState(current_state).isEmpty()) {
                 process.status.current_state = current_state;
             }
@@ -454,6 +461,9 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             const bool sensor_telemetry = !sensor_measurement.isEmpty();
             if (sensor_telemetry && sensor_id.has_value()) {
                 UpdateSensor(process.status, *sensor_id, sensor_measurement, -1, timestamp);
+            }
+            if (sensor_stale) {
+                ResetSensors(process.status);
             }
             process.status.connection_state =
                 (sensor_stale || sensor_telemetry) && connection_state == mqtt::ConnectionState::kUartError
@@ -792,11 +802,7 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         process.status.has_error = false;
         process.status.has_warning = false;
         process.status.updated_at = timestamp;
-        for (auto& sensor : process.status.sensors) {
-            sensor.measurement_status = QStringLiteral("UNKNOWN");
-            sensor.distance_cm = -1;
-            sensor.updated_at = {};
-        }
+        ResetSensors(process.status);
         process.last_received_at = {};
         process.last_event_at = {};
     }

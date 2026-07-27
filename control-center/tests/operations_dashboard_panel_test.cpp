@@ -72,6 +72,17 @@ int main(int argc, char* argv[]) {
     assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
     assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
     assert(panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator")).size() == 4);
+    QLabel* sorting_sensor_2 = nullptr;
+    for (auto* indicator : panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator"))) {
+        if (indicator->property("sensorId").toInt() == 2) {
+            sorting_sensor_2 = indicator;
+            break;
+        }
+    }
+    assert(sorting_sensor_2 != nullptr);
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("UNKNOWN"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 대기"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
     bool has_gripper_title = false;
     bool has_transfer_state = false;
     for (const auto* label : panel.findChildren<QLabel*>()) {
@@ -80,6 +91,16 @@ int main(int argc, char* argv[]) {
     }
     assert(has_gripper_title);
     assert(has_transfer_state);
+
+    assert(
+        state
+            .applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-CLEAR", "PI-SORTING-01", 2, QStringLiteral("CLEAR"), 42, 4))
+            .applied);
+    panel.setState(state);
+    application.processEvents();
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("CLEAR"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 없음"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#89d185")));
 
     assert(state
                .applyEnvelope({
@@ -108,6 +129,9 @@ int main(int argc, char* argv[]) {
     }
     assert(has_sensor_warning);
     assert(has_sensor_warning_detail);
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("UNKNOWN"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 대기"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
 
     assert(
         state.applyEnvelope(SensorEnvelope("SORTING-SENSOR-2", "PI-SORTING-01", 2, QStringLiteral("DETECTED"), 11, 5))
@@ -123,6 +147,25 @@ int main(int argc, char* argv[]) {
         }
     }
     assert(has_detected_sensor);
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#75beff")));
+
+    assert(
+        state.applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-FAULT", "PI-SORTING-01", 2, QStringLiteral("FAULT"), 0, 6))
+            .applied);
+    panel.setState(state);
+    application.processEvents();
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("FAULT"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 오류"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#f14c4c")));
+
+    assert(state
+               .applyEnvelope(
+                   SensorEnvelope("SORTING-SENSOR-2-RECOVERED", "PI-SORTING-01", 2, QStringLiteral("CLEAR"), 40, 7))
+               .applied);
+    panel.setState(state);
+    application.processEvents();
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("CLEAR"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#89d185")));
 
     assert(state.applyEnvelope(DeviceEnvelope("VISION-WAITING", "PI-VISION-01", "WAITING_FOR_PRODUCT", "", 5)).applied);
     panel.setState(state);
@@ -173,6 +216,8 @@ int main(int argc, char* argv[]) {
     const auto* live_status = panel.findChild<QLabel*>(QStringLiteral("dashboardLiveStatus"));
     assert(live_status != nullptr);
     assert(live_status->text() == QStringLiteral("● MQTT 연결 끊김"));
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("UNKNOWN"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
     int waiting_count = 0;
     int disconnected_count = 0;
     for (const auto* label : panel.findChildren<QLabel*>()) {

@@ -126,6 +126,31 @@ int main() {
     assert(SensorById(sorting_after_clear, 2).measurement_status == QStringLiteral("CLEAR"));
     assert(stopped_sensor_state.overall().state == OverallProcessState::Stopped);
 
+    result = stopped_sensor_state.applyEnvelope(
+        Envelope("SORTING-SENSOR-1-DETECTED", "SENSOR_STATUS",
+                 { { QStringLiteral("sensorId"), 1 },
+                   { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                   { QStringLiteral("distanceCm"), 10 } },
+                 "PI-SORTING-01", "2026-07-23T01:00:00.600Z"));
+    assert(result.applied);
+    result = stopped_sensor_state.applyEnvelope(
+        Envelope("SORTING-SENSORS-STALE", "ERROR_OCCURRED",
+                 { { QStringLiteral("errorCode"), QStringLiteral("ERR-HEALTH-SENSOR-STALE") },
+                   { QStringLiteral("errorLevel"), QStringLiteral("WARNING") },
+                   { QStringLiteral("currentState"), QStringLiteral("CONTROLLER_HEALTH") },
+                   { QStringLiteral("message"), QStringLiteral("sorting sensors stale") } },
+                 "PI-SORTING-01", "2026-07-23T01:00:00.700Z"));
+    assert(result.applied);
+    const auto sorting_after_stale = ProcessByKey(stopped_sensor_state, QStringLiteral("sorting"));
+    assert(sorting_after_stale.current_state == QStringLiteral("STOPPED"));
+    assert(sorting_after_stale.has_warning);
+    for (const auto& sensor : sorting_after_stale.sensors) {
+        assert(sensor.measurement_status == QStringLiteral("UNKNOWN"));
+        assert(sensor.distance_cm == -1);
+        assert(!sensor.updated_at.isValid());
+    }
+    assert(stopped_sensor_state.overall().state == OverallProcessState::Stopped);
+
     result = state.applyEnvelope(
         Envelope("INPUT-1", "DEVICE_STATUS", DeviceStatus("ONLINE", "RUNNING", "WORK-105"), "PI-INPUT-01"));
     assert(result.handled && result.applied && result.error.isEmpty());
