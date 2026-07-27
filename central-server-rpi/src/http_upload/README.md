@@ -34,3 +34,17 @@ allow_insecure_http=true
 Use the central server machine's LAN IP instead of `127.0.0.1` when the vision node runs on a different device. Plain
 HTTP is intended only for an isolated integration network; configure `tls_enabled=true` and an HTTPS endpoint for
 deployment.
+
+## History queries
+
+The same HTTP listener exposes read-only work and device history endpoints:
+
+```text
+GET /api/v1/history/work/{workId}?limit=100
+GET /api/v1/history/device/{deviceId}?limit=100
+Authorization: Bearer <http.bearer_token>
+```
+
+`limit` defaults to 100 and must be between 1 and 500. Results are returned newest first. Work history combines process
+transitions and recorded errors; device history combines retained MQTT events and device errors. MQTT events, device
+status, errors, security logs, and images use the retention periods configured in the `[storage]` section.

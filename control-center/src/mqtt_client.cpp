@@ -115,10 +115,12 @@ qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& t
         data.insert(QString::fromLatin1(mqtt::kComponentIdField), component_id);
     }
 
+    const auto message_type = command == mqtt::ControlCommand::kEmergencyStop ? mqtt::MessageType::kEmergencyStop
+                                                                              : mqtt::MessageType::kControlCommand;
     const QJsonObject envelope{
         { QString::fromLatin1(mqtt::kProtocolVersionField), QString::fromLatin1(mqtt::kCurrentProtocolVersion) },
         { QString::fromLatin1(mqtt::kMessageIdField), QUuid::createUuid().toString(QUuid::WithoutBraces) },
-        { QString::fromLatin1(mqtt::kMessageTypeField), ToQString(mqtt::ToString(mqtt::MessageType::kControlCommand)) },
+        { QString::fromLatin1(mqtt::kMessageTypeField), ToQString(mqtt::ToString(message_type)) },
         { QString::fromLatin1(mqtt::kSourceIdField), config_.client_id },
         { QString::fromLatin1(mqtt::kTimestampField), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) },
         { QString::fromLatin1(mqtt::kDataField), data },

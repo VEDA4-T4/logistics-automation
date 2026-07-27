@@ -12,6 +12,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ProjectWarnings.cmake")
 add_library(
     logistics_central_storage
     src/db_manager/database.cpp
+    src/db_manager/history_service.cpp
     src/http_upload/upload_service.cpp
     src/db_manager/persistence.cpp
 )
@@ -89,6 +90,74 @@ target_link_libraries(
 )
 
 logistics_enable_warnings(logistics_central_server_device_manager)
+
+# ------------------------------------------------------------------------------
+# Command manager
+# ------------------------------------------------------------------------------
+
+add_library(
+    logistics_central_server_command_manager
+    src/command_manager/command_manager.cpp
+)
+add_library(
+    logistics::central_server_command_manager
+    ALIAS logistics_central_server_command_manager
+)
+
+target_include_directories(
+    logistics_central_server_command_manager
+    PUBLIC include
+)
+target_link_libraries(
+    logistics_central_server_command_manager
+    PUBLIC
+        logistics::central_server_device_manager
+        logistics::contracts
+)
+
+logistics_enable_warnings(logistics_central_server_command_manager)
+
+# ------------------------------------------------------------------------------
+# Process state machine
+# ------------------------------------------------------------------------------
+
+add_library(
+    logistics_central_server_process_state_machine
+    src/process_manager/process_state_machine.cpp
+)
+add_library(
+    logistics::central_server_process_state_machine
+    ALIAS logistics_central_server_process_state_machine
+)
+target_include_directories(
+    logistics_central_server_process_state_machine
+    PUBLIC include
+)
+target_link_libraries(
+    logistics_central_server_process_state_machine
+    PUBLIC logistics::contracts
+)
+logistics_enable_warnings(logistics_central_server_process_state_machine)
+
+add_library(
+    logistics_central_server_process_orchestrator
+    src/process_manager/process_orchestrator.cpp
+)
+add_library(
+    logistics::central_server_process_orchestrator
+    ALIAS logistics_central_server_process_orchestrator
+)
+target_include_directories(
+    logistics_central_server_process_orchestrator
+    PUBLIC include
+)
+target_link_libraries(
+    logistics_central_server_process_orchestrator
+    PUBLIC
+        logistics::central_server_process_state_machine
+        logistics::contracts
+)
+logistics_enable_warnings(logistics_central_server_process_orchestrator)
 
 # ------------------------------------------------------------------------------
 # MQTT handler
@@ -209,6 +278,8 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         PRIVATE
             logistics::central_storage
             logistics::central_http_upload_server
+            logistics::central_server_command_manager
+            logistics::central_server_process_orchestrator
             logistics::central_server_mosquitto
             logistics::central_server_mqtt_handler
             Threads::Threads
@@ -278,6 +349,48 @@ if(BUILD_TESTING)
     add_test(
         NAME central_server_device_manager_test
         COMMAND central_server_device_manager_test
+    )
+
+    add_executable(
+        central_server_command_manager_test
+        tests/command_manager_test.cpp
+    )
+    target_link_libraries(
+        central_server_command_manager_test
+        PRIVATE logistics::central_server_command_manager
+    )
+    logistics_enable_warnings(central_server_command_manager_test)
+    add_test(
+        NAME central_server_command_manager_test
+        COMMAND central_server_command_manager_test
+    )
+
+    add_executable(
+        central_server_process_state_machine_test
+        tests/process_state_machine_test.cpp
+    )
+    target_link_libraries(
+        central_server_process_state_machine_test
+        PRIVATE logistics::central_server_process_state_machine
+    )
+    logistics_enable_warnings(central_server_process_state_machine_test)
+    add_test(
+        NAME central_server_process_state_machine_test
+        COMMAND central_server_process_state_machine_test
+    )
+
+    add_executable(
+        central_server_process_orchestrator_test
+        tests/process_orchestrator_test.cpp
+    )
+    target_link_libraries(
+        central_server_process_orchestrator_test
+        PRIVATE logistics::central_server_process_orchestrator
+    )
+    logistics_enable_warnings(central_server_process_orchestrator_test)
+    add_test(
+        NAME central_server_process_orchestrator_test
+        COMMAND central_server_process_orchestrator_test
     )
 
     add_executable(

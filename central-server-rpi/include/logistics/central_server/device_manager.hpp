@@ -1,8 +1,10 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -42,10 +44,14 @@ public:
 
 class DeviceManager final {
 public:
-    explicit DeviceManager(std::filesystem::path registry_path = {});
+    using Clock = std::chrono::steady_clock;
+    using NowProvider = std::function<Clock::time_point()>;
+
+    explicit DeviceManager(std::filesystem::path registry_path = {}, NowProvider now_provider = {});
 
     [[nodiscard]] bool HandleMessage(const contracts::mqtt::ParsedTopic& topic,
                                      const contracts::mqtt::MqttMessage& message, std::string_view received_at = {});
+    [[nodiscard]] std::vector<DeviceSnapshot> CheckHeartbeatTimeouts(std::string_view checked_at = {});
 
     [[nodiscard]] std::size_t RegisteredDeviceCount() const;
     [[nodiscard]] std::optional<DeviceSnapshot> FindDevice(std::string_view device_id) const;
@@ -60,6 +66,8 @@ private:
     std::filesystem::path registry_path_;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, DeviceSnapshot> devices_;
+    std::unordered_map<std::string, Clock::time_point> heartbeat_observed_at_;
+    NowProvider now_provider_;
     std::string last_error_;
 };
 

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "logistics/central_server/database.hpp"
+#include "logistics/central_server/history_service.hpp"
 #include "logistics/central_server/persistence.hpp"
 #include "logistics/central_server/upload_service.hpp"
 
@@ -183,6 +184,37 @@ int main() {
     assert(result.status == server::PersistenceStatus::kStored);
     assert(Scalar(database, "SELECT count(*) FROM product WHERE lifecycle_state='COMPLETED'") == 1);
 
+    server::EventPayload device_error;
+    device_error.work_id = work_id;
+    device_error.error_code = "ERR-BARCODE-CAMERA";
+    device_error.severity = "ERROR";
+    device_error.error_message = "camera focus prevented barcode recognition";
+    device_error.details_json = R"({"cause":"CAMERA_FOCUS"})";
+    result =
+        persistence.PersistValidatedEvent(Envelope("MSG-ERROR-OLD", mqtt::MessageType::kErrorOccurred, "PI-VISION-01"),
+                                          device_error, Metadata(base_time + 7, "device/PI-VISION-01/error"));
+    assert(result.status == server::PersistenceStatus::kStored);
+
+    server::HistoryService history(database);
+    std::vector<server::HistoryEntry> history_entries;
+    assert(history.FindByWorkId(work_id, 100, history_entries).ok());
+    assert(!history_entries.empty());
+    bool found_error = false;
+    for (const auto& entry : history_entries) {
+        if (entry.event_type == "ERROR_OCCURRED") {
+            found_error = entry.error_code == "ERR-BARCODE-CAMERA" &&
+                          entry.message == "camera focus prevented barcode recognition" &&
+                          entry.occurred_at_ms == base_time + 7;
+        }
+    }
+    assert(found_error);
+    assert(history.FindByDeviceId("PI-VISION-01", 100, history_entries).ok());
+    assert(history_entries.size() == 3);
+    assert(history_entries.front().event_type == "ERROR_OCCURRED");
+    assert(history.FindByWorkId(work_id, 0, history_entries).code == server::DatabaseStatusCode::kInvalidArgument);
+    assert(history.FindByDeviceId("invalid/device", 10, history_entries).code ==
+           server::DatabaseStatusCode::kInvalidArgument);
+
     server::EventPayload device;
     device.device_role = "input";
     device.connection_state = "ONLINE";
@@ -197,10 +229,40 @@ int main() {
     assert(result.ok());
     assert(Scalar(database, "SELECT count(*) FROM device_status WHERE process_state='VISION_REPORTED'") == 1);
 
+    server::EventPayload recent_device_error = device_error;
+    recent_device_error.error_code = "ERR-RECENT";
+    recent_device_error.error_message = "recent device error";
+    recent_device_error.details_json = R"({"cause":"RECENT_TEST_ERROR"})";
+    result = persistence.PersistValidatedEvent(
+        Envelope("MSG-ERROR-NEW", mqtt::MessageType::kErrorOccurred, "PI-VISION-01"), recent_device_error,
+        Metadata(base_time + 40 * 86'400'000LL, "device/PI-VISION-01/error"));
+    assert(result.status == server::PersistenceStatus::kStored);
+
+    server::LogRepository logs(database);
+    assert(logs.AppendSecurity("OLD_SECURITY_EVENT", "test", "127.0.0.1", R"({"cause":"expired"})", base_time).ok());
+    assert(logs.AppendSecurity("NEW_SECURITY_EVENT", "test", "127.0.0.1", R"({"cause":"retained"})",
+                               base_time + 40 * 86'400'000LL)
+               .ok());
+
+    storage.error_retention_days = 30;
+    storage.security_retention_days = 30;
     server::RetentionService retention(database, storage);
     assert(retention.RunOnce(base_time + 40 * 86'400'000LL).ok());
     assert(Scalar(database, "SELECT count(*) FROM device_status WHERE device_id='PI-INPUT-01'") == 1);
     assert(Scalar(database, "SELECT count(*) FROM image_file") == 0);
+    assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-ERROR-OLD'") == 0);
+    assert(Scalar(database, "SELECT count(*) FROM error_log WHERE message_id='MSG-ERROR-OLD'") == 0);
+    assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-ERROR-NEW'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM error_log WHERE message_id='MSG-ERROR-NEW'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM security_log WHERE event_type='OLD_SECURITY_EVENT'") == 0);
+    assert(Scalar(database, "SELECT count(*) FROM security_log WHERE event_type='NEW_SECURITY_EVENT'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM work_history WHERE work_id='" + work_id + "'") >= 1);
+    assert(history.FindByDeviceId("PI-VISION-01", 100, history_entries).ok());
+    assert(history_entries.size() == 1);
+    assert(history_entries.front().event_type == "ERROR_OCCURRED");
+    assert(history_entries.front().message_id == "MSG-ERROR-NEW");
+    assert(history_entries.front().error_code == "ERR-RECENT");
+    assert(history_entries.front().details_json == R"({"cause":"RECENT_TEST_ERROR"})");
 
     const auto migration_copy = root / "migrations";
     std::filesystem::create_directories(migration_copy);

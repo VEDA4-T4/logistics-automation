@@ -537,6 +537,7 @@ int main() {
     using logistics::contracts::ProcessState;
 
     assert(logistics::contracts::ToString(DeviceRole::kVision) == "vision");
+    assert(logistics::contracts::ToString(DeviceRole::kGripper) == "gripper");
     assert(logistics::contracts::ToString(ProcessState::kEmergencyStop) == "ESTOP");
 
     assert(mqtt::QtRequestTopic("QT-01") == "server/request/QT-01");

@@ -14,13 +14,17 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <utility>
 
 namespace logistics::control_center {
 namespace {
+
+constexpr qsizetype kMaximumVisibleEntries = 200;
 
 QString SeverityColor(OperationalLogSeverity severity) {
     switch (severity) {
@@ -149,12 +153,9 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     connect(severity_filter_, &QComboBox::currentIndexChanged, this, [this]() { refresh(); });
     connect(query_filter_, &QLineEdit::textChanged, this, [this]() { refresh(); });
     connect(unacknowledged_filter_, &QCheckBox::toggled, this, [this]() { refresh(); });
-    connect(table_, &QTableWidget::cellClicked, this, [this](int row, int) {
-        last_clicked_id_ = entryIdAtRow(row);
-        acknowledgeEntry(last_clicked_id_);
-    });
+    connect(table_, &QTableWidget::cellClicked, this, [this](int row, int) { acknowledgeEntry(entryIdAtRow(row)); });
     connect(table_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
-        const auto id = last_clicked_id_.isEmpty() ? entryIdAtRow(row) : last_clicked_id_;
+        const auto id = entryIdAtRow(row);
         acknowledgeEntry(id);
         showDetails(id);
     });
@@ -169,6 +170,33 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
 void OperationalLogPanel::setState(const OperationalLogState& state) {
     state_ = state;
     refresh();
+}
+
+void OperationalLogPanel::setEntryAcknowledged(const QString& id) {
+    if (!state_.acknowledge(id)) {
+        return;
+    }
+    if (unacknowledged_filter_->isChecked()) {
+        refresh();
+        return;
+    }
+
+    const QSignalBlocker blocker(table_);
+    for (int row = 0; row < table_->rowCount(); ++row) {
+        if (entryIdAtRow(row) != id) {
+            continue;
+        }
+        for (int column = 0; column < table_->columnCount(); ++column) {
+            if (auto* item = table_->item(row, column); item != nullptr) {
+                item->setForeground(QColor(QStringLiteral("#777777")));
+                item->setData(Qt::UserRole + 1, true);
+            }
+        }
+        break;
+    }
+    alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(state_.activeAlertCount()));
+    alert_count_->setVisible(state_.activeAlertCount() > 0);
+    acknowledge_all_button_->setEnabled(state_.activeAlertCount() > 0);
 }
 
 void OperationalLogPanel::setAcknowledgeHandler(AcknowledgeHandler handler) {
@@ -193,9 +221,12 @@ OperationalLogFilter OperationalLogPanel::currentFilter() const {
 
 void OperationalLogPanel::refresh() {
     const auto entries = state_.filteredEntries(currentFilter());
+    const auto visible_count = std::min(entries.size(), kMaximumVisibleEntries);
+    const QSignalBlocker blocker(table_);
+    table_->setUpdatesEnabled(false);
     table_->setSortingEnabled(false);
-    table_->setRowCount(entries.size());
-    for (qsizetype row = 0; row < entries.size(); ++row) {
+    table_->setRowCount(visible_count);
+    for (qsizetype row = 0; row < visible_count; ++row) {
         const auto& entry = entries[row];
         auto* time_item = ReadOnlyItem(entry.occurred_at.toLocalTime().toString(QStringLiteral("HH:mm:ss")));
         time_item->setData(Qt::UserRole, entry.id);
@@ -224,7 +255,10 @@ void OperationalLogPanel::refresh() {
         table_->setItem(static_cast<int>(row), 2, device_item);
         table_->setItem(static_cast<int>(row), 3, message_item);
     }
-    result_count_->setText(QStringLiteral("%1건").arg(entries.size()));
+    table_->setUpdatesEnabled(true);
+    result_count_->setText(entries.size() > visible_count
+                               ? QStringLiteral("%1건 중 최근 %2건 표시").arg(entries.size()).arg(visible_count)
+                               : QStringLiteral("%1건").arg(entries.size()));
     alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(state_.activeAlertCount()));
     alert_count_->setVisible(state_.activeAlertCount() > 0);
     acknowledge_all_button_->setEnabled(state_.activeAlertCount() > 0);
