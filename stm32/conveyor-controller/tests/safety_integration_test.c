@@ -210,11 +210,26 @@ const sorting_gate_port_t* sorting_gate_mg90s_port(void) {
 /* ---- fake: CommTx ---- */
 static uint32_t setDeviceStatusCalls;
 static uint8_t lastDeviceState;
+static uint32_t setChannelStatusCalls[COMM_TX_CH_COUNT];
+static uint8_t channelDeviceStates[COMM_TX_CH_COUNT];
 
 void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code) {
+    uint32_t i;
+
     (void)error_code;
     setDeviceStatusCalls++;
     lastDeviceState = device_state;
+
+    for (i = 0U; i < COMM_TX_CH_COUNT; i++) {
+        channelDeviceStates[i] = device_state;
+    }
+}
+
+void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code) {
+    (void)error_code;
+    assert(channel < COMM_TX_CH_COUNT);
+    setChannelStatusCalls[channel]++;
+    channelDeviceStates[channel] = device_state;
 }
 
 int32_t CommTx_Send(comm_tx_channel_t channel, uint8_t command, const uint8_t* payload, uint8_t length) {
@@ -298,6 +313,8 @@ static void reset_all(void) {
 
     setDeviceStatusCalls = 0U;
     lastDeviceState = 0U;
+    memset(setChannelStatusCalls, 0, sizeof(setChannelStatusCalls));
+    memset(channelDeviceStates, 0, sizeof(channelDeviceStates));
 
     memset(&inputMotor, 0, sizeof(inputMotor));
     inputMotorPort.context = &inputMotor;
@@ -323,12 +340,8 @@ static void reset_all(void) {
     SafetyTask_Init();
 }
 
-/*
- * 전체 흐름: 분류 Pi에서 E-Stop 수신 -> 두 공정 정지 통지 -> 분류 게이트가
- * 아직 물리적으로 이동 중이라 STOPPED 지연 -> 게이트 도착 -> 두 공정 STOPPED
- * 확인 -> 투입 Pi에서 Reset -> 두 공정 RELEASED 확인 후에야 STBY latch 해제.
- */
-static void test_full_estop_and_reset_cycle_with_real_control_tasks(void) {
+/* E-Stop은 전체 차단하고, 각 UART의 Reset은 해당 ControlTask만 복구한다. */
+static void test_scoped_reset_cycle_with_real_control_tasks(void) {
     reset_all();
 
     /* 사전 조건: 두 공정 모두 정상 동작 상태(RELEASED). */
@@ -358,40 +371,48 @@ static void test_full_estop_and_reset_cycle_with_real_control_tasks(void) {
     drive_sorting_marker(APP_CONTROL_MESSAGE_SAFETY_STOP);
     assert(sorting_control_task_get_safety_sync_state() == SORTING_CONTROL_SAFETY_STOP_REQUESTED);
 
-    /* 3) SafetyTask가 이 시점에 reset을 시도해도 아직 해제를 요청하면 안 된다. */
-    control_command_t reset = safety_command(APP_UART_CHANNEL_1, UART_CMD_RESET_DEVICE);
-    SafetyTask_HandleSafetyCommand(&reset);
+    /* 3) USART1 reset은 Sorting 상태와 무관하게 Input만 해제 요청한다. */
+    control_command_t inputReset = safety_command(APP_UART_CHANNEL_1, UART_CMD_RESET_DEVICE);
+    SafetyTask_HandleSafetyCommand(&inputReset);
     SafetyTask_ServicePending();
+    assert(input_control_task_get_safety_sync_state() == INPUT_CONTROL_SAFETY_RELEASE_REQUESTED);
     assert(sorting_control_task_get_safety_sync_state() == SORTING_CONTROL_SAFETY_STOP_REQUESTED);
     assert(releaseLatchCalls == 0U);
 
-    /* 4) 게이트가 물리적으로 Home에 도착. */
+    drive_input_marker(APP_CONTROL_MESSAGE_SAFETY_RELEASE);
+    SafetyTask_ServicePending();
+    assert(input_control_task_get_safety_sync_state() == INPUT_CONTROL_SAFETY_RELEASED);
+    assert(sorting_control_task_get_safety_sync_state() == SORTING_CONTROL_SAFETY_STOP_REQUESTED);
+    assert(releaseLatchCalls == 1U);
+    assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 1U);
+    assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 0U);
+    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_READY);
+    assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_EMERGENCY_STOP);
+    assert(conveyor_motor_power_enable() == 1U);
+    assert(input_control_task_capture_command_epoch() != UINT32_MAX);
+    assert(sorting_control_task_capture_command_epoch() == UINT32_MAX);
+
+    /* 4) 게이트 Home 도착 후 USART6 reset으로 Sorting만 별도 복구한다. */
     sortingGate.motionComplete = 1U;
     drive_sorting_marker(APP_CONTROL_MESSAGE_SAFETY_STOP);
     assert(sorting_control_task_get_safety_sync_state() == SORTING_CONTROL_SAFETY_STOPPED);
 
-    /* 5) 이제 SafetyTask가 두 공정 모두 STOPPED임을 확인하고 해제를 요청한다. */
+    control_command_t sortingReset = safety_command(APP_UART_CHANNEL_6, UART_CMD_RESET_DEVICE);
+    SafetyTask_HandleSafetyCommand(&sortingReset);
     SafetyTask_ServicePending();
-    assert(input_control_task_get_safety_sync_state() == INPUT_CONTROL_SAFETY_RELEASE_REQUESTED);
     assert(sorting_control_task_get_safety_sync_state() == SORTING_CONTROL_SAFETY_RELEASE_REQUESTED);
-    assert(releaseLatchCalls == 0U); /* 해제 요청만으로는 latch를 풀지 않는다 */
-
-    /* 6) 각 ControlTask가 해제 마커를 처리해 RELEASED로 전이. */
-    drive_input_marker(APP_CONTROL_MESSAGE_SAFETY_RELEASE);
-    assert(input_control_task_get_safety_sync_state() == INPUT_CONTROL_SAFETY_RELEASED);
-
     drive_sorting_marker(APP_CONTROL_MESSAGE_SAFETY_RELEASE);
     assert(sorting_control_task_get_safety_sync_state() == SORTING_CONTROL_SAFETY_RELEASED);
 
-    /* 7) 두 공정 모두 RELEASED 확인 후에야 SafetyTask가 STBY latch를 푼다. */
     SafetyTask_ServicePending();
-    assert(releaseLatchCalls == 1U);
+    assert(releaseLatchCalls == 2U);
     assert(SafetyTask_IsReleasing() == 0U);
-    assert(lastDeviceState == UART_DEVICE_READY);
-    assert(conveyor_motor_power_enable() == 1U); /* latch가 실제로 풀려 다시 enable 가능 */
+    assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 1U);
+    assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_READY);
+    assert(sorting_control_task_capture_command_epoch() != UINT32_MAX);
 }
 
 int main(void) {
-    test_full_estop_and_reset_cycle_with_real_control_tasks();
+    test_scoped_reset_cycle_with_real_control_tasks();
     return 0;
 }

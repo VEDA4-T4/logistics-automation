@@ -49,6 +49,9 @@ static sorting_control_safety_sync_state_t sortingSync;
 static uint32_t setDeviceStatusCalls;
 static uint8_t lastDeviceState;
 static uint8_t lastDeviceError;
+static uint32_t setChannelStatusCalls[COMM_TX_CH_COUNT];
+static uint8_t channelDeviceStates[COMM_TX_CH_COUNT];
+static uint8_t channelDeviceErrors[COMM_TX_CH_COUNT];
 
 typedef struct {
     comm_tx_channel_t channel;
@@ -57,7 +60,7 @@ typedef struct {
     uint8_t payload[UART_MAX_PAYLOAD_SIZE];
 } tx_urgent_record_t;
 
-#define TX_RECORD_MAX 8U
+#define TX_RECORD_MAX 16U
 static tx_urgent_record_t txRecords[TX_RECORD_MAX];
 static uint32_t txRecordCount;
 static int sendUrgentFail;
@@ -123,9 +126,23 @@ sorting_control_safety_sync_state_t sorting_control_task_get_safety_sync_state(v
 
 /* ---- fake: CommTx ---- */
 void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code) {
+    uint32_t i;
+
     setDeviceStatusCalls++;
     lastDeviceState = device_state;
     lastDeviceError = error_code;
+
+    for (i = 0U; i < COMM_TX_CH_COUNT; i++) {
+        channelDeviceStates[i] = device_state;
+        channelDeviceErrors[i] = error_code;
+    }
+}
+
+void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code) {
+    assert(channel < COMM_TX_CH_COUNT);
+    setChannelStatusCalls[channel]++;
+    channelDeviceStates[channel] = device_state;
+    channelDeviceErrors[channel] = error_code;
 }
 
 int32_t CommTx_SendUrgent(comm_tx_channel_t channel, uint8_t command, const uint8_t* payload, uint8_t length) {
@@ -181,6 +198,9 @@ static void reset_all(void) {
     setDeviceStatusCalls = 0U;
     lastDeviceState = 0U;
     lastDeviceError = 0U;
+    memset(setChannelStatusCalls, 0, sizeof(setChannelStatusCalls));
+    memset(channelDeviceStates, 0, sizeof(channelDeviceStates));
+    memset(channelDeviceErrors, 0, sizeof(channelDeviceErrors));
     memset(txRecords, 0, sizeof(txRecords));
     txRecordCount = 0U;
     sendUrgentFail = 0;
@@ -216,8 +236,8 @@ static void drive_estop(app_uart_channel_t source) {
     SafetyTask_HandleSafetyCommand(&message);
 }
 
-static void drive_reset(void) {
-    control_command_t message = make_command(APP_UART_CHANNEL_1, UART_CMD_RESET_DEVICE);
+static void drive_reset(app_uart_channel_t source) {
+    control_command_t message = make_command(source, UART_CMD_RESET_DEVICE);
     SafetyTask_HandleSafetyCommand(&message);
 }
 
@@ -284,51 +304,95 @@ static void test_stop_queue_failure_is_counted(void) {
     assert(stats.estopEvents == 1U);
 }
 
-static void test_reset_releases_only_after_both_released(void) {
+static void test_input_reset_releases_only_input(void) {
     safety_task_stats_t stats;
 
     reset_all();
     drive_estop(APP_UART_CHANNEL_1);
     assert(SafetyTask_IsReleasing() == 0U);
 
-    /* ControlTask들이 아직 STOPPED에 도달하지 않은 상태에서 reset 시작. */
-    drive_reset();
+    /* USART1 reset은 Input 공정의 해제만 시작한다. */
+    drive_reset(APP_UART_CHANNEL_1);
     assert(SafetyTask_IsReleasing() == 1U);
 
     SafetyTask_ServicePending();
     assert(inputNotifyReleaseCalls == 0U); /* STOPPED 전에는 해제 요청 안 함 */
+    assert(sortingNotifyReleaseCalls == 0U);
     assert(releaseLatchCalls == 0U);
 
-    /* ControlTask들이 STOPPED로 동기화 -> 해제 요청됨(fake가 RELEASE_REQUESTED로 전진). */
+    /* Sorting 상태와 무관하게 Input이 STOPPED이면 Input에만 해제를 요청한다. */
     inputSync = (int)INPUT_CONTROL_SAFETY_STOPPED;
-    sortingSync = SORTING_CONTROL_SAFETY_STOPPED;
     SafetyTask_ServicePending();
     assert(inputNotifyReleaseCalls == 1U);
-    assert(sortingNotifyReleaseCalls == 1U);
+    assert(sortingNotifyReleaseCalls == 0U);
     assert(releaseLatchCalls == 0U); /* 아직 RELEASED 확인 전 */
     assert(inputSync == (int)INPUT_CONTROL_SAFETY_RELEASE_REQUESTED);
-    assert(sortingSync == SORTING_CONTROL_SAFETY_RELEASE_REQUESTED);
+    assert(sortingSync == SORTING_CONTROL_SAFETY_STOP_REQUESTED);
 
-    /* 해제 요청 접수만으로는 latch를 풀지 않는다. */
-    SafetyTask_ServicePending();
-    assert(releaseLatchCalls == 0U);
-
-    /* 두 공정이 RELEASED로 최종 확인(ControlTask가 해제 마커 처리). 이제서야 latch 해제. */
+    /* Input RELEASED 확인 후 Input 채널만 READY가 된다. */
     inputSync = (int)INPUT_CONTROL_SAFETY_RELEASED;
-    sortingSync = SORTING_CONTROL_SAFETY_RELEASED;
     SafetyTask_ServicePending();
     assert(releaseLatchCalls == 1U);
     assert(SafetyTask_IsReleasing() == 0U);
-    assert(lastDeviceState == UART_DEVICE_READY);
+    assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 1U);
+    assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 0U);
+    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_READY);
+    assert(channelDeviceErrors[COMM_TX_CH_INPUT] == UART_ERROR_NONE);
+    assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_EMERGENCY_STOP);
+    assert(channelDeviceErrors[COMM_TX_CH_SORTING] == UART_ERROR_EMERGENCY_STOP);
 
-    const tx_urgent_record_t* event = find_event(COMM_TX_CH_SORTING);
-    assert(event != NULL);
-    /* 마지막 이벤트가 RESET_COMPLETE여야 한다. */
+    /* E-Stop broadcast 2개 뒤 Reset 완료는 요청한 Input 채널에만 보고한다. */
+    assert(txRecordCount == 3U);
+    assert(txRecords[txRecordCount - 1U].channel == COMM_TX_CH_INPUT);
     assert(txRecords[txRecordCount - 1U].payload[APP_SAFETY_EVENT_KIND_INDEX] == SAFETY_EVENT_RESET_COMPLETE);
     assert(txRecords[txRecordCount - 1U].payload[APP_SAFETY_EVENT_RESULT_INDEX] == SAFETY_RESET_OK);
 
     Safety_GetStats(&stats);
     assert(stats.resetCompleted == 1U);
+}
+
+static void test_sorting_reset_releases_only_sorting(void) {
+    reset_all();
+    drive_estop(APP_UART_CHANNEL_6);
+    drive_reset(APP_UART_CHANNEL_6);
+
+    sortingSync = SORTING_CONTROL_SAFETY_STOPPED;
+    SafetyTask_ServicePending();
+    assert(inputNotifyReleaseCalls == 0U);
+    assert(sortingNotifyReleaseCalls == 1U);
+    assert(inputSync == (int)INPUT_CONTROL_SAFETY_STOP_REQUESTED);
+
+    sortingSync = SORTING_CONTROL_SAFETY_RELEASED;
+    SafetyTask_ServicePending();
+    assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 0U);
+    assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 1U);
+    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_EMERGENCY_STOP);
+    assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_READY);
+    assert(txRecords[txRecordCount - 1U].channel == COMM_TX_CH_SORTING);
+}
+
+static void test_both_scoped_resets_can_progress_independently(void) {
+    reset_all();
+    drive_estop(APP_UART_CHANNEL_1);
+    drive_reset(APP_UART_CHANNEL_1);
+    drive_reset(APP_UART_CHANNEL_6);
+
+    inputSync = (int)INPUT_CONTROL_SAFETY_STOPPED;
+    sortingSync = SORTING_CONTROL_SAFETY_STOPPED;
+    SafetyTask_ServicePending();
+    assert(inputNotifyReleaseCalls == 1U);
+    assert(sortingNotifyReleaseCalls == 1U);
+
+    inputSync = (int)INPUT_CONTROL_SAFETY_RELEASED;
+    SafetyTask_ServicePending();
+    assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 1U);
+    assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 0U);
+    assert(SafetyTask_IsReleasing() == 1U);
+
+    sortingSync = SORTING_CONTROL_SAFETY_RELEASED;
+    SafetyTask_ServicePending();
+    assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 1U);
+    assert(SafetyTask_IsReleasing() == 0U);
 }
 
 static void test_reset_times_out_and_keeps_latched(void) {
@@ -337,7 +401,7 @@ static void test_reset_times_out_and_keeps_latched(void) {
 
     reset_all();
     drive_estop(APP_UART_CHANNEL_1);
-    drive_reset();
+    drive_reset(APP_UART_CHANNEL_1);
 
     /* ControlTask가 영영 STOPPED에 도달하지 않음 -> 예산 초과로 거부. */
     for (i = 0U; i < 300U; i++) {
@@ -361,7 +425,7 @@ static void test_reset_times_out_and_keeps_latched(void) {
 static void test_estop_during_release_relatches(void) {
     reset_all();
     drive_estop(APP_UART_CHANNEL_1);
-    drive_reset();
+    drive_reset(APP_UART_CHANNEL_1);
     inputSync = (int)INPUT_CONTROL_SAFETY_STOPPED;
     sortingSync = SORTING_CONTROL_SAFETY_STOPPED;
     SafetyTask_ServicePending(); /* WAIT_RELEASED로 진입 */
@@ -379,7 +443,7 @@ static void test_reset_without_estop_is_ignored(void) {
     safety_task_stats_t stats;
 
     reset_all();
-    drive_reset();
+    drive_reset(APP_UART_CHANNEL_1);
 
     assert(latchDisableCalls == 0U);
     assert(releaseLatchCalls == 0U);
@@ -413,7 +477,9 @@ int main(void) {
     test_estop_latches_before_notifying_controls();
     test_estop_cause_maps_from_source_channel();
     test_stop_queue_failure_is_counted();
-    test_reset_releases_only_after_both_released();
+    test_input_reset_releases_only_input();
+    test_sorting_reset_releases_only_sorting();
+    test_both_scoped_resets_can_progress_independently();
     test_reset_times_out_and_keeps_latched();
     test_estop_during_release_relatches();
     test_reset_without_estop_is_ignored();
