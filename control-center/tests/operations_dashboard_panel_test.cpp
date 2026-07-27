@@ -29,6 +29,24 @@ QJsonObject DeviceEnvelope(const QString& message_id, const QString& source_id, 
     };
 }
 
+QJsonObject SensorEnvelope(const QString& message_id, const QString& source_id, int sensor_id,
+                           const QString& measurement_status, int distance_cm, int second) {
+    return {
+        { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+        { QStringLiteral("messageId"), message_id },
+        { QStringLiteral("messageType"), QStringLiteral("SENSOR_STATUS") },
+        { QStringLiteral("sourceId"), source_id },
+        { QStringLiteral("timestamp"),
+          QStringLiteral("2026-07-23T01:00:%1.500Z").arg(second, 2, 10, QLatin1Char('0')) },
+        { QStringLiteral("data"),
+          QJsonObject{
+              { QStringLiteral("sensorId"), sensor_id },
+              { QStringLiteral("measurementStatus"), measurement_status },
+              { QStringLiteral("distanceCm"), distance_cm },
+          } },
+    };
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -53,6 +71,7 @@ int main(int argc, char* argv[]) {
     assert(panel.maximumHeight() == 112);
     assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
     assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
+    assert(panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator")).size() == 4);
     bool has_gripper_title = false;
     bool has_transfer_state = false;
     for (const auto* label : panel.findChildren<QLabel*>()) {
@@ -89,6 +108,21 @@ int main(int argc, char* argv[]) {
     }
     assert(has_sensor_warning);
     assert(has_sensor_warning_detail);
+
+    assert(
+        state.applyEnvelope(SensorEnvelope("SORTING-SENSOR-2", "PI-SORTING-01", 2, QStringLiteral("DETECTED"), 11, 5))
+            .applied);
+    panel.setState(state);
+    application.processEvents();
+    bool has_detected_sensor = false;
+    for (const auto* indicator : panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator"))) {
+        if (indicator->property("sensorId").toInt() == 2 &&
+            indicator->property("measurementStatus").toString() == QStringLiteral("DETECTED")) {
+            has_detected_sensor = indicator->text() == QStringLiteral("● S2 감지");
+            assert(indicator->toolTip().contains(QStringLiteral("11 cm")));
+        }
+    }
+    assert(has_detected_sensor);
 
     assert(state.applyEnvelope(DeviceEnvelope("VISION-WAITING", "PI-VISION-01", "WAITING_FOR_PRODUCT", "", 5)).applied);
     panel.setState(state);

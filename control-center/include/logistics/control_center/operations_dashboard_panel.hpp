@@ -36,6 +36,7 @@ private:
         QLabel* current_state{ nullptr };
         QLabel* work_or_error{ nullptr };
         QLabel* device_and_updated_at{ nullptr };
+        QMap<int, QLabel*> sensor_indicators;
     };
 
     ProcessCardWidgets createProcessCard(const ProcessUnitStatus& process);

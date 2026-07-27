@@ -168,6 +168,28 @@ QString CurrentStateText(const QString& current_state) {
     return current_state;
 }
 
+QString SensorStateText(const QString& measurement_status) {
+    const auto status = measurement_status.trimmed().toUpper();
+    if (status == QStringLiteral("CLEAR"))
+        return QStringLiteral("없음");
+    if (status == QStringLiteral("DETECTED"))
+        return QStringLiteral("감지");
+    if (status == QStringLiteral("FAULT"))
+        return QStringLiteral("오류");
+    return QStringLiteral("대기");
+}
+
+QString SensorStateColor(const QString& measurement_status) {
+    const auto status = measurement_status.trimmed().toUpper();
+    if (status == QStringLiteral("CLEAR"))
+        return QStringLiteral("#89d185");
+    if (status == QStringLiteral("DETECTED"))
+        return QStringLiteral("#75beff");
+    if (status == QStringLiteral("FAULT"))
+        return QStringLiteral("#f14c4c");
+    return QStringLiteral("#6e6e6e");
+}
+
 }  // namespace
 
 OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(parent) {
@@ -276,8 +298,20 @@ void OperationsDashboardPanel::setState(const OperationsDashboardState& state) {
     bool rebuild = new_processes.size() != processes_.size();
     if (!rebuild) {
         for (qsizetype index = 0; index < new_processes.size(); ++index) {
-            if (new_processes[index].key != processes_[index].key) {
+            const auto& new_process = new_processes[index];
+            const auto& previous_process = processes_[index];
+            if (new_process.key != previous_process.key ||
+                new_process.sensors.size() != previous_process.sensors.size()) {
                 rebuild = true;
+                break;
+            }
+            for (qsizetype sensor_index = 0; sensor_index < new_process.sensors.size(); ++sensor_index) {
+                if (new_process.sensors[sensor_index].sensor_id != previous_process.sensors[sensor_index].sensor_id) {
+                    rebuild = true;
+                    break;
+                }
+            }
+            if (rebuild) {
                 break;
             }
         }
@@ -349,9 +383,25 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.work_or_error->setStyleSheet("color:#9d9d9d;font-size:9px;");
     widgets.device_and_updated_at = new QLabel(widgets.card);
     widgets.device_and_updated_at->setStyleSheet("color:#7f7f7f;font-size:8px;");
+    auto* sensor_layout = new QHBoxLayout();
+    sensor_layout->setContentsMargins(0, 0, 0, 0);
+    sensor_layout->setSpacing(7);
+    for (const auto& sensor : process.sensors) {
+        auto* indicator = new QLabel(widgets.card);
+        indicator->setObjectName(QStringLiteral("sensorStatusIndicator"));
+        indicator->setProperty("sensorId", sensor.sensor_id);
+        indicator->setProperty("measurementStatus", sensor.measurement_status);
+        indicator->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+        sensor_layout->addWidget(indicator);
+        widgets.sensor_indicators.insert(sensor.sensor_id, indicator);
+    }
+    sensor_layout->addStretch();
     layout->addLayout(header);
     layout->addWidget(widgets.current_state);
     layout->addWidget(widgets.work_or_error);
+    if (!process.sensors.isEmpty()) {
+        layout->addLayout(sensor_layout);
+    }
     layout->addWidget(widgets.device_and_updated_at);
     for (auto* label : widgets.card->findChildren<QLabel*>()) {
         label->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -420,6 +470,24 @@ void OperationsDashboardPanel::refreshProcesses() {
         widgets.device_and_updated_at->setText(
             QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
         widgets.device_and_updated_at->setToolTip(process.updated_at.toLocalTime().toString(Qt::ISODateWithMs));
+        for (const auto& sensor : process.sensors) {
+            auto* indicator = widgets.sensor_indicators.value(sensor.sensor_id, nullptr);
+            if (indicator == nullptr) {
+                continue;
+            }
+            indicator->setText(
+                QStringLiteral("● %1 %2").arg(sensor.display_name, SensorStateText(sensor.measurement_status)));
+            indicator->setStyleSheet(QStringLiteral("color:%1;font-size:8px;font-weight:700;")
+                                         .arg(SensorStateColor(sensor.measurement_status)));
+            indicator->setProperty("measurementStatus", sensor.measurement_status);
+            const auto distance =
+                sensor.distance_cm >= 0 ? QStringLiteral("%1 cm").arg(sensor.distance_cm) : QStringLiteral("거리 없음");
+            const auto updated_at =
+                sensor.updated_at.isValid() ? UpdatedAtText(sensor.updated_at) : QStringLiteral("수신 기록 없음");
+            indicator->setToolTip(
+                QStringLiteral("%1 · %2 · %3 · %4")
+                    .arg(sensor.display_name, SensorStateText(sensor.measurement_status), distance, updated_at));
+        }
     }
 }
 

@@ -41,6 +41,14 @@ struct ProcessDefinition {
     QString device_id;
 };
 
+struct SensorUnitStatus {
+    int sensor_id{ 0 };
+    QString display_name;
+    QString measurement_status{ QStringLiteral("UNKNOWN") };
+    int distance_cm{ -1 };
+    QDateTime updated_at;
+};
+
 struct ProcessUnitStatus {
     QString key;
     QString display_name;
@@ -54,6 +62,7 @@ struct ProcessUnitStatus {
     QDateTime updated_at;
     bool has_error{ false };
     bool has_warning{ false };
+    QList<SensorUnitStatus> sensors;
 };
 
 struct ProcessDashboardStatus {
