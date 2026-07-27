@@ -11,7 +11,8 @@ reconnect_interval_ms=3000
 keep_alive_seconds=30
 
 [control]
-; The central server resolves this logical target to the appropriate devices.
+; Initial GUI selection. The operator can switch between SYSTEM and individual process nodes at runtime.
+; Emergency stop is always sent to SYSTEM regardless of this selection.
 target_device_id=SYSTEM
 
 [dashboard]

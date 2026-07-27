@@ -517,6 +517,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));
     detail_tabs_->addTab(operational_log_panel_, QStringLiteral("운영 로그"));
     process_control_panel_ = new ProcessControlPanel(side_panel);
+    process_control_panel_->configureTargets(config.control_target_device_id, config.process_definitions);
+    process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                             operations_dashboard_state_.processes());
     side_layout->addWidget(detail_tabs_, 1);
     side_layout->addWidget(process_control_panel_, 0);
     content_splitter->addWidget(video_container);
@@ -568,6 +571,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         process_control_panel_->setMqttConnected(true);
                         operations_dashboard_state_.markMqttConnectedAwaitingStatus(QDateTime::currentDateTimeUtc());
                         operations_dashboard_panel_->setState(operations_dashboard_state_);
+                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                                                 operations_dashboard_state_.processes());
                         operations_dashboard_panel_->setMqttConnected(true);
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
                         mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
@@ -585,6 +590,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         operations_dashboard_panel_->setState(operations_dashboard_state_);
+                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                                                 operations_dashboard_state_.processes());
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
@@ -596,6 +603,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         operations_dashboard_panel_->setState(operations_dashboard_state_);
+                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                                                 operations_dashboard_state_.processes());
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
@@ -605,6 +614,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         operations_dashboard_panel_->setState(operations_dashboard_state_);
+                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                                                 operations_dashboard_state_.processes());
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
@@ -970,11 +981,17 @@ void MainWindow::reconnectChannel(std::size_t channel) {
     video_streams_[channel]->start(stream_urls_[channel]);
 }
 
-void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand command) {
-    const auto message_id = mqtt_client_->publishCommand(command, control_target_device_id_);
+void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand command,
+                                    const QString& target_device_id) {
+    const auto actual_target = command == logistics::contracts::mqtt::ControlCommand::kEmergencyStop
+                                   ? QStringLiteral("SYSTEM")
+                                   : target_device_id;
+    pending_target_device_id_ = actual_target;
+    const auto message_id = mqtt_client_->publishCommand(command, actual_target);
     if (message_id < 0) {
         process_control_panel_->setCommandFinished(command, logistics::contracts::mqtt::CommandResult::kFailed,
                                                    QStringLiteral("MQTT 명령 발행 실패"));
+        pending_target_device_id_.clear();
     }
 }
 
@@ -989,7 +1006,8 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
     const auto dashboard_update = operations_dashboard_state_.applyEnvelope(envelope);
     if (dashboard_update.applied) {
         operations_dashboard_panel_->setState(operations_dashboard_state_);
-        process_control_panel_->setProcessState(operations_dashboard_state_.overall().state);
+        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                                 operations_dashboard_state_.processes());
     } else if (dashboard_update.handled && !dashboard_update.error.isEmpty()) {
         statusBar()->showMessage(dashboard_update.error, 4000);
     }
@@ -1048,14 +1066,17 @@ void MainWindow::handleCommandTimeout() {
         return;
     }
     process_control_panel_->setCommandFinished(pending_command_, logistics::contracts::mqtt::CommandResult::kTimeout);
-    appendOperationalLog(OperationalLogSeverity::Error, control_target_device_id_, QStringLiteral("관제 명령"),
-                         QStringLiteral("COMMAND_TIMEOUT"), QStringLiteral("관제 명령 응답 시간이 초과되었습니다."));
+    appendOperationalLog(OperationalLogSeverity::Error,
+                         pending_target_device_id_.isEmpty() ? control_target_device_id_ : pending_target_device_id_,
+                         QStringLiteral("관제 명령"), QStringLiteral("COMMAND_TIMEOUT"),
+                         QStringLiteral("관제 명령 응답 시간이 초과되었습니다."));
     clearPendingCommand();
 }
 
 void MainWindow::clearPendingCommand() {
     command_response_timer_->stop();
     pending_request_id_.clear();
+    pending_target_device_id_.clear();
     pending_command_ = logistics::contracts::mqtt::ControlCommand::kUnknown;
 }
 

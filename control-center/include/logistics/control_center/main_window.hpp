@@ -44,7 +44,7 @@ private:
     void updatePlaybackState(std::size_t channel);
     void setChannelState(std::size_t channel, ChannelState state, const QString& detail = {});
     void reconnectChannel(std::size_t channel);
-    void sendControlCommand(logistics::contracts::mqtt::ControlCommand command);
+    void sendControlCommand(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id);
     void handleMqttMessage(const QString& topic, const QJsonObject& envelope);
     void handleCommandTimeout();
     void clearPendingCommand();
@@ -75,6 +75,7 @@ private:
     ProcessControlPanel* process_control_panel_{ nullptr };
     QTimer* command_response_timer_{ nullptr };
     QString control_target_device_id_{ "SYSTEM" };
+    QString pending_target_device_id_;
     QString pending_request_id_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
     CurrentProductState current_product_state_;

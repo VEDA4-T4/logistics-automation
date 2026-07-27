@@ -8,6 +8,7 @@
 
 class QLabel;
 class QPushButton;
+class QComboBox;
 
 namespace logistics::control_center {
 
@@ -17,23 +18,28 @@ class ProcessControlPanel final : public QWidget {
 public:
     explicit ProcessControlPanel(QWidget* parent = nullptr);
 
+    void configureTargets(const QString& default_target_device_id, const QList<ProcessDefinition>& processes);
     void setMqttConnected(bool connected);
     void setProcessState(OverallProcessState state);
+    void setProcessStates(OverallProcessState overall_state, const QList<ProcessUnitStatus>& processes);
     void setCommandPending(logistics::contracts::mqtt::ControlCommand command);
     void setCommandProgress(logistics::contracts::mqtt::ControlCommand command,
                             logistics::contracts::mqtt::CommandResult result, const QString& detail = {});
     void setCommandFinished(logistics::contracts::mqtt::ControlCommand command,
                             logistics::contracts::mqtt::CommandResult result, const QString& detail = {});
+    [[nodiscard]] QString selectedTargetDeviceId() const;
 
 signals:
-    void commandRequested(logistics::contracts::mqtt::ControlCommand command);
+    void commandRequested(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id);
 
 private:
     void requestCommand(logistics::contracts::mqtt::ControlCommand command, const QString& confirmation);
+    void applySelectedTargetState();
     void updateButtonStates();
 
     QLabel* connection_hint_{ nullptr };
     QLabel* command_status_{ nullptr };
+    QComboBox* target_selector_{ nullptr };
     QPushButton* start_button_{ nullptr };
     QPushButton* stop_button_{ nullptr };
     QPushButton* restart_button_{ nullptr };
@@ -41,6 +47,8 @@ private:
     QPushButton* initialize_button_{ nullptr };
     QPushButton* emergency_stop_button_{ nullptr };
     ProcessControlState control_state_;
+    OverallProcessState overall_state_{ OverallProcessState::Idle };
+    QList<ProcessUnitStatus> process_statuses_;
 };
 
 }  // namespace logistics::control_center
