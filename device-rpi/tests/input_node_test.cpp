@@ -352,9 +352,30 @@ void TestHeartbeatReportsOnlyOnChange() {
         input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR, 4U));
     assert(fixture.reports.size() == 2);
 
+    // A sensor-only change must NOT trigger a heartbeat report: HandleSensorStatus
+    // (a separate UART_CMD_SENSOR_STATUS frame) already reports sensor transitions
+    // with the correct SENSOR_CLEAR/OBJECT_DETECTED naming, so re-reporting the
+    // unchanged device_state here would just be a misleading duplicate.
     fixture.node->HandleUartFrame(
         input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_DETECTED, 5U));
-    assert(fixture.reports.size() == 3);  // sensor state change is reported too
+    assert(fixture.reports.size() == 2);
+}
+
+void TestHeartbeatDoesNotDuplicateSensorTransition() {
+    // Reproduces the real-hardware sequence: a dedicated SENSOR_STATUS frame reports
+    // the transition, then the next ~1 Hz heartbeat carries the same new sensor
+    // reading. The heartbeat must not add a redundant device-status report.
+    Fixture fixture;
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+    assert(fixture.reports.size() == 1);
+
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
+    assert(fixture.reports.size() == 2);
+
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_DETECTED));
+    assert(fixture.reports.size() == 2);  // no extra "READY" report from the heartbeat
 }
 
 void TestHealthEventIsDecoded() {
@@ -461,6 +482,7 @@ int main() {
     TestHeartbeatIsDecodedToDeviceStatus();
     TestHeartbeatErrorIsSurfaced();
     TestHeartbeatReportsOnlyOnChange();
+    TestHeartbeatDoesNotDuplicateSensorTransition();
     TestHealthEventIsDecoded();
     TestSafetyEventIsDecoded();
     TestSafetyResetCompleteIsReportedAsStatus();

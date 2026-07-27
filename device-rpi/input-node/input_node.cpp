@@ -492,11 +492,20 @@ void InputNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
     const std::uint8_t error_code = frame.payload[kHeartbeatErrorIndex];
     const std::uint8_t sensor_state = frame.payload[kHeartbeatInputSensorIndex];
 
-    if (last_heartbeat_state_.has_value() && last_heartbeat_state_->device_state == device_state &&
-        last_heartbeat_state_->error_code == error_code && last_heartbeat_state_->sensor_state == sensor_state) {
+    // The sensor state travels in every heartbeat too, but UART_CMD_SENSOR_STATUS
+    // (HandleSensorStatus) already reports its transitions with the correct
+    // SENSOR_CLEAR/OBJECT_DETECTED naming. Track it here to keep state consistent
+    // (e.g. for the cross-path update in HandleControllerEvent) but do not let it
+    // gate this report on its own, or every sensor transition would also emit a
+    // misleading device_state-only report ("READY") right alongside the correct
+    // sensor report.
+    const bool device_state_changed = !last_heartbeat_state_.has_value() ||
+                                      last_heartbeat_state_->device_state != device_state ||
+                                      last_heartbeat_state_->error_code != error_code;
+    last_heartbeat_state_ = HeartbeatState{ device_state, error_code, sensor_state };
+    if (!device_state_changed) {
         return;
     }
-    last_heartbeat_state_ = HeartbeatState{ device_state, error_code, sensor_state };
 
     const bool has_error = error_code != UART_ERROR_NONE;
     EmitReport({
