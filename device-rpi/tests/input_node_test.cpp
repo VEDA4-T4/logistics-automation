@@ -457,6 +457,23 @@ void TestSafetyResetRejectedIsStillAnError() {
     assert(error->error_code == "ERR-SAFETY-RESET-REJECTED");
 }
 
+void TestSafetyResetCompleteSuppressesFollowingHeartbeatDuplicate() {
+    Fixture fixture;
+    // A heartbeat already established EMERGENCY_STOP before recovery.
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP, UART_SENSOR_CLEAR));
+    assert(fixture.reports.size() == 1);
+
+    // SAFETY RESET_COMPLETE reports the recovery.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 2U, 0U));
+    assert(fixture.reports.size() == 2);
+
+    // The next heartbeat carries the same READY/NONE state; it must not re-report.
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+    assert(fixture.reports.size() == 2);
+}
+
 void TestRepeatedControllerEventIsDeduplicated() {
     Fixture fixture;
     // The same latched health condition re-emitted repeatedly must report once.
@@ -499,6 +516,7 @@ int main() {
     TestSafetyEventIsDecoded();
     TestSafetyResetCompleteIsReportedAsStatus();
     TestSafetyResetRejectedIsStillAnError();
+    TestSafetyResetCompleteSuppressesFollowingHeartbeatDuplicate();
     TestRepeatedControllerEventIsDeduplicated();
     return 0;
 }

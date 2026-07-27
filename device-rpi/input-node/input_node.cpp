@@ -573,6 +573,16 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
                     .error_code = std::nullopt,
                 },
         });
+        // The next ~1 Hz heartbeat will carry this same READY/NONE state; record it
+        // now so that heartbeat's own change detection does not re-report it a
+        // second later. The sensor field is left as whatever heartbeat last saw (or
+        // CLEAR if none yet) since this event carries no sensor information.
+        if (last_heartbeat_state_.has_value()) {
+            last_heartbeat_state_->device_state = UART_DEVICE_READY;
+            last_heartbeat_state_->error_code = UART_ERROR_NONE;
+        } else {
+            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR };
+        }
         return;
     }
 
