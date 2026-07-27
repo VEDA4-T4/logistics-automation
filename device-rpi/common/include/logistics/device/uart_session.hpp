@@ -92,6 +92,9 @@ public:
     void SetEventHandler(UartSessionEventHandler handler);
 
     [[nodiscard]] UartSessionSendResult SendCommand(std::uint8_t command, std::span<const std::uint8_t> payload = {});
+    [[nodiscard]] UartSessionSendResult SendOneWayCommand(std::uint8_t command,
+                                                          std::span<const std::uint8_t> payload = {});
+    [[nodiscard]] bool CancelPendingCommand() noexcept;
     [[nodiscard]] UartIoResult PollOnce(std::chrono::milliseconds read_timeout = std::chrono::milliseconds{ 0 });
     void Tick(std::chrono::milliseconds elapsed);
 

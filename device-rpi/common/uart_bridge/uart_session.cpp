@@ -112,6 +112,51 @@ UartSessionSendResult UartSession::SendCommand(std::uint8_t command, std::span<c
     return { UartSessionSendStatus::kSent, frame.sequence, UART_CODEC_OK, io_result };
 }
 
+UartSessionSendResult UartSession::SendOneWayCommand(std::uint8_t command, std::span<const std::uint8_t> payload) {
+    if (!IsOpen()) {
+        return {
+            UartSessionSendStatus::kNotOpen, 0, UART_CODEC_OK, { UartIoStatus::kNotOpen, 0, transport_.LastError() }
+        };
+    }
+    if (pending_.active) {
+        return { UartSessionSendStatus::kBusy, pending_.frame.sequence, UART_CODEC_OK, {} };
+    }
+    if (payload.size() > UART_MAX_PAYLOAD_SIZE || UART_IS_VALID_COMMAND(command) == 0U ||
+        UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(command, payload.size()) == 0U) {
+        return { UartSessionSendStatus::kInvalidArgument, 0, UART_CODEC_INVALID_ARGUMENT, {} };
+    }
+
+    uart_frame_t frame{};
+    frame.version = UART_PROTOCOL_VERSION;
+    frame.sequence = AllocateSequence();
+    frame.command = command;
+    frame.length = static_cast<std::uint8_t>(payload.size());
+    if (!payload.empty()) {
+        std::copy(payload.begin(), payload.end(), frame.payload);
+    }
+
+    std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+    std::size_t encoded_length = 0U;
+    const uart_codec_result_t codec_result = uart_encode_frame(&frame, encoded.data(), encoded.size(), &encoded_length);
+    if (codec_result != UART_CODEC_OK) {
+        return { UartSessionSendStatus::kEncodeError, frame.sequence, codec_result, {} };
+    }
+
+    const UartIoResult io_result = transport_.WriteAll(std::span<const std::uint8_t>(encoded.data(), encoded_length),
+                                                       std::chrono::milliseconds{ UART_RETRY_INTERVAL_MS });
+    if (!io_result.Succeeded()) {
+        HandleTransportFailure(io_result);
+        return { UartSessionSendStatus::kTransportError, frame.sequence, UART_CODEC_OK, io_result };
+    }
+    return { UartSessionSendStatus::kSent, frame.sequence, UART_CODEC_OK, io_result };
+}
+
+bool UartSession::CancelPendingCommand() noexcept {
+    const bool cancelled = pending_.active;
+    pending_ = {};
+    return cancelled;
+}
+
 UartIoResult UartSession::PollOnce(std::chrono::milliseconds read_timeout) {
     if (!IsOpen()) {
         return { UartIoStatus::kNotOpen, 0, transport_.LastError() };
