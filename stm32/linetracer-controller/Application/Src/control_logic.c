@@ -130,6 +130,29 @@ static linetracer_control_state_t ControlLogic_SafetyState(linetracer_stop_reaso
     }
 }
 
+static uint8_t ControlLogic_ContextIsTurning(const control_context_t* context) {
+    if (context == NULL) {
+        return 0U;
+    }
+
+    return (context->state == LINETRACER_CONTROL_TURNING_FROM_DEST ||
+            context->state == LINETRACER_CONTROL_TURNING_TO_PICKUP ||
+            context->state == LINETRACER_CONTROL_TURNING_AT_PICKUP ||
+            (context->state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE &&
+             (context->pending_route_action == ROUTE_ACTION_TURN_LEFT ||
+              context->pending_route_action == ROUTE_ACTION_TURN_RIGHT)))
+               ? 1U
+               : 0U;
+}
+
+static uint8_t ControlLogic_StateExpectsMarker(linetracer_control_state_t state) {
+    return (state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION ||
+            state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE || state == LINETRACER_CONTROL_MOVING_TO_PICKUP ||
+            state == LINETRACER_CONTROL_MOVING_TO_DEST)
+               ? 1U
+               : 0U;
+}
+
 uint8_t ControlLogic_StateCanResume(linetracer_control_state_t state) {
     switch (state) {
         case LINETRACER_CONTROL_TURNING_FROM_DEST:
@@ -231,6 +254,9 @@ uint8_t ControlLogic_Transition(control_context_t* context, linetracer_control_s
 
     context->state = next_state;
     context->state_entered_at_ms = now_ms;
+    if (ControlLogic_StateExpectsMarker(next_state) != 0U) {
+        context->marker_wait_started_at_ms = now_ms;
+    }
     return 1U;
 }
 
@@ -246,11 +272,15 @@ void ControlLogic_Init(control_context_t* context, uint32_t now_ms) {
     context->active_route = UART_LINETRACER_ROUTE_NONE;
     context->state_entered_at_ms = now_ms;
     context->last_command_at_ms = now_ms;
+    context->marker_wait_started_at_ms = now_ms;
+    context->last_marker_detected_at_ms = 0U;
     context->active_job_id = UART_LINETRACER_JOB_ID_NONE;
+    context->last_marker_code = APP_MARKER_NONE;
     context->route_active = 0U;
     context->resume_valid = 0U;
     context->safety_latched = 0U;
     context->safety_error_code = UART_ERROR_NONE;
+    context->last_marker_valid = 0U;
     RoutePlanner_Reset(&context->route_plan);
     context->pending_route_action = ROUTE_ACTION_NONE;
 }
@@ -311,9 +341,8 @@ void ControlLogic_MakeSnapshot(const control_context_t* context, uart_linetracer
 }
 
 uint8_t ControlLogic_BuildStartedEvent(const control_context_t* context, const app_control_command_t* command,
-                                       const control_command_result_t* result,
-                                       uart_linetracer_load_state_t load_state, uint32_t now_ms,
-                                       app_tx_event_t* event) {
+                                       const control_command_result_t* result, uart_linetracer_load_state_t load_state,
+                                       uint32_t now_ms, app_tx_event_t* event) {
     if (context == NULL || command == NULL || result == NULL || event == NULL ||
         command->type != APP_CONTROL_COMMAND_ASSIGN_ROUTE || result->accepted == 0U ||
         result->status != UART_STATUS_ACK || result->state_changed == 0U || context->route_active == 0U ||
@@ -340,8 +369,7 @@ uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
                                            app_tx_event_t* event) {
     uart_error_t error_code;
 
-    if (context == NULL || safety_event == NULL || event == NULL ||
-        safety_event->type != APP_CONTROL_SAFETY_LATCHED) {
+    if (context == NULL || safety_event == NULL || event == NULL || safety_event->type != APP_CONTROL_SAFETY_LATCHED) {
         return 0U;
     }
 
@@ -360,12 +388,10 @@ uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
     event->load_state = load_state;
     event->status = UART_STATUS_ERROR;
     error_code = ControlLogic_CurrentError(context);
-    if (error_code == UART_ERROR_NONE &&
-        uart_linetracer_fault_error_is_valid(safety_event->error_code) != 0U) {
+    if (error_code == UART_ERROR_NONE && uart_linetracer_fault_error_is_valid(safety_event->error_code) != 0U) {
         error_code = (uart_error_t)safety_event->error_code;
     }
-    event->error_code =
-        (error_code != UART_ERROR_NONE) ? (uint8_t)error_code : (uint8_t)UART_ERROR_INTERNAL;
+    event->error_code = (error_code != UART_ERROR_NONE) ? (uint8_t)error_code : (uint8_t)UART_ERROR_INTERNAL;
     return 1U;
 }
 
@@ -438,6 +464,9 @@ static void ControlLogic_HandleAssignRoute(control_context_t* context, const app
     context->route_active = 1U;
     context->resume_valid = 0U;
     context->stop_reason = LINETRACER_STOP_REASON_NONE;
+    context->last_marker_code = APP_MARKER_NONE;
+    context->last_marker_detected_at_ms = 0U;
+    context->last_marker_valid = 0U;
 
     if (RoutePlanner_Create(context->current_position, context->active_route, &context->route_plan) == 0U) {
         context->active_job_id = UART_LINETRACER_JOB_ID_NONE;
@@ -619,6 +648,7 @@ uint8_t ControlLogic_CompleteTurn(control_context_t* context, uint32_t now_ms) {
                 return 0U;
             }
             context->pending_route_action = ROUTE_ACTION_GO_STRAIGHT;
+            context->marker_wait_started_at_ms = now_ms;
             return 1U;
 
         case LINETRACER_CONTROL_TURNING_FROM_DEST:
@@ -654,12 +684,86 @@ static route_action_t ControlLogic_RouteError(control_context_t* context, linetr
     return action;
 }
 
-route_action_t ControlLogic_HandleMarker(control_context_t* context, uint32_t now_ms) {
+static app_marker_code_t ControlLogic_MarkerCodeForIndex(uint8_t index) {
+    switch (index) {
+        case 0U:
+            return APP_MARKER_DEST_A;
+
+        case 1U:
+            return APP_MARKER_DEST_B;
+
+        case 2U:
+            return APP_MARKER_DEST_C;
+
+        default:
+            return APP_MARKER_INVALID;
+    }
+}
+
+app_marker_code_t ControlLogic_ExpectedMarkerCode(const control_context_t* context) {
+    if (context == NULL || context->route_plan.valid == 0U) {
+        return APP_MARKER_NONE;
+    }
+
+    switch (context->route_plan.expected_marker) {
+        case ROUTE_MARKER_DEST_EXIT:
+            return ControlLogic_MarkerCodeForIndex(context->route_plan.origin_index);
+
+        case ROUTE_MARKER_SOURCE_JUNCTION:
+        case ROUTE_MARKER_COMMON_JUNCTION:
+        case ROUTE_MARKER_RETURN_JUNCTION:
+            return APP_MARKER_JUNCTION;
+
+        case ROUTE_MARKER_PICKUP:
+        case ROUTE_MARKER_PICKUP_EXIT:
+        case ROUTE_MARKER_DEST:
+            return ControlLogic_MarkerCodeForIndex(context->route_plan.target_index);
+
+        case ROUTE_MARKER_NONE:
+        default:
+            return APP_MARKER_NONE;
+    }
+}
+
+static uint8_t ControlLogic_MarkerIsDuplicate(const control_context_t* context, app_marker_code_t marker_code,
+                                              uint32_t marker_detected_at_ms) {
+    if (context->last_marker_valid == 0U || marker_code != context->last_marker_code) {
+        return 0U;
+    }
+
+    return (marker_detected_at_ms == context->last_marker_detected_at_ms) ? 1U : 0U;
+}
+
+route_action_t ControlLogic_HandleMarker(control_context_t* context, app_marker_code_t marker_code,
+                                         uint32_t marker_detected_at_ms, uint32_t now_ms) {
     route_action_t action;
+    app_marker_code_t expected_marker;
+    uint32_t event_time;
     uint8_t transition_ok = 1U;
 
     if (context == NULL || ControlLogic_HasActiveJob(context) == 0U) {
         return ROUTE_ACTION_ERROR;
+    }
+
+    expected_marker = ControlLogic_ExpectedMarkerCode(context);
+    event_time = (marker_detected_at_ms != 0U) ? marker_detected_at_ms : now_ms;
+
+    /*
+     * APP_MARKER_NONE preserves compatibility while SensorTask is migrated to
+     * the classified marker
+     * interface. Classified and invalid markers are
+     * always validated.
+     */
+    if (marker_code == APP_MARKER_NONE) {
+        marker_code = expected_marker;
+    }
+
+    if (ControlLogic_MarkerIsDuplicate(context, marker_code, event_time) != 0U) {
+        return ROUTE_ACTION_NONE;
+    }
+
+    if (expected_marker == APP_MARKER_NONE || marker_code == APP_MARKER_INVALID || marker_code != expected_marker) {
+        return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE, ROUTE_ACTION_ERROR, now_ms);
     }
 
     action = RoutePlanner_OnMarker(&context->route_plan);
@@ -667,6 +771,10 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, uint32_t no
     if (action == ROUTE_ACTION_ERROR) {
         return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE, action, now_ms);
     }
+
+    context->last_marker_code = marker_code;
+    context->last_marker_detected_at_ms = event_time;
+    context->last_marker_valid = 1U;
 
     switch (context->state) {
         case LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION:
@@ -716,7 +824,41 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, uint32_t no
         return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE, ROUTE_ACTION_ERROR, now_ms);
     }
 
+    if (ControlLogic_StateExpectsMarker(context->state) != 0U) {
+        context->marker_wait_started_at_ms = now_ms;
+    }
+
     return action;
+}
+
+linetracer_stop_reason_t ControlLogic_CheckRouteTimeout(control_context_t* context, uint32_t now_ms) {
+    linetracer_stop_reason_t reason;
+    uint32_t started_at_ms;
+    uint32_t timeout_ms;
+
+    if (context == NULL || ControlLogic_HasActiveJob(context) == 0U || context->safety_latched != 0U) {
+        return LINETRACER_STOP_REASON_NONE;
+    }
+
+    if (ControlLogic_ContextIsTurning(context) != 0U) {
+        reason = LINETRACER_STOP_REASON_TURN_TIMEOUT;
+        started_at_ms = context->state_entered_at_ms;
+        timeout_ms = CONTROL_TURN_TIMEOUT_MS;
+    } else if (ControlLogic_StateExpectsMarker(context->state) != 0U &&
+               ControlLogic_ExpectedMarkerCode(context) != APP_MARKER_NONE) {
+        reason = LINETRACER_STOP_REASON_MARKER_SEQUENCE;
+        started_at_ms = context->marker_wait_started_at_ms;
+        timeout_ms = CONTROL_MARKER_TIMEOUT_MS;
+    } else {
+        return LINETRACER_STOP_REASON_NONE;
+    }
+
+    if ((uint32_t)(now_ms - started_at_ms) < timeout_ms) {
+        return LINETRACER_STOP_REASON_NONE;
+    }
+
+    (void)ControlLogic_RouteError(context, reason, ROUTE_ACTION_ERROR, now_ms);
+    return reason;
 }
 
 route_action_t ControlLogic_HandleLoadOn(control_context_t* context, uint32_t now_ms) {
@@ -801,6 +943,9 @@ control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, ui
     context->resume_state = LINETRACER_CONTROL_WAITING_AT_DEST;
     context->resume_valid = 0U;
     context->stop_reason = LINETRACER_STOP_REASON_NONE;
+    context->last_marker_code = APP_MARKER_NONE;
+    context->last_marker_detected_at_ms = 0U;
+    context->last_marker_valid = 0U;
     RoutePlanner_Reset(&context->route_plan);
     context->pending_route_action = ROUTE_ACTION_NONE;
 
