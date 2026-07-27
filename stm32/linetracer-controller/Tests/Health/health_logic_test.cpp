@@ -200,8 +200,7 @@ static void TestOneRecoveryDoesNotClearAnotherFault(void) {
 static void TestUartRecoveryClearsTimeoutAndRecoverableError(void) {
     health_logic_context_t context{};
     health_fault_record_t fault{};
-    app_health_event_t event =
-        MakeEvent(APP_TASK_COMM_RX, APP_HEALTH_EVENT_UART_RX_TIMEOUT, 100U, 5000U);
+    app_health_event_t event = MakeEvent(APP_TASK_COMM_RX, APP_HEALTH_EVENT_UART_RX_TIMEOUT, 100U, 5000U);
 
     HealthLogic_Init(&context, HEALTH_REQUIRED_TASK_MASK, 0U);
     assert(HealthLogic_HandleEvent(&context, &event, &fault) != 0U);
