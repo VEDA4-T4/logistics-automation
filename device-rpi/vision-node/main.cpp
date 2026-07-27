@@ -20,11 +20,11 @@
 #include <unordered_set>
 
 #include "detection.hpp"
-#include "vision_control_state.hpp"
 #include "vision_mqtt_workflow.hpp"
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
 #include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/device/device_control_state.hpp"
 #include "logistics/device/device_status.hpp"
 #include "logistics/device/image_uploader.hpp"
 #include "logistics/device/mqtt_node_client.hpp"
@@ -348,7 +348,11 @@ int main(const int argc, char* argv[]) {
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
     logistics::vision::VisionMqttWorkflow mqtt_workflow(
         device_id, 3, 5, static_cast<std::size_t>(settings.fps * kBarcodeRecognitionTimeoutSeconds));
-    logistics::vision::VisionControlState control_state(device_id);
+    logistics::device::DeviceControlState control_state({
+        .device_id = device_id,
+        .component_name = "vision",
+        .not_ready_error_code = "ERR-CAMERA-UNAVAILABLE",
+    });
     logistics::device::MqttNodeClient mqtt_client(std::move(mqtt_config), "vision", device_status);
     const std::string mqtt_session_id = logistics::device::GenerateMessageSessionId();
     std::atomic_uint64_t mqtt_sequence{ 1 };
@@ -370,7 +374,7 @@ int main(const int argc, char* argv[]) {
             }
             return;
         }
-        if (!control_state.IsProcessingEnabled()) {
+        if (!control_state.IsOperational()) {
             return;
         }
         if (mqtt_workflow.AssignWork(message)) {
@@ -412,9 +416,9 @@ int main(const int argc, char* argv[]) {
     bool should_exit = false;
     while (!should_exit) {
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
-        if (control_state.ConsumeCameraResetRequest()) {
+        if (control_state.ConsumeResetRequest()) {
             camera.release();
-            control_state.SetCameraAvailable(false);
+            control_state.SetReady(false);
             mqtt_workflow.Reset();
             pending_capture.release();
             device_status->SetJobId(std::nullopt);
@@ -425,7 +429,7 @@ int main(const int argc, char* argv[]) {
             if (!OpenCamera(camera, settings)) {
                 std::cerr << "Failed to open camera. Retrying in " << kReconnectIntervalMs << " ms.\n";
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
-                control_state.SetCameraAvailable(false);
+                control_state.SetReady(false);
                 if (!camera_error_reported && mqtt_client.IsConnected()) {
                     camera_error_reported = mqtt_client.PublishError(MakeVisionError(
                         device_id,
@@ -449,7 +453,7 @@ int main(const int argc, char* argv[]) {
             std::cout << "Camera connected.\n";
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
             camera_error_reported = false;
-            control_state.SetCameraAvailable(true);
+            control_state.SetReady(true);
             device_status->SetCurrentState(control_state.CurrentState());
             device_status->SetErrorCode(std::nullopt);
 #endif
@@ -475,7 +479,7 @@ int main(const int argc, char* argv[]) {
             if (consecutive_frame_errors >= kMaximumConsecutiveFrameErrors) {
                 camera.release();
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
-                control_state.SetCameraAvailable(false);
+                control_state.SetReady(false);
                 device_status->SetCurrentState(control_state.CurrentState());
                 device_status->SetErrorCode("CAMERA_DISCONNECTED");
 #endif
@@ -490,7 +494,7 @@ int main(const int argc, char* argv[]) {
         consecutive_frame_errors = 0;
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
-        if (!control_state.IsProcessingEnabled()) {
+        if (!control_state.IsOperational()) {
             pending_capture.release();
             if (!settings.headless) {
                 DrawOperatingState(frame, control_state.CurrentState());
@@ -525,9 +529,9 @@ int main(const int argc, char* argv[]) {
             logistics::device::CurrentIso8601Timestamp());
         if (box_event.has_value()) {
             pending_capture.release();
-            if (control_state.IsProcessingEnabled() && mqtt_client.PublishEvent(*box_event)) {
+            if (control_state.IsOperational() && mqtt_client.PublishEvent(*box_event)) {
                 device_status->SetCurrentState("AWAITING_WORK_ID");
-                if (!control_state.IsProcessingEnabled()) {
+                if (!control_state.IsOperational()) {
                     device_status->SetCurrentState(control_state.CurrentState());
                 }
             } else {
@@ -539,7 +543,7 @@ int main(const int argc, char* argv[]) {
             pending_capture = frame.clone();
         }
 
-        if (auto work = mqtt_workflow.TakeAssignedWork(); work.has_value() && control_state.IsProcessingEnabled()) {
+        if (auto work = mqtt_workflow.TakeAssignedWork(); work.has_value() && control_state.IsOperational()) {
             const std::string timestamp = logistics::device::CurrentIso8601Timestamp();
             const auto position = logistics::vision::MakePositionDetectedMessage(
                 device_id, *work,
@@ -551,8 +555,8 @@ int main(const int argc, char* argv[]) {
                 logistics::device::MakeMessageId(device_id, mqtt_session_id,
                                                  mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
                 timestamp);
-            const bool position_published = control_state.IsProcessingEnabled() && mqtt_client.PublishEvent(position);
-            const bool barcode_published = control_state.IsProcessingEnabled() && mqtt_client.PublishEvent(barcode);
+            const bool position_published = control_state.IsOperational() && mqtt_client.PublishEvent(position);
+            const bool barcode_published = control_state.IsOperational() && mqtt_client.PublishEvent(barcode);
             const bool barcode_detected = work->observation.barcode.has_value();
             bool image_published = !barcode_detected || image_uploader == nullptr;
             if (barcode_detected && image_uploader != nullptr && !pending_capture.empty()) {
@@ -570,7 +574,7 @@ int main(const int argc, char* argv[]) {
                             logistics::device::MakeMessageId(device_id, mqtt_session_id,
                                                              mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
                             captured_at);
-                        image_published = control_state.IsProcessingEnabled() && mqtt_client.PublishEvent(image);
+                        image_published = control_state.IsOperational() && mqtt_client.PublishEvent(image);
                     } else {
                         std::cerr << "[vision][ERROR] image upload failed: " << uploaded.error << '\n';
                         static_cast<void>(mqtt_client.PublishError(MakeVisionError(
@@ -596,7 +600,7 @@ int main(const int argc, char* argv[]) {
                     logistics::device::CurrentIso8601Timestamp(), "IMAGE_CAPTURE_MISSING", "VISION_ERROR",
                     "barcode was detected without a captured frame", work->work_id)));
             }
-            if (control_state.IsProcessingEnabled()) {
+            if (control_state.IsOperational()) {
                 const bool all_published = position_published && barcode_published && image_published;
                 device_status->SetCurrentState(all_published ? "VISION_REPORTED" : "VISION_ERROR");
                 if (!all_published) {
@@ -604,7 +608,7 @@ int main(const int argc, char* argv[]) {
                 } else {
                     device_status->SetErrorCode(std::nullopt);
                 }
-                if (!control_state.IsProcessingEnabled()) {
+                if (!control_state.IsOperational()) {
                     device_status->SetCurrentState(control_state.CurrentState());
                 }
             } else {

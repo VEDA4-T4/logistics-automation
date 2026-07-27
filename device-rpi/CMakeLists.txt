@@ -85,11 +85,13 @@ target_include_directories(device_status PUBLIC common/include)
 target_link_libraries(device_status PUBLIC logistics::contracts)
 logistics_enable_warnings(device_status)
 
-add_library(
-    vision_mqtt_workflow
-    vision-node/vision_control_state.cpp
-    vision-node/vision_mqtt_workflow.cpp
-)
+add_library(device_control_state common/device_control/device_control_state.cpp)
+add_library(logistics::device_control_state ALIAS device_control_state)
+target_include_directories(device_control_state PUBLIC common/include)
+target_link_libraries(device_control_state PUBLIC logistics::contracts)
+logistics_enable_warnings(device_control_state)
+
+add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
 add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
 target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
 target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
@@ -211,7 +213,10 @@ if(BUILD_TESTING)
     add_test(NAME device_log_spool_test COMMAND device_log_spool_test)
 
     add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
-    target_link_libraries(vision_mqtt_workflow_test PRIVATE logistics::vision_mqtt_workflow)
+    target_link_libraries(
+        vision_mqtt_workflow_test
+        PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow
+    )
     logistics_enable_warnings(vision_mqtt_workflow_test)
     add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
 
@@ -230,7 +235,7 @@ target_sources(
 find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgcodecs imgproc objdetect videoio)
 target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
-target_link_libraries(logistics_vision_node PRIVATE logistics::vision_mqtt_workflow)
+target_link_libraries(logistics_vision_node PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow)
 
 if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
     target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)

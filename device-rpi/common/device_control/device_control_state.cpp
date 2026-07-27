@@ -1,11 +1,11 @@
-#include "vision_control_state.hpp"
+#include "logistics/device/device_control_state.hpp"
 
 #include <stdexcept>
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
 
-namespace logistics::vision {
+namespace logistics::device {
 namespace {
 
 namespace mqtt = contracts::mqtt;
@@ -36,29 +36,30 @@ struct CommandRequest final {
 
 }  // namespace
 
-std::string_view ToString(const VisionOperatingState state) noexcept {
+std::string_view ToString(const DeviceOperatingState state) noexcept {
     switch (state) {
-        case VisionOperatingState::kStopped:
+        case DeviceOperatingState::kStopped:
             return "STOPPED";
-        case VisionOperatingState::kRunning:
+        case DeviceOperatingState::kRunning:
             return "RUNNING";
-        case VisionOperatingState::kEmergencyStop:
+        case DeviceOperatingState::kEmergencyStop:
             return "EMERGENCY_STOP";
-        case VisionOperatingState::kRecovering:
+        case DeviceOperatingState::kRecovering:
             return "RECOVERY";
-        case VisionOperatingState::kError:
+        case DeviceOperatingState::kError:
             return "ERROR";
     }
     return "ERROR";
 }
 
-VisionControlState::VisionControlState(std::string device_id) : device_id_(std::move(device_id)) {
-    if (!mqtt::IsValidTopicLevel(device_id_)) {
-        throw std::invalid_argument("invalid vision device ID");
+DeviceControlState::DeviceControlState(DeviceControlConfig config) : config_(std::move(config)) {
+    if (!mqtt::IsValidTopicLevel(config_.device_id) || config_.component_name.empty() ||
+        config_.not_ready_error_code.empty()) {
+        throw std::invalid_argument("invalid device control configuration");
     }
 }
 
-std::optional<VisionControlDecision> VisionControlState::HandleCommand(const mqtt::MqttMessage& message,
+std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqtt::MqttMessage& message,
                                                                        std::string response_message_id,
                                                                        std::string timestamp) {
     const auto request = ReadCommand(message);
@@ -76,97 +77,97 @@ std::optional<VisionControlDecision> VisionControlState::HandleCommand(const mqt
         if (!IsTargetedToThisNode(request->target_device_id)) {
             result = mqtt::CommandResult::kRejected;
             error_code = "ERR-MQTT-INVALID-TARGET";
-            response_text = "vision command targets a different device";
+            response_text = config_.component_name + " command targets a different device";
         } else {
             switch (request->command) {
                 case mqtt::ControlCommand::kStart:
                 case mqtt::ControlCommand::kRestart:
-                    if (state_ == VisionOperatingState::kRunning) {
-                        response_text = "vision processing is already running";
-                    } else if (state_ != VisionOperatingState::kStopped) {
+                    if (state_ == DeviceOperatingState::kRunning) {
+                        response_text = config_.component_name + " is already running";
+                    } else if (state_ != DeviceOperatingState::kStopped) {
                         result = mqtt::CommandResult::kRejected;
                         error_code = "ERR-INVALID-STATE";
-                        response_text = "vision processing can only start from STOPPED";
-                    } else if (!camera_available_) {
+                        response_text = config_.component_name + " can only start from STOPPED";
+                    } else if (!ready_) {
                         result = mqtt::CommandResult::kRejected;
-                        error_code = "ERR-CAMERA-UNAVAILABLE";
-                        response_text = "vision camera is not available";
+                        error_code = config_.not_ready_error_code;
+                        response_text = config_.component_name + " is not ready";
                     } else {
-                        state_ = VisionOperatingState::kRunning;
-                        response_text = "vision processing started";
+                        state_ = DeviceOperatingState::kRunning;
+                        response_text = config_.component_name + " started";
                     }
                     break;
                 case mqtt::ControlCommand::kStop:
-                    if (state_ == VisionOperatingState::kStopped) {
-                        response_text = "vision processing is already stopped";
-                    } else if (state_ != VisionOperatingState::kRunning) {
+                    if (state_ == DeviceOperatingState::kStopped) {
+                        response_text = config_.component_name + " is already stopped";
+                    } else if (state_ != DeviceOperatingState::kRunning) {
                         result = mqtt::CommandResult::kRejected;
                         error_code = "ERR-INVALID-STATE";
-                        response_text = "vision processing cannot stop from the current state";
+                        response_text = config_.component_name + " cannot stop from the current state";
                     } else {
-                        state_ = VisionOperatingState::kStopped;
+                        state_ = DeviceOperatingState::kStopped;
                         clear_work = true;
-                        response_text = "vision processing stopped";
+                        response_text = config_.component_name + " stopped";
                     }
                     break;
                 case mqtt::ControlCommand::kEmergencyStop:
-                    state_ = VisionOperatingState::kEmergencyStop;
+                    state_ = DeviceOperatingState::kEmergencyStop;
                     clear_work = true;
-                    response_text = "vision processing emergency-stopped";
+                    response_text = config_.component_name + " emergency-stopped";
                     break;
                 case mqtt::ControlCommand::kRecovery:
-                    if (state_ == VisionOperatingState::kRecovering) {
-                        response_text = "vision recovery is already in progress";
-                    } else if (state_ != VisionOperatingState::kEmergencyStop &&
-                               state_ != VisionOperatingState::kError) {
+                    if (state_ == DeviceOperatingState::kRecovering) {
+                        response_text = config_.component_name + " recovery is already in progress";
+                    } else if (state_ != DeviceOperatingState::kEmergencyStop &&
+                               state_ != DeviceOperatingState::kError) {
                         result = mqtt::CommandResult::kRejected;
                         error_code = "ERR-INVALID-STATE";
-                        response_text = "vision recovery requires ERROR or EMERGENCY_STOP";
+                        response_text = config_.component_name + " recovery requires ERROR or EMERGENCY_STOP";
                     } else {
-                        state_ = VisionOperatingState::kRecovering;
-                        camera_available_ = false;
-                        camera_reset_requested_ = true;
+                        state_ = DeviceOperatingState::kRecovering;
+                        ready_ = false;
+                        reset_requested_ = true;
                         clear_work = true;
-                        response_text = "vision recovery started";
+                        response_text = config_.component_name + " recovery started";
                     }
                     break;
                 case mqtt::ControlCommand::kInitialize:
-                    if (state_ == VisionOperatingState::kStopped) {
-                        response_text = "vision processing is already initialized";
-                    } else if (state_ != VisionOperatingState::kRecovering) {
+                    if (state_ == DeviceOperatingState::kStopped) {
+                        response_text = config_.component_name + " is already initialized";
+                    } else if (state_ != DeviceOperatingState::kRecovering) {
                         result = mqtt::CommandResult::kRejected;
                         error_code = "ERR-INVALID-STATE";
-                        response_text = "vision initialization requires RECOVERY";
-                    } else if (!camera_available_) {
+                        response_text = config_.component_name + " initialization requires RECOVERY";
+                    } else if (!ready_) {
                         result = mqtt::CommandResult::kRejected;
-                        error_code = "ERR-CAMERA-UNAVAILABLE";
-                        response_text = "vision camera has not recovered";
+                        error_code = config_.not_ready_error_code;
+                        response_text = config_.component_name + " has not recovered";
                     } else {
-                        state_ = VisionOperatingState::kStopped;
+                        state_ = DeviceOperatingState::kStopped;
                         clear_work = true;
-                        response_text = "vision processing initialized";
+                        response_text = config_.component_name + " initialized";
                     }
                     break;
                 case mqtt::ControlCommand::kStatusRequest:
-                    response_text = "vision state is " + std::string(ToString(state_));
+                    response_text = config_.component_name + " state is " + std::string(ToString(state_));
                     break;
                 case mqtt::ControlCommand::kDestinationSet:
                 case mqtt::ControlCommand::kUnknown:
                     result = mqtt::CommandResult::kRejected;
                     error_code = "ERR-UNSUPPORTED-COMMAND";
-                    response_text = "vision command is not supported";
+                    response_text = config_.component_name + " command is not supported";
                     break;
             }
         }
     }
 
-    return VisionControlDecision{
+    return DeviceControlDecision{
         .response =
             mqtt::MqttMessage{
                 .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
                 .message_id = std::move(response_message_id),
                 .message_type = mqtt::MessageType::kCommandResponse,
-                .source_id = device_id_,
+                .source_id = config_.device_id,
                 .timestamp = std::move(timestamp),
                 .data =
                     mqtt::CommandResponsePayload{
@@ -181,38 +182,38 @@ std::optional<VisionControlDecision> VisionControlState::HandleCommand(const mqt
     };
 }
 
-void VisionControlState::SetCameraAvailable(const bool available) {
+void DeviceControlState::SetReady(const bool ready) {
     std::lock_guard lock(mutex_);
-    camera_available_ = available;
-    if (!available && state_ == VisionOperatingState::kRunning) {
-        state_ = VisionOperatingState::kError;
+    ready_ = ready;
+    if (!ready && state_ == DeviceOperatingState::kRunning) {
+        state_ = DeviceOperatingState::kError;
     }
 }
 
-bool VisionControlState::IsProcessingEnabled() const {
+bool DeviceControlState::IsOperational() const {
     std::lock_guard lock(mutex_);
-    return state_ == VisionOperatingState::kRunning && camera_available_;
+    return state_ == DeviceOperatingState::kRunning && ready_;
 }
 
-bool VisionControlState::ConsumeCameraResetRequest() {
+bool DeviceControlState::ConsumeResetRequest() {
     std::lock_guard lock(mutex_);
-    const bool requested = camera_reset_requested_;
-    camera_reset_requested_ = false;
+    const bool requested = reset_requested_;
+    reset_requested_ = false;
     return requested;
 }
 
-VisionOperatingState VisionControlState::State() const {
+DeviceOperatingState DeviceControlState::State() const {
     std::lock_guard lock(mutex_);
     return state_;
 }
 
-std::string VisionControlState::CurrentState() const {
+std::string DeviceControlState::CurrentState() const {
     std::lock_guard lock(mutex_);
     return std::string(ToString(state_));
 }
 
-bool VisionControlState::IsTargetedToThisNode(const std::string_view target_device_id) const noexcept {
-    return target_device_id == device_id_ || target_device_id == "ALL" || target_device_id == "SYSTEM";
+bool DeviceControlState::IsTargetedToThisNode(const std::string_view target_device_id) const noexcept {
+    return target_device_id == config_.device_id || target_device_id == "ALL" || target_device_id == "SYSTEM";
 }
 
-}  // namespace logistics::vision
+}  // namespace logistics::device

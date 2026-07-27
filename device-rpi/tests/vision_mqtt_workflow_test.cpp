@@ -5,11 +5,12 @@
 #include <string>
 
 #include "logistics/contracts/mqtt_validation.hpp"
-#include "vision_control_state.hpp"
+#include "logistics/device/device_control_state.hpp"
 
 namespace {
 
 namespace mqtt = logistics::contracts::mqtt;
+namespace device = logistics::device;
 namespace vision = logistics::vision;
 
 constexpr std::string_view kWorkId = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
@@ -73,13 +74,13 @@ mqtt::MqttMessage EmergencyStop() {
     };
 }
 
-const mqtt::CommandResponsePayload& ResponsePayload(const vision::VisionControlDecision& decision) {
+const mqtt::CommandResponsePayload& ResponsePayload(const device::DeviceControlDecision& decision) {
     const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(decision.response);
     assert(response != nullptr);
     return *response;
 }
 
-vision::VisionControlDecision Handle(vision::VisionControlState& control, const mqtt::MqttMessage& command,
+device::DeviceControlDecision Handle(device::DeviceControlState& control, const mqtt::MqttMessage& command,
                                      const int sequence) {
     auto decision = control.HandleCommand(command, "MSG-RESPONSE-" + std::to_string(sequence), "2026-07-21T11:00:02Z");
     assert(decision.has_value());
@@ -143,60 +144,68 @@ void TestMissingBarcodeProducesFailedResult() {
 }
 
 void TestVisionControlLifecycle() {
-    vision::VisionControlState control("PI-VISION-01");
-    assert(control.State() == vision::VisionOperatingState::kStopped);
-    assert(!control.IsProcessingEnabled());
+    device::DeviceControlState control({
+        .device_id = "PI-VISION-01",
+        .component_name = "vision",
+        .not_ready_error_code = "ERR-CAMERA-UNAVAILABLE",
+    });
+    assert(control.State() == device::DeviceOperatingState::kStopped);
+    assert(!control.IsOperational());
 
     auto decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 1);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
     assert(ResponsePayload(decision).error_code == "ERR-CAMERA-UNAVAILABLE");
 
-    control.SetCameraAvailable(true);
+    control.SetReady(true);
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 2);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
-    assert(control.State() == vision::VisionOperatingState::kRunning);
-    assert(control.IsProcessingEnabled());
+    assert(control.State() == device::DeviceOperatingState::kRunning);
+    assert(control.IsOperational());
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 3);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
     assert(decision.clear_work);
-    assert(control.State() == vision::VisionOperatingState::kStopped);
+    assert(control.State() == device::DeviceOperatingState::kStopped);
 
     static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kRestart), 4));
     decision = Handle(control, EmergencyStop(), 5);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
     assert(decision.clear_work);
-    assert(control.State() == vision::VisionOperatingState::kEmergencyStop);
+    assert(control.State() == device::DeviceOperatingState::kEmergencyStop);
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 6);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 7);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
-    assert(control.State() == vision::VisionOperatingState::kRecovering);
-    assert(control.ConsumeCameraResetRequest());
-    assert(!control.ConsumeCameraResetRequest());
+    assert(control.State() == device::DeviceOperatingState::kRecovering);
+    assert(control.ConsumeResetRequest());
+    assert(!control.ConsumeResetRequest());
 
-    control.SetCameraAvailable(false);
+    control.SetReady(false);
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 8);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
     assert(ResponsePayload(decision).error_code == "ERR-CAMERA-UNAVAILABLE");
 
-    control.SetCameraAvailable(true);
+    control.SetReady(true);
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 9);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
-    assert(control.State() == vision::VisionOperatingState::kStopped);
+    assert(control.State() == device::DeviceOperatingState::kStopped);
 
     static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 10));
-    control.SetCameraAvailable(false);
-    assert(control.State() == vision::VisionOperatingState::kError);
-    assert(!control.IsProcessingEnabled());
+    control.SetReady(false);
+    assert(control.State() == device::DeviceOperatingState::kError);
+    assert(!control.IsOperational());
 }
 
 void TestStopClearsPendingVisionWork() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
-    vision::VisionControlState control("PI-VISION-01");
-    control.SetCameraAvailable(true);
+    device::DeviceControlState control({
+        .device_id = "PI-VISION-01",
+        .component_name = "vision",
+        .not_ready_error_code = "ERR-CAMERA-UNAVAILABLE",
+    });
+    control.SetReady(true);
     static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 1));
 
     assert(workflow.Observe(Observation("8801234567893"), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
@@ -205,7 +214,7 @@ void TestStopClearsPendingVisionWork() {
     assert(decision.clear_work);
     workflow.Reset();
     assert(!workflow.TakeAssignedWork().has_value());
-    assert(!control.IsProcessingEnabled());
+    assert(!control.IsOperational());
 }
 
 }  // namespace
