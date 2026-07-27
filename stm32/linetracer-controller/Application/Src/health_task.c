@@ -15,11 +15,11 @@ static health_persisted_record_t s_persisted_record;
 static health_reset_cause_t s_reset_cause;
 static volatile health_task_snapshot_t s_health_snapshot;
 static volatile uint8_t s_health_snapshot_valid;
-static uint8_t s_persisted_fault_report_pending;
 static uint8_t s_persisted_fault_locked;
 static health_fault_record_t s_pending_safety_fault;
 static uint8_t s_pending_safety_fault_valid;
 static uint8_t s_safety_fault_active;
+static uint32_t s_observed_health_drop_counts[APP_TASK_COUNT];
 
 static uint32_t HealthTask_EnterShortCriticalSection(void) {
     uint32_t primask = __get_PRIMASK();
@@ -161,6 +161,31 @@ static void HealthTask_DrainEvents(void) {
     }
 }
 
+static void HealthTask_SampleHealthQueueDrops(uint32_t now_ms) {
+    uint32_t task;
+
+    for (task = 0U; task < (uint32_t)APP_TASK_COUNT; ++task) {
+        app_health_event_t event = { 0 };
+        health_fault_record_t fault;
+        uint32_t current_count = AppQueues_GetHealthDropCount((app_task_id_t)task);
+        uint32_t new_drops = current_count - s_observed_health_drop_counts[task];
+
+        if (new_drops == 0U) {
+            continue;
+        }
+
+        s_observed_health_drop_counts[task] = current_count;
+        s_health_stats.health_queue_drops_seen += new_drops;
+        event.type = APP_HEALTH_EVENT_QUEUE_FULL;
+        event.occurred_at_ms = now_ms;
+        event.detail = new_drops;
+        event.source_task = (app_task_id_t)task;
+        if (HealthLogic_HandleEvent(&s_health_logic, &event, &fault) != 0U) {
+            HealthTask_ReportFault(&fault, 1U);
+        }
+    }
+}
+
 static void HealthTask_SampleStacks(void) {
     uint32_t task;
 
@@ -194,6 +219,7 @@ static void HealthTask_Initialize(uint32_t now_ms) {
     (void)memset(&s_persisted_record, 0, sizeof(s_persisted_record));
     (void)memset((void*)&s_health_snapshot, 0, sizeof(s_health_snapshot));
     (void)memset(&s_pending_safety_fault, 0, sizeof(s_pending_safety_fault));
+    (void)memset(s_observed_health_drop_counts, 0, sizeof(s_observed_health_drop_counts));
     s_health_snapshot_valid = 0U;
     s_persisted_fault_locked = 0U;
     s_pending_safety_fault_valid = 0U;
@@ -201,7 +227,14 @@ static void HealthTask_Initialize(uint32_t now_ms) {
 
     HealthLogic_Init(&s_health_logic, HEALTH_REQUIRED_TASK_MASK, now_ms);
     s_reset_cause = HealthHw_CaptureResetCause();
-    s_persisted_fault_report_pending = HealthHw_LoadPersistedRecord(&s_persisted_record);
+    if ((HealthHw_LoadPersistedRecord(&s_persisted_record) != 0U) &&
+        (s_persisted_record.valid != 0U)) {
+        /*
+         * Backup-domain faults are historical diagnostic data. Re-publishing
+         * one as active would latch SafetyTask again after a successful reset.
+         */
+        s_last_fault = s_persisted_record.fault;
+    }
     HealthHw_StartWatchdog(HEALTH_IWDG_PRESCALER_REG, HEALTH_IWDG_RELOAD);
 }
 
@@ -216,12 +249,8 @@ void StartHealthTask(void* argument) {
         uint32_t now_ms = osKernelGetTickCount();
         uint8_t watchdog_allowed;
 
-        if ((s_persisted_fault_report_pending != 0U) && (s_persisted_record.valid != 0U)) {
-            HealthTask_ReportFault(&s_persisted_record.fault, 0U);
-            s_persisted_fault_report_pending = 0U;
-        }
-
         HealthTask_DrainEvents();
+        HealthTask_SampleHealthQueueDrops(now_ms);
         HealthTask_SampleStacks();
         HealthTask_Evaluate(now_ms);
         (void)HealthLogic_ClearExpiredTransientFaults(&s_health_logic, now_ms, HEALTH_TRANSIENT_FAULT_CLEAR_MS);

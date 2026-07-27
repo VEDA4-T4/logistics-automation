@@ -16,6 +16,7 @@ typedef struct {
     uint32_t fault_clears_reported;
     uint32_t safety_report_drops;
     uint32_t persisted_fault_skips;
+    uint32_t health_queue_drops_seen;
     uint32_t watchdog_refreshes;
     uint32_t watchdog_refresh_skips;
 } health_task_stats_t;

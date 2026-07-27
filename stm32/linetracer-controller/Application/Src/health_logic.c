@@ -40,6 +40,16 @@ static uint8_t HealthLogic_FaultAttributes(app_health_event_type_t type, health_
             *error_code = (uint8_t)UART_ERROR_TIMEOUT;
             return 1U;
 
+        case APP_HEALTH_EVENT_UART_RX_ERROR:
+            *reason = HEALTH_FAULT_UART_RX_ERROR;
+            *error_code = (uint8_t)UART_ERROR_INTERNAL;
+            return 1U;
+
+        case APP_HEALTH_EVENT_UART_TX_ERROR:
+            *reason = HEALTH_FAULT_UART_TX_ERROR;
+            *error_code = (uint8_t)UART_ERROR_INTERNAL;
+            return 1U;
+
         case APP_HEALTH_EVENT_INTERNAL_ERROR:
             *reason = HEALTH_FAULT_INTERNAL_ERROR;
             *error_code = (uint8_t)UART_ERROR_INTERNAL;
@@ -139,6 +149,11 @@ uint8_t HealthLogic_HandleEvent(health_logic_context_t* context, const app_healt
     recovery_target = HealthLogic_RecoveryTarget(event->type);
     if (recovery_target != APP_HEALTH_EVENT_NONE) {
         (void)HealthLogic_ClearEventFault(context, event->source_task, recovery_target);
+        if (event->type == APP_HEALTH_EVENT_UART_RX_RECOVERED) {
+            (void)HealthLogic_ClearEventFault(context, event->source_task, APP_HEALTH_EVENT_UART_RX_ERROR);
+        } else if (event->type == APP_HEALTH_EVENT_UART_TX_RECOVERED) {
+            (void)HealthLogic_ClearEventFault(context, event->source_task, APP_HEALTH_EVENT_UART_TX_ERROR);
+        }
         return 0U;
     }
 
@@ -221,7 +236,12 @@ uint8_t HealthLogic_Evaluate(health_logic_context_t* context, uint32_t now_ms, u
 
 uint32_t HealthLogic_ClearExpiredTransientFaults(health_logic_context_t* context, uint32_t now_ms,
                                                  uint32_t clear_timeout_ms) {
-    const app_health_event_type_t transient_types[] = { APP_HEALTH_EVENT_QUEUE_FULL, APP_HEALTH_EVENT_UART_TX_TIMEOUT };
+    const app_health_event_type_t transient_types[] = {
+        APP_HEALTH_EVENT_QUEUE_FULL,
+        APP_HEALTH_EVENT_UART_TX_TIMEOUT,
+        APP_HEALTH_EVENT_UART_RX_ERROR,
+        APP_HEALTH_EVENT_UART_TX_ERROR,
+    };
     uint32_t cleared = 0U;
     uint32_t task;
     uint32_t type_index;
