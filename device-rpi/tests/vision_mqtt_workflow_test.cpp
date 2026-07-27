@@ -5,6 +5,7 @@
 #include <string>
 
 #include "logistics/contracts/mqtt_validation.hpp"
+#include "vision_control_state.hpp"
 
 namespace {
 
@@ -35,6 +36,55 @@ mqtt::MqttMessage WorkCreated() {
         .timestamp = "2026-07-21T11:00:01Z",
         .data = mqtt::WorkCreatedPayload{ .work_id = std::string(kWorkId) },
     };
+}
+
+mqtt::MqttMessage ControlCommand(const mqtt::ControlCommand command, std::string request_id = "REQ-VISION-01",
+                                 std::string target_device_id = "PI-VISION-01") {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-CONTROL-01",
+        .message_type = mqtt::MessageType::kControlCommand,
+        .source_id = "central-server",
+        .timestamp = "2026-07-21T11:00:01Z",
+        .data =
+            mqtt::ControlCommandPayload{
+                .request_id = std::move(request_id),
+                .command = command,
+                .target_device_id = std::move(target_device_id),
+                .component_id = {},
+                .params = mqtt::Json::object(),
+            },
+    };
+}
+
+mqtt::MqttMessage EmergencyStop() {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-ESTOP-01",
+        .message_type = mqtt::MessageType::kEmergencyStop,
+        .source_id = "central-server",
+        .timestamp = "2026-07-21T11:00:01Z",
+        .data =
+            mqtt::EmergencyStopPayload{
+                .request_id = "REQ-ESTOP-01",
+                .command = mqtt::ControlCommand::kEmergencyStop,
+                .target_device_id = "ALL",
+            },
+    };
+}
+
+const mqtt::CommandResponsePayload& ResponsePayload(const vision::VisionControlDecision& decision) {
+    const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(decision.response);
+    assert(response != nullptr);
+    return *response;
+}
+
+vision::VisionControlDecision Handle(vision::VisionControlState& control, const mqtt::MqttMessage& command,
+                                     const int sequence) {
+    auto decision = control.HandleCommand(command, "MSG-RESPONSE-" + std::to_string(sequence), "2026-07-21T11:00:02Z");
+    assert(decision.has_value());
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceResponseTopic("PI-VISION-01"), decision->response).IsSuccess());
+    return std::move(*decision);
 }
 
 void TestDetectionAssignmentAndResultMessages() {
@@ -92,10 +142,78 @@ void TestMissingBarcodeProducesFailedResult() {
     assert(payload->message.has_value());
 }
 
+void TestVisionControlLifecycle() {
+    vision::VisionControlState control("PI-VISION-01");
+    assert(control.State() == vision::VisionOperatingState::kStopped);
+    assert(!control.IsProcessingEnabled());
+
+    auto decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 1);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
+    assert(ResponsePayload(decision).error_code == "ERR-CAMERA-UNAVAILABLE");
+
+    control.SetCameraAvailable(true);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 2);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
+    assert(control.State() == vision::VisionOperatingState::kRunning);
+    assert(control.IsProcessingEnabled());
+
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 3);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
+    assert(decision.clear_work);
+    assert(control.State() == vision::VisionOperatingState::kStopped);
+
+    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kRestart), 4));
+    decision = Handle(control, EmergencyStop(), 5);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
+    assert(decision.clear_work);
+    assert(control.State() == vision::VisionOperatingState::kEmergencyStop);
+
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 6);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
+
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 7);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
+    assert(control.State() == vision::VisionOperatingState::kRecovering);
+    assert(control.ConsumeCameraResetRequest());
+    assert(!control.ConsumeCameraResetRequest());
+
+    control.SetCameraAvailable(false);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 8);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
+    assert(ResponsePayload(decision).error_code == "ERR-CAMERA-UNAVAILABLE");
+
+    control.SetCameraAvailable(true);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 9);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
+    assert(control.State() == vision::VisionOperatingState::kStopped);
+
+    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 10));
+    control.SetCameraAvailable(false);
+    assert(control.State() == vision::VisionOperatingState::kError);
+    assert(!control.IsProcessingEnabled());
+}
+
+void TestStopClearsPendingVisionWork() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
+    vision::VisionControlState control("PI-VISION-01");
+    control.SetCameraAvailable(true);
+    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 1));
+
+    assert(workflow.Observe(Observation("8801234567893"), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
+    assert(workflow.AssignWork(WorkCreated()));
+    const auto decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 2);
+    assert(decision.clear_work);
+    workflow.Reset();
+    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!control.IsProcessingEnabled());
+}
+
 }  // namespace
 
 int main() {
     TestDetectionAssignmentAndResultMessages();
     TestMissingBarcodeProducesFailedResult();
+    TestVisionControlLifecycle();
+    TestStopClearsPendingVisionWork();
     return 0;
 }

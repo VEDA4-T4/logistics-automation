@@ -85,7 +85,11 @@ target_include_directories(device_status PUBLIC common/include)
 target_link_libraries(device_status PUBLIC logistics::contracts)
 logistics_enable_warnings(device_status)
 
-add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
+add_library(
+    vision_mqtt_workflow
+    vision-node/vision_control_state.cpp
+    vision-node/vision_mqtt_workflow.cpp
+)
 add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
 target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
 target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
