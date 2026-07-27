@@ -171,6 +171,35 @@ struct Fixture {
         assert(session->PollOnce().Succeeded());
     }
 
+    void PushControllerEvent(std::uint8_t event_id, std::uint8_t kind, std::uint8_t cause, std::uint8_t result = 0U) {
+        uart_frame_t event{};
+        event.version = UART_PROTOCOL_VERSION;
+        event.sequence = next_event_sequence++;
+        event.command = UART_CMD_EVENT;
+        event.length = event_id == 0x03U ? 8U : 7U;
+        event.payload[UART_EVENT_ID_INDEX] = event_id;
+        event.payload[1U] = kind;
+        event.payload[2U] = cause;
+        if (event.length == 8U) {
+            event.payload[7U] = result;
+        }
+        backend->PushRead(Encode(event));
+        assert(session->PollOnce().Succeeded());
+    }
+
+    void PushHeartbeat(std::uint8_t state, std::uint8_t error) {
+        uart_frame_t event{};
+        event.version = UART_PROTOCOL_VERSION;
+        event.sequence = next_event_sequence++;
+        event.command = UART_CMD_EVENT;
+        event.length = 9U;
+        event.payload[UART_EVENT_ID_INDEX] = 0x01U;
+        event.payload[1U] = state;
+        event.payload[2U] = error;
+        backend->PushRead(Encode(event));
+        assert(session->PollOnce().Succeeded());
+    }
+
     FakeUartIoBackend* backend{};
     std::unique_ptr<UartSession> session;
     std::unique_ptr<SortingNode> node;
@@ -204,7 +233,8 @@ mqtt::MqttMessage MakeDestination(std::string destination = "2", std::string tar
     };
 }
 
-mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string component = {}) {
+mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string component = {},
+                              mqtt::Json params = mqtt::Json::object()) {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = "MSG-CONTROL-01",
@@ -217,7 +247,23 @@ mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string componen
                 .command = command,
                 .target_device_id = "PI-SORT-01",
                 .component_id = std::move(component),
-                .params = mqtt::Json::object(),
+                .params = std::move(params),
+            },
+    };
+}
+
+mqtt::MqttMessage MakeEmergencyStop() {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-ESTOP-01",
+        .message_type = mqtt::MessageType::kEmergencyStop,
+        .source_id = "SERVER-01",
+        .timestamp = "2026-07-24T10:00:02+09:00",
+        .data =
+            mqtt::EmergencyStopPayload{
+                .request_id = "REQ-ESTOP-01",
+                .command = mqtt::ControlCommand::kEmergencyStop,
+                .target_device_id = "PI-SORT-01",
             },
     };
 }
@@ -302,6 +348,61 @@ void TestNackDoesNotActivateCycleAndReportsFailure() {
     assert(response.error_code == "ERR-UART-PAYLOAD");
 }
 
+void TestStartConfiguresSpeedBeforeStartingConveyor() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart)).status ==
+           SortingCommandStatus::kInvalidSpeed);
+    assert(fixture.backend->writes.empty());
+
+    mqtt::Json params = mqtt::Json::object();
+    params["speed"] = 50;
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, {}, params));
+    assert(result.Succeeded());
+    assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
+    assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
+
+    fixture.PushOperationResult();
+    assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_START);
+    assert(fixture.session->HasPendingCommand());
+    assert(fixture.reports.empty());
+
+    fixture.PushOperationResult();
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.reports.size() == 2U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.back());
+    assert(response.result == mqtt::CommandResult::kSuccess);
+}
+
+void TestEmergencyStopPreemptsPendingCommandAndIsNotRetried() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    assert(fixture.session->HasPendingCommand());
+
+    const auto result = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+
+    assert(result.status == SortingCommandStatus::kSentNoReply);
+    assert(fixture.LastCommand().command == UART_CMD_EMERGENCY_STOP);
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.backend->writes.size() == 2U);
+    assert(fixture.reports.size() == 1U);
+    const auto& preempted = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(preempted.result == mqtt::CommandResult::kFailed);
+    assert(preempted.error_code == "ERR-EMERGENCY-STOP");
+
+    fixture.session->Tick(std::chrono::milliseconds{ UART_ACK_TIMEOUT_MS * 4U });
+    assert(fixture.backend->writes.size() == 2U);
+}
+
+void TestSafetyRecoveryUsesOneWayDeviceReset() {
+    Fixture fixture;
+
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery, "SAFETY"));
+
+    assert(result.status == SortingCommandStatus::kSentNoReply);
+    assert(fixture.LastCommand().command == UART_CMD_RESET_DEVICE);
+    assert(!fixture.session->HasPendingCommand());
+}
+
 void TestReturnHomeAndCycleCompletePublishCompletion() {
     Fixture fixture;
     ActivateCycle(fixture);
@@ -375,6 +476,27 @@ void TestSensorStatusPublishesEveryDistanceMeasurement() {
     assert(second.distance_cm == 37);
 }
 
+void TestSafetyAndHealthEventsAreDecodedAndDeduplicated() {
+    Fixture fixture;
+
+    fixture.PushControllerEvent(0x03U, 1U, 2U);
+    fixture.PushControllerEvent(0x03U, 1U, 2U);
+    assert(fixture.reports.size() == 2U);
+    const auto& safety = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.back());
+    assert(safety.error_code == "ERR-EMERGENCY-STOP");
+
+    fixture.reports.clear();
+    fixture.PushControllerEvent(0x04U, 2U, 3U);
+    fixture.PushControllerEvent(0x04U, 2U, 3U);
+    assert(fixture.reports.size() == 1U);
+    const auto& health = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.front());
+    assert(health.error_code == "ERR-HEALTH-QUEUE-OVERFLOW");
+
+    fixture.PushHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE);
+    fixture.PushControllerEvent(0x04U, 2U, 3U);
+    assert(fixture.reports.size() == 3U);
+}
+
 void TestCommandTimeoutReportsTimeout() {
     Fixture fixture;
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
@@ -409,10 +531,14 @@ int main() {
     TestDuplicateAndConflictingWorkAreRejectedWithoutSecondMotion();
     TestBusyPreservesCommandOrderAtNodeBoundary();
     TestNackDoesNotActivateCycleAndReportsFailure();
+    TestStartConfiguresSpeedBeforeStartingConveyor();
+    TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
+    TestSafetyRecoveryUsesOneWayDeviceReset();
     TestReturnHomeAndCycleCompletePublishCompletion();
     TestReconnectStatusQueryPublishesControllerState();
     TestReconnectStatusRejectsDestinationMappingMismatch();
     TestSensorStatusPublishesEveryDistanceMeasurement();
+    TestSafetyAndHealthEventsAreDecodedAndDeduplicated();
     TestCommandTimeoutReportsTimeout();
     return 0;
 }

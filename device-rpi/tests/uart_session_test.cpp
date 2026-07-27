@@ -368,6 +368,37 @@ void TestAckTimeoutRetriesSameFrameThreeTimes() {
     assert(fixture.events.back().type == UartSessionEventType::kAckTimeout);
 }
 
+void TestOneWayCommandIsWrittenOnceWithoutPendingRetry() {
+    Fixture fixture;
+    fixture.backend->PushWrite(UART_FRAME_OVERHEAD_SIZE);
+
+    const auto result = fixture.session->SendOneWayCommand(UART_CMD_EMERGENCY_STOP);
+
+    assert(result.Succeeded());
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.backend->writes.size() == 1U);
+    fixture.session->Tick(std::chrono::milliseconds{ UART_ACK_TIMEOUT_MS * 4U });
+    assert(fixture.backend->writes.size() == 1U);
+    assert(fixture.session->Diagnostics().command_retries == 0U);
+    assert(fixture.session->Diagnostics().ack_timeouts == 0U);
+}
+
+void TestPendingCommandCanBeCancelledBeforeOneWaySafetyCommand() {
+    Fixture fixture;
+    static_cast<void>(SendRouteCommand(fixture));
+    assert(fixture.session->HasPendingCommand());
+
+    assert(fixture.session->CancelPendingCommand());
+    assert(!fixture.session->HasPendingCommand());
+    assert(!fixture.session->CancelPendingCommand());
+
+    fixture.backend->PushWrite(UART_FRAME_OVERHEAD_SIZE);
+    const auto result = fixture.session->SendOneWayCommand(UART_CMD_RESET_DEVICE);
+    assert(result.Succeeded());
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.backend->writes.size() == 2U);
+}
+
 void TestDisconnectFailsPendingCommand() {
     Fixture fixture;
     const std::uint8_t sequence = SendRouteCommand(fixture);
@@ -399,6 +430,8 @@ int main() {
     TestUnexpectedResponseDoesNotPoisonNextSequence();
     TestDuplicateFrameIsNotDeliveredTwice();
     TestAckTimeoutRetriesSameFrameThreeTimes();
+    TestOneWayCommandIsWrittenOnceWithoutPendingRetry();
+    TestPendingCommandCanBeCancelledBeforeOneWaySafetyCommand();
     TestDisconnectFailsPendingCommand();
     return 0;
 }
