@@ -252,8 +252,8 @@ bool OperationsDashboardState::expireStaleProcesses(const QDateTime& timestamp) 
     return true;
 }
 
-DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject& envelope,
-                                                              const QDateTime& received_at) {
+DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject& envelope, const QDateTime& received_at,
+                                                              const bool apply_command_to_overall) {
     const auto type_text = envelope.value(QString::fromLatin1(mqtt::kMessageTypeField)).toString();
     const auto type = mqtt::MessageTypeFromString(type_text.toStdString());
     if (!IsDashboardMessage(type)) {
@@ -333,6 +333,10 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
     }
 
     if (type == mqtt::MessageType::kCommandResponse) {
+        if (!apply_command_to_overall) {
+            rememberMessage(message_id);
+            return result;
+        }
         if (overall_.updated_at.isValid() && timestamp < overall_.updated_at) {
             return result;
         }

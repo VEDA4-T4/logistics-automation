@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QQueue>
+#include <QSet>
 #include <QString>
 #include <QUrl>
 #include <cstddef>
@@ -79,6 +81,8 @@ private:
     QString control_target_device_id_{ "SYSTEM" };
     QString pending_target_device_id_;
     QString pending_request_id_;
+    QSet<QString> individual_command_request_ids_;
+    QQueue<QString> individual_command_request_order_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
     CurrentProductState current_product_state_;
     OperationalLogState operational_log_state_;

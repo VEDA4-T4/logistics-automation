@@ -653,6 +653,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             [this](qint32, const QString& request_id, logistics::contracts::mqtt::ControlCommand command) {
                 pending_request_id_ = request_id;
                 pending_command_ = command;
+                if (pending_target_device_id_ != QStringLiteral("SYSTEM") &&
+                    pending_target_device_id_ != QStringLiteral("ALL")) {
+                    individual_command_request_ids_.insert(request_id);
+                    individual_command_request_order_.enqueue(request_id);
+                    constexpr qsizetype kMaximumRememberedCommandTargets = 256;
+                    while (individual_command_request_order_.size() > kMaximumRememberedCommandTargets) {
+                        individual_command_request_ids_.remove(individual_command_request_order_.dequeue());
+                    }
+                }
                 process_control_panel_->setCommandPending(command);
 
                 const auto timeout = logistics::contracts::mqtt::CommandResponseTimeout(command);
@@ -1021,13 +1030,20 @@ void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand c
 
 void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& envelope) {
     const auto parsed_topic = logistics::contracts::mqtt::ParseTopic(topic.toStdString());
+    const auto response_request_id = envelope.value(QString::fromLatin1(logistics::contracts::mqtt::kDataField))
+                                         .toObject()
+                                         .value(QString::fromLatin1(logistics::contracts::mqtt::kRequestIdField))
+                                         .toString();
+    const bool is_individual_response = parsed_topic.kind == logistics::contracts::mqtt::TopicKind::kQtResponse &&
+                                        individual_command_request_ids_.contains(response_request_id);
     const auto log_update = operational_log_state_.applyEnvelope(topic, envelope);
     if (log_update.applied) {
         refreshOperationalLogPanel();
     } else if (log_update.handled && !log_update.error.isEmpty()) {
         statusBar()->showMessage(log_update.error, 4000);
     }
-    const auto dashboard_update = operations_dashboard_state_.applyEnvelope(envelope, QDateTime::currentDateTimeUtc());
+    const auto dashboard_update =
+        operations_dashboard_state_.applyEnvelope(envelope, QDateTime::currentDateTimeUtc(), !is_individual_response);
     if (dashboard_update.applied) {
         operations_dashboard_panel_->setState(operations_dashboard_state_);
         process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,

@@ -259,6 +259,20 @@ int main() {
     assert(result.applied && state.overall().state == OverallProcessState::Stopped);
     assert(state.overall().stage == QStringLiteral("복구 완료 · 시작 대기"));
 
+    OperationsDashboardState individual_command_state;
+    result = individual_command_state.applyEnvelope(
+        Envelope("VISION-RUNNING", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"), "PI-VISION-01"));
+    assert(result.applied && individual_command_state.overall().state == OverallProcessState::Running);
+    result = individual_command_state.applyEnvelope(
+        Envelope("INDIVIDUAL-STOP", "COMMAND_RESPONSE",
+                 { { QStringLiteral("requestId"), QStringLiteral("REQ-INDIVIDUAL") },
+                   { QStringLiteral("command"), QStringLiteral("STOP") },
+                   { QStringLiteral("result"), QStringLiteral("SUCCESS") } },
+                 "central-server", "2026-07-23T01:00:01.000Z"),
+        {}, false);
+    assert(result.handled && !result.applied);
+    assert(individual_command_state.overall().state == OverallProcessState::Running);
+
     result = state.applyEnvelope(Envelope("VISION-RECOVERED", "DEVICE_STATUS", DeviceStatus("ONLINE", "STOPPED"),
                                           "PI-VISION-01", "2026-07-23T01:00:14.500Z"));
     assert(result.applied);
