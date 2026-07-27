@@ -73,6 +73,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
     std::optional<std::string> error_code;
     std::string response_text;
     bool clear_work = false;
+    bool state_changed = false;
 
     {
         std::lock_guard lock(mutex_);
@@ -96,6 +97,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " is not ready";
                     } else {
                         state_ = DeviceOperatingState::kRunning;
+                        state_changed = true;
                         response_text = config_.component_name + " started";
                     }
                     break;
@@ -108,11 +110,13 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " cannot stop from the current state";
                     } else {
                         state_ = DeviceOperatingState::kStopped;
+                        state_changed = true;
                         clear_work = true;
                         response_text = config_.component_name + " stopped";
                     }
                     break;
                 case mqtt::ControlCommand::kEmergencyStop:
+                    state_changed = state_ != DeviceOperatingState::kEmergencyStop;
                     state_ = DeviceOperatingState::kEmergencyStop;
                     pending_recovery_request_id_.reset();
                     clear_work = true;
@@ -124,6 +128,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                     } else if (state_ == DeviceOperatingState::kRecovering) {
                         if (ready_) {
                             state_ = DeviceOperatingState::kRecoveryReady;
+                            state_changed = true;
                             pending_recovery_request_id_.reset();
                             response_text = config_.component_name + " recovery completed";
                         } else {
@@ -139,6 +144,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " recovery requires ERROR or EMERGENCY_STOP";
                     } else {
                         state_ = DeviceOperatingState::kRecovering;
+                        state_changed = true;
                         ready_ = false;
                         reset_requested_ = true;
                         pending_recovery_request_id_ = std::string(request->request_id);
@@ -160,6 +166,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " initialization requires RECOVERY_READY";
                     } else {
                         state_ = DeviceOperatingState::kStopped;
+                        state_changed = true;
                         pending_recovery_request_id_.reset();
                         clear_work = true;
                         response_text = config_.component_name + " initialized";
@@ -182,6 +189,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
         .response = MakeResponse(request->request_id, request->command, result, std::move(error_code),
                                  std::move(response_text), std::move(response_message_id), std::move(timestamp)),
         .clear_work = clear_work,
+        .state_changed = state_changed,
     };
 }
 
@@ -206,6 +214,14 @@ void DeviceControlState::SetReady(const bool ready) {
     if (!ready && (state_ == DeviceOperatingState::kRunning || state_ == DeviceOperatingState::kStopped ||
                    state_ == DeviceOperatingState::kRecoveryReady)) {
         state_ = DeviceOperatingState::kError;
+    }
+}
+
+void DeviceControlState::SetFault() {
+    std::lock_guard lock(mutex_);
+    if (state_ == DeviceOperatingState::kRunning) {
+        state_ = DeviceOperatingState::kError;
+        pending_recovery_request_id_.reset();
     }
 }
 

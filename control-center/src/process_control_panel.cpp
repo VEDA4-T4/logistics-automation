@@ -80,6 +80,9 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
     if (state == QStringLiteral("ERROR") || state.endsWith(QStringLiteral("_ERROR"))) {
         return ProcessControlPhase::Error;
     }
+    if (state == QStringLiteral("WAITING_FOR_PRODUCT")) {
+        return ProcessControlPhase::Running;
+    }
     if (state == QStringLiteral("IDLE") || state == QStringLiteral("READY") || state == QStringLiteral("WAITING") ||
         state == QStringLiteral("ONLINE") || state == QStringLiteral("COMPLETED")) {
         return ProcessControlPhase::Idle;

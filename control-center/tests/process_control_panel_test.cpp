@@ -51,6 +51,11 @@ int main(int argc, char* argv[]) {
     assert(start->isEnabled());
     assert(!recovery->isEnabled());
 
+    processes[0].current_state = QStringLiteral("WAITING_FOR_PRODUCT");
+    panel.setProcessStates(logistics::control_center::OverallProcessState::Running, processes);
+    assert(!start->isEnabled());
+    assert(!recovery->isEnabled());
+
     processes[0].current_state = QStringLiteral("RECOVERY_READY");
     panel.setProcessStates(logistics::control_center::OverallProcessState::Recovery, processes);
     assert(!start->isEnabled());

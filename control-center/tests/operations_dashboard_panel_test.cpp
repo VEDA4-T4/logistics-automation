@@ -61,6 +61,16 @@ int main(int argc, char* argv[]) {
     assert(has_gripper_title);
     assert(has_transfer_state);
 
+    assert(
+        state.applyEnvelope(DeviceEnvelope("VISION-WAITING", "PI-VISION-01", "WAITING_FOR_PRODUCT", "", 5)).applied);
+    panel.setState(state);
+    application.processEvents();
+    bool has_product_waiting_state = false;
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        has_product_waiting_state = has_product_waiting_state || label->text() == QStringLiteral("상품 감지 대기");
+    }
+    assert(has_product_waiting_state);
+
     QString selected_target;
     QObject::connect(
         &panel, &logistics::control_center::OperationsDashboardPanel::controlTargetSelected,

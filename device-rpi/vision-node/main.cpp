@@ -46,6 +46,9 @@ constexpr int kMaximumCameraFps = 240;
 constexpr int kBarcodeRecognitionTimeoutSeconds = 3;
 constexpr std::size_t kBarcodeCornerCount = 4;
 constexpr double kLatencySmoothingFactor = 0.1;
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+constexpr std::string_view kWaitingForProductState = "WAITING_FOR_PRODUCT";
+#endif
 const cv::Scalar kBoxOutlineColor{ 255, 128, 0 };
 const cv::Scalar kBarcodeBoxColor{ 0, 255, 0 };
 const cv::Scalar kErrorColor{ 0, 0, 255 };
@@ -368,7 +371,12 @@ int main(const int argc, char* argv[]) {
                 mqtt_workflow.Reset();
                 device_status->SetJobId(std::nullopt);
             }
-            device_status->SetCurrentState(control_state.CurrentState());
+            if (decision->state_changed) {
+                device_status->SetCurrentState(control_state.IsOperational()
+                                                   ? std::string(kWaitingForProductState)
+                                                   : control_state.CurrentState());
+                device_status->SetErrorCode(std::nullopt);
+            }
             if (const auto* response =
                     logistics::contracts::mqtt::GetPayload<logistics::contracts::mqtt::CommandResponsePayload>(
                         decision->response);
@@ -561,6 +569,11 @@ int main(const int argc, char* argv[]) {
                 }
             } else {
                 mqtt_workflow.CancelPendingWork();
+                if (control_state.IsOperational()) {
+                    control_state.SetFault();
+                    device_status->SetCurrentState(control_state.CurrentState());
+                    device_status->SetErrorCode("VISION_EVENT_PUBLISH_FAILED");
+                }
             }
         }
         if (detection_result.box.has_value() && !detection_result.barcodes.empty() &&
@@ -625,22 +638,20 @@ int main(const int argc, char* argv[]) {
                     logistics::device::CurrentIso8601Timestamp(), "IMAGE_CAPTURE_MISSING", "VISION_ERROR",
                     "barcode was detected without a captured frame", work->work_id)));
             }
-            if (control_state.IsOperational()) {
-                const bool all_published = position_published && barcode_published && image_published;
-                device_status->SetCurrentState(all_published ? "VISION_REPORTED" : "VISION_ERROR");
-                if (!all_published) {
-                    device_status->SetErrorCode("VISION_EVENT_PUBLISH_FAILED");
-                } else {
-                    device_status->SetErrorCode(std::nullopt);
-                }
-                if (!control_state.IsOperational()) {
-                    device_status->SetCurrentState(control_state.CurrentState());
-                }
+            const bool all_published = position_published && barcode_published && image_published;
+            mqtt_workflow.CompleteWork();
+            pending_capture.release();
+            device_status->SetJobId(std::nullopt);
+            if (all_published && control_state.IsOperational()) {
+                device_status->SetCurrentState(std::string(kWaitingForProductState));
+                device_status->SetErrorCode(std::nullopt);
+            } else if (!all_published && control_state.IsOperational()) {
+                control_state.SetFault();
+                device_status->SetCurrentState(control_state.CurrentState());
+                device_status->SetErrorCode("VISION_EVENT_PUBLISH_FAILED");
             } else {
                 device_status->SetCurrentState(control_state.CurrentState());
             }
-            mqtt_workflow.CompleteWork();
-            pending_capture.release();
         }
 #endif
 

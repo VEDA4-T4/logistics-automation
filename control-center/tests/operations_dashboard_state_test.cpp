@@ -123,6 +123,15 @@ int main() {
            logistics::contracts::mqtt::ConnectionState::kOnline);
     assert(ProcessByKey(mqtt_transition_state, QStringLiteral("input")).current_state == QStringLiteral("RUNNING"));
 
+    OperationsDashboardState operational_waiting_state;
+    result = operational_waiting_state.applyEnvelope(
+        Envelope("VISION-WAITING", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"), "PI-VISION-01"));
+    assert(result.applied);
+    assert(operational_waiting_state.overall().state == OverallProcessState::Running);
+    assert(operational_waiting_state.overall().active_unit_count == 0);
+    assert(operational_waiting_state.overall().active_work_count == 0);
+    assert(operational_waiting_state.overall().stage == QStringLiteral("가동 준비 완료 · 상품 대기 1"));
+
     result = state.applyEnvelope(Envelope("LEGACY-ROBOT", "DEVICE_STATUS", DeviceStatus("ONLINE", "PICKING"),
                                           "PI-ROBOT-01", "2026-07-23T01:00:02.500Z"));
     assert(result.handled && !result.applied);

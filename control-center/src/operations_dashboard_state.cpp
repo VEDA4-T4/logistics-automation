@@ -114,6 +114,10 @@ bool IsIdleState(const QString& current_state) {
            state == QStringLiteral("COMPLETED") || current_state == QStringLiteral("배송 완료");
 }
 
+bool IsOperationalWaitingState(const QString& current_state) {
+    return current_state.trimmed().compare(QStringLiteral("WAITING_FOR_PRODUCT"), Qt::CaseInsensitive) == 0;
+}
+
 bool IsEmergencyState(const QString& current_state) {
     const auto state = current_state.trimmed().toUpper();
     return state == QStringLiteral("ESTOP") || state == QStringLiteral("EMERGENCY_STOP");
@@ -138,7 +142,8 @@ bool IsBusy(const ProcessUnitStatus& process) {
         process.current_state.compare(QStringLiteral("COMPLETED"), Qt::CaseInsensitive) == 0) {
         return false;
     }
-    return !process.work_id.isEmpty() || !IsIdleState(process.current_state);
+    return !process.work_id.isEmpty() ||
+           (!IsIdleState(process.current_state) && !IsOperationalWaitingState(process.current_state));
 }
 
 QString CommandStage(const QString& command) {
@@ -386,6 +391,7 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
     int active_processes = 0;
     int error_processes = 0;
     int received_processes = 0;
+    int operational_waiting_processes = 0;
     bool emergency_stop = false;
     bool recovery = false;
     bool stopped = false;
@@ -401,6 +407,9 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
         emergency_stop = emergency_stop || IsEmergencyState(process.current_state);
         recovery = recovery || IsRecoveryState(process.current_state);
         stopped = stopped || IsStoppedState(process.current_state);
+        if (IsOperationalWaitingState(process.current_state)) {
+            ++operational_waiting_processes;
+        }
         if (process.has_error || IsConnectionError(process.connection_state)) {
             ++error_processes;
             if (first_error.isEmpty()) {
@@ -447,6 +456,9 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
         overall_.stage = QStringLiteral("가동 %1 · 대기 %2")
                              .arg(active_processes)
                              .arg(std::max(0, static_cast<int>(process_runtime_.size()) - active_processes));
+    } else if (operational_waiting_processes > 0) {
+        overall_.state = OverallProcessState::Running;
+        overall_.stage = QStringLiteral("가동 준비 완료 · 상품 대기 %1").arg(operational_waiting_processes);
     } else if (stopped) {
         overall_.state = OverallProcessState::Stopped;
         overall_.stage = QStringLiteral("공정 정지");

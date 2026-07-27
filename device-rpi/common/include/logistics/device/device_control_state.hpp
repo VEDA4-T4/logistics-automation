@@ -27,6 +27,7 @@ struct DeviceControlConfig final {
 struct DeviceControlDecision final {
     contracts::mqtt::MqttMessage response;
     bool clear_work{};
+    bool state_changed{};
 };
 
 class DeviceControlState final {
@@ -40,6 +41,7 @@ public:
                                                                                std::string timestamp);
 
     void SetReady(bool ready);
+    void SetFault();
 
     [[nodiscard]] bool IsOperational() const;
     [[nodiscard]] bool ConsumeResetRequest();

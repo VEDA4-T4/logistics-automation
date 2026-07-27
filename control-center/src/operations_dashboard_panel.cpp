@@ -127,6 +127,8 @@ QString CurrentStateText(const QString& current_state) {
         return QStringLiteral("준비 완료");
     if (state == QStringLiteral("RUNNING"))
         return QStringLiteral("가동 중");
+    if (state == QStringLiteral("WAITING_FOR_PRODUCT"))
+        return QStringLiteral("상품 감지 대기");
     if (state == QStringLiteral("WORK_ASSIGNED"))
         return QStringLiteral("작업 할당됨");
     if (state == QStringLiteral("AWAITING_WORK_ID"))
