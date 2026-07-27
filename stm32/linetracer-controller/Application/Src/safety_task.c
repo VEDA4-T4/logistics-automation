@@ -7,7 +7,9 @@
 #include "app_queues.h"
 #include "app_timing.h"
 #include "cmsis_os2.h"
+#include "control_task.h"
 #include "main.h"
+#include "safety_policy.h"
 
 extern osThreadId_t SafetyTaskHandle;
 
@@ -45,21 +47,18 @@ static volatile uint32_t s_duplicate_event_count;
 static volatile uint32_t s_invalid_event_count;
 static volatile uint32_t s_emergency_stop_interrupt_count;
 static uint8_t s_emergency_stop_input_reported;
+static uint8_t s_line_lost_sensor_active;
 
 static void SafetyTask_ProcessEvent(const app_safety_event_t* event);
 
 static void SafetyTask_PublishHealthEvent(app_health_event_type_t type, uint32_t detail, uint32_t now_ms) {
     app_health_event_t event = { 0 };
 
-    if (healthEventQueue == NULL) {
-        return;
-    }
-
     event.type = type;
     event.occurred_at_ms = now_ms;
     event.detail = detail;
     event.source_task = APP_TASK_SAFETY;
-    (void)osMessageQueuePut(healthEventQueue, &event, 0U, 0U);
+    (void)AppQueues_TryPutHealth(&event);
 }
 
 static uint32_t SafetyTask_EventToHazardMask(app_safety_event_type_t type) {
@@ -406,7 +405,19 @@ static void SafetyTask_HandleReset(const app_safety_event_t* request) {
     }
 }
 
+static uint8_t SafetyTask_LineLossApplies(void) {
+    app_control_snapshot_t snapshot;
+
+    if (!ControlTask_GetLatest(&snapshot)) {
+        return 0U;
+    }
+
+    return SafetyPolicy_LineLossApplies(&snapshot);
+}
+
 static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
+    app_safety_event_t momentary_clear;
+
     if (event == NULL) {
         return;
     }
@@ -416,11 +427,44 @@ static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
         return;
     }
 
+    if (event->type == APP_SAFETY_EVENT_LINE_LOST) {
+        s_line_lost_sensor_active = (event->active != 0U) ? 1U : 0U;
+        if (event->active != 0U && SafetyTask_LineLossApplies() == 0U) {
+            return;
+        }
+        if (event->active == 0U && (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) == 0U) {
+            return;
+        }
+    }
+
     if (event->active != 0U) {
         SafetyTask_ActivateHazard(event);
+        if (SafetyPolicy_IsMomentaryRemoteEstop(event) != 0U) {
+            momentary_clear = *event;
+            momentary_clear.active = 0U;
+            SafetyTask_DeactivateHazard(&momentary_clear);
+        }
     } else {
         SafetyTask_DeactivateHazard(event);
     }
+}
+
+static void SafetyTask_ReconcileLineLoss(uint32_t now_ms) {
+    app_safety_event_t event = { 0 };
+
+    if (s_line_lost_sensor_active == 0U ||
+        (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) != 0U ||
+        SafetyTask_LineLossApplies() == 0U) {
+        return;
+    }
+
+    event.type = APP_SAFETY_EVENT_LINE_LOST;
+    event.occurred_at_ms = now_ms;
+    event.reason = LINETRACER_STOP_REASON_LINE_LOST;
+    event.source_task = APP_TASK_SENSOR;
+    event.error_code = (uint8_t)UART_ERROR_SENSOR;
+    event.active = 1U;
+    SafetyTask_ActivateHazard(&event);
 }
 
 static void SafetyTask_ProcessEmergencyStopInput(uint32_t now_ms) {
@@ -489,6 +533,7 @@ static void SafetyTask_Initialize(void) {
     s_invalid_event_count = 0U;
     s_emergency_stop_interrupt_count = 0U;
     s_emergency_stop_input_reported = 0U;
+    s_line_lost_sensor_active = 0U;
     (void)osThreadFlagsClear(APP_SAFETY_NOTIFY_EMERGENCY_STOP);
 }
 
@@ -508,6 +553,7 @@ void StartSafetyTask(void* argument) {
         now_ms = osKernelGetTickCount();
         SafetyTask_ProcessEmergencyStopInput(now_ms);
         SafetyTask_ProcessQueue();
+        SafetyTask_ReconcileLineLoss(now_ms);
 
         if ((uint32_t)(now_ms - last_alive_ms) >= APP_TIMING_HEALTH_PERIOD_MS) {
             SafetyTask_PublishHealthEvent(APP_HEALTH_EVENT_TASK_ALIVE, s_safety_context.latched_hazard_mask, now_ms);

@@ -71,3 +71,27 @@ if(WIN32)
 else()
     add_test(NAME linetracer_route_planner_test COMMAND linetracer_route_planner_test)
 endif()
+
+add_executable(
+    linetracer_safety_policy_test
+    safety_policy_test.cpp
+    ../../Application/Src/safety_policy.c
+)
+
+target_include_directories(
+    linetracer_safety_policy_test
+    PRIVATE ../../Application/Inc
+)
+
+target_link_libraries(linetracer_safety_policy_test PRIVATE logistics::contracts)
+
+if(WIN32)
+    get_filename_component(LOGISTICS_SAFETY_POLICY_TEST_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    add_test(
+        NAME linetracer_safety_policy_test
+        COMMAND ${CMAKE_COMMAND} -E env "PATH=${LOGISTICS_SAFETY_POLICY_TEST_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:linetracer_safety_policy_test>
+    )
+else()
+    add_test(NAME linetracer_safety_policy_test COMMAND linetracer_safety_policy_test)
+endif()
