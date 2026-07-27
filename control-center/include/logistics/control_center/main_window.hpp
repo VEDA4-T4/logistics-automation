@@ -75,6 +75,7 @@ private:
     ProductResultPanel* product_result_panel_{ nullptr };
     ProcessControlPanel* process_control_panel_{ nullptr };
     QTimer* command_response_timer_{ nullptr };
+    QTimer* node_status_timer_{ nullptr };
     QString control_target_device_id_{ "SYSTEM" };
     QString pending_target_device_id_;
     QString pending_request_id_;

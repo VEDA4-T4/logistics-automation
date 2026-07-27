@@ -73,6 +73,7 @@ public:
     void configureProcesses(const QList<ProcessDefinition>& definitions);
     void markMqttConnectedAwaitingStatus(const QDateTime& timestamp);
     void markMqttDisconnected(const QDateTime& timestamp);
+    [[nodiscard]] bool expireStaleProcesses(const QDateTime& timestamp);
     [[nodiscard]] DashboardUpdateResult applyEnvelope(const QJsonObject& envelope);
     [[nodiscard]] const QList<ProcessUnitStatus>& processes() const noexcept;
     [[nodiscard]] const ProcessDashboardStatus& overall() const noexcept;

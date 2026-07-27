@@ -123,6 +123,21 @@ int main() {
            logistics::contracts::mqtt::ConnectionState::kOnline);
     assert(ProcessByKey(mqtt_transition_state, QStringLiteral("input")).current_state == QStringLiteral("RUNNING"));
 
+    OperationsDashboardState heartbeat_expiration_state;
+    result = heartbeat_expiration_state.applyEnvelope(Envelope("VISION-ONLINE", "DEVICE_STATUS",
+                                                               DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"),
+                                                               "PI-VISION-01", "2026-07-23T01:00:00.000Z"));
+    assert(result.applied);
+    assert(!heartbeat_expiration_state.expireStaleProcesses(
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:14.999Z"), Qt::ISODateWithMs)));
+    assert(heartbeat_expiration_state.expireStaleProcesses(
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:15.000Z"), Qt::ISODateWithMs)));
+    const auto expired_vision = ProcessByKey(heartbeat_expiration_state, QStringLiteral("vision"));
+    assert(expired_vision.connection_state == logistics::contracts::mqtt::ConnectionState::kOffline);
+    assert(expired_vision.current_state == QStringLiteral("DISCONNECTED"));
+    assert(expired_vision.work_id.isEmpty());
+    assert(expired_vision.error_code == QStringLiteral("ERR-HEARTBEAT-TIMEOUT"));
+
     OperationsDashboardState operational_waiting_state;
     result = operational_waiting_state.applyEnvelope(
         Envelope("VISION-WAITING", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"), "PI-VISION-01"));

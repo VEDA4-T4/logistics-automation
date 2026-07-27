@@ -548,6 +548,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     command_response_timer_ = new QTimer(this);
     command_response_timer_->setSingleShot(true);
     connect(command_response_timer_, &QTimer::timeout, this, &MainWindow::handleCommandTimeout);
+    node_status_timer_ = new QTimer(this);
+    node_status_timer_->setInterval(1000);
+    connect(node_status_timer_, &QTimer::timeout, this, [this]() {
+        if (!operations_dashboard_state_.expireStaleProcesses(QDateTime::currentDateTimeUtc())) {
+            return;
+        }
+        operations_dashboard_panel_->setState(operations_dashboard_state_);
+        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                                 operations_dashboard_state_.processes());
+    });
+    node_status_timer_->start();
     connect(process_control_panel_, &ProcessControlPanel::commandRequested, this, &MainWindow::sendControlCommand);
     connect(operations_dashboard_panel_, &OperationsDashboardPanel::controlTargetSelected, this,
             [this](const QString& target_device_id, const QString& display_name) {

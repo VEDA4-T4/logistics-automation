@@ -217,6 +217,41 @@ void OperationsDashboardState::markMqttDisconnected(const QDateTime& timestamp) 
     resetForMqttTransition(QStringLiteral("DISCONNECTED"), QStringLiteral("MQTT 연결 끊김"), timestamp);
 }
 
+bool OperationsDashboardState::expireStaleProcesses(const QDateTime& timestamp) {
+    if (!timestamp.isValid()) {
+        return false;
+    }
+
+    const auto stale_after =
+        std::chrono::duration_cast<std::chrono::milliseconds>(mqtt::kHeartbeatOfflineAfter).count();
+    bool changed = false;
+    for (auto& runtime : process_runtime_) {
+        auto& process = runtime.status;
+        if (!process.updated_at.isValid() ||
+            (process.connection_state != mqtt::ConnectionState::kOnline &&
+             process.connection_state != mqtt::ConnectionState::kDelayed &&
+             process.connection_state != mqtt::ConnectionState::kReconnecting) ||
+            process.updated_at.msecsTo(timestamp) < stale_after) {
+            continue;
+        }
+
+        process.connection_state = mqtt::ConnectionState::kOffline;
+        process.current_state = QStringLiteral("DISCONNECTED");
+        process.work_id.clear();
+        process.error_code = QStringLiteral("ERR-HEARTBEAT-TIMEOUT");
+        process.updated_at = timestamp;
+        process.has_error = true;
+        changed = true;
+    }
+    if (!changed) {
+        return false;
+    }
+
+    updateOverall(timestamp);
+    publishProcessSnapshots();
+    return true;
+}
+
 DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject& envelope) {
     const auto type_text = envelope.value(QString::fromLatin1(mqtt::kMessageTypeField)).toString();
     const auto type = mqtt::MessageTypeFromString(type_text.toStdString());
