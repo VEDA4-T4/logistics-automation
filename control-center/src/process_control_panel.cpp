@@ -162,7 +162,7 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     });
     connect(emergency_stop_button_, &QPushButton::clicked, this, [this]() {
         command_target_device_id_ = QStringLiteral("SYSTEM");
-        emit commandRequested(mqtt::ControlCommand::kEmergencyStop, command_target_device_id_);
+        emit commandRequested(mqtt::ControlCommand::kEmergencyStop, command_target_device_id_, {});
     });
 
     layout->addLayout(title_row);
@@ -182,13 +182,14 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(divider);
     layout->addWidget(emergency_stop_button_);
 
+    updateTargetPresentation();
     updateButtonStates();
 }
 
 void ProcessControlPanel::setControlTarget(const QString& target_device_id, const QString& display_name) {
     selected_target_device_id_ = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
     selected_target_display_name_ = display_name.isEmpty() ? selected_target_device_id_ : display_name;
-    target_label_->setText(QStringLiteral("제어 대상 · %1").arg(selected_target_display_name_));
+    updateTargetPresentation();
     applySelectedTargetState();
 }
 
@@ -243,6 +244,7 @@ void ProcessControlPanel::setProcessStates(const OverallProcessState overall_sta
                                            const QList<ProcessUnitStatus>& processes) {
     overall_state_ = overall_state;
     process_statuses_ = processes;
+    updateTargetPresentation();
     applySelectedTargetState();
 }
 
@@ -317,18 +319,90 @@ void ProcessControlPanel::requestCommand(mqtt::ControlCommand command, const QSt
     if (!control_state_.isMqttConnected() || control_state_.isCommandPending()) {
         return;
     }
-    const auto target_description =
-        QStringLiteral("%1 (%2)").arg(selected_target_display_name_, selectedTargetDeviceId());
+
+    auto target_device_id = selectedTargetDeviceId();
+    QString component_id;
+    auto target_description = QStringLiteral("%1 (%2)").arg(selected_target_display_name_, target_device_id);
+    auto scoped_confirmation = confirmation;
+    if (command == mqtt::ControlCommand::kRecovery && isConveyorTarget()) {
+        target_device_id = conveyorRecoveryTarget();
+        component_id = QStringLiteral("SAFETY");
+        target_description = QStringLiteral("컨베이어 시스템 · 투입 + 분류 (%1 경유)").arg(target_device_id);
+        scoped_confirmation = QStringLiteral(
+            "투입·분류 컨베이어의 공통 비상정지 상태를 복구하시겠습니까?\n"
+            "두 모터의 안전 상태를 확인한 뒤 공통 STBY가 해제됩니다.");
+    } else if (command == mqtt::ControlCommand::kRecovery && target_device_id == QStringLiteral("SYSTEM")) {
+        component_id = QStringLiteral("SAFETY");
+    }
+
     if (ShowConfirmationDialog(this, QStringLiteral("공정 제어 확인"),
-                               QStringLiteral("%1\n\n대상: %2").arg(confirmation, target_description),
+                               QStringLiteral("%1\n\n대상: %2").arg(scoped_confirmation, target_description),
                                CommandLabel(command))) {
-        command_target_device_id_ = selectedTargetDeviceId();
-        emit commandRequested(command, command_target_device_id_);
+        command_target_device_id_ = target_device_id;
+        emit commandRequested(command, command_target_device_id_, component_id);
     }
 }
 
 QString ProcessControlPanel::selectedTargetDeviceId() const {
     return selected_target_device_id_;
+}
+
+bool ProcessControlPanel::isConveyorTarget() const {
+    const auto target_device_id = selectedTargetDeviceId();
+    return std::any_of(process_statuses_.cbegin(), process_statuses_.cend(),
+                       [&target_device_id](const ProcessUnitStatus& process) {
+                           return (process.key == QString::fromLatin1(kInputProcessKey) ||
+                                   process.key == QString::fromLatin1(kSortingProcessKey)) &&
+                                  process.device_id == target_device_id;
+                       });
+}
+
+QString ProcessControlPanel::conveyorRecoveryTarget() const {
+    const auto is_available = [](const ProcessUnitStatus& process) {
+        return process.updated_at.isValid() && process.connection_state != mqtt::ConnectionState::kUnknown &&
+               process.connection_state != mqtt::ConnectionState::kOffline;
+    };
+    const auto find_process = [this](const char* key, bool require_available) -> const ProcessUnitStatus* {
+        const auto process = std::find_if(
+            process_statuses_.cbegin(), process_statuses_.cend(), [key, require_available](const auto& candidate) {
+                return candidate.key == QString::fromLatin1(key) &&
+                       (!require_available || (candidate.updated_at.isValid() &&
+                                               candidate.connection_state != mqtt::ConnectionState::kUnknown &&
+                                               candidate.connection_state != mqtt::ConnectionState::kOffline));
+            });
+        return process == process_statuses_.cend() ? nullptr : &*process;
+    };
+
+    for (const auto* key : { kInputProcessKey, kSortingProcessKey }) {
+        if (const auto* process = find_process(key, true); process != nullptr && is_available(*process)) {
+            return process->device_id;
+        }
+    }
+    for (const auto* key : { kInputProcessKey, kSortingProcessKey }) {
+        if (const auto* process = find_process(key, false); process != nullptr) {
+            return process->device_id;
+        }
+    }
+    return selectedTargetDeviceId();
+}
+
+void ProcessControlPanel::updateTargetPresentation() {
+    if (isConveyorTarget()) {
+        target_label_->setText(
+            QStringLiteral("제어 대상 · %1  |  복구 · 컨베이어 시스템").arg(selected_target_display_name_));
+        target_label_->setToolTip(
+            QStringLiteral("시작·정지는 선택한 노드에만 적용됩니다. 복구는 투입·분류 컨베이어의 공통 안전 상태에 "
+                           "적용됩니다."));
+        recovery_button_->setText(QStringLiteral("컨베이어 복구"));
+        return;
+    }
+
+    target_label_->setText(QStringLiteral("제어 대상 · %1").arg(selected_target_display_name_));
+    target_label_->setToolTip(selectedTargetDeviceId() == QStringLiteral("SYSTEM")
+                                  ? QStringLiteral("시작·정지·복구는 전체 공정에 적용됩니다.")
+                                  : QStringLiteral("시작·정지·복구는 선택한 노드에 적용됩니다."));
+    recovery_button_->setText(selectedTargetDeviceId() == QStringLiteral("SYSTEM") ? QStringLiteral("전체 복구")
+                                                                                   : QStringLiteral("복구"));
 }
 
 void ProcessControlPanel::applySelectedTargetState() {

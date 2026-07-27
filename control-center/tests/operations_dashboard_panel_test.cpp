@@ -52,6 +52,12 @@ int main(int argc, char* argv[]) {
     assert(panel.minimumHeight() == 112);
     assert(panel.maximumHeight() == 112);
     assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
+    const auto* conveyor_group = panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup"));
+    const auto* conveyor_title = panel.findChild<QLabel*>(QStringLiteral("conveyorSystemGroupTitle"));
+    assert(conveyor_group != nullptr);
+    assert(conveyor_title != nullptr);
+    assert(conveyor_title->text() == QStringLiteral("컨베이어 시스템 · 공통 안전 제어"));
+    assert(conveyor_group->findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 2);
     bool has_gripper_title = false;
     bool has_transfer_state = false;
     for (const auto* label : panel.findChildren<QLabel*>()) {
@@ -87,6 +93,21 @@ int main(int argc, char* argv[]) {
     QApplication::sendEvent(vision_card, &select_vision);
     assert(selected_target == QStringLiteral("PI-VISION-01"));
     assert(vision_card->property("selectedControlTarget").toBool());
+    assert(!conveyor_group->property("containsSelectedTarget").toBool());
+
+    QFrame* input_card = nullptr;
+    for (auto* card : panel.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
+        if (card->property("controlTargetDeviceId").toString() == QStringLiteral("PI-INPUT-01")) {
+            input_card = card;
+            break;
+        }
+    }
+    assert(input_card != nullptr);
+    QMouseEvent select_input(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
+                             Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(input_card, &select_input);
+    assert(selected_target == QStringLiteral("PI-INPUT-01"));
+    assert(conveyor_group->property("containsSelectedTarget").toBool());
 
     state.markMqttDisconnected(QDateTime::currentDateTimeUtc());
     panel.setState(state);

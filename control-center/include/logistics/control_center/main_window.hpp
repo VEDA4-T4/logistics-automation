@@ -46,7 +46,8 @@ private:
     void updatePlaybackState(std::size_t channel);
     void setChannelState(std::size_t channel, ChannelState state, const QString& detail = {});
     void reconnectChannel(std::size_t channel);
-    void sendControlCommand(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id);
+    void sendControlCommand(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id,
+                            const QString& component_id);
     void handleMqttMessage(const QString& topic, const QJsonObject& envelope);
     void completePendingRecoveryFromDeviceState();
     void handleCommandTimeout();

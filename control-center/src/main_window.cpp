@@ -1014,13 +1014,15 @@ void MainWindow::reconnectChannel(std::size_t channel) {
     video_streams_[channel]->start(stream_urls_[channel]);
 }
 
-void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand command,
-                                    const QString& target_device_id) {
+void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id,
+                                    const QString& component_id) {
     const auto actual_target = command == logistics::contracts::mqtt::ControlCommand::kEmergencyStop
                                    ? QStringLiteral("SYSTEM")
                                    : target_device_id;
     pending_target_device_id_ = actual_target;
-    const auto message_id = mqtt_client_->publishCommand(command, actual_target);
+    const auto actual_component =
+        command == logistics::contracts::mqtt::ControlCommand::kEmergencyStop ? QString{} : component_id;
+    const auto message_id = mqtt_client_->publishCommand(command, actual_target, actual_component);
     if (message_id < 0) {
         process_control_panel_->setCommandFinished(command, logistics::contracts::mqtt::CommandResult::kFailed,
                                                    QStringLiteral("MQTT 명령 발행 실패"));
