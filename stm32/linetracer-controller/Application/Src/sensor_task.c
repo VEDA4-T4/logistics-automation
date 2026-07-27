@@ -158,15 +158,11 @@ bool SensorTask_GetLatest(app_sensor_snapshot_t* snapshot) {
 static void PublishHealthEvent(app_health_event_type_t type, uint32_t now_ms, uint32_t detail) {
     app_health_event_t event = { 0 };
 
-    if (healthEventQueue == NULL) {
-        return;
-    }
-
     event.type = type;
     event.occurred_at_ms = now_ms;
     event.detail = detail;
     event.source_task = APP_TASK_SENSOR;
-    (void)osMessageQueuePut(healthEventQueue, &event, 0U, 0U);
+    (void)AppQueues_TryPutHealth(&event);
 }
 
 static void PublishSafetyEvent(app_safety_event_type_t type, linetracer_stop_reason_t reason, uint32_t now_ms,
@@ -460,7 +456,6 @@ static void UpdateCommonSensorError(sensor_task_context_t* context, uint32_t now
     } else {
         PublishSafetyEvent(APP_SAFETY_EVENT_SENSOR_FAULT, LINETRACER_STOP_REASON_SENSOR_FAULT, now_ms, 1U,
                            (uint8_t)current_errors);
-        PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR, now_ms, current_errors);
     }
 
     context->reported_error_flags = current_errors;
