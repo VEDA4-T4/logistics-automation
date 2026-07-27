@@ -38,6 +38,7 @@ typedef struct {
     uint32_t last_raw_activity_ms;
     uint32_t last_valid_frame_ms;
     uint8_t timeout_reported;
+    uint8_t monitoring_required;
 } comm_rx_link_monitor_t;
 
 typedef struct {
@@ -52,6 +53,7 @@ void CommRxLogic_CommitSequence(comm_rx_sequence_history_t* history, uint8_t seq
 void CommRxLogic_LinkInit(comm_rx_link_monitor_t* monitor, uint32_t now_ms);
 void CommRxLogic_LinkRecordRaw(comm_rx_link_monitor_t* monitor, uint32_t now_ms);
 void CommRxLogic_LinkRecordValidFrame(comm_rx_link_monitor_t* monitor, uint32_t now_ms);
+uint8_t CommRxLogic_LinkSetMonitoringRequired(comm_rx_link_monitor_t* monitor, uint8_t required, uint32_t now_ms);
 uint8_t CommRxLogic_LinkCheckTimeout(comm_rx_link_monitor_t* monitor, uint32_t now_ms, uint32_t timeout_ms);
 comm_rx_decode_result_t CommRxLogic_DecodeFrame(const comm_rx_sequence_history_t* history, const uart_frame_t* frame,
                                                 uint32_t now_ms, comm_rx_decoded_command_t* decoded);
