@@ -1,3 +1,43 @@
+include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
+
+add_library(device_uart_transport common/uart_bridge/uart_transport.cpp)
+add_library(logistics::device_uart_transport ALIAS device_uart_transport)
+target_include_directories(device_uart_transport PUBLIC common/include)
+logistics_enable_warnings(device_uart_transport)
+
+add_library(device_uart_session common/uart_bridge/uart_session.cpp)
+add_library(logistics::device_uart_session ALIAS device_uart_session)
+target_include_directories(device_uart_session PUBLIC common/include)
+target_link_libraries(device_uart_session PUBLIC logistics::device_uart_transport logistics::uart)
+logistics_enable_warnings(device_uart_session)
+
+add_library(device_linetracer_node linetracer-node/linetracer_node.cpp)
+add_library(logistics::device_linetracer_node ALIAS device_linetracer_node)
+target_include_directories(device_linetracer_node PUBLIC common/include)
+target_link_libraries(device_linetracer_node PUBLIC logistics::contracts logistics::device_uart_session)
+logistics_enable_warnings(device_linetracer_node)
+
+if(BUILD_TESTING)
+    add_executable(device_uart_transport_test tests/uart_transport_test.cpp)
+    target_link_libraries(device_uart_transport_test PRIVATE logistics::device_uart_transport)
+    logistics_enable_warnings(device_uart_transport_test)
+    add_test(NAME device_uart_transport_test COMMAND device_uart_transport_test)
+
+    add_executable(device_uart_session_test tests/uart_session_test.cpp)
+    target_link_libraries(device_uart_session_test PRIVATE logistics::device_uart_session)
+    logistics_enable_warnings(device_uart_session_test)
+    add_test(NAME device_uart_session_test COMMAND device_uart_session_test)
+
+    add_executable(device_linetracer_node_test tests/linetracer_node_test.cpp)
+    target_link_libraries(device_linetracer_node_test PRIVATE logistics::device_linetracer_node)
+    logistics_enable_warnings(device_linetracer_node_test)
+    add_test(NAME device_linetracer_node_test COMMAND device_linetracer_node_test)
+endif()
+
+if(NOT LOGISTICS_BUILD_DEVICE_NODES)
+    return()
+endif()
+
 add_library(
     device_mqtt_core
     common/config/mqtt_node_config.cpp
@@ -22,7 +62,6 @@ target_link_libraries(
 target_include_directories(device_mqtt_core PUBLIC common/include)
 target_link_libraries(device_mqtt_core PUBLIC logistics::contracts)
 
-include(${PROJECT_SOURCE_DIR}/cmake/ProjectWarnings.cmake)
 logistics_enable_warnings(device_mqtt_core)
 logistics_enable_warnings(device_log_spool)
 
@@ -134,6 +173,17 @@ add_device_node(logistics_input_node input-node/main.cpp)
 add_device_node(logistics_vision_node vision-node/main.cpp)
 add_device_node(logistics_sorting_node sorting-node/main.cpp)
 add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
+
+if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+    target_compile_definitions(logistics_linetracer_node PRIVATE LOGISTICS_LINETRACER_DAEMON_ENABLED=1)
+    target_link_libraries(
+        logistics_linetracer_node
+        PRIVATE
+            logistics::device_linetracer_node
+            logistics::device_mqtt_mosquitto
+            logistics::device_status
+    )
+endif()
 
 if(BUILD_TESTING)
     add_executable(device_mqtt_message_processor_test tests/mqtt_message_processor_test.cpp)

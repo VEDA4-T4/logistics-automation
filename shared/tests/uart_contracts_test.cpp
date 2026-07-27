@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "logistics/contracts/uart/input_commands.h"
+#include "logistics/contracts/uart/linetracer_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
 #include "logistics/contracts/uart_codec.h"
 #include "logistics/contracts/uart_crc16.h"
@@ -29,27 +30,33 @@ void TestCommonValidationDoesNotTruncateWideValues() {
 }
 
 void TestInputPayloadValidation() {
-    constexpr std::array<std::uint8_t, 1> kConveyor1{ UART_CONVEYOR_ID_1 };
-    constexpr std::array<std::uint8_t, 1> kInvalidConveyor{ 3U };
-    constexpr std::array<std::uint8_t, 2> kSpeed100{ UART_CONVEYOR_ID_2, 100U };
-    constexpr std::array<std::uint8_t, 2> kSpeed101{ UART_CONVEYOR_ID_2, 101U };
-    constexpr std::array<std::uint8_t, 5> kVisionResult{ 0x34U, 0x12U, UART_VISION_DETECTED, 2U, 90U };
+    constexpr std::array<std::uint8_t, 1> kUnexpectedPayload{ 1U };
+    constexpr std::array<std::uint8_t, 1> kSpeed100{ 100U };
+    constexpr std::array<std::uint8_t, 1> kSpeed101{ 101U };
+    constexpr std::array<std::uint8_t, 5> kVisionResult{ 0x34U, 0x12U, UART_INPUT_VISION_DETECTED, 2U, 90U };
+    constexpr std::array<std::uint8_t, 4> kInputSensorDetected{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_DETECTED, 10U, 0U };
+    constexpr std::array<std::uint8_t, 4> kInvalidInputSensor{ 2U, UART_SENSOR_DETECTED, 10U, 0U };
 
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONVEYOR_START, kConveyor1.data(), kConveyor1.size()) != 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONVEYOR_START, kInvalidConveyor.data(), kInvalidConveyor.size()) ==
-           0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONVEYOR_SET_SPEED, kSpeed100.data(), kSpeed100.size()) != 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONVEYOR_SET_SPEED, kSpeed101.data(), kSpeed101.size()) == 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_CONTROL_RESET, nullptr, 0U) != 0U);
-    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_VISION_RESULT, kVisionResult.data(), kVisionResult.size()) != 0U);
-    assert(uart_vision_cycle_id(kVisionResult.data()) == 0x1234U);
-    assert(UART_CONVEYOR_STATUS_PAYLOAD_SIZE == 6U);
+    assert(UART_IS_VALID_INPUT_COMMAND(UART_CMD_INPUT_CONVEYOR_START) != 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_START, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_START, kUnexpectedPayload.data(),
+                                       kUnexpectedPayload.size()) == 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_SET_SPEED, kSpeed100.data(), kSpeed100.size()) != 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONVEYOR_SET_SPEED, kSpeed101.data(), kSpeed101.size()) == 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONTROL_RESET, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_VISION_RESULT, kVisionResult.data(), kVisionResult.size()) != 0U);
+    assert(uart_input_vision_cycle_id(kVisionResult.data()) == 0x1234U);
+    assert(uart_input_sensor_status_is_valid(kInputSensorDetected.data(), kInputSensorDetected.size()) != 0U);
+    assert(uart_input_sensor_status_is_valid(kInvalidInputSensor.data(), kInvalidInputSensor.size()) == 0U);
+    assert(UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
 }
 
 void TestSortingPayloadValidation() {
     constexpr std::array<std::uint8_t, 3> kRouteDestination2{ 0x34U, 0x12U, UART_SORTING_DESTINATION_2 };
     constexpr std::array<std::uint8_t, 3> kInvalidDestination{ 0x34U, 0x12U, 4U };
     constexpr std::array<std::uint8_t, 2> kCancelCycle{ 0x34U, 0x12U };
+    constexpr std::array<std::uint8_t, 1> kSortingSpeed100{ 100U };
+    constexpr std::array<std::uint8_t, 1> kSortingSpeed101{ 101U };
     constexpr std::array<std::uint8_t, 4> kSensorDetected{ UART_SORTING_SENSOR_ID_2, UART_SENSOR_DETECTED, 10U, 0U };
     constexpr std::array<std::uint8_t, 4> kCompleteEvent{ UART_SORTING_EVENT_CYCLE_COMPLETE, 0x34U, 0x12U,
                                                           UART_SORTING_DESTINATION_2 };
@@ -75,9 +82,20 @@ void TestSortingPayloadValidation() {
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_GET_STATUS, nullptr, 0U) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RESET, nullptr, 0U) != 0U);
     assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_RESET, nullptr, 256U) == 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_START, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_STOP, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_GET_STATUS, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_SET_SPEED, kSortingSpeed100.data(),
+                                         kSortingSpeed100.size()) != 0U);
+    assert(UART_IS_VALID_SORTING_PAYLOAD(UART_CMD_SORTING_CONVEYOR_SET_SPEED, kSortingSpeed101.data(),
+                                         kSortingSpeed101.size()) == 0U);
 
     assert(uart_sorting_route_cycle_id(kRouteDestination2.data()) == 0x1234U);
     assert(uart_sorting_cancel_cycle_id(kCancelCycle.data()) == 0x1234U);
+    assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_1) != 0U);
+    assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_2) != 0U);
+    assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_3) != 0U);
+    assert(uart_sorting_sensor_id_is_valid(4U) == 0U);
     assert(uart_sorting_sensor_matches_destination(UART_SORTING_SENSOR_ID_2, UART_SORTING_DESTINATION_2) != 0U);
     assert(uart_sorting_sensor_matches_destination(UART_SORTING_SENSOR_ID_1, UART_SORTING_DESTINATION_2) == 0U);
     assert(uart_sorting_sensor_status_is_valid(kSensorDetected.data(), kSensorDetected.size()) != 0U);
@@ -87,19 +105,88 @@ void TestSortingPayloadValidation() {
                                                kInvalidUnexpectedSensorEvent.size()) == 0U);
     assert(UART_IS_VALID_SORTING_EVENT_PAYLOAD(kFaultEvent.data(), kFaultEvent.size()) != 0U);
     assert(UART_SORTING_STATUS_PAYLOAD_SIZE == 7U);
+    assert(UART_SORTING_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
     assert(UART_SORTING_CYCLE_EVENT_PAYLOAD_SIZE == 4U);
     assert(UART_SORTING_UNEXPECTED_EVENT_PAYLOAD_SIZE == 5U);
     assert(UART_SORTING_FAULT_EVENT_PAYLOAD_SIZE == 5U);
+}
+
+void TestLineTracerPayloadValidation() {
+    constexpr std::array<std::uint8_t, 3> kAssignRouteB{ 0x34U, 0x12U, UART_LINETRACER_ROUTE_B };
+    constexpr std::array<std::uint8_t, 3> kAssignWithoutJob{ 0x00U, 0x00U, UART_LINETRACER_ROUTE_B };
+    constexpr std::array<std::uint8_t, 3> kAssignInvalidRoute{ 0x34U, 0x12U, 4U };
+    constexpr std::array<std::uint8_t, 2> kStopJob{ 0x34U, 0x12U };
+    constexpr std::array<std::uint8_t, 1> kPositionA{ UART_LINETRACER_POSITION_DEST_A };
+    constexpr std::array<std::uint8_t, 1> kPositionC{ UART_LINETRACER_POSITION_DEST_C };
+    constexpr std::array<std::uint8_t, 1> kPositionNone{ UART_LINETRACER_POSITION_NONE };
+    constexpr std::array<std::uint8_t, 1> kInvalidPosition{ 4U };
+    constexpr std::array<std::uint8_t, 4> kArrivedEvent{ UART_LINETRACER_EVENT_ARRIVED, 0x34U, 0x12U,
+                                                         UART_LINETRACER_ROUTE_B };
+    constexpr std::array<std::uint8_t, 5> kStateEvent{ UART_LINETRACER_EVENT_STATE_CHANGED, 0x34U, 0x12U,
+                                                       UART_LINETRACER_ROUTE_B, UART_LINETRACER_STATE_FOLLOWING_LINE };
+    constexpr std::array<std::uint8_t, 5> kFaultEvent{ UART_LINETRACER_EVENT_FAULT, 0x34U, 0x12U,
+                                                       UART_LINETRACER_ROUTE_B, UART_ERROR_MOTOR };
+
+    assert(UART_CMD_LINETRACER_START_ROUTE == 0x40U);
+    assert(UART_CMD_LINETRACER_STOP == 0x41U);
+    assert(UART_CMD_LINETRACER_GET_STATUS == 0x42U);
+    assert(UART_CMD_LINETRACER_RESET == 0x43U);
+    assert(UART_CMD_LINETRACER_SET_CURRENT_POSITION == 0x44U);
+    assert(UART_CMD_LINETRACER_RESUME_DRIVE == 0x45U);
+    assert(UART_CMD_LINETRACER_MANUAL_UNLOAD == 0x46U);
+    assert(UART_CMD_LINETRACER_ASSIGN_ROUTE == UART_CMD_LINETRACER_START_ROUTE);
+    assert(UART_IS_EMERGENCY_COMMAND(UART_CMD_EMERGENCY_STOP) != 0U);
+
+    assert(UART_IS_VALID_LINETRACER_COMMAND(UART_CMD_LINETRACER_START_ROUTE) != 0U);
+    assert(UART_IS_VALID_LINETRACER_COMMAND(UART_CMD_LINETRACER_MANUAL_UNLOAD) != 0U);
+    assert(UART_IS_VALID_LINETRACER_COMMAND(0x47U) == 0U);
+    assert(UART_IS_VALID_LINETRACER_COMMAND(0x140U) == 0U);
+
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_START_ROUTE, kAssignRouteB.data(),
+                                            kAssignRouteB.size()) != 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_START_ROUTE, kAssignWithoutJob.data(),
+                                            kAssignWithoutJob.size()) == 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_START_ROUTE, kAssignInvalidRoute.data(),
+                                            kAssignInvalidRoute.size()) == 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_STOP, kStopJob.data(), kStopJob.size()) != 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_STOP, nullptr, kStopJob.size()) == 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_GET_STATUS, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_RESET, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_RESUME_DRIVE, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_MANUAL_UNLOAD, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_SET_CURRENT_POSITION, kPositionA.data(),
+                                            kPositionA.size()) != 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_SET_CURRENT_POSITION, kPositionC.data(),
+                                            kPositionC.size()) != 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_SET_CURRENT_POSITION, kPositionNone.data(),
+                                            kPositionNone.size()) == 0U);
+    assert(UART_IS_VALID_LINETRACER_PAYLOAD(UART_CMD_LINETRACER_SET_CURRENT_POSITION, kInvalidPosition.data(),
+                                            kInvalidPosition.size()) == 0U);
+
+    assert(uart_linetracer_start_job_id(kAssignRouteB.data()) == 0x1234U);
+    assert(uart_linetracer_stop_job_id(kStopJob.data()) == 0x1234U);
+    assert(uart_linetracer_position_is_valid(UART_LINETRACER_POSITION_DEST_A) != 0U);
+    assert(uart_linetracer_position_is_valid(UART_LINETRACER_POSITION_NONE) == 0U);
+    assert(uart_linetracer_status_position_is_valid(UART_LINETRACER_POSITION_NONE) != 0U);
+    assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(kArrivedEvent.data(), kArrivedEvent.size()) != 0U);
+    assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(kStateEvent.data(), kStateEvent.size()) != 0U);
+    assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(kFaultEvent.data(), kFaultEvent.size()) != 0U);
+
+    assert(UART_LINETRACER_START_PAYLOAD_SIZE == 3U);
+    assert(UART_LINETRACER_STOP_PAYLOAD_SIZE == 2U);
+    assert(UART_LINETRACER_SET_POSITION_PAYLOAD_SIZE == 1U);
+    assert(UART_LINETRACER_RESUME_DRIVE_PAYLOAD_SIZE == 0U);
+    assert(UART_LINETRACER_MANUAL_UNLOAD_PAYLOAD_SIZE == 0U);
+    assert(UART_LINETRACER_STATUS_PAYLOAD_SIZE == 8U);
 }
 
 void TestCodecAndParserRoundTrip() {
     uart_frame_t source{};
     source.version = UART_PROTOCOL_VERSION;
     source.sequence = 7U;
-    source.command = UART_CMD_CONVEYOR_SET_SPEED;
-    source.length = UART_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
-    source.payload[UART_CONVEYOR_SPEED_ID_INDEX] = UART_CONVEYOR_ID_1;
-    source.payload[UART_CONVEYOR_SPEED_VALUE_INDEX] = 70U;
+    source.command = UART_CMD_INPUT_CONVEYOR_SET_SPEED;
+    source.length = UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
+    source.payload[UART_INPUT_CONVEYOR_SPEED_VALUE_INDEX] = 70U;
 
     std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
     std::size_t encoded_length = 0U;
@@ -139,6 +226,7 @@ int main() {
     TestCommonValidationDoesNotTruncateWideValues();
     TestInputPayloadValidation();
     TestSortingPayloadValidation();
+    TestLineTracerPayloadValidation();
     TestCodecAndParserRoundTrip();
     TestParserTimeout();
     return 0;

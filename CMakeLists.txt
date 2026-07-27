@@ -11,9 +11,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(LOGISTICS_BUILD_CONTROL_CENTER "Build the Qt control center" OFF)
 option(LOGISTICS_BUILD_CENTRAL_SERVER "Build the central Raspberry Pi server" ON)
 option(LOGISTICS_BUILD_DEVICE_NODES "Build Raspberry Pi device nodes" ON)
+option(LOGISTICS_BUILD_DEVICE_UART_TRANSPORT "Build the Raspberry Pi UART transport" ON)
 option(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT "Build MQTT clients with libmosquitto" ON)
 
 add_subdirectory(shared)
+
+if(BUILD_TESTING)
+    add_subdirectory(stm32/linetracer-controller/Tests/CommRx)
+    add_subdirectory(stm32/linetracer-controller/Tests/CommTx)
+    add_subdirectory(stm32/linetracer-controller/Tests/Host)
+endif()
 
 if(LOGISTICS_BUILD_CONTROL_CENTER)
     add_subdirectory(control-center)
@@ -23,7 +30,7 @@ if(LOGISTICS_BUILD_CENTRAL_SERVER)
     add_subdirectory(central-server-rpi)
 endif()
 
-if(LOGISTICS_BUILD_DEVICE_NODES)
+if(LOGISTICS_BUILD_DEVICE_NODES OR LOGISTICS_BUILD_DEVICE_UART_TRANSPORT)
     add_subdirectory(device-rpi)
 endif()
 
