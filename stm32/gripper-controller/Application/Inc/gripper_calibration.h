@@ -1,0 +1,33 @@
+#ifndef GRIPPER_CALIBRATION_H
+#define GRIPPER_CALIBRATION_H
+
+/*
+ * Provisional MG90S calibration values.
+ *
+ * Keep these values conservative until each assembled joint is measured.
+ * The UART contract accepts 0.0 to 180.0 degrees, while the controller applies
+ * the narrower per-joint limits below before writing PWM outputs.
+ */
+#define GRIPPER_BASE_MIN_ANGLE_DECI_DEG 100U
+#define GRIPPER_BASE_MAX_ANGLE_DECI_DEG 1700U
+#define GRIPPER_BASE_HOME_ANGLE_DECI_DEG 900U
+
+#define GRIPPER_SHOULDER_MIN_ANGLE_DECI_DEG 300U
+#define GRIPPER_SHOULDER_MAX_ANGLE_DECI_DEG 1500U
+#define GRIPPER_SHOULDER_HOME_ANGLE_DECI_DEG 900U
+
+#define GRIPPER_ELBOW_MIN_ANGLE_DECI_DEG 300U
+#define GRIPPER_ELBOW_MAX_ANGLE_DECI_DEG 1500U
+#define GRIPPER_ELBOW_HOME_ANGLE_DECI_DEG 900U
+
+#define GRIPPER_SERVO_MIN_PULSE_US 1000U
+#define GRIPPER_SERVO_MAX_PULSE_US 2000U
+
+#define GRIPPER_CLOSED_PULSE_US 1100U
+#define GRIPPER_OPEN_PULSE_US 1900U
+#define GRIPPER_HOME_POSITION_PERCENT 100U
+
+#define GRIPPER_CONTROL_UPDATE_PERIOD_MS 20U
+#define GRIPPER_HOME_DURATION_MS 2000U
+
+#endif /* GRIPPER_CALIBRATION_H */
