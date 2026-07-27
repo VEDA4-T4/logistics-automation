@@ -152,38 +152,55 @@ void TestVisionControlLifecycle() {
     assert(control.State() == device::DeviceOperatingState::kStopped);
     assert(!control.IsOperational());
 
-    auto decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 1);
-    assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
-    assert(ResponsePayload(decision).error_code == "ERR-CAMERA-UNAVAILABLE");
-
+    control.SetReady(false);
+    assert(control.State() == device::DeviceOperatingState::kError);
+    auto decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 1);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kProcessing);
+    assert(control.ConsumeResetRequest());
     control.SetReady(true);
-    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 2);
+    assert(control.CompleteRecovery("MSG-INITIAL-RECOVERY", "2026-07-21T11:00:00Z").has_value());
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 2);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
+    assert(control.State() == device::DeviceOperatingState::kStopped);
+
+    control.SetReady(false);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 3);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
+    assert(ResponsePayload(decision).error_code == "ERR-INVALID-STATE");
+
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 4);
+    assert(ResponsePayload(decision).result == mqtt::CommandResult::kProcessing);
+    assert(control.ConsumeResetRequest());
+    control.SetReady(true);
+    assert(control.CompleteRecovery("MSG-READY-RECOVERY", "2026-07-21T11:00:01Z").has_value());
+    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 5));
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 6);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
     assert(control.State() == device::DeviceOperatingState::kRunning);
     assert(control.IsOperational());
 
-    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 3);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 7);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
     assert(decision.clear_work);
     assert(control.State() == device::DeviceOperatingState::kStopped);
 
-    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kRestart), 4));
-    decision = Handle(control, EmergencyStop(), 5);
+    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kRestart), 8));
+    decision = Handle(control, EmergencyStop(), 9);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
     assert(decision.clear_work);
     assert(control.State() == device::DeviceOperatingState::kEmergencyStop);
 
-    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 6);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 10);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
 
-    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 7);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 11);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kProcessing);
     assert(control.State() == device::DeviceOperatingState::kRecovering);
     assert(control.ConsumeResetRequest());
     assert(!control.ConsumeResetRequest());
 
     control.SetReady(false);
-    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 8);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 12);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kRejected);
     assert(ResponsePayload(decision).error_code == "ERR-CAMERA-UNAVAILABLE");
 
@@ -197,11 +214,11 @@ void TestVisionControlLifecycle() {
     assert(recovery_response->command == mqtt::ControlCommand::kRecovery);
     assert(recovery_response->result == mqtt::CommandResult::kSuccess);
     assert(!control.CompleteRecovery("IGNORED", "2026-07-21T11:00:04Z").has_value());
-    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 9);
+    decision = Handle(control, ControlCommand(mqtt::ControlCommand::kInitialize), 13);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
     assert(control.State() == device::DeviceOperatingState::kStopped);
 
-    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 10));
+    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 14));
     control.SetReady(false);
     assert(control.State() == device::DeviceOperatingState::kError);
     assert(!control.IsOperational());

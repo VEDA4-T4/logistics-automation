@@ -197,7 +197,7 @@ std::optional<mqtt::MqttMessage> DeviceControlState::CompleteRecovery(std::strin
 void DeviceControlState::SetReady(const bool ready) {
     std::lock_guard lock(mutex_);
     ready_ = ready;
-    if (!ready && state_ == DeviceOperatingState::kRunning) {
+    if (!ready && (state_ == DeviceOperatingState::kRunning || state_ == DeviceOperatingState::kStopped)) {
         state_ = DeviceOperatingState::kError;
     }
 }

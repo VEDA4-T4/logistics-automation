@@ -98,6 +98,14 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
     switch (command) {
         case ControlCommand::kStart:
         case ControlCommand::kRestart:
+            if (system_state_ == ProcessSystemState::kRunning) {
+                return {
+                    .disposition = TransitionDisposition::kDuplicate,
+                    .previous_stage = std::nullopt,
+                    .current_stage = std::nullopt,
+                    .reason = "system is already running; command may be retried for stopped devices",
+                };
+            }
             if (system_state_ != ProcessSystemState::kIdle && system_state_ != ProcessSystemState::kStopped) {
                 return Reject("START or RESTART is only allowed from IDLE or STOPPED");
             }

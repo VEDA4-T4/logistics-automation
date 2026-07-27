@@ -369,6 +369,19 @@ int main(const int argc, char* argv[]) {
                 device_status->SetJobId(std::nullopt);
             }
             device_status->SetCurrentState(control_state.CurrentState());
+            if (const auto* response =
+                    logistics::contracts::mqtt::GetPayload<logistics::contracts::mqtt::CommandResponsePayload>(
+                        decision->response);
+                response != nullptr) {
+                std::clog << "[vision][control][INFO] command="
+                          << logistics::contracts::mqtt::ToString(response->command)
+                          << "; result=" << logistics::contracts::mqtt::ToString(response->result)
+                          << "; state=" << control_state.CurrentState();
+                if (response->error_code.has_value()) {
+                    std::clog << "; error=" << *response->error_code;
+                }
+                std::clog << "; message=" << response->message << '\n';
+            }
             if (!mqtt_client.PublishResponse(decision->response)) {
                 std::cerr << "[vision][mqtt][ERROR] failed to publish command response\n";
             }

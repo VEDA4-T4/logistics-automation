@@ -132,7 +132,7 @@ void TestStartEnablesAnIdleSystem() {
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).disposition ==
-           central_server::TransitionDisposition::kRejected);
+           central_server::TransitionDisposition::kDuplicate);
 }
 
 void TestErrorEmergencyStopAndRecovery() {
