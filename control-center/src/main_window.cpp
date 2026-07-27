@@ -1027,7 +1027,7 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
     } else if (log_update.handled && !log_update.error.isEmpty()) {
         statusBar()->showMessage(log_update.error, 4000);
     }
-    const auto dashboard_update = operations_dashboard_state_.applyEnvelope(envelope);
+    const auto dashboard_update = operations_dashboard_state_.applyEnvelope(envelope, QDateTime::currentDateTimeUtc());
     if (dashboard_update.applied) {
         operations_dashboard_panel_->setState(operations_dashboard_state_);
         process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,

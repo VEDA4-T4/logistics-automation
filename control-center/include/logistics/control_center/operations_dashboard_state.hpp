@@ -74,13 +74,15 @@ public:
     void markMqttConnectedAwaitingStatus(const QDateTime& timestamp);
     void markMqttDisconnected(const QDateTime& timestamp);
     [[nodiscard]] bool expireStaleProcesses(const QDateTime& timestamp);
-    [[nodiscard]] DashboardUpdateResult applyEnvelope(const QJsonObject& envelope);
+    [[nodiscard]] DashboardUpdateResult applyEnvelope(const QJsonObject& envelope, const QDateTime& received_at = {});
     [[nodiscard]] const QList<ProcessUnitStatus>& processes() const noexcept;
     [[nodiscard]] const ProcessDashboardStatus& overall() const noexcept;
 
 private:
     struct ProcessRuntime {
         ProcessUnitStatus status;
+        QDateTime last_received_at;
+        QDateTime last_event_at;
         QSet<QString> retired_work_ids;
         QQueue<QString> retired_work_order;
     };
@@ -90,7 +92,7 @@ private:
     void updateOverallForCommand(const QJsonObject& data, const QDateTime& timestamp);
     [[nodiscard]] int processIndexForDevice(const QString& device_id) const;
     [[nodiscard]] int processIndexForEvent(logistics::contracts::mqtt::MessageType type) const;
-    [[nodiscard]] bool updateProcessWork(ProcessRuntime& process, const QString& work_id, const QDateTime& timestamp);
+    [[nodiscard]] bool updateProcessWork(ProcessRuntime& process, const QString& work_id);
     void retireProcessWork(ProcessRuntime& process, const QString& work_id);
     void publishProcessSnapshots();
     void resetForMqttTransition(const QString& current_state, const QString& detail, const QDateTime& timestamp);

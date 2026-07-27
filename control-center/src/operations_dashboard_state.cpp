@@ -227,11 +227,11 @@ bool OperationsDashboardState::expireStaleProcesses(const QDateTime& timestamp) 
     bool changed = false;
     for (auto& runtime : process_runtime_) {
         auto& process = runtime.status;
-        if (!process.updated_at.isValid() ||
+        if (!runtime.last_received_at.isValid() ||
             (process.connection_state != mqtt::ConnectionState::kOnline &&
              process.connection_state != mqtt::ConnectionState::kDelayed &&
              process.connection_state != mqtt::ConnectionState::kReconnecting) ||
-            process.updated_at.msecsTo(timestamp) < stale_after) {
+            runtime.last_received_at.msecsTo(timestamp) < stale_after) {
             continue;
         }
 
@@ -252,7 +252,8 @@ bool OperationsDashboardState::expireStaleProcesses(const QDateTime& timestamp) 
     return true;
 }
 
-DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject& envelope) {
+DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject& envelope,
+                                                              const QDateTime& received_at) {
     const auto type_text = envelope.value(QString::fromLatin1(mqtt::kMessageTypeField)).toString();
     const auto type = mqtt::MessageTypeFromString(type_text.toStdString());
     if (!IsDashboardMessage(type)) {
@@ -264,6 +265,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
     const auto source_id = envelope.value(QString::fromLatin1(mqtt::kSourceIdField)).toString().trimmed();
     const auto data_value = envelope.value(QString::fromLatin1(mqtt::kDataField));
     const auto timestamp = ParseTimestamp(envelope);
+    const auto effective_received_at = received_at.isValid() ? received_at.toUTC() : timestamp;
     const auto protocol_version = envelope.value(QString::fromLatin1(mqtt::kProtocolVersionField)).toString().trimmed();
     if (protocol_version != QString::fromLatin1(mqtt::kCurrentProtocolVersion) ||
         !mqtt::IsValidTopicLevel(message_id.toStdString()) || !mqtt::IsValidTopicLevel(source_id.toStdString()) ||
@@ -283,10 +285,6 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         }
 
         auto& process = process_runtime_[process_index];
-        if (process.status.updated_at.isValid() && timestamp < process.status.updated_at) {
-            return result;
-        }
-
         const auto current_state = StringValue(data, "currentState");
         if (current_state.isEmpty()) {
             result.error = QStringLiteral("장치 상태에 currentState가 필요합니다.");
@@ -300,7 +298,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 return result;
             }
             const auto work_id = StringValue(data, "jobId");
-            if (!work_id.isEmpty() && !updateProcessWork(process, work_id, timestamp)) {
+            if (!work_id.isEmpty() && !updateProcessWork(process, work_id)) {
                 return result;
             }
             process.status.current_state = current_state;
@@ -315,7 +313,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 return result;
             }
             const auto work_id = StringValue(data, "jobId");
-            if (!updateProcessWork(process, work_id, timestamp)) {
+            if (!updateProcessWork(process, work_id)) {
                 return result;
             }
             process.status.connection_state = connection_state;
@@ -325,6 +323,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                                        IsProcessErrorState(current_state);
             process.status.updated_at = timestamp;
         }
+        process.last_received_at = effective_received_at;
 
         updateOverall(timestamp);
         publishProcessSnapshots();
@@ -376,10 +375,10 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
     const auto process_index = processIndexForEvent(type);
     if (process_index >= 0) {
         auto& process = process_runtime_[process_index];
-        if (process.status.updated_at.isValid() && timestamp < process.status.updated_at) {
+        if (process.last_event_at.isValid() && timestamp < process.last_event_at) {
             return result;
         }
-        const bool work_updated = work_id.isEmpty() || updateProcessWork(process, work_id, timestamp);
+        const bool work_updated = work_id.isEmpty() || updateProcessWork(process, work_id);
         if (!work_updated && type != mqtt::MessageType::kWorkCompleted) {
             return result;
         }
@@ -391,6 +390,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 process.status.has_error = true;
                 process.status.error_code = QStringLiteral("WORK_FAILED");
             }
+            process.last_event_at = timestamp;
         }
     }
 
@@ -593,11 +593,7 @@ int OperationsDashboardState::processIndexForEvent(mqtt::MessageType type) const
     return iterator == process_index_by_key_.cend() ? -1 : iterator.value();
 }
 
-bool OperationsDashboardState::updateProcessWork(ProcessRuntime& process, const QString& work_id,
-                                                 const QDateTime& timestamp) {
-    if (process.status.updated_at.isValid() && timestamp < process.status.updated_at) {
-        return false;
-    }
+bool OperationsDashboardState::updateProcessWork(ProcessRuntime& process, const QString& work_id) {
     if (work_id.isEmpty()) {
         retireProcessWork(process, process.status.work_id);
         process.status.work_id.clear();
@@ -641,6 +637,8 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         process.status.error_code.clear();
         process.status.has_error = false;
         process.status.updated_at = timestamp;
+        process.last_received_at = {};
+        process.last_event_at = {};
     }
 
     overall_.state = OverallProcessState::Idle;

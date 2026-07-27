@@ -138,6 +138,23 @@ int main() {
     assert(expired_vision.work_id.isEmpty());
     assert(expired_vision.error_code == QStringLiteral("ERR-HEARTBEAT-TIMEOUT"));
 
+    OperationsDashboardState clock_skew_state;
+    const auto received_at = QDateTime::fromString(QStringLiteral("2026-07-23T02:00:00.000Z"), Qt::ISODateWithMs);
+    result = clock_skew_state.applyEnvelope(
+        Envelope("VISION-SKEWED", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"), "PI-VISION-01",
+                 "2026-07-23T01:55:00.000Z"),
+        received_at);
+    assert(result.applied);
+    assert(!clock_skew_state.expireStaleProcesses(received_at.addMSecs(14999)));
+    assert(clock_skew_state.expireStaleProcesses(received_at.addSecs(15)));
+    result = clock_skew_state.applyEnvelope(
+        Envelope("VISION-SKEWED-RECOVERED", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"),
+                 "PI-VISION-01", "2026-07-23T01:55:05.000Z"),
+        received_at.addSecs(16));
+    assert(result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOnline);
+
     OperationsDashboardState operational_waiting_state;
     result = operational_waiting_state.applyEnvelope(
         Envelope("VISION-WAITING", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"), "PI-VISION-01"));
