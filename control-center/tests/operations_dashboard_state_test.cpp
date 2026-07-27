@@ -212,27 +212,34 @@ int main() {
                                           "PI-INPUT-01", "2026-07-23T01:00:13.500Z"));
     assert(result.applied && state.overall().state == OverallProcessState::EmergencyStop);
 
-    result = state.applyEnvelope(Envelope("COMMAND-2", "COMMAND_RESPONSE",
+    result = state.applyEnvelope(Envelope("COMMAND-2-PROCESSING", "COMMAND_RESPONSE",
                                           { { QStringLiteral("requestId"), QStringLiteral("REQ-2") },
                                             { QStringLiteral("command"), QStringLiteral("RECOVERY") },
-                                            { QStringLiteral("result"), QStringLiteral("SUCCESS") } },
+                                            { QStringLiteral("result"), QStringLiteral("PROCESSING") } },
                                           "central-server", "2026-07-23T01:00:14.000Z"));
     assert(result.applied && state.overall().state == OverallProcessState::Recovery);
 
-    result =
-        state.applyEnvelope(Envelope("VISION-RECOVERY-READY", "DEVICE_STATUS", DeviceStatus("ONLINE", "RECOVERY_READY"),
-                                     "PI-VISION-01", "2026-07-23T01:00:14.500Z"));
-    assert(result.applied);
-    assert(ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("RECOVERY_READY"));
-    assert(state.overall().state == OverallProcessState::Recovery);
+    result = state.applyEnvelope(Envelope("COMMAND-2-SUCCESS", "COMMAND_RESPONSE",
+                                          { { QStringLiteral("requestId"), QStringLiteral("REQ-2") },
+                                            { QStringLiteral("command"), QStringLiteral("RECOVERY") },
+                                            { QStringLiteral("result"), QStringLiteral("SUCCESS") } },
+                                          "central-server", "2026-07-23T01:00:14.250Z"));
+    assert(result.applied && state.overall().state == OverallProcessState::Stopped);
+    assert(state.overall().stage == QStringLiteral("복구 완료 · 시작 대기"));
 
-    result = state.applyEnvelope(Envelope("COMMAND-2", "COMMAND_RESPONSE",
+    result = state.applyEnvelope(Envelope("VISION-RECOVERED", "DEVICE_STATUS", DeviceStatus("ONLINE", "STOPPED"),
+                                          "PI-VISION-01", "2026-07-23T01:00:14.500Z"));
+    assert(result.applied);
+    assert(ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("STOPPED"));
+    assert(state.overall().state == OverallProcessState::Stopped);
+
+    result = state.applyEnvelope(Envelope("COMMAND-2-SUCCESS", "COMMAND_RESPONSE",
                                           { { QStringLiteral("requestId"), QStringLiteral("REQ-2") },
                                             { QStringLiteral("command"), QStringLiteral("STOP") },
                                             { QStringLiteral("result"), QStringLiteral("SUCCESS") } },
                                           "central-server", "2026-07-23T01:00:15.000Z"));
     assert(result.handled && !result.applied);
-    assert(state.overall().state == OverallProcessState::Recovery);
+    assert(state.overall().state == OverallProcessState::Stopped);
 
     OperationsDashboardState configured_state;
     auto definitions = logistics::control_center::DefaultProcessDefinitions();

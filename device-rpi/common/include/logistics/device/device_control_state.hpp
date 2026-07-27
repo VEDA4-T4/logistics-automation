@@ -14,7 +14,6 @@ enum class DeviceOperatingState {
     kRunning,
     kEmergencyStop,
     kRecovering,
-    kRecoveryReady,
     kError,
 };
 

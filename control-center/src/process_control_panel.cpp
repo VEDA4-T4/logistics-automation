@@ -72,7 +72,7 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
         return ProcessControlPhase::Recovering;
     }
     if (state == QStringLiteral("RECOVERY_READY")) {
-        return ProcessControlPhase::RecoveryReady;
+        return ProcessControlPhase::Stopped;
     }
     if (state == QStringLiteral("STOPPED")) {
         return ProcessControlPhase::Stopped;
@@ -109,7 +109,6 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "QPushButton#startButton:hover:enabled{background-color:#1177bb;}"
         "QPushButton#stopButton{color:#cca700;}"
         "QPushButton#recoveryButton{color:#75beff;}"
-        "QPushButton#initializeButton{color:#c586c0;}"
         "QPushButton#emergencyStopButton{min-height:34px;background-color:#a1260d;color:#ffffff;"
         "font-size:13px;border:1px solid #c42b1c;}"
         "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
@@ -149,12 +148,8 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     start_button_->setObjectName(QStringLiteral("startButton"));
     stop_button_ = new QPushButton(QStringLiteral("정지"), this);
     stop_button_->setObjectName(QStringLiteral("stopButton"));
-    restart_button_ = new QPushButton(QStringLiteral("재시작"), this);
-    restart_button_->setObjectName(QStringLiteral("restartButton"));
     recovery_button_ = new QPushButton(QStringLiteral("복구"), this);
     recovery_button_->setObjectName(QStringLiteral("recoveryButton"));
-    initialize_button_ = new QPushButton(QStringLiteral("초기화"), this);
-    initialize_button_->setObjectName(QStringLiteral("initializeButton"));
     emergency_stop_button_ = new QPushButton(QStringLiteral("비상정지\nEMERGENCY STOP"), this);
     emergency_stop_button_->setObjectName(QStringLiteral("emergencyStopButton"));
 
@@ -162,14 +157,8 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
             [this]() { requestCommand(mqtt::ControlCommand::kStart, QStringLiteral("공정을 시작하시겠습니까?")); });
     connect(stop_button_, &QPushButton::clicked, this,
             [this]() { requestCommand(mqtt::ControlCommand::kStop, QStringLiteral("공정을 정지하시겠습니까?")); });
-    connect(restart_button_, &QPushButton::clicked, this,
-            [this]() { requestCommand(mqtt::ControlCommand::kRestart, QStringLiteral("공정을 재시작하시겠습니까?")); });
     connect(recovery_button_, &QPushButton::clicked, this, [this]() {
         requestCommand(mqtt::ControlCommand::kRecovery, QStringLiteral("선택한 대상의 공정 복구를 시작하시겠습니까?"));
-    });
-    connect(initialize_button_, &QPushButton::clicked, this, [this]() {
-        requestCommand(mqtt::ControlCommand::kInitialize,
-                       QStringLiteral("선택한 대상의 복구가 완료되었습니까?\n공정을 초기화하시겠습니까?"));
     });
     connect(emergency_stop_button_, &QPushButton::clicked, this, [this]() {
         command_target_device_id_ = QStringLiteral("SYSTEM");
@@ -184,9 +173,7 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     normal_commands->setSpacing(6);
     normal_commands->addWidget(start_button_);
     normal_commands->addWidget(stop_button_);
-    normal_commands->addWidget(restart_button_);
     normal_commands->addWidget(recovery_button_);
-    normal_commands->addWidget(initialize_button_);
     layout->addLayout(normal_commands);
 
     auto* divider = new QFrame(this);
@@ -246,9 +233,7 @@ void ProcessControlPanel::setProcessState(const OverallProcessState state) {
             control_state_.setPhase(ProcessControlPhase::EmergencyStop);
             break;
         case OverallProcessState::Recovery:
-            if (control_state_.phase() != ProcessControlPhase::RecoveryReady) {
-                control_state_.setPhase(ProcessControlPhase::Recovering);
-            }
+            control_state_.setPhase(ProcessControlPhase::Recovering);
             break;
     }
     updateButtonStates();
@@ -310,10 +295,8 @@ void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt:
                 control_state_.setPhase(ProcessControlPhase::EmergencyStop);
                 break;
             case mqtt::ControlCommand::kRecovery:
-                control_state_.setPhase(ProcessControlPhase::RecoveryReady);
-                break;
             case mqtt::ControlCommand::kInitialize:
-                control_state_.setPhase(ProcessControlPhase::Idle);
+                control_state_.setPhase(ProcessControlPhase::Stopped);
                 break;
             case mqtt::ControlCommand::kStatusRequest:
             case mqtt::ControlCommand::kDestinationSet:
@@ -361,10 +344,7 @@ void ProcessControlPanel::applySelectedTargetState() {
     if (process == process_statuses_.cend()) {
         control_state_.setPhase(ProcessControlPhase::Unknown);
     } else {
-        const auto phase = PhaseForProcess(*process);
-        if (phase != ProcessControlPhase::Recovering || control_state_.phase() != ProcessControlPhase::RecoveryReady) {
-            control_state_.setPhase(phase);
-        }
+        control_state_.setPhase(PhaseForProcess(*process));
     }
     updateButtonStates();
 }
@@ -372,9 +352,7 @@ void ProcessControlPanel::applySelectedTargetState() {
 void ProcessControlPanel::updateButtonStates() {
     start_button_->setEnabled(control_state_.startEnabled());
     stop_button_->setEnabled(control_state_.stopEnabled());
-    restart_button_->setEnabled(control_state_.restartEnabled());
     recovery_button_->setEnabled(control_state_.recoveryEnabled());
-    initialize_button_->setEnabled(control_state_.initializeEnabled());
 
     // Emergency stop stays available while a normal command is pending so it can always take priority.
     emergency_stop_button_->setEnabled(control_state_.emergencyStopEnabled());

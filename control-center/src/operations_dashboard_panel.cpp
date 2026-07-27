@@ -152,7 +152,7 @@ QString CurrentStateText(const QString& current_state) {
     if (state == QStringLiteral("RECOVERY"))
         return QStringLiteral("복구 중");
     if (state == QStringLiteral("RECOVERY_READY"))
-        return QStringLiteral("복구 완료 · 초기화 대기");
+        return QStringLiteral("복구 완료 · 시작 대기");
     if (state == QStringLiteral("DISCONNECTED"))
         return QStringLiteral("연결 끊김");
     if (state == QStringLiteral("CAMERA_ERROR"))

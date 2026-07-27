@@ -125,11 +125,12 @@ bool IsEmergencyState(const QString& current_state) {
 
 bool IsRecoveryState(const QString& current_state) {
     const auto state = current_state.trimmed().toUpper();
-    return state == QStringLiteral("RECOVERY") || state == QStringLiteral("RECOVERY_READY");
+    return state == QStringLiteral("RECOVERY");
 }
 
 bool IsStoppedState(const QString& current_state) {
-    return current_state.trimmed().compare(QStringLiteral("STOPPED"), Qt::CaseInsensitive) == 0;
+    const auto state = current_state.trimmed().toUpper();
+    return state == QStringLiteral("STOPPED") || state == QStringLiteral("RECOVERY_READY");
 }
 
 bool IsProcessErrorState(const QString& current_state) {
@@ -493,6 +494,12 @@ void OperationsDashboardState::updateOverallForCommand(const QJsonObject& data, 
         return;
     }
     if (command_result != QStringLiteral("SUCCESS")) {
+        if (command == QStringLiteral("RECOVERY")) {
+            command_override_ = OverallProcessState::Recovery;
+            command_override_stage_ = stage;
+            command_override_detail_ = overall_.detail;
+            overall_.state = OverallProcessState::Recovery;
+        }
         return;
     }
 
@@ -506,23 +513,17 @@ void OperationsDashboardState::updateOverallForCommand(const QJsonObject& data, 
         command_override_stage_ = stage;
         command_override_detail_ = overall_.detail;
         overall_.state = OverallProcessState::Stopped;
-    } else if (command == QStringLiteral("INITIALIZE")) {
-        command_override_.reset();
-        command_override_stage_.clear();
-        command_override_detail_.clear();
-        overall_.state = OverallProcessState::Idle;
-        last_completion_at_ = {};
-        last_completion_detail_.clear();
     } else if (command == QStringLiteral("EMERGENCY_STOP")) {
         command_override_ = OverallProcessState::EmergencyStop;
         command_override_stage_ = stage;
         command_override_detail_ = overall_.detail;
         overall_.state = OverallProcessState::EmergencyStop;
     } else if (command == QStringLiteral("RECOVERY")) {
-        command_override_ = OverallProcessState::Recovery;
-        command_override_stage_ = stage;
+        command_override_ = OverallProcessState::Stopped;
+        command_override_stage_ = QStringLiteral("복구 완료 · 시작 대기");
         command_override_detail_ = overall_.detail;
-        overall_.state = OverallProcessState::Recovery;
+        overall_.state = OverallProcessState::Stopped;
+        overall_.stage = command_override_stage_;
     }
 }
 

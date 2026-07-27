@@ -372,9 +372,8 @@ int main(const int argc, char* argv[]) {
                 device_status->SetJobId(std::nullopt);
             }
             if (decision->state_changed) {
-                device_status->SetCurrentState(control_state.IsOperational()
-                                                   ? std::string(kWaitingForProductState)
-                                                   : control_state.CurrentState());
+                device_status->SetCurrentState(control_state.IsOperational() ? std::string(kWaitingForProductState)
+                                                                             : control_state.CurrentState());
                 device_status->SetErrorCode(std::nullopt);
             }
             if (const auto* response =

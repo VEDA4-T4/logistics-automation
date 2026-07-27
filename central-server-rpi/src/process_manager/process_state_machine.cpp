@@ -147,28 +147,23 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
             if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop) {
                 return Reject("RECOVERY is only allowed from ERROR or EMERGENCY_STOP");
             }
-            SuspendActiveWorks(WorkStage::kRecovering);
-            system_state_ = ProcessSystemState::kRecovery;
+            SuspendActiveWorks(WorkStage::kStopped);
+            system_state_ = ProcessSystemState::kStopped;
             return { .disposition = TransitionDisposition::kApplied,
                      .previous_stage = std::nullopt,
                      .current_stage = std::nullopt,
                      .reason = {} };
 
         case ControlCommand::kInitialize:
-            if (system_state_ != ProcessSystemState::kRecovery) {
-                return Reject("INITIALIZE completes an active recovery only");
+            if (system_state_ == ProcessSystemState::kStopped) {
+                return {
+                    .disposition = TransitionDisposition::kDuplicate,
+                    .previous_stage = std::nullopt,
+                    .current_stage = std::nullopt,
+                    .reason = "system recovery already completed in STOPPED",
+                };
             }
-            for (auto& [work_id, work] : works_) {
-                static_cast<void>(work_id);
-                if (work.stage == WorkStage::kRecovering) {
-                    work.stage = WorkStage::kStopped;
-                }
-            }
-            system_state_ = ProcessSystemState::kStopped;
-            return { .disposition = TransitionDisposition::kApplied,
-                     .previous_stage = std::nullopt,
-                     .current_stage = std::nullopt,
-                     .reason = {} };
+            return Reject("INITIALIZE is retained for compatibility but is not required");
 
         case ControlCommand::kStatusRequest:
             return { .disposition = TransitionDisposition::kApplied,

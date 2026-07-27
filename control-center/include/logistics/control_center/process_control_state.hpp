@@ -10,7 +10,6 @@ enum class ProcessControlPhase {
     Error,
     EmergencyStop,
     Recovering,
-    RecoveryReady,
 };
 
 class ProcessControlState final {
@@ -54,16 +53,10 @@ public:
     [[nodiscard]] bool stopEnabled() const noexcept {
         return normalCommandsEnabled() && phase_ == ProcessControlPhase::Running;
     }
-    [[nodiscard]] bool restartEnabled() const noexcept {
-        return normalCommandsEnabled() && phase_ == ProcessControlPhase::Stopped;
-    }
     [[nodiscard]] bool recoveryEnabled() const noexcept {
         return normalCommandsEnabled() &&
                (phase_ == ProcessControlPhase::Error || phase_ == ProcessControlPhase::EmergencyStop ||
                 phase_ == ProcessControlPhase::Recovering);
-    }
-    [[nodiscard]] bool initializeEnabled() const noexcept {
-        return normalCommandsEnabled() && phase_ == ProcessControlPhase::RecoveryReady;
     }
     [[nodiscard]] bool emergencyStopEnabled() const noexcept {
         return mqtt_connected_;

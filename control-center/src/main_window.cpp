@@ -1082,15 +1082,16 @@ void MainWindow::completePendingRecoveryFromDeviceState() {
         return;
     }
     for (const auto& process : operations_dashboard_state_.processes()) {
+        const auto state = process.current_state.trimmed().toUpper();
         if (process.device_id != pending_target_device_id_ ||
-            process.current_state.trimmed().compare(QStringLiteral("RECOVERY_READY"), Qt::CaseInsensitive) != 0) {
+            (state != QStringLiteral("STOPPED") && state != QStringLiteral("RECOVERY_READY"))) {
             continue;
         }
         process_control_panel_->setCommandFinished(pending_command_,
                                                    logistics::contracts::mqtt::CommandResult::kSuccess,
                                                    QStringLiteral("장치 상태에서 복구 완료를 확인했습니다."));
         appendOperationalLog(OperationalLogSeverity::Info, pending_target_device_id_, QStringLiteral("관제 명령"),
-                             QStringLiteral("RECOVERY_READY"),
+                             QStringLiteral("RECOVERY_COMPLETED"),
                              QStringLiteral("최종 응답과 별개로 장치 상태에서 복구 완료를 확인했습니다."));
         clearPendingCommand();
         return;

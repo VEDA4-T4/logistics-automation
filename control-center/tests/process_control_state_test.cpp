@@ -9,26 +9,20 @@ int main() {
     assert(!state.normalCommandsEnabled());
     assert(!state.startEnabled());
     assert(!state.stopEnabled());
-    assert(!state.restartEnabled());
     assert(!state.recoveryEnabled());
-    assert(!state.initializeEnabled());
     assert(!state.emergencyStopEnabled());
 
     state.setMqttConnected(true);
     assert(state.normalCommandsEnabled());
     assert(!state.startEnabled());
     assert(!state.stopEnabled());
-    assert(!state.restartEnabled());
     assert(!state.recoveryEnabled());
-    assert(!state.initializeEnabled());
     assert(state.emergencyStopEnabled());
 
     state.setPhase(logistics::control_center::ProcessControlPhase::EmergencyStop);
     assert(!state.startEnabled());
     assert(!state.stopEnabled());
-    assert(!state.restartEnabled());
     assert(state.recoveryEnabled());
-    assert(!state.initializeEnabled());
 
     state.setCommandPending();
     assert(state.isCommandPending());
@@ -43,23 +37,15 @@ int main() {
 
     state.setPhase(logistics::control_center::ProcessControlPhase::Recovering);
     assert(state.recoveryEnabled());
-    assert(!state.initializeEnabled());
-
-    state.setPhase(logistics::control_center::ProcessControlPhase::RecoveryReady);
-    assert(!state.recoveryEnabled());
-    assert(state.initializeEnabled());
 
     state.setPhase(logistics::control_center::ProcessControlPhase::Stopped);
     assert(state.startEnabled());
     assert(!state.stopEnabled());
-    assert(state.restartEnabled());
     assert(!state.recoveryEnabled());
-    assert(!state.initializeEnabled());
 
     state.setPhase(logistics::control_center::ProcessControlPhase::Running);
     assert(!state.startEnabled());
     assert(state.stopEnabled());
-    assert(!state.restartEnabled());
 
     state.setMqttConnected(false);
     assert(!state.isMqttConnected());
@@ -67,9 +53,7 @@ int main() {
     assert(!state.normalCommandsEnabled());
     assert(!state.startEnabled());
     assert(!state.stopEnabled());
-    assert(!state.restartEnabled());
     assert(!state.recoveryEnabled());
-    assert(!state.initializeEnabled());
     assert(!state.emergencyStopEnabled());
 
     return 0;

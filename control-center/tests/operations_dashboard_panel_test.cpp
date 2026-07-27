@@ -61,8 +61,7 @@ int main(int argc, char* argv[]) {
     assert(has_gripper_title);
     assert(has_transfer_state);
 
-    assert(
-        state.applyEnvelope(DeviceEnvelope("VISION-WAITING", "PI-VISION-01", "WAITING_FOR_PRODUCT", "", 5)).applied);
+    assert(state.applyEnvelope(DeviceEnvelope("VISION-WAITING", "PI-VISION-01", "WAITING_FOR_PRODUCT", "", 5)).applied);
     panel.setState(state);
     application.processEvents();
     bool has_product_waiting_state = false;
@@ -83,8 +82,8 @@ int main(int argc, char* argv[]) {
         }
     }
     assert(vision_card != nullptr);
-    QMouseEvent select_vision(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4),
-                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent select_vision(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(vision_card, &select_vision);
     assert(selected_target == QStringLiteral("PI-VISION-01"));
     assert(vision_card->property("selectedControlTarget").toBool());

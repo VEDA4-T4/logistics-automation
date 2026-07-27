@@ -41,9 +41,7 @@ private:
     QLabel* target_label_{ nullptr };
     QPushButton* start_button_{ nullptr };
     QPushButton* stop_button_{ nullptr };
-    QPushButton* restart_button_{ nullptr };
     QPushButton* recovery_button_{ nullptr };
-    QPushButton* initialize_button_{ nullptr };
     QPushButton* emergency_stop_button_{ nullptr };
     ProcessControlState control_state_;
     OverallProcessState overall_state_{ OverallProcessState::Idle };
