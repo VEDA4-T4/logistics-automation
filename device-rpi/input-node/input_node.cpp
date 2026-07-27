@@ -160,10 +160,9 @@ namespace mqtt = contracts::mqtt;
 }
 
 [[nodiscard]] std::optional<std::int32_t> SensorDistanceCm(const uart_frame_t& frame) {
-    const std::uint16_t distance = static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
-                                   static_cast<std::uint16_t>(
-                                       static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX])
-                                       << 8U);
+    const std::uint16_t distance =
+        static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
+        static_cast<std::uint16_t>(static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX]) << 8U);
     if (distance == UART_SENSOR_DISTANCE_UNKNOWN) {
         return std::nullopt;
     }
@@ -228,9 +227,7 @@ struct ControllerEventDescription {
                              "input controller reported a transient queue overflow" + cause_suffix };
                 case kHealthIssueSensorStale: {
                     const std::string sensor_suffix =
-                        sensor_id.has_value()
-                            ? " sensorId=" + std::to_string(static_cast<int>(*sensor_id))
-                            : "";
+                        sensor_id.has_value() ? " sensorId=" + std::to_string(static_cast<int>(*sensor_id)) : "";
                     return { "ERR-HEALTH-SENSOR-STALE", "WARNING",
                              "input controller reported a stale sensor" + sensor_suffix + cause_suffix };
                 }
@@ -438,10 +435,9 @@ void InputNode::HandleSensorStatus(const uart_frame_t& frame) {
     }
     const std::uint8_t sensor_id = frame.payload[UART_SENSOR_ID_INDEX];
     const std::uint8_t sensor_state = frame.payload[UART_SENSOR_STATE_INDEX];
-    const std::uint16_t distance_cm = static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
-                                      static_cast<std::uint16_t>(
-                                          static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX])
-                                          << 8U);
+    const std::uint16_t distance_cm =
+        static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
+        static_cast<std::uint16_t>(static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX]) << 8U);
 
     // Sensor readings are telemetry, not device state: publish every measurement as
     // a SENSOR_STATUS event so the server gets the sensor id and distance, and so
@@ -569,10 +565,9 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     // sensor-stale) every few seconds; without this, each re-emission would flood
     // device/{id}/error. sensorId is folded in so a different stale sensor on the
     // same (kind, cause) is never mistaken for a repeat of the previous one.
-    const std::uint32_t signature = (static_cast<std::uint32_t>(event_id) << 24U) |
-                                    (static_cast<std::uint32_t>(kind) << 16U) |
-                                    (static_cast<std::uint32_t>(cause) << 8U) |
-                                    static_cast<std::uint32_t>(sensor_id_for_signature);
+    const std::uint32_t signature =
+        (static_cast<std::uint32_t>(event_id) << 24U) | (static_cast<std::uint32_t>(kind) << 16U) |
+        (static_cast<std::uint32_t>(cause) << 8U) | static_cast<std::uint32_t>(sensor_id_for_signature);
     if (last_controller_event_signature_.has_value() && *last_controller_event_signature_ == signature) {
         return;
     }

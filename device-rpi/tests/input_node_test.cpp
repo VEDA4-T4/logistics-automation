@@ -139,8 +139,8 @@ void TestStatusRequest() {
         return std::vector<uart_frame_t>{ MakeStatusResponse(request.sequence, UART_INPUT_CONVEYOR_RUNNING, 60U) };
     };
 
-    const InputCommandResult result =
-        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStatusRequest, std::string(kDeviceId)));
+    const InputCommandResult result = fixture.node->HandleMqttCommand(
+        MakeControlCommand(mqtt::ControlCommand::kStatusRequest, std::string(kDeviceId)));
 
     assert(result.status == InputCommandStatus::kSuccess);
     assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_GET_STATUS);

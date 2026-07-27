@@ -106,8 +106,8 @@ namespace input_test {
 }
 
 [[nodiscard]] inline uart_frame_t MakeControllerEvent(std::uint8_t event_id, std::uint8_t kind = 0U,
-                                                     std::uint8_t cause = 0U,
-                                                     std::optional<std::uint8_t> sensor_id = std::nullopt) {
+                                                      std::uint8_t cause = 0U,
+                                                      std::optional<std::uint8_t> sensor_id = std::nullopt) {
     uart_frame_t frame{};
     frame.version = UART_PROTOCOL_VERSION;
     frame.sequence = 202U;
