@@ -71,6 +71,8 @@ public:
     OperationsDashboardState();
 
     void configureProcesses(const QList<ProcessDefinition>& definitions);
+    void markMqttConnectedAwaitingStatus(const QDateTime& timestamp);
+    void markMqttDisconnected(const QDateTime& timestamp);
     [[nodiscard]] DashboardUpdateResult applyEnvelope(const QJsonObject& envelope);
     [[nodiscard]] const QList<ProcessUnitStatus>& processes() const noexcept;
     [[nodiscard]] const ProcessDashboardStatus& overall() const noexcept;
@@ -90,6 +92,7 @@ private:
     [[nodiscard]] bool updateProcessWork(ProcessRuntime& process, const QString& work_id, const QDateTime& timestamp);
     void retireProcessWork(ProcessRuntime& process, const QString& work_id);
     void publishProcessSnapshots();
+    void resetForMqttTransition(const QString& current_state, const QString& detail, const QDateTime& timestamp);
 
     QList<ProcessRuntime> process_runtime_;
     QList<ProcessUnitStatus> process_snapshots_;

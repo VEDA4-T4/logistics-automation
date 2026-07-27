@@ -59,5 +59,22 @@ int main(int argc, char* argv[]) {
     }
     assert(has_gripper_title);
     assert(has_transfer_state);
+
+    state.markMqttDisconnected(QDateTime::currentDateTimeUtc());
+    panel.setState(state);
+    panel.setMqttConnected(false);
+    application.processEvents();
+
+    const auto* live_status = panel.findChild<QLabel*>(QStringLiteral("dashboardLiveStatus"));
+    assert(live_status != nullptr);
+    assert(live_status->text() == QStringLiteral("● MQTT 연결 끊김"));
+    int waiting_count = 0;
+    int disconnected_count = 0;
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        waiting_count += label->text() == QStringLiteral("수신 대기") ? 1 : 0;
+        disconnected_count += label->text() == QStringLiteral("연결 끊김") ? 1 : 0;
+    }
+    assert(waiting_count == 5);
+    assert(disconnected_count == 5);
     return 0;
 }

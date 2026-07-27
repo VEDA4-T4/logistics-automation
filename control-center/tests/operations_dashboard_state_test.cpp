@@ -85,6 +85,44 @@ int main() {
     assert(state.overall().active_unit_count == 5);
     assert(state.overall().active_work_count == 5);
 
+    OperationsDashboardState mqtt_transition_state;
+    result = mqtt_transition_state.applyEnvelope(
+        Envelope("MQTT-INPUT", "DEVICE_STATUS", DeviceStatus("ONLINE", "RUNNING", "WORK-MQTT"), "PI-INPUT-01"));
+    assert(result.applied);
+    const auto disconnected_at = QDateTime::fromString(QStringLiteral("2026-07-23T01:00:04.500Z"), Qt::ISODateWithMs);
+    mqtt_transition_state.markMqttDisconnected(disconnected_at);
+    for (const auto& process : mqtt_transition_state.processes()) {
+        assert(process.connection_state == logistics::contracts::mqtt::ConnectionState::kUnknown);
+        assert(process.current_state == QStringLiteral("DISCONNECTED"));
+        assert(process.work_id.isEmpty());
+        assert(process.error_code.isEmpty());
+        assert(!process.has_error);
+        assert(process.updated_at == disconnected_at);
+    }
+    assert(mqtt_transition_state.overall().state == OverallProcessState::Idle);
+    assert(mqtt_transition_state.overall().stage == QStringLiteral("공정 상태 수신 대기"));
+    assert(mqtt_transition_state.overall().detail == QStringLiteral("MQTT 연결 끊김"));
+    assert(mqtt_transition_state.overall().active_unit_count == 0);
+    assert(mqtt_transition_state.overall().active_work_count == 0);
+
+    const auto reconnected_at = disconnected_at.addSecs(1);
+    mqtt_transition_state.markMqttConnectedAwaitingStatus(reconnected_at);
+    for (const auto& process : mqtt_transition_state.processes()) {
+        assert(process.connection_state == logistics::contracts::mqtt::ConnectionState::kUnknown);
+        assert(process.current_state == QStringLiteral("상태 수신 대기"));
+        assert(!process.has_error);
+    }
+    assert(mqtt_transition_state.overall().stage == QStringLiteral("공정 상태 수신 대기"));
+    assert(mqtt_transition_state.overall().detail == QStringLiteral("MQTT 연결됨 · 노드 상태 수신 대기"));
+
+    result = mqtt_transition_state.applyEnvelope(Envelope("INPUT-RESTORED", "DEVICE_STATUS",
+                                                          DeviceStatus("ONLINE", "RUNNING", "WORK-MQTT"), "PI-INPUT-01",
+                                                          "2026-07-23T01:00:06.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(mqtt_transition_state, QStringLiteral("input")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOnline);
+    assert(ProcessByKey(mqtt_transition_state, QStringLiteral("input")).current_state == QStringLiteral("RUNNING"));
+
     result = state.applyEnvelope(Envelope("LEGACY-ROBOT", "DEVICE_STATUS", DeviceStatus("ONLINE", "PICKING"),
                                           "PI-ROBOT-01", "2026-07-23T01:00:02.500Z"));
     assert(result.handled && !result.applied);

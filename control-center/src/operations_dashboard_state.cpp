@@ -201,6 +201,15 @@ void OperationsDashboardState::configureProcesses(const QList<ProcessDefinition>
     publishProcessSnapshots();
 }
 
+void OperationsDashboardState::markMqttConnectedAwaitingStatus(const QDateTime& timestamp) {
+    resetForMqttTransition(QStringLiteral("상태 수신 대기"), QStringLiteral("MQTT 연결됨 · 노드 상태 수신 대기"),
+                           timestamp);
+}
+
+void OperationsDashboardState::markMqttDisconnected(const QDateTime& timestamp) {
+    resetForMqttTransition(QStringLiteral("DISCONNECTED"), QStringLiteral("MQTT 연결 끊김"), timestamp);
+}
+
 DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject& envelope) {
     const auto type_text = envelope.value(QString::fromLatin1(mqtt::kMessageTypeField)).toString();
     const auto type = mqtt::MessageTypeFromString(type_text.toStdString());
@@ -572,6 +581,31 @@ void OperationsDashboardState::publishProcessSnapshots() {
     for (const auto& runtime : process_runtime_) {
         process_snapshots_.append(runtime.status);
     }
+}
+
+void OperationsDashboardState::resetForMqttTransition(const QString& current_state, const QString& detail,
+                                                      const QDateTime& timestamp) {
+    for (auto& process : process_runtime_) {
+        process.status.connection_state = mqtt::ConnectionState::kUnknown;
+        process.status.current_state = current_state;
+        process.status.work_id.clear();
+        process.status.error_code.clear();
+        process.status.has_error = false;
+        process.status.updated_at = timestamp;
+    }
+
+    overall_.state = OverallProcessState::Idle;
+    overall_.stage = QStringLiteral("공정 상태 수신 대기");
+    overall_.detail = detail;
+    overall_.updated_at = timestamp;
+    overall_.active_unit_count = 0;
+    overall_.active_work_count = 0;
+    last_completion_at_ = {};
+    last_completion_detail_.clear();
+    command_override_.reset();
+    command_override_stage_.clear();
+    command_override_detail_.clear();
+    publishProcessSnapshots();
 }
 
 }  // namespace logistics::control_center

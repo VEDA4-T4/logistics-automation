@@ -566,6 +566,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 switch (state) {
                     case MqttClient::ConnectionState::Connected:
                         process_control_panel_->setMqttConnected(true);
+                        operations_dashboard_state_.markMqttConnectedAwaitingStatus(QDateTime::currentDateTimeUtc());
+                        operations_dashboard_panel_->setState(operations_dashboard_state_);
                         operations_dashboard_panel_->setMqttConnected(true);
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
                         mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
@@ -581,6 +583,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         break;
                     case MqttClient::ConnectionState::Reconnecting:
                         process_control_panel_->setMqttConnected(false);
+                        operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
+                        operations_dashboard_panel_->setState(operations_dashboard_state_);
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
@@ -590,6 +594,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         break;
                     case MqttClient::ConnectionState::Error:
                         process_control_panel_->setMqttConnected(false);
+                        operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
+                        operations_dashboard_panel_->setState(operations_dashboard_state_);
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
@@ -597,6 +603,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         break;
                     case MqttClient::ConnectionState::Disconnected:
                         process_control_panel_->setMqttConnected(false);
+                        operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
+                        operations_dashboard_panel_->setState(operations_dashboard_state_);
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
