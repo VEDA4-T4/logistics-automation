@@ -80,11 +80,7 @@ typedef struct {
     volatile uint8_t restart_pending;
 } comm_tx_channel_state_t;
 
-typedef enum {
-    COMM_TX_ROUTE_OK = 0,
-    COMM_TX_ROUTE_BUSY,
-    COMM_TX_ROUTE_DROPPED
-} comm_tx_route_result_t;
+typedef enum { COMM_TX_ROUTE_OK = 0, COMM_TX_ROUTE_BUSY, COMM_TX_ROUTE_DROPPED } comm_tx_route_result_t;
 
 static QueueHandle_t comm_tx_normal_queue;
 static QueueHandle_t comm_tx_urgent_queue;
@@ -93,9 +89,15 @@ static uint32_t comm_tx_next_heartbeat;
 
 static comm_tx_channel_state_t comm_tx_channels[COMM_TX_CH_COUNT];
 
-/* heartbeat에 실리는 장치 상태 (setter로 갱신) */
-static volatile uint8_t comm_tx_device_state = (uint8_t)UART_DEVICE_READY;
-static volatile uint8_t comm_tx_error_code = (uint8_t)UART_ERROR_NONE;
+/* heartbeat에 실리는 채널별 장치 상태 (setter로 갱신) */
+static volatile uint8_t comm_tx_device_states[COMM_TX_CH_COUNT] = {
+    (uint8_t)UART_DEVICE_READY,
+    (uint8_t)UART_DEVICE_READY,
+};
+static volatile uint8_t comm_tx_error_codes[COMM_TX_CH_COUNT] = {
+    (uint8_t)UART_ERROR_NONE,
+    (uint8_t)UART_ERROR_NONE,
+};
 static volatile uint8_t comm_tx_sensor_states[COMM_TX_CH_COUNT] = {
     (uint8_t)UART_SENSOR_CLEAR,
     (uint8_t)UART_SENSOR_CLEAR,
@@ -236,8 +238,6 @@ static void comm_tx_send_heartbeat(void) {
     msg.command = (uint8_t)UART_CMD_EVENT;
     msg.length = APP_HEARTBEAT_PAYLOAD_SIZE;
     msg.payload[UART_EVENT_ID_INDEX] = APP_EVENT_HEARTBEAT;
-    msg.payload[APP_HEARTBEAT_STATE_INDEX] = comm_tx_device_state;
-    msg.payload[APP_HEARTBEAT_ERROR_INDEX] = comm_tx_error_code;
     msg.payload[APP_HEARTBEAT_UPTIME_INDEX] = (uint8_t)(uptime_seconds & 0xFFU);
     msg.payload[APP_HEARTBEAT_UPTIME_INDEX + 1U] = (uint8_t)((uptime_seconds >> 8U) & 0xFFU);
     msg.payload[APP_HEARTBEAT_UPTIME_INDEX + 2U] = (uint8_t)((uptime_seconds >> 16U) & 0xFFU);
@@ -247,6 +247,8 @@ static void comm_tx_send_heartbeat(void) {
 
     for (uint32_t i = 0U; i < COMM_TX_CH_COUNT; i++) {
         msg.channel = (uint8_t)i;
+        msg.payload[APP_HEARTBEAT_STATE_INDEX] = comm_tx_device_states[i];
+        msg.payload[APP_HEARTBEAT_ERROR_INDEX] = comm_tx_error_codes[i];
 
         if (comm_tx_route(&msg, 0U) == COMM_TX_ROUTE_OK) {
             comm_tx_stats.heartbeat_sent++;
@@ -270,8 +272,7 @@ static void comm_tx_check_timeouts(void) {
 
         taskENTER_CRITICAL();
 
-        if (channel->dma_busy != 0U && channel->count > 0U &&
-            (now - channel->tx_start_tick) > COMM_TX_TX_TIMEOUT_MS) {
+        if (channel->dma_busy != 0U && channel->count > 0U && (now - channel->tx_start_tick) > COMM_TX_TX_TIMEOUT_MS) {
             comm_tx_stats.tx_timeout[i]++;
 
             (void)HAL_UART_AbortTransmit(channel->huart);
@@ -294,8 +295,7 @@ static void comm_tx_service_restarts(void) {
         taskENTER_CRITICAL();
 
         if ((channel->dma_busy == 0U) && (channel->count > 0U)) {
-            if ((channel->restart_pending != 0U) &&
-                ((now - channel->tx_start_tick) < COMM_TX_RETRY_INTERVAL_MS)) {
+            if ((channel->restart_pending != 0U) && ((now - channel->tx_start_tick) < COMM_TX_RETRY_INTERVAL_MS)) {
                 taskEXIT_CRITICAL();
                 continue;
             }
@@ -394,8 +394,17 @@ int32_t CommTx_SendUrgentWithSequence(comm_tx_channel_t channel, uint8_t sequenc
 }
 
 void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code) {
-    comm_tx_device_state = device_state;
-    comm_tx_error_code = error_code;
+    for (uint32_t i = 0U; i < COMM_TX_CH_COUNT; i++) {
+        comm_tx_device_states[i] = device_state;
+        comm_tx_error_codes[i] = error_code;
+    }
+}
+
+void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code) {
+    if (channel < COMM_TX_CH_COUNT) {
+        comm_tx_device_states[channel] = device_state;
+        comm_tx_error_codes[channel] = error_code;
+    }
 }
 
 void CommTx_SetSensorState(comm_tx_channel_t process, uint8_t sensor_state) {

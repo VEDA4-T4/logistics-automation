@@ -23,6 +23,13 @@
 typedef enum { SAFETY_STATE_NORMAL = 0, SAFETY_STATE_ESTOP } safety_state_t;
 
 typedef enum {
+    SAFETY_DOMAIN_NONE = 0U,
+    SAFETY_DOMAIN_INPUT = (1U << COMM_TX_CH_INPUT),
+    SAFETY_DOMAIN_SORTING = (1U << COMM_TX_CH_SORTING),
+    SAFETY_DOMAIN_ALL = SAFETY_DOMAIN_INPUT | SAFETY_DOMAIN_SORTING
+} safety_domain_t;
+
+typedef enum {
     SAFETY_RELEASE_IDLE = 0,
     SAFETY_RELEASE_WAIT_STOPPED,
     SAFETY_RELEASE_WAIT_RELEASED
@@ -30,10 +37,11 @@ typedef enum {
 
 typedef struct {
     safety_state_t state;
-    safety_release_phase_t releasePhase;
+    safety_release_phase_t releasePhases[COMM_TX_CH_COUNT];
     safety_cause_t cause;
     uint32_t eventTick;
-    uint32_t releaseAttempts;
+    uint32_t releaseAttempts[COMM_TX_CH_COUNT];
+    uint8_t latchedDomains;
 } safety_runtime_t;
 
 static safety_runtime_t safety;
@@ -52,7 +60,37 @@ static safety_sync_state_t safety_sorting_sync(void) {
     return (safety_sync_state_t)sorting_control_task_get_safety_sync_state();
 }
 
-static void safety_report_event(safety_event_kind_t kind, safety_cause_t cause, uint32_t tick, uint8_t result) {
+static safety_domain_t safety_domain_from_source(app_uart_channel_t source) {
+    if (source == APP_UART_CHANNEL_1) {
+        return SAFETY_DOMAIN_INPUT;
+    }
+
+    if (source == APP_UART_CHANNEL_6) {
+        return SAFETY_DOMAIN_SORTING;
+    }
+
+    return SAFETY_DOMAIN_NONE;
+}
+
+static comm_tx_channel_t safety_channel_from_domain(safety_domain_t domain) {
+    return (domain == SAFETY_DOMAIN_SORTING) ? COMM_TX_CH_SORTING : COMM_TX_CH_INPUT;
+}
+
+static safety_sync_state_t safety_domain_sync(safety_domain_t domain) {
+    return (domain == SAFETY_DOMAIN_SORTING) ? safety_sorting_sync() : safety_input_sync();
+}
+
+static uint8_t safety_notify_domain_release(safety_domain_t domain) {
+    return (domain == SAFETY_DOMAIN_SORTING) ? sorting_control_task_notify_safety_release()
+                                             : input_control_task_notify_safety_release();
+}
+
+static safety_reset_result_t safety_domain_not_ready_result(safety_domain_t domain) {
+    return (domain == SAFETY_DOMAIN_SORTING) ? SAFETY_RESET_SORTING_NOT_READY : SAFETY_RESET_INPUT_NOT_READY;
+}
+
+static void safety_report_event(safety_domain_t destinations, safety_event_kind_t kind, safety_cause_t cause,
+                                uint32_t tick, uint8_t result) {
     uint8_t payload[APP_SAFETY_EVENT_PAYLOAD_SIZE];
 
     payload[UART_EVENT_ID_INDEX] = APP_EVENT_SAFETY;
@@ -64,12 +102,13 @@ static void safety_report_event(safety_event_kind_t kind, safety_cause_t cause, 
     payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 3U] = (uint8_t)((tick >> 24U) & 0xFFU);
     payload[APP_SAFETY_EVENT_RESULT_INDEX] = result;
 
-    /* 안전 상태는 장치 전체에 영향을 주므로 항상 양쪽 채널에 보고한다. */
-    if (CommTx_SendUrgent(COMM_TX_CH_INPUT, UART_CMD_EVENT, payload, APP_SAFETY_EVENT_PAYLOAD_SIZE) != 0) {
+    if (((destinations & SAFETY_DOMAIN_INPUT) != 0U) &&
+        (CommTx_SendUrgent(COMM_TX_CH_INPUT, UART_CMD_EVENT, payload, APP_SAFETY_EVENT_PAYLOAD_SIZE) != 0)) {
         safetyStats.reportDrops++;
     }
 
-    if (CommTx_SendUrgent(COMM_TX_CH_SORTING, UART_CMD_EVENT, payload, APP_SAFETY_EVENT_PAYLOAD_SIZE) != 0) {
+    if (((destinations & SAFETY_DOMAIN_SORTING) != 0U) &&
+        (CommTx_SendUrgent(COMM_TX_CH_SORTING, UART_CMD_EVENT, payload, APP_SAFETY_EVENT_PAYLOAD_SIZE) != 0)) {
         safetyStats.reportDrops++;
     }
 }
@@ -98,70 +137,98 @@ static void safety_enter_estop(safety_cause_t cause) {
 
     /* E-Stop은 진행 중인 해제를 무효화한다(E-Stop이 항상 우선). */
     safety.state = SAFETY_STATE_ESTOP;
-    safety.releasePhase = SAFETY_RELEASE_IDLE;
-    safety.releaseAttempts = 0U;
+    safety.releasePhases[COMM_TX_CH_INPUT] = SAFETY_RELEASE_IDLE;
+    safety.releasePhases[COMM_TX_CH_SORTING] = SAFETY_RELEASE_IDLE;
+    safety.releaseAttempts[COMM_TX_CH_INPUT] = 0U;
+    safety.releaseAttempts[COMM_TX_CH_SORTING] = 0U;
+    safety.latchedDomains = (uint8_t)SAFETY_DOMAIN_ALL;
     safety.cause = cause;
     safety.eventTick = HAL_GetTick();
     safetyStats.estopEvents++;
 
     /* 3) 장치 상태 게시 + 양쪽 채널 EVENT 보고. */
     CommTx_SetDeviceStatus(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP);
-    safety_report_event(SAFETY_EVENT_ESTOP_LATCHED, cause, safety.eventTick, 0U);
+    safety_report_event(SAFETY_DOMAIN_ALL, SAFETY_EVENT_ESTOP_LATCHED, cause, safety.eventTick, 0U);
 }
 
-static void safety_begin_reset(void) {
-    if (safety.state != SAFETY_STATE_ESTOP) {
-        /* 걸린 E-Stop이 없으면 reset은 무의미하다. */
+static void safety_begin_reset(app_uart_channel_t source) {
+    safety_domain_t domain = safety_domain_from_source(source);
+    comm_tx_channel_t channel = safety_channel_from_domain(domain);
+
+    if ((domain == SAFETY_DOMAIN_NONE) || ((safety.latchedDomains & (uint8_t)domain) == 0U)) {
+        /* 해당 공정에 걸린 E-Stop이 없으면 reset은 무의미하다. */
         safetyStats.resetIgnored++;
         return;
     }
 
-    /* 해제 핸드셰이크 시작. STBY latch는 계속 LOW로 유지된다. */
-    safety.releasePhase = SAFETY_RELEASE_WAIT_STOPPED;
-    safety.releaseAttempts = 0U;
+    /* 같은 공정의 중복 reset은 진행 중인 핸드셰이크를 다시 시작하지 않는다. */
+    if (safety.releasePhases[channel] != SAFETY_RELEASE_IDLE) {
+        safetyStats.resetIgnored++;
+        return;
+    }
+
+    safety.releasePhases[channel] = SAFETY_RELEASE_WAIT_STOPPED;
+    safety.releaseAttempts[channel] = 0U;
 }
 
-static void safety_reject_reset(safety_reset_result_t result) {
-    /* STBY latch를 유지한 채(fail-safe) 해제를 포기한다. Pi가 재시도할 수 있다. */
-    safety.releasePhase = SAFETY_RELEASE_IDLE;
-    safety.releaseAttempts = 0U;
+static void safety_reject_reset(safety_domain_t domain, safety_reset_result_t result) {
+    comm_tx_channel_t channel = safety_channel_from_domain(domain);
+
+    /* 해당 공정의 software safety latch를 유지한 채 해제를 포기한다. */
+    safety.releasePhases[channel] = SAFETY_RELEASE_IDLE;
+    safety.releaseAttempts[channel] = 0U;
     safetyStats.resetRejected++;
-    safety_report_event(SAFETY_EVENT_RESET_REJECTED, safety.cause, HAL_GetTick(), (uint8_t)result);
+    safety_report_event(domain, SAFETY_EVENT_RESET_REJECTED, safety.cause, HAL_GetTick(), (uint8_t)result);
 }
 
-static void safety_service_release(void) {
-    switch (safety.releasePhase) {
+static void safety_complete_reset(safety_domain_t domain) {
+    comm_tx_channel_t channel = safety_channel_from_domain(domain);
+
+    safety.releasePhases[channel] = SAFETY_RELEASE_IDLE;
+    safety.releaseAttempts[channel] = 0U;
+    safety.latchedDomains &= (uint8_t)(~(uint8_t)domain);
+    safetyStats.resetCompleted++;
+
+    /* 핀은 LOW를 유지하며, 해제된 공정의 모터 드라이버만 이후 enable할 수 있다. */
+    conveyor_motor_power_release_latch();
+    CommTx_SetChannelDeviceStatus(channel, UART_DEVICE_READY, UART_ERROR_NONE);
+    safety_report_event(domain, SAFETY_EVENT_RESET_COMPLETE, safety.cause, HAL_GetTick(), (uint8_t)SAFETY_RESET_OK);
+
+    if (safety.latchedDomains == (uint8_t)SAFETY_DOMAIN_NONE) {
+        safety.state = SAFETY_STATE_NORMAL;
+    }
+}
+
+static void safety_service_release(safety_domain_t domain) {
+    comm_tx_channel_t channel = safety_channel_from_domain(domain);
+
+    switch (safety.releasePhases[channel]) {
         case SAFETY_RELEASE_WAIT_STOPPED:
-            if ((safety_input_sync() == SAFETY_SYNC_STOPPED) && (safety_sorting_sync() == SAFETY_SYNC_STOPPED)) {
-                /* 두 공정 모두 정지 확인. 이제 해제를 요청한다. */
-                (void)input_control_task_notify_safety_release();
-                (void)sorting_control_task_notify_safety_release();
-                safety.releasePhase = SAFETY_RELEASE_WAIT_RELEASED;
-                safety.releaseAttempts = 0U;
+            if (safety_domain_sync(domain) == SAFETY_SYNC_STOPPED) {
+                if (safety_notify_domain_release(domain) != 0U) {
+                    safety.releasePhases[channel] = SAFETY_RELEASE_WAIT_RELEASED;
+                    safety.releaseAttempts[channel] = 0U;
+                } else {
+                    safety.releaseAttempts[channel]++;
+                    if (safety.releaseAttempts[channel] >= SAFETY_RELEASE_MAX_ATTEMPTS) {
+                        safety_reject_reset(domain, SAFETY_RESET_TIMEOUT);
+                    }
+                }
             } else {
-                safety.releaseAttempts++;
-                if (safety.releaseAttempts >= SAFETY_RELEASE_MAX_ATTEMPTS) {
-                    safety_reject_reset((safety_input_sync() != SAFETY_SYNC_STOPPED) ? SAFETY_RESET_INPUT_NOT_READY
-                                                                                     : SAFETY_RESET_SORTING_NOT_READY);
+                safety.releaseAttempts[channel]++;
+                if (safety.releaseAttempts[channel] >= SAFETY_RELEASE_MAX_ATTEMPTS) {
+                    safety_reject_reset(domain, safety_domain_not_ready_result(domain));
                 }
             }
             break;
 
         case SAFETY_RELEASE_WAIT_RELEASED:
-            if ((safety_input_sync() == SAFETY_SYNC_RELEASED) && (safety_sorting_sync() == SAFETY_SYNC_RELEASED)) {
-                /* 두 공정 모두 해제 확인 후에만 STBY latch를 푼다. */
-                conveyor_motor_power_release_latch();
-                safety.state = SAFETY_STATE_NORMAL;
-                safety.releasePhase = SAFETY_RELEASE_IDLE;
-                safety.releaseAttempts = 0U;
-                safetyStats.resetCompleted++;
-
-                CommTx_SetDeviceStatus(UART_DEVICE_READY, UART_ERROR_NONE);
-                safety_report_event(SAFETY_EVENT_RESET_COMPLETE, safety.cause, HAL_GetTick(), (uint8_t)SAFETY_RESET_OK);
+            if (safety_domain_sync(domain) == SAFETY_SYNC_RELEASED) {
+                safety_complete_reset(domain);
             } else {
-                safety.releaseAttempts++;
-                if (safety.releaseAttempts >= SAFETY_RELEASE_MAX_ATTEMPTS) {
-                    safety_reject_reset(SAFETY_RESET_TIMEOUT);
+                safety.releaseAttempts[channel]++;
+                if (safety.releaseAttempts[channel] >= SAFETY_RELEASE_MAX_ATTEMPTS) {
+                    safety_reject_reset(domain, SAFETY_RESET_TIMEOUT);
                 }
             }
             break;
@@ -189,7 +256,7 @@ void SafetyTask_HandleSafetyCommand(const control_command_t* message) {
             (message->source == APP_UART_CHANNEL_6) ? SAFETY_CAUSE_ESTOP_SORTING_PI : SAFETY_CAUSE_ESTOP_INPUT_PI;
         safety_enter_estop(cause);
     } else if (message->frame.command == UART_CMD_RESET_DEVICE) {
-        safety_begin_reset();
+        safety_begin_reset(message->source);
     } else {
         /* comm_rx가 E-Stop/Reset만 이 큐로 라우팅하므로 그 외는 무시한다. */
     }
@@ -200,13 +267,17 @@ void SafetyTask_ServicePending(void) {
         safety_enter_estop((safety_cause_t)atomic_load_explicit(&safetyPendingFatalCause, memory_order_acquire));
     }
 
-    if ((safety.state == SAFETY_STATE_ESTOP) && (safety.releasePhase != SAFETY_RELEASE_IDLE)) {
-        safety_service_release();
+    if (safety.state == SAFETY_STATE_ESTOP) {
+        safety_service_release(SAFETY_DOMAIN_INPUT);
+        safety_service_release(SAFETY_DOMAIN_SORTING);
     }
 }
 
 uint8_t SafetyTask_IsReleasing(void) {
-    return ((safety.state == SAFETY_STATE_ESTOP) && (safety.releasePhase != SAFETY_RELEASE_IDLE)) ? 1U : 0U;
+    return ((safety.state == SAFETY_STATE_ESTOP) && ((safety.releasePhases[COMM_TX_CH_INPUT] != SAFETY_RELEASE_IDLE) ||
+                                                     (safety.releasePhases[COMM_TX_CH_SORTING] != SAFETY_RELEASE_IDLE)))
+               ? 1U
+               : 0U;
 }
 
 void Safety_TriggerEmergencyStop(safety_cause_t cause) {

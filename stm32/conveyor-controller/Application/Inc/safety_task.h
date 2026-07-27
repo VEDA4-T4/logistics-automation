@@ -24,18 +24,23 @@
  *      함께 처리한다(별도 게이트 호출 불필요).
  *   3) 장치 상태를 EMERGENCY_STOP으로 게시하고 안전 EVENT를 양쪽 채널에 보고.
  *
- * Reset 시퀀스(UART_CMD_RESET_DEVICE, 양쪽 UART 수신 가능):
- *   E-Stop latch 상태에서만 유효하다. 두 공정이 모두 STOPPED로 동기화된 뒤에만
- *   해제를 요청하고, 두 공정이 모두 RELEASED로 확인된 뒤에만 STBY latch를 푼다.
- *   분류 쪽은 sorting_control_handle_safety_release()가 게이트 Home 상태를
- *   전제조건으로 검사하므로(그 전엔 MOTION_PENDING), 게이트가 아직 복귀 중이면
- *   STOPPED 전이 자체가 지연되고 SafetyTask는 이를 그대로 폴링 대기한다.
- *   어느 단계든 시간 예산을 초과하면 latch를 유지한 채(fail-safe) reset을 거부
- *   보고한다.
+ * Reset 시퀀스(UART_CMD_RESET_DEVICE, 요청 채널 범위):
+ *   USART1 reset은 InputControlTask만, USART6 reset은
+ * SortingControlTask만 해제한다.
+ *   요청된 공정이 STOPPED로 동기화된 뒤 해제를 요청하고 RELEASED 확인 후 해당
  *
- * 논블로킹:
- *   보고는 CommTx_SendUrgent(비블로킹)를 사용하고, 해제 핸드셰이크는 큐 대기
- *   timeout으로 pacing하여 하위 우선순위 ControlTask가 실행될 수 있게 한다.
+ * 채널의 heartbeat만 READY로 변경한다. 다른 공정의 software safety latch와
+ *   EMERGENCY_STOP 상태는 그대로 유지된다.
+ * 공용 STBY latch는 첫 공정 복구 시
+ *   해제되지만 핀은 LOW를 유지하고, 아직 잠긴 공정은 ControlTask가 PWM/방향
+ *
+ * 출력을 안전 상태로 유지하며 구동 명령을 거부한다. 분류 게이트가 아직 Home
+ *   복귀 중이면 SortingControlTask의
+ * STOPPED 전이가 지연되므로 SafetyTask가
+ *   폴링 대기한다. 시간 예산을 초과하면 해당 공정 reset만 거부한다.
+
+ * * 논블로킹: 보고는 CommTx_SendUrgent(비블로킹)를 사용하고, 해제 핸드셰이크는 큐 대기 timeout으로 pacing하여 하위
+ * 우선순위 ControlTask가 실행될 수 있게 한다.
  */
 
 /* E-Stop 원인 분류. 안전 EVENT payload의 cause 필드로 그대로 사용한다. */
@@ -100,9 +105,9 @@ typedef enum {
 /* 통계. 디버거 Live Expressions로 관찰한다. */
 typedef struct {
     uint32_t estopEvents;         /* E-Stop 진입 횟수 */
-    uint32_t resetCompleted;      /* 정상 해제 완료 횟수 */
-    uint32_t resetRejected;       /* 해제 실패(예산 초과 등)로 latch 유지 */
-    uint32_t resetIgnored;        /* E-Stop 미발생 상태의 reset 무시 */
+    uint32_t resetCompleted;      /* 공정 범위 정상 해제 완료 횟수 */
+    uint32_t resetRejected;       /* 공정 범위 해제 실패(예산 초과 등) */
+    uint32_t resetIgnored;        /* 해당 공정 latch 없음/중복 reset 무시 */
     uint32_t reportDrops;         /* CommTx_SendUrgent 실패(양쪽 합산) */
     uint32_t controlStopFailures; /* notify_safety_stop 접수 실패 */
 } safety_task_stats_t;

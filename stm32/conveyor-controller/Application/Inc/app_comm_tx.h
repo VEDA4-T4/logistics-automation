@@ -125,11 +125,14 @@ int32_t CommTx_SendUrgentWithSequence(comm_tx_channel_t channel, uint8_t sequenc
                                       const uint8_t* payload, uint8_t length);
 
 /*
- * Updates the device status included in heartbeat frames. CommTxTask owns the
- * periodic transmission; SafetyTask
- * and HealthTask only update this state.
+ * Updates the device status included in both heartbeat channels. CommTxTask
+ * owns periodic transmission; callers
+ * only update the snapshot.
  */
 void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code);
+
+/* Updates only the heartbeat snapshot for the selected process channel. */
+void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code);
 
 /*
  * Updates the per-process sensor state included in heartbeat frames. The

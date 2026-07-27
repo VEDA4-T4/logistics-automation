@@ -115,9 +115,8 @@ private:
     };
 
     [[nodiscard]] bool EncodeCommandFrame(std::uint8_t command, std::span<const std::uint8_t> payload,
-                                         uart_frame_t& frame,
-                                         std::array<std::uint8_t, UART_MAX_FRAME_SIZE>& encoded,
-                                         std::size_t& encoded_length, InputTransactResult& result);
+                                          uart_frame_t& frame, std::array<std::uint8_t, UART_MAX_FRAME_SIZE>& encoded,
+                                          std::size_t& encoded_length, InputTransactResult& result);
     [[nodiscard]] WaitOutcome WaitForResponse(std::uint8_t sequence, InputTransactResult& result);
     void Classify(const uart_frame_t& frame, InputTransactResult& result) noexcept;
     [[nodiscard]] static bool IsResponseFrame(const uart_frame_t& frame, std::uint8_t sequence) noexcept;

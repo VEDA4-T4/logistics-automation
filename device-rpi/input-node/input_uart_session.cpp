@@ -151,8 +151,7 @@ InputUartSession::WaitOutcome InputUartSession::WaitForResponse(std::uint8_t seq
 }
 
 bool InputUartSession::EncodeCommandFrame(std::uint8_t command, std::span<const std::uint8_t> payload,
-                                          uart_frame_t& frame,
-                                          std::array<std::uint8_t, UART_MAX_FRAME_SIZE>& encoded,
+                                          uart_frame_t& frame, std::array<std::uint8_t, UART_MAX_FRAME_SIZE>& encoded,
                                           std::size_t& encoded_length, InputTransactResult& result) {
     if (payload.size() > UART_MAX_PAYLOAD_SIZE || UART_IS_VALID_COMMAND(command) == 0U ||
         UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(command, payload.size()) == 0U) {

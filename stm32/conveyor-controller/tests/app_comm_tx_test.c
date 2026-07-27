@@ -1,3 +1,5 @@
+#include "app_comm_tx.h"
+
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -5,7 +7,6 @@
 #include <string.h>
 
 #include "FreeRTOS.h"
-#include "app_comm_tx.h"
 #include "health_task.h"
 #include "logistics/contracts/uart_codec.h"
 #include "queue.h"
@@ -104,8 +105,7 @@ BaseType_t xQueueAddToSet(QueueSetMemberHandle_t member, QueueSetHandle_t queue_
     assert(queueSet->type == FAKE_OBJECT_SET);
     fakeAddCalls++;
 
-    if ((fakeFailAddCall != 0U && fakeAddCalls == fakeFailAddCall) ||
-        queueSet->memberCount >= FAKE_MAX_SET_MEMBERS) {
+    if ((fakeFailAddCall != 0U && fakeAddCalls == fakeFailAddCall) || queueSet->memberCount >= FAKE_MAX_SET_MEMBERS) {
         return pdFAIL;
     }
 
@@ -355,8 +355,7 @@ static void test_immediate_dma_failure_retries_same_frame(void) {
     const uint8_t payload[] = { 0xA5U };
 
     fakeNextTransmitStatus = HAL_BUSY;
-    assert(CommTx_SendWithSequence(COMM_TX_CH_INPUT, 0xA1U, UART_CMD_EVENT, payload,
-                                   (uint8_t)sizeof(payload)) == 0);
+    assert(CommTx_SendWithSequence(COMM_TX_CH_INPUT, 0xA1U, UART_CMD_EVENT, payload, (uint8_t)sizeof(payload)) == 0);
     CommTx_ProcessOnce();
     assert(fakeTransmitCalls == transmitBefore + 1U);
     assert(fakeCaptureCount == captureBefore);
@@ -460,6 +459,24 @@ static void test_heartbeat_routes_to_both_channels(void) {
     complete_channel(&huart6);
 }
 
+static void test_heartbeat_uses_channel_specific_device_status(void) {
+    uint32_t captureBefore = fakeCaptureCount;
+
+    CommTx_SetDeviceStatus(UART_DEVICE_RUNNING, UART_ERROR_NONE);
+    CommTx_SetChannelDeviceStatus(COMM_TX_CH_SORTING, UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP);
+    osDelay(1000U);
+    CommTx_ProcessOnce();
+
+    uart_frame_t inputFrame = decode_capture(captureBefore, &huart1);
+    uart_frame_t sortingFrame = decode_capture(captureBefore + 1U, &huart6);
+    assert(inputFrame.payload[APP_HEARTBEAT_STATE_INDEX] == UART_DEVICE_RUNNING);
+    assert(inputFrame.payload[APP_HEARTBEAT_ERROR_INDEX] == UART_ERROR_NONE);
+    assert(sortingFrame.payload[APP_HEARTBEAT_STATE_INDEX] == UART_DEVICE_EMERGENCY_STOP);
+    assert(sortingFrame.payload[APP_HEARTBEAT_ERROR_INDEX] == UART_ERROR_EMERGENCY_STOP);
+    complete_channel(&huart1);
+    complete_channel(&huart6);
+}
+
 int main(void) {
     test_init_failure_is_recoverable();
     test_sequence_and_payload_are_encoded();
@@ -471,6 +488,7 @@ int main(void) {
     test_uart_error_only_retries_real_tx_dma_error();
     test_spurious_completion_is_ignored();
     test_heartbeat_routes_to_both_channels();
+    test_heartbeat_uses_channel_specific_device_status();
     assert(fakeAbortCalls >= UART_MAX_RETRY_COUNT + 1U);
     assert(fakeCriticalDepth == 0U);
     return 0;
