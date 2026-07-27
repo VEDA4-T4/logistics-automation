@@ -111,16 +111,17 @@ namespace mqtt = contracts::mqtt;
     return static_cast<std::uint8_t>(value);
 }
 
-[[nodiscard]] std::string SensorStateName(std::uint8_t state) {
+// SensorStatusPayload.measurement_status only accepts these three values
+// (IsValidMeasurementStatus in mqtt_codec.hpp).
+[[nodiscard]] std::string MeasurementStatusName(std::uint8_t state) {
     switch (state) {
-        case UART_SENSOR_CLEAR:
-            return "SENSOR_CLEAR";
         case UART_SENSOR_DETECTED:
-            return "OBJECT_DETECTED";
+            return "DETECTED";
         case UART_SENSOR_FAULT:
-            return "SENSOR_FAULT";
+            return "FAULT";
+        case UART_SENSOR_CLEAR:
         default:
-            return "SENSOR_UNKNOWN";
+            return "CLEAR";
     }
 }
 
@@ -424,9 +425,29 @@ void InputNode::HandleSensorStatus(const uart_frame_t& frame) {
     if (frame.length != UART_SENSOR_STATUS_PAYLOAD_SIZE) {
         return;
     }
+    const std::uint8_t sensor_id = frame.payload[UART_SENSOR_ID_INDEX];
     const std::uint8_t sensor_state = frame.payload[UART_SENSOR_STATE_INDEX];
+    const std::uint16_t distance_cm = static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
+                                      static_cast<std::uint16_t>(
+                                          static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX])
+                                          << 8U);
+
+    // Sensor readings are telemetry, not device state: publish every measurement as
+    // a SENSOR_STATUS event so the server gets the sensor id and distance, and so
+    // sensor activity no longer overwrites the device's operational current_state.
+    EmitReport({
+        .channel = InputReportChannel::kEvent,
+        .message_type = mqtt::MessageType::kSensorStatus,
+        .data =
+            mqtt::SensorStatusPayload{
+                .sensor_id = static_cast<std::int32_t>(sensor_id),
+                .measurement_status = MeasurementStatusName(sensor_state),
+                .distance_cm = static_cast<std::int32_t>(distance_cm),
+            },
+    });
+
     if (last_sensor_state_.has_value() && *last_sensor_state_ == sensor_state) {
-        return;  // report only on change to avoid flooding the broker
+        return;  // only a transition raises the fault alert below
     }
     last_sensor_state_ = sensor_state;
 
@@ -444,20 +465,7 @@ void InputNode::HandleSensorStatus(const uart_frame_t& frame) {
                     .distance = SensorDistanceCm(frame),
                 },
         });
-        return;
     }
-
-    EmitReport({
-        .channel = InputReportChannel::kStatus,
-        .message_type = mqtt::MessageType::kDeviceStatus,
-        .data =
-            mqtt::DeviceStatusPayload{
-                .status = mqtt::ConnectionState::kOnline,
-                .current_state = SensorStateName(sensor_state),
-                .job_id = std::nullopt,
-                .error_code = std::nullopt,
-            },
-    });
 }
 
 void InputNode::HandleDeviceStatus(const uart_frame_t& frame) {

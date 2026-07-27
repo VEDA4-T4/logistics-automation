@@ -143,8 +143,12 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 
 | UART 프레임 | MQTT 채널 / 타입 | 내용 |
 |---|---|---|
-| `SENSOR_STATUS` (CLEAR/DETECTED) | status / `DEVICE_STATUS` | `current_state = SENSOR_CLEAR / OBJECT_DETECTED` (상태 변화 시에만) |
-| `SENSOR_STATUS` (FAULT) | error / `ERROR_OCCURRED` | `error_code=ERR-SENSOR`, `distance` 포함 |
+| `SENSOR_STATUS` (모든 측정) | event / `SENSOR_STATUS` | `{sensorId, measurementStatus, distanceCm}`. `measurementStatus`는 계약상 `CLEAR`/`DETECTED`/`FAULT`만 허용. 거리값이 매번 바뀌므로 **측정마다 발행** |
+| `SENSOR_STATUS` (FAULT로 전환 시) | error / `ERROR_OCCURRED` | 위 telemetry에 더해 `error_code=ERR-SENSOR` 알림도 발행 |
+
+> 센서 값은 telemetry라 `DEVICE_STATUS`가 아니라 **`SENSOR_STATUS` 이벤트**로 나간다(`device/{id}/event`,
+> `mqtt_validation.hpp`가 SENSOR_STATUS를 device event로 분류). 덕분에 센서 활동이 장치 운영 상태
+> (`current_state` = READY/EMERGENCY_STOP/RUNNING/STOPPED)를 덮어쓰지 않는다.
 | `DEVICE_STATUS` | status / `DEVICE_STATUS` | 장치 상태명 + 오류코드 |
 | `EVENT` (heartbeat, id=1) | status / `DEVICE_STATUS` | 9바이트 payload 디코딩: `device_state`/`error_code`/uptime/투입·분류 센서 상태. 상태 변화 시에만 보고(uptime만 바뀌면 무시) |
 | `EVENT` (safety, id=3, kind=1/3) | error / `ERROR_OCCURRED` | `ERR-SAFETY-ESTOP-LATCHED`(비상정지 latch) / `ERR-SAFETY-RESET-REJECTED`(해제 거부) |

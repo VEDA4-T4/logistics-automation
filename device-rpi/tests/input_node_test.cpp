@@ -265,31 +265,76 @@ void TestSensorDetectedReport() {
     fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
 
     assert(fixture.reports.size() == 1);
-    assert(fixture.reports.front().channel == InputReportChannel::kStatus);
-    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
-    assert(status != nullptr);
-    assert(status->current_state == "OBJECT_DETECTED");
+    // Sensor readings are telemetry: SENSOR_STATUS on the event channel, carrying
+    // the sensor id and distance, not a device-state report.
+    assert(fixture.reports.front().channel == InputReportChannel::kEvent);
+    assert(fixture.reports.front().message_type == mqtt::MessageType::kSensorStatus);
+    const auto* sensor = std::get_if<mqtt::SensorStatusPayload>(&fixture.reports.front().data);
+    assert(sensor != nullptr);
+    assert(sensor->sensor_id == UART_INPUT_SENSOR_ID_1);
+    assert(sensor->measurement_status == "DETECTED");
+    assert(sensor->distance_cm == 15);
+    assert(sensor->IsValid());
+}
+
+void TestSensorClearReportsMeasurementStatusClear() {
+    Fixture fixture;
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_CLEAR, 40U));
+
+    assert(fixture.reports.size() == 1);
+    const auto* sensor = std::get_if<mqtt::SensorStatusPayload>(&fixture.reports.front().data);
+    assert(sensor != nullptr);
+    assert(sensor->measurement_status == "CLEAR");
+    assert(sensor->distance_cm == 40);
+    assert(sensor->IsValid());
 }
 
 void TestSensorFaultReport() {
     Fixture fixture;
     fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_FAULT, 7U));
 
-    assert(fixture.reports.size() == 1);
-    assert(fixture.reports.front().channel == InputReportChannel::kError);
-    const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.front().data);
+    // A fault still raises the operator-facing error, alongside the telemetry event.
+    assert(fixture.reports.size() == 2);
+    const auto* sensor = std::get_if<mqtt::SensorStatusPayload>(&fixture.reports.front().data);
+    assert(sensor != nullptr);
+    assert(sensor->measurement_status == "FAULT");
+
+    assert(fixture.reports.back().channel == InputReportChannel::kError);
+    const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.back().data);
     assert(error != nullptr);
     assert(error->error_code == "ERR-SENSOR");
     assert(error->distance.has_value() && *error->distance == 7);
 }
 
-void TestSensorReportsOnlyOnChange() {
+void TestEverySensorMeasurementIsPublished() {
     Fixture fixture;
+    // Distance changes even while the state does not, so every measurement is sent.
     fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 14U));  // same state, ignored
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 14U));
     fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_CLEAR, 40U));
 
-    assert(fixture.reports.size() == 2);
+    assert(fixture.reports.size() == 3);
+    for (const auto& report : fixture.reports) {
+        assert(report.channel == InputReportChannel::kEvent);
+        assert(std::holds_alternative<mqtt::SensorStatusPayload>(report.data));
+    }
+}
+
+void TestSensorActivityDoesNotOverwriteDeviceState() {
+    Fixture fixture;
+    // The controller heartbeat establishes the operational state...
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+    assert(fixture.reports.size() == 1);
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(status != nullptr && status->current_state == "READY");
+
+    // ...and sensor traffic must not replace it with a sensor state.
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_CLEAR, 40U));
+    for (std::size_t index = 1; index < fixture.reports.size(); ++index) {
+        assert(!std::holds_alternative<mqtt::DeviceStatusPayload>(fixture.reports[index].data));
+    }
 }
 
 void TestDeviceStatusReport() {
@@ -371,7 +416,7 @@ void TestHeartbeatDoesNotDuplicateSensorTransition() {
     assert(fixture.reports.size() == 1);
 
     fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
-    assert(fixture.reports.size() == 2);
+    assert(fixture.reports.size() == 2);  // the SENSOR_STATUS telemetry event
 
     fixture.node->HandleUartFrame(
         input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_DETECTED));
@@ -475,8 +520,10 @@ int main() {
     TestInvalidTarget();
     TestControllerTimeout();
     TestSensorDetectedReport();
+    TestSensorClearReportsMeasurementStatusClear();
     TestSensorFaultReport();
-    TestSensorReportsOnlyOnChange();
+    TestEverySensorMeasurementIsPublished();
+    TestSensorActivityDoesNotOverwriteDeviceState();
     TestDeviceStatusReport();
     TestMalformedHeartbeatIsIgnored();
     TestHeartbeatIsDecodedToDeviceStatus();
