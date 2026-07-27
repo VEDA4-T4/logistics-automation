@@ -9,6 +9,13 @@ namespace {
 
 int g_failures = 0;
 
+static_assert(APP_MARKER_NONE == 0);
+static_assert(APP_MARKER_JUNCTION == 1);
+static_assert(APP_MARKER_DEST_A == 2);
+static_assert(APP_MARKER_DEST_B == 3);
+static_assert(APP_MARKER_DEST_C == 4);
+static_assert(APP_MARKER_INVALID == 5);
+
 #define CHECK_TRUE(condition)                                                                    \
     do {                                                                                         \
         if (!(condition)) {                                                                      \
@@ -28,6 +35,28 @@ sensor_logic_update_t UpdateFsr(sensor_logic_context_t& context, std::uint16_t r
     sensor_logic_update_t update{};
     SensorLogic_UpdateFsr(&context, raw, now_ms, &update);
     return update;
+}
+
+void TestMarkerMessageContract() {
+    app_sensor_snapshot_t snapshot{};
+    sensor_logic_context_t context{};
+
+    CHECK_TRUE(snapshot.marker_code == APP_MARKER_NONE);
+    CHECK_TRUE(snapshot.marker_count == 0U);
+    CHECK_TRUE(snapshot.marker_detected_at_ms == 0U);
+
+    SensorLogic_Init(&context, 10U);
+    CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_NONE);
+    CHECK_TRUE(context.snapshot.marker_count == 0U);
+    CHECK_TRUE(context.snapshot.marker_detected_at_ms == 0U);
+
+    snapshot.marker_code = APP_MARKER_DEST_C;
+    snapshot.marker_count = 4U;
+    snapshot.marker_detected_at_ms = 1234U;
+
+    CHECK_TRUE(snapshot.marker_code == APP_MARKER_DEST_C);
+    CHECK_TRUE(snapshot.marker_count == 4U);
+    CHECK_TRUE(snapshot.marker_detected_at_ms == 1234U);
 }
 
 void TestLineNormalizationAndDebounce() {
@@ -251,6 +280,7 @@ void TestSensorErrorsAndStaleness() {
 }  // namespace
 
 int main() {
+    TestMarkerMessageContract();
     TestLineNormalizationAndDebounce();
     TestMarkerIsOneShot();
     TestInvalidMarkerEntryAndLineLost();

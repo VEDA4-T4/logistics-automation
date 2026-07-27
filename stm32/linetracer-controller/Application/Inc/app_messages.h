@@ -67,9 +67,24 @@ typedef enum {
     APP_SENSOR_EVENT_OBSTACLE = (1U << 6U)
 } app_sensor_event_flags_t;
 
+/*
+ * Marker identity decoded by SensorTask. The current control phase determines
+ * whether a route marker represents a
+ * pickup point or a parking destination.
+ */
+typedef enum {
+    APP_MARKER_NONE = 0,
+    APP_MARKER_JUNCTION,
+    APP_MARKER_DEST_A,
+    APP_MARKER_DEST_B,
+    APP_MARKER_DEST_C,
+    APP_MARKER_INVALID
+} app_marker_code_t;
+
 typedef struct {
     uint32_t sampled_at_ms;
     uint32_t event_flags;
+    uint32_t marker_detected_at_ms;
     uint16_t fsr_raw;
     uint16_t ultrasonic_front_mm;
     uint16_t ultrasonic_rear_mm;
@@ -77,8 +92,10 @@ typedef struct {
     uint16_t ultrasonic_right_mm;
     linetracer_line_state_t line_state;
     uart_linetracer_load_state_t load_state;
+    app_marker_code_t marker_code;
     uint8_t line_left;
     uint8_t line_right;
+    uint8_t marker_count;
 } app_sensor_snapshot_t;
 
 typedef enum {
