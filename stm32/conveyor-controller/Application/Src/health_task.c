@@ -25,10 +25,15 @@
 /* 남은 스택이 이 워드 수 미만이면 치명으로 본다. */
 #define HEALTH_STACK_MARGIN_WORDS 32U
 
-/* 센서 채널의 마지막 유효 표본으로부터 이 시간이 지나면 갱신 지연으로 본다.
- * 실측 결과(2026-07-23, 손으로 직접 든 실제 HC-SR04) sensor_filter의 10회 연속
- * fault 기준보다 훨씬 엄격해서, 손 각도 등으로 인한 짧은 echo 실패에도 500ms는
- * 너무 자주 걸렸다 - 1000ms로 완화. */
+/* 센서 채널을 마지막으로 폴링한 시각으로부터 이 시간이 지나면 서비스 지연으로 본다.
+ * SensorTask는 채널당 SENSOR_MIN_CYCLE_MS(60ms) x 4채널 = 약 240ms마다 각 채널을
+ * 다시 폴링하므로, 1000ms면 4주기를 통째로 건너뛴 것이라 명백한 이상이다.
+ *
+ * 주의: 이 판정은 "폴링되고 있는가"만 본다. 예전에는 "유효 표본을 받았는가"를
+ * 봤는데(2026-07-27 수정 전), echo 누락은 HC-SR04의 정상 특성이라 정상 배선
+ * 상태에서도 STALE이 끊임없이 발생했다 - sensor_filter의 10회 연속 fault 기준보다
+ * 2배 민감해서 애플리케이션 FAULT(ERR-SENSOR)보다 health 경고가 더 자주 뜨는
+ * 역전까지 있었다. echo 누락 자체는 sensor_filter가 UART_SENSOR_FAULT로 보고한다. */
 #define HEALTH_SENSOR_STALE_MS 1000U
 
 /* UART 채널에서 이 시간 동안 바이트 수신이 전혀 없으면 단절로 본다.
@@ -268,9 +273,9 @@ static void health_check_sensor_staleness(uint32_t now) {
     }
 
     for (i = 0U; i < count; i++) {
-        uint32_t lastSampleTick = SensorTask_GetChannelLastSampleTick(i);
+        uint32_t lastPollTick = SensorTask_GetChannelLastPollTick(i);
 
-        if ((now - lastSampleTick) >= HEALTH_SENSOR_STALE_MS) {
+        if ((now - lastPollTick) >= HEALTH_SENSOR_STALE_MS) {
             if (healthSensorLatch[i].reported == 0U) {
                 healthSensorLatch[i].reported = 1U;
                 healthStats.sensorStaleEvents++;

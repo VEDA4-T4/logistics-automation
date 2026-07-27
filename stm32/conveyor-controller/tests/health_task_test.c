@@ -105,7 +105,7 @@ int32_t CommTx_Send(comm_tx_channel_t channel, uint8_t command, const uint8_t* p
 }
 
 /* ---- fake: SensorTask ---- */
-static uint32_t fakeSensorLastSampleTick[4];
+static uint32_t fakeSensorLastPollTick[4];
 static comm_tx_channel_t fakeSensorProcess[4] = { COMM_TX_CH_INPUT, COMM_TX_CH_SORTING, COMM_TX_CH_SORTING,
                                                   COMM_TX_CH_SORTING };
 /* 실기기 매핑과 동일: US1(input)=1, US2(sorting dest1)=1, US3(dest2)=2, US4(dest3)=3. */
@@ -115,8 +115,8 @@ uint8_t SensorTask_GetChannelCount(void) {
     return 4U;
 }
 
-uint32_t SensorTask_GetChannelLastSampleTick(uint8_t index) {
-    return fakeSensorLastSampleTick[index];
+uint32_t SensorTask_GetChannelLastPollTick(uint8_t index) {
+    return fakeSensorLastPollTick[index];
 }
 
 comm_tx_channel_t SensorTask_GetChannelProcess(uint8_t index) {
@@ -185,7 +185,7 @@ static void reset_all(void) {
     memset(&fakeCommTxStats, 0, sizeof(fakeCommTxStats));
     memset(commTxSendCalls, 0, sizeof(commTxSendCalls));
     commTxSendCallCount = 0U;
-    memset(fakeSensorLastSampleTick, 0, sizeof(fakeSensorLastSampleTick));
+    memset(fakeSensorLastPollTick, 0, sizeof(fakeSensorLastPollTick));
     iwdgStartCalls = 0U;
     iwdgRefreshCalls = 0U;
     fakeResetCause = HEALTH_RESET_POWER_ON;
@@ -289,10 +289,10 @@ static void test_uart_channel_timeout_reports_to_opposite_channel(void) {
     fakeTick = 6000U; /* 채널 timeout 기준(5000ms)보다 크게 */
     fakeCommRxLastRxTick[1] = fakeTick; /* 분류(sorting) 채널만 방금 활동, 투입은 여전히 0 */
     /* 센서 갱신 지연 체크와 간섭되지 않게 4채널 다 최신으로 고정(이 테스트의 관심사 아님). */
-    fakeSensorLastSampleTick[0] = fakeTick;
-    fakeSensorLastSampleTick[1] = fakeTick;
-    fakeSensorLastSampleTick[2] = fakeTick;
-    fakeSensorLastSampleTick[3] = fakeTick;
+    fakeSensorLastPollTick[0] = fakeTick;
+    fakeSensorLastPollTick[1] = fakeTick;
+    fakeSensorLastPollTick[2] = fakeTick;
+    fakeSensorLastPollTick[3] = fakeTick;
     health_ping_all();
     HealthTask_RunCycle();
 
@@ -327,9 +327,9 @@ static void test_sensor_staleness_reports_to_owning_process(void) {
     assert(commTxSendCallCount == 0U);
 
     fakeTick = 1100U; /* 센서 stale 기준(1000ms)보다 크게, 나머지 채널은 갱신되게 함 */
-    fakeSensorLastSampleTick[0] = fakeTick; /* index0=US1=input, 최신 */
-    fakeSensorLastSampleTick[1] = fakeTick; /* US2=sorting, 최신 */
-    fakeSensorLastSampleTick[2] = fakeTick; /* US3=sorting, 최신 */
+    fakeSensorLastPollTick[0] = fakeTick; /* index0=US1=input, 최신 */
+    fakeSensorLastPollTick[1] = fakeTick; /* US2=sorting, 최신 */
+    fakeSensorLastPollTick[2] = fakeTick; /* US3=sorting, 최신 */
     /* index3(US4=sorting)만 tick=0으로 방치 -> stale */
     health_ping_all();
     HealthTask_RunCycle();

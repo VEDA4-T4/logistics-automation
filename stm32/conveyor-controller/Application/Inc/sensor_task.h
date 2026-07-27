@@ -22,16 +22,21 @@ void SensorTask_PollChannel(uint8_t index);
 
 /*
  * ============================================================================
- * HealthTask가 센서 갱신 지연을 판정하는 데 쓰는 조회 함수
+ * HealthTask가 채널 서비스 지연을 판정하는 데 쓰는 조회 함수
  * ============================================================================
  */
 
 /* 등록된 센서 채널 수(현재 4: US1..US4). */
 uint8_t SensorTask_GetChannelCount(void);
 
-/* index 채널의 마지막 유효 표본 시각(HAL_GetTick 기준). 부팅 후 아직 유효
- * 표본이 없으면 0. */
-uint32_t SensorTask_GetChannelLastSampleTick(uint8_t index);
+/* index 채널을 마지막으로 폴링한 시각(HAL_GetTick 기준). 부팅 후 아직 한 번도
+ * 폴링하지 않았으면 0.
+ *
+ * 측정 성공 여부와 무관하게 갱신된다 - HealthTask가 판정하려는 것은 "SensorTask가
+ * 이 채널을 계속 서비스하고 있는가"이지 "센서가 유효한 echo를 받았는가"가 아니기
+ * 때문이다. 후자(echo 누락)는 HC-SR04의 정상 특성이라 health 이상이 아니며,
+ * 지속되면 sensor_filter가 UART_SENSOR_FAULT로 따로 보고한다. */
+uint32_t SensorTask_GetChannelLastPollTick(uint8_t index);
 
 /* index 채널이 보고하는 대상 공정(투입/분류). */
 comm_tx_channel_t SensorTask_GetChannelProcess(uint8_t index);

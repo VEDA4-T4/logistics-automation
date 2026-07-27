@@ -157,12 +157,15 @@ uint32_t osKernelGetTickCount(void) {
     return 0U;
 }
 
+static uint32_t fakeTick;
+
 uint32_t HAL_GetTick(void) {
-    return 0U;
+    return fakeTick;
 }
 
 /* ---- 테스트 헬퍼 ---- */
 static void reset_all(void) {
+    fakeTick = 0U;
     memset(fakeChannels, 0, sizeof(fakeChannels));
     fakeChannelCount = 0U;
     memset(triggerOrder, 0, sizeof(triggerOrder));
@@ -288,10 +291,38 @@ static void test_fault_after_threshold_reports_fault_and_unknown_distance(void) 
     assert(lastSensorState[COMM_TX_CH_INPUT] == UART_SENSOR_FAULT);
 }
 
+/*
+ * echo를 계속 못 받아도 폴링되고 있는 한 lastPollTick은 계속 갱신되어야 한다.
+ *
+ * HealthTask가 이 값으로 판정하려는 것은 "SensorTask가 이 채널을 계속 서비스하고
+ * 있는가"이지 "센서가 유효한 echo를 받았는가"가 아니다. echo 누락은 HC-SR04의
+ * 정상 특성(범위 밖/비스듬한 표면/흡음재)이라, 예전처럼 측정 성공 시각만 기록하면
+ * 정상 배선 상태에서도 SENSOR_STALE이 끊임없이 발생한다(2026-07-27 실기기에서
+ * 분류 3채널 전부에서 재현). echo 누락이 지속되는 상황은 sensor_filter가
+ * UART_SENSOR_FAULT로 따로 보고하므로 여기서 중복해서 알릴 필요가 없다.
+ */
+static void test_failed_measurements_still_advance_poll_tick(void) {
+    uint32_t i;
+
+    reset_all();
+    fakeChannels[1].ready = 0U; /* is_ready()가 계속 0 -> echo timeout 경로로만 진행 */
+
+    for (i = 0U; i < (SENSOR_FILTER_FAULT_THRESHOLD + 5U); i++) {
+        fakeTick += 240U; /* 4채널 순차 폴링 기준 채널당 재방문 주기(60ms x 4) */
+        SensorTask_PollChannel(1U);
+        /* 한 번도 성공하지 못했어도 폴링 자체는 계속되므로 stale로 보이면 안 된다. */
+        assert(SensorTask_GetChannelLastPollTick(1U) == fakeTick);
+    }
+
+    /* 대신 애플리케이션 경로가 FAULT로 이 상황을 보고한다(중복 아닌 각자의 역할). */
+    assert(lastSensorState[COMM_TX_CH_SORTING] == UART_SENSOR_FAULT);
+}
+
 int main(void) {
     test_input_channel_detection_routes_to_input_comm_channel();
     test_full_cycle_polls_in_order_with_correct_routing();
     test_sorting_heartbeat_reports_worst_state_across_three_sensors();
     test_fault_after_threshold_reports_fault_and_unknown_distance();
+    test_failed_measurements_still_advance_poll_tick();
     return 0;
 }

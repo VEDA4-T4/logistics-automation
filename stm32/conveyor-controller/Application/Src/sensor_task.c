@@ -26,14 +26,25 @@
 
 #define SENSOR_COUNT 4U
 #define SENSOR_ECHO_WAIT_MS 45U /* echo timeout(~38ms) + 여유 */
-#define SENSOR_MIN_CYCLE_MS 50U /* 센서당 최소 측정 주기 */
+
+/*
+ * 측정 1회의 최소 소요 시간. 다음 센서를 트리거하기까지의 간격이기도 하다.
+ *
+ * HC-SR04 데이터시트가 권장하는 최소 측정 주기가 60ms다 - 이전 발사의 초음파가
+ * 충분히 감쇠하기 전에 다시 발사하면 그 잔향이 다음 수신창에 잡힌다. 개별 센서
+ * 재방문 주기는 4채널 순차라 이 값의 4배(240ms)로 넉넉하지만, *인접* 채널은 딱
+ * 이 간격만큼만 떨어져 있다. 분류 US2/US3/US4는 같은 구역을 향하고 있어서 서로의
+ * 잔향을 주울 수 있으므로 인접 간격 자체가 데이터시트 기준을 만족해야 한다
+ * (50ms였을 때 실기기 캡처에 554cm/382cm 같은 비현실적 값이 섞여 나왔다).
+ */
+#define SENSOR_MIN_CYCLE_MS 60U
 
 typedef struct {
     hc_sr04_sensor_t driver;
     sensor_filter_t filter;
     comm_tx_channel_t txChannel;
     uint8_t sensorId;
-    uint32_t lastSampleTick; /* HealthTask의 갱신 지연 판정용, 유효 표본 성공 시각 */
+    uint32_t lastPollTick; /* HealthTask의 채널 서비스 지연 판정용, 폴링 시각 */
 } sensor_channel_t;
 
 static sensor_channel_t sensorChannels[SENSOR_COUNT];
@@ -95,7 +106,6 @@ static void sensor_task_measure(sensor_channel_t* channel) {
     }
 
     sensor_filter_record_sample(&channel->filter, distanceCm);
-    channel->lastSampleTick = HAL_GetTick();
 }
 
 static void sensor_task_report(const sensor_channel_t* channel) {
@@ -139,7 +149,15 @@ void SensorTask_Init(void) {
     sensor_task_init_channels();
 }
 
+/*
+ * HealthTask가 보는 것은 "이 채널이 계속 측정되고 있는가"(소프트웨어 생존성)이지
+ * "센서가 지금 유효한 echo를 받았는가"가 아니다. echo 누락은 HC-SR04의 정상
+ * 특성이고(범위 밖/비스듬한 표면/흡음재), 그 상태는 sensor_filter가 연속
+ * SENSOR_FILTER_FAULT_THRESHOLD회 누락 시 UART_SENSOR_FAULT로 따로 보고한다.
+ * 그래서 측정 성공 여부와 무관하게 폴링한 시각을 기록한다.
+ */
 void SensorTask_PollChannel(uint8_t index) {
+    sensorChannels[index].lastPollTick = HAL_GetTick();
     sensor_task_measure(&sensorChannels[index]);
     sensor_task_report(&sensorChannels[index]);
     sensor_task_update_heartbeat();
@@ -149,8 +167,8 @@ uint8_t SensorTask_GetChannelCount(void) {
     return SENSOR_COUNT;
 }
 
-uint32_t SensorTask_GetChannelLastSampleTick(uint8_t index) {
-    return sensorChannels[index].lastSampleTick;
+uint32_t SensorTask_GetChannelLastPollTick(uint8_t index) {
+    return sensorChannels[index].lastPollTick;
 }
 
 comm_tx_channel_t SensorTask_GetChannelProcess(uint8_t index) {
