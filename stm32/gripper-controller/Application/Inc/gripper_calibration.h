@@ -2,7 +2,7 @@
 #define GRIPPER_CALIBRATION_H
 
 /*
- * Provisional MG90S calibration values.
+ * Provisional SG90 calibration values.
  *
  * Keep these values conservative until each assembled joint is measured.
  * The UART contract accepts 0.0 to 180.0 degrees, while the controller applies
@@ -19,6 +19,12 @@
 #define GRIPPER_ELBOW_MIN_ANGLE_DECI_DEG 300U
 #define GRIPPER_ELBOW_MAX_ANGLE_DECI_DEG 1500U
 #define GRIPPER_ELBOW_HOME_ANGLE_DECI_DEG 900U
+
+/* Conservative initial motion limits. Tune after testing the assembled arm. */
+#define GRIPPER_BASE_MAX_SPEED_DECI_DEG_PER_SEC 300U
+#define GRIPPER_SHOULDER_MAX_SPEED_DECI_DEG_PER_SEC 150U
+#define GRIPPER_ELBOW_MAX_SPEED_DECI_DEG_PER_SEC 200U
+#define GRIPPER_CLAW_MAX_SPEED_PERCENT_PER_SEC 40U
 
 #define GRIPPER_SERVO_MIN_PULSE_US 1000U
 #define GRIPPER_SERVO_MAX_PULSE_US 2000U

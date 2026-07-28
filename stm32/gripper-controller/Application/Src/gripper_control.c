@@ -23,6 +23,49 @@ static uint8_t gripper_control_arm_target_is_safe(uint16_t base_angle, uint16_t 
                : 0U;
 }
 
+static uint32_t gripper_control_absolute_difference(uint32_t first, uint32_t second) {
+    return (first >= second) ? (first - second) : (second - first);
+}
+
+static uint32_t gripper_control_duration_for_delta(uint32_t delta, uint32_t units_per_second) {
+    if (delta == 0U) {
+        return 0U;
+    }
+
+    return ((delta * 1000U) + units_per_second - 1U) / units_per_second;
+}
+
+static uint32_t gripper_control_max_u32(uint32_t first, uint32_t second) {
+    return (first >= second) ? first : second;
+}
+
+static uint32_t gripper_control_arm_minimum_duration(const gripper_control_t* controller, uint16_t base_angle,
+                                                     uint16_t shoulder_angle, uint16_t elbow_angle) {
+    uint32_t duration;
+
+    duration = gripper_control_duration_for_delta(
+        gripper_control_absolute_difference(controller->base_angle, base_angle),
+        GRIPPER_BASE_MAX_SPEED_DECI_DEG_PER_SEC);
+    duration = gripper_control_max_u32(
+        duration,
+        gripper_control_duration_for_delta(
+            gripper_control_absolute_difference(controller->shoulder_angle, shoulder_angle),
+            GRIPPER_SHOULDER_MAX_SPEED_DECI_DEG_PER_SEC));
+    duration = gripper_control_max_u32(
+        duration,
+        gripper_control_duration_for_delta(
+            gripper_control_absolute_difference(controller->elbow_angle, elbow_angle),
+            GRIPPER_ELBOW_MAX_SPEED_DECI_DEG_PER_SEC));
+    return duration;
+}
+
+static uint32_t gripper_control_claw_minimum_duration(const gripper_control_t* controller,
+                                                      uint8_t position_percent) {
+    return gripper_control_duration_for_delta(
+        gripper_control_absolute_difference(controller->gripper_position, position_percent),
+        GRIPPER_CLAW_MAX_SPEED_PERCENT_PER_SEC);
+}
+
 static int32_t gripper_control_enable_outputs(gripper_control_t* controller) {
     if (controller->outputs_enabled != 0U) {
         return 0;
@@ -51,12 +94,21 @@ static gripper_control_result_t gripper_control_start_arm_motion(gripper_control
                                                                 uint16_t base_angle, uint16_t shoulder_angle,
                                                                 uint16_t elbow_angle, uint32_t duration_ms,
                                                                 uint32_t now_ms) {
+    uint32_t minimum_duration;
+
     if (gripper_control_arm_target_is_safe(base_angle, shoulder_angle, elbow_angle) == 0U) {
         return GRIPPER_CONTROL_INVALID_PAYLOAD;
     }
     if (gripper_control_enable_outputs(controller) != 0) {
         controller->state = UART_GRIPPER_STATE_FAULT;
         return GRIPPER_CONTROL_SERVO_ERROR;
+    }
+
+    minimum_duration = gripper_control_arm_minimum_duration(controller, base_angle, shoulder_angle, elbow_angle);
+    if (motion_type == UART_GRIPPER_MOTION_HOME) {
+        minimum_duration = gripper_control_max_u32(
+            minimum_duration,
+            gripper_control_claw_minimum_duration(controller, controller->target_gripper_position));
     }
 
     controller->start_base_angle = controller->base_angle;
@@ -66,7 +118,7 @@ static gripper_control_result_t gripper_control_start_arm_motion(gripper_control
     controller->target_shoulder_angle = shoulder_angle;
     controller->target_elbow_angle = elbow_angle;
     controller->motion_start_tick = now_ms;
-    controller->motion_duration_ms = duration_ms;
+    controller->motion_duration_ms = gripper_control_max_u32(duration_ms, minimum_duration);
     controller->active_motion_id = motion_id;
     controller->motion_type = motion_type;
     controller->completion.valid = 0U;
@@ -147,7 +199,9 @@ gripper_control_result_t gripper_control_process_command(gripper_control_t* cont
             controller->start_gripper_position = controller->gripper_position;
             controller->target_gripper_position = payload[UART_GRIPPER_SET_POSITION_INDEX];
             controller->motion_start_tick = now_ms;
-            controller->motion_duration_ms = uart_gripper_set_duration_ms(payload);
+            controller->motion_duration_ms = gripper_control_max_u32(
+                uart_gripper_set_duration_ms(payload),
+                gripper_control_claw_minimum_duration(controller, controller->target_gripper_position));
             controller->active_motion_id = uart_gripper_set_motion_id(payload);
             controller->motion_type = UART_GRIPPER_MOTION_GRIPPER;
             controller->completion.valid = 0U;
