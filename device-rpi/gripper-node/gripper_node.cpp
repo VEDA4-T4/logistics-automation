@@ -230,22 +230,12 @@ GripperCommandResult GripperNode::HandleMqttCommand(const mqtt::MqttMessage& mes
                                      .request_id = command->request_id };
     }
 
-    // A repeated request ID must never re-run a motion; replay the stored answer.
-    if (!command->request_id.empty() && command->request_id == last_request_id_ && last_result_.has_value()) {
-        GripperCommandResult replay = *last_result_;
-        replay.status = GripperCommandStatus::kDuplicate;
-        EmitCommandResponse(replay.request_id, replay.mqtt_command, mqtt::CommandResult::kDuplicated, std::nullopt,
-                            "duplicate request replayed: " + last_result_message_);
-        return replay;
-    }
-
-    GripperCommandResult result = HandleControlCommand(*command);
-    if (!command->request_id.empty()) {
-        last_request_id_ = command->request_id;
-        last_result_ = result;
-        last_result_message_ = std::string(ToString(cycle_.step));
-    }
-    return result;
+    // Exact message resends never reach here: MqttNodeClient recognizes a
+    // repeated MQTT message ID and replays the cached CommandResponse itself
+    // (see HandleMessage in mqtt_node_client.cpp), so this node only needs to
+    // reject a genuinely new request for work that is already running, which
+    // StartCycle does by comparing work IDs.
+    return HandleControlCommand(*command);
 }
 
 GripperCommandResult GripperNode::HandleControlCommand(const mqtt::ControlCommandPayload& command) {

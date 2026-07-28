@@ -229,11 +229,6 @@ private:
     std::optional<HeartbeatState> last_heartbeat_state_;
     std::chrono::milliseconds since_controller_heartbeat_{};
     bool controller_heartbeat_lost_{ false };
-
-    // Last response per request ID, replayed when the server retries a request.
-    std::string last_request_id_;
-    std::optional<GripperCommandResult> last_result_;
-    std::string last_result_message_;
 };
 
 }  // namespace logistics::device

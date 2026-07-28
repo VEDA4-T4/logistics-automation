@@ -366,6 +366,12 @@ void test_controller_heartbeat_does_not_overwrite_an_active_cycle_state() {
     assert(fixture.node->HasActiveCycle());
 }
 
+// Exact MQTT message resends (same message_id) never reach the node at all:
+// MqttNodeClient recognizes them and replays its own cached CommandResponse
+// before the command handler is called (see HandleMessage in
+// mqtt_node_client.cpp). A distinct new message for work that is already
+// active does reach here, and req-2 below exercises that the node itself
+// still refuses to re-run the motion for it.
 void test_duplicate_work_is_idempotent_and_a_second_work_conflicts() {
     Fixture fixture;
     fixture.Home();
@@ -377,26 +383,13 @@ void test_duplicate_work_is_idempotent_and_a_second_work_conflicts() {
     const GripperCommandResult repeat = fixture.node->HandleMqttCommand(MakeStartCommand("req-2", kWorkId));
     assert(repeat.status == GripperCommandStatus::kDuplicate);
     assert(fixture.backend->write_calls == writes_after_first);
+    const auto* repeat_response = fixture.LastResponse();
+    assert(repeat_response != nullptr && repeat_response->result == mqtt::CommandResult::kDuplicated);
 
     const GripperCommandResult other = fixture.node->HandleMqttCommand(MakeStartCommand("req-3", kOtherWorkId));
     assert(other.status == GripperCommandStatus::kActiveCycleConflict);
     assert(fixture.backend->write_calls == writes_after_first);
     assert(fixture.node->ActiveWorkId() == kWorkId);
-}
-
-void test_repeated_request_id_replays_the_stored_response() {
-    Fixture fixture;
-    fixture.Home();
-
-    const GripperCommandResult first = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
-    assert(first.status == GripperCommandStatus::kAccepted);
-    const int writes_after_first = fixture.backend->write_calls;
-
-    const GripperCommandResult replay = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
-    assert(replay.status == GripperCommandStatus::kDuplicate);
-    assert(fixture.backend->write_calls == writes_after_first);
-    const auto* response = fixture.LastResponse();
-    assert(response != nullptr && response->result == mqtt::CommandResult::kDuplicated);
 }
 
 void test_motion_fault_aborts_the_cycle_and_reports_an_error() {
@@ -611,7 +604,6 @@ int main() {
     test_progress_states_carry_the_job_id_but_never_report_ready();
     test_controller_heartbeat_does_not_overwrite_an_active_cycle_state();
     test_duplicate_work_is_idempotent_and_a_second_work_conflicts();
-    test_repeated_request_id_replays_the_stored_response();
     test_motion_fault_aborts_the_cycle_and_reports_an_error();
     test_a_stale_motion_completion_does_not_advance_the_cycle();
     test_emergency_stop_aborts_the_cycle_and_clears_the_home_reference();
