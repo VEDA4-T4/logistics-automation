@@ -1,0 +1,90 @@
+# Copy this file to gripper-node.ini before running the gripper node.
+# Do not commit gripper-node.ini because it can contain deployment IP addresses
+# and MQTT credentials.
+
+[device]
+# Must match the gripper_device_id configured in the central server [process]
+# section, and the targetDeviceId the server puts on its control commands.
+device_id=PI-GRIPPER-01
+
+# Human-readable node name reported during device registration.
+node_name=gripper-node-01
+
+# Replace with the gripper Raspberry Pi IP address shown by `hostname -I`.
+ip_address=192.168.0.23
+
+[mqtt]
+# Central server / MQTT broker address.
+host=172.20.33.246
+port=1883
+
+# Must be unique among clients connected to the same MQTT broker.
+client_id=PI-GRIPPER-01
+
+# Leave both values empty only when the MQTT broker permits anonymous access.
+username=
+password=
+
+# Connection recovery policy. The defaults normally do not need adjustment.
+keep_alive_seconds=30
+reconnect_min_delay_seconds=1
+reconnect_max_delay_seconds=30
+clean_session=true
+
+[gripper]
+# ---------------------------------------------------------------------------
+# Taught arm poses, written as base,shoulder,elbow in deci-degrees
+# (900 means 90.0 degrees).
+#
+# The STM32 only accepts calibrated joint targets, so these values decide where
+# the arm actually goes. Teach them against the assembled arm before running a
+# real cycle: drive each joint with device-rpi/tools/gripper_uart_roundtrip and
+# copy the angles that land the claw correctly.
+#
+# The controller clamps every target to its own mechanical limits from
+# stm32/gripper-controller/Application/Inc/gripper_calibration.h:
+#   base     10.0 - 170.0 degrees   (100 - 1700)
+#   shoulder 30.0 - 150.0 degrees   (300 - 1500)
+#   elbow    30.0 - 150.0 degrees   (300 - 1500)
+# Values outside those ranges are silently pulled back to the limit, so keep the
+# poses below inside them or the arm will not reach the pose you expect.
+# ---------------------------------------------------------------------------
+
+# Neutral pose the arm returns to at the end of a cycle.
+home_pose=900,900,900
+
+# Directly above the box on the input conveyor; the claw descends from here.
+pick_approach_pose=600,700,900
+
+# Claw closed around the box on the input conveyor.
+pick_pose=600,1100,700
+
+# Directly above the drop point on the sorting conveyor.
+place_approach_pose=1200,700,900
+
+# Claw opened to release the box onto the sorting conveyor.
+place_pose=1200,1100,700
+
+# Claw travel. 0 is fully closed, 100 is fully open after calibration.
+# closed_position_percent must be smaller than open_position_percent; set it to
+# the value that grips a box firmly without stalling the servo.
+open_position_percent=100
+closed_position_percent=30
+
+# Interpolation time the controller spends on each motion, in milliseconds
+# (100 - 10000). Longer is gentler on the servos and the held box.
+arm_duration_ms=1500
+claw_duration_ms=600
+
+# ---------------------------------------------------------------------------
+# Vision offset correction (optional).
+#
+# When the central server starts forwarding a pixel offset as params.offsetX,
+# the base joint is nudged by this many deci-degrees per pixel on top of
+# pick_pose. Leave it at 0 until the camera and arm are calibrated together:
+# 0 disables the correction entirely and every cycle uses the taught pose.
+# ---------------------------------------------------------------------------
+base_deci_deg_per_pixel=0.0
+
+# Largest correction accepted before an offset is treated as implausible.
+max_base_correction_deci_deg=150

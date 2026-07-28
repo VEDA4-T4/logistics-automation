@@ -1,0 +1,1089 @@
+#include "logistics/device/gripper_node.hpp"
+
+#include <array>
+#include <utility>
+
+namespace logistics::device {
+namespace {
+
+namespace mqtt = contracts::mqtt;
+
+/*
+ * Controller event IDs.
+ *
+ * The gripper firmware reuses the low event IDs for two unrelated families:
+ * APP_EVENT_HEARTBEAT and UART_GRIPPER_EVENT_MOTION_COMPLETE are both 0x01, and
+ * APP_EVENT_SAFETY and UART_GRIPPER_EVENT_FAULT are both 0x02. The payload
+ * length is what separates them, so every decode below checks the length as
+ * well as the ID. Getting this wrong would silently read a heartbeat as a
+ * motion completion and advance the cycle early.
+ */
+constexpr std::uint8_t kAppEventHeartbeat = 0x01U;
+constexpr std::uint8_t kAppEventSafety = 0x02U;
+
+constexpr std::size_t kHeartbeatPayloadSize = 7U;  // APP_HEARTBEAT_PAYLOAD_SIZE
+constexpr std::size_t kHeartbeatStateIndex = 1U;
+constexpr std::size_t kHeartbeatErrorIndex = 2U;
+
+constexpr std::size_t kSafetyEventPayloadSize = 3U;
+constexpr std::size_t kSafetyEventLatchedIndex = 1U;
+constexpr std::size_t kSafetyEventCauseIndex = 2U;
+
+// A motion may legitimately take its full interpolation time plus controller
+// scheduling slack; anything beyond that means the completion event was lost.
+constexpr auto kMotionTimeoutSlack = std::chrono::milliseconds{ 2000 };
+constexpr auto kSafetyEventTimeout = std::chrono::milliseconds{ 1500 };
+constexpr auto kControllerHeartbeatTimeout = std::chrono::milliseconds{ 5000 };
+
+void WriteU16(std::uint8_t* payload, std::size_t low_index, std::uint16_t value) noexcept {
+    payload[low_index] = static_cast<std::uint8_t>(value & 0xFFU);
+    payload[low_index + 1U] = static_cast<std::uint8_t>((value >> 8U) & 0xFFU);
+}
+
+[[nodiscard]] std::uint16_t ReadU16(const std::uint8_t* payload, std::size_t low_index) noexcept {
+    return static_cast<std::uint16_t>(static_cast<std::uint16_t>(payload[low_index]) |
+                                      (static_cast<std::uint16_t>(payload[low_index + 1U]) << 8U));
+}
+
+[[nodiscard]] std::string DescribeDeviceState(std::uint8_t state) {
+    switch (state) {
+        case UART_DEVICE_READY:
+            return "READY";
+        case UART_DEVICE_RUNNING:
+            return "RUNNING";
+        case UART_DEVICE_STOPPED:
+            return "STOPPED";
+        case UART_DEVICE_ERROR:
+            return "ERROR";
+        case UART_DEVICE_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+[[nodiscard]] std::string DescribeGripperState(std::uint8_t state) {
+    switch (state) {
+        case UART_GRIPPER_STATE_IDLE:
+            return "IDLE";
+        case UART_GRIPPER_STATE_MOVING_ARM:
+            return "MOVING_ARM";
+        case UART_GRIPPER_STATE_MOVING_GRIPPER:
+            return "MOVING_GRIPPER";
+        case UART_GRIPPER_STATE_HOMING:
+            return "HOMING";
+        case UART_GRIPPER_STATE_STOPPED:
+            return "STOPPED";
+        case UART_GRIPPER_STATE_FAULT:
+            return "FAULT";
+        case UART_GRIPPER_STATE_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+[[nodiscard]] std::string DescribeUartError(std::uint8_t error) {
+    switch (error) {
+        case UART_ERROR_TIMEOUT:
+            return "ERR-CONTROLLER-TIMEOUT";
+        case UART_ERROR_SERVO:
+            return "ERR-GRIPPER-SERVO";
+        case UART_ERROR_EMERGENCY_STOP:
+            return "ERR-EMERGENCY-STOP";
+        case UART_GRIPPER_ERROR_NOT_HOMED:
+            return "ERR-GRIPPER-NOT-HOMED";
+        default:
+            return "ERR-CONTROLLER-INTERNAL";
+    }
+}
+
+[[nodiscard]] std::optional<std::string> ReadStringParam(const mqtt::Json& params, const char* key) {
+    const auto found = params.find(key);
+    if (found == params.end() || !found->is_string()) {
+        return std::nullopt;
+    }
+    std::string value = found->get<std::string>();
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+[[nodiscard]] std::optional<std::int32_t> ReadIntParam(const mqtt::Json& params, const char* key) {
+    const auto found = params.find(key);
+    if (found == params.end() || !found->is_number_integer()) {
+        return std::nullopt;
+    }
+    const std::int64_t value = found->get<std::int64_t>();
+    // A pixel offset far outside this range is a malformed message rather than a
+    // real detection, and letting it through would narrow to a bogus angle.
+    if (value < -100000 || value > 100000) {
+        return std::nullopt;
+    }
+    return static_cast<std::int32_t>(value);
+}
+
+}  // namespace
+
+std::string_view ToString(GripperCycleStep step) noexcept {
+    switch (step) {
+        case GripperCycleStep::kIdle:
+            return "IDLE";
+        case GripperCycleStep::kOpenClaw:
+            return "PREPARING";
+        case GripperCycleStep::kPickApproach:
+        case GripperCycleStep::kPickDescend:
+        case GripperCycleStep::kCloseClaw:
+            return "PICKING";
+        case GripperCycleStep::kPickRetreat:
+        case GripperCycleStep::kPlaceApproach:
+            return "TRANSFERRING";
+        case GripperCycleStep::kPlaceDescend:
+        case GripperCycleStep::kReleaseClaw:
+        case GripperCycleStep::kPlaceRetreat:
+            return "PLACING";
+        case GripperCycleStep::kReturnHome:
+            return "HOMING";
+        case GripperCycleStep::kCompleted:
+            return "COMPLETED";
+    }
+    return "UNKNOWN";
+}
+
+GripperNode::GripperNode(std::string device_id, InputUartSession& uart_session, GripperPoseConfig poses)
+    : device_id_(std::move(device_id)), uart_session_(uart_session), poses_(std::move(poses)) {}
+
+void GripperNode::SetReportHandler(GripperReportHandler handler) {
+    report_handler_ = std::move(handler);
+}
+
+bool GripperNode::HasActiveCycle() const noexcept {
+    return cycle_.active;
+}
+
+std::string_view GripperNode::ActiveWorkId() const noexcept {
+    return cycle_.work_id;
+}
+
+GripperCycleStep GripperNode::ActiveStep() const noexcept {
+    return cycle_.step;
+}
+
+bool GripperNode::IsHomed() const noexcept {
+    return homed_;
+}
+
+bool GripperNode::IsTargetedToThisNode(std::string_view target_device_id) const noexcept {
+    return target_device_id == device_id_;
+}
+
+std::optional<GripperPhase> GripperNode::PhaseFromComponent(std::string_view component_id) noexcept {
+    if (component_id.empty() || component_id == "gripper" || component_id == "arm") {
+        return GripperPhase::kFullCycle;
+    }
+    if (component_id == "pick") {
+        return GripperPhase::kPick;
+    }
+    if (component_id == "transfer") {
+        return GripperPhase::kTransfer;
+    }
+    if (component_id == "place") {
+        return GripperPhase::kPlace;
+    }
+    if (component_id == "home") {
+        return GripperPhase::kHome;
+    }
+    return std::nullopt;
+}
+
+std::uint16_t GripperNode::AllocateMotionId() noexcept {
+    const std::uint16_t motion_id = next_motion_id_;
+    next_motion_id_ = (next_motion_id_ == UART_GRIPPER_MOTION_ID_MAX) ? UART_GRIPPER_MOTION_ID_MIN
+                                                                      : static_cast<std::uint16_t>(next_motion_id_ + 1U);
+    return motion_id;
+}
+
+// ---------------------------------------------------------------------------
+// MQTT command entry point
+// ---------------------------------------------------------------------------
+
+GripperCommandResult GripperNode::HandleMqttCommand(const mqtt::MqttMessage& message) {
+    if (const auto* estop = std::get_if<mqtt::EmergencyStopPayload>(&message.data); estop != nullptr) {
+        return HandleEmergencyStop(*estop);
+    }
+
+    const auto* command = std::get_if<mqtt::ControlCommandPayload>(&message.data);
+    if (command == nullptr) {
+        return GripperCommandResult{ .status = GripperCommandStatus::kUnsupportedMessage };
+    }
+    if (!command->IsValid()) {
+        GripperCommandResult result{ .status = GripperCommandStatus::kInvalidMessage,
+                                     .mqtt_command = command->command,
+                                     .request_id = command->request_id };
+        EmitCommandResponse(result, "control command failed contract validation");
+        return result;
+    }
+    if (!IsTargetedToThisNode(command->target_device_id)) {
+        return GripperCommandResult{ .status = GripperCommandStatus::kInvalidTarget,
+                                     .mqtt_command = command->command,
+                                     .request_id = command->request_id };
+    }
+
+    // A repeated request ID must never re-run a motion; replay the stored answer.
+    if (!command->request_id.empty() && command->request_id == last_request_id_ && last_result_.has_value()) {
+        GripperCommandResult replay = *last_result_;
+        replay.status = GripperCommandStatus::kDuplicate;
+        EmitCommandResponse(replay.request_id, replay.mqtt_command, mqtt::CommandResult::kDuplicated, std::nullopt,
+                            "duplicate request replayed: " + last_result_message_);
+        return replay;
+    }
+
+    GripperCommandResult result = HandleControlCommand(*command);
+    if (!command->request_id.empty()) {
+        last_request_id_ = command->request_id;
+        last_result_ = result;
+        last_result_message_ = std::string(ToString(cycle_.step));
+    }
+    return result;
+}
+
+GripperCommandResult GripperNode::HandleControlCommand(const mqtt::ControlCommandPayload& command) {
+    switch (command.command) {
+        case mqtt::ControlCommand::kStart:
+        case mqtt::ControlCommand::kRestart: {
+            const auto phase = PhaseFromComponent(command.component_id);
+            if (!phase.has_value()) {
+                GripperCommandResult result{ .status = GripperCommandStatus::kUnsupportedCommand,
+                                             .mqtt_command = command.command,
+                                             .request_id = command.request_id };
+                EmitCommandResponse(result, "unsupported gripper component: " + command.component_id);
+                return result;
+            }
+            return StartCycle(command, *phase);
+        }
+
+        case mqtt::ControlCommand::kStop:
+            return RunStop(command);
+
+        case mqtt::ControlCommand::kInitialize:
+            return RunInitialize(command);
+
+        case mqtt::ControlCommand::kRecovery:
+            return RunRecovery(command);
+
+        case mqtt::ControlCommand::kStatusRequest:
+            return RunStatusRequest(command);
+
+        default: {
+            GripperCommandResult result{ .status = GripperCommandStatus::kUnsupportedCommand,
+                                         .mqtt_command = command.command,
+                                         .request_id = command.request_id };
+            EmitCommandResponse(result, "command is not supported by the gripper node");
+            return result;
+        }
+    }
+}
+
+GripperCommandResult GripperNode::HandleEmergencyStop(const mqtt::EmergencyStopPayload& command) {
+    GripperCommandResult result{ .status = GripperCommandStatus::kUartError,
+                                 .mqtt_command = mqtt::ControlCommand::kEmergencyStop,
+                                 .request_id = command.request_id };
+
+    result = ExecuteAsync(std::move(result), UART_CMD_EMERGENCY_STOP, {});
+    if (result.Succeeded()) {
+        pending_safety_ = PendingSafetyCommand{ .active = true,
+                                                .expected = PendingSafetyEvent::kEstopLatched,
+                                                .command = mqtt::ControlCommand::kEmergencyStop,
+                                                .request_id = command.request_id,
+                                                .elapsed = {} };
+        // The controller latches the stop and invalidates the running motion; the
+        // cycle is abandoned here so no completion event can revive it.
+        if (cycle_.active) {
+            AbortCycle("ERR-EMERGENCY-STOP", "cycle aborted by emergency stop");
+        }
+    } else {
+        EmitCommandResponse(result, "emergency stop could not be written to the controller");
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+GripperCommandResult GripperNode::StartCycle(const mqtt::ControlCommandPayload& command, GripperPhase phase) {
+    GripperCommandResult result{ .status = GripperCommandStatus::kInvalidParameters,
+                                 .mqtt_command = command.command,
+                                 .request_id = command.request_id };
+
+    const auto work_id = ReadStringParam(command.params, "workId");
+    if (phase != GripperPhase::kHome && !work_id.has_value()) {
+        EmitCommandResponse(result, "params.workId is required to start a gripper cycle");
+        return result;
+    }
+    result.work_id = work_id.value_or(std::string{});
+
+    if (estop_latched_) {
+        result.status = GripperCommandStatus::kRejected;
+        EmitCommandResponse(result, "emergency stop is latched; send RECOVERY before starting a cycle");
+        return result;
+    }
+
+    if (cycle_.active) {
+        // The same work arriving twice is idempotent; a different work while one
+        // is running would drop the box that is already in the claw.
+        if (work_id.has_value() && *work_id == cycle_.work_id) {
+            result.status = GripperCommandStatus::kDuplicate;
+            EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kDuplicated, std::nullopt,
+                                "work is already being transferred");
+            return result;
+        }
+        result.status = GripperCommandStatus::kActiveCycleConflict;
+        EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kRejected,
+                            std::string("ERR-ACTIVE-CYCLE-CONFLICT"),
+                            "another work is already being transferred: " + cycle_.work_id);
+        return result;
+    }
+
+    // Motions are rejected by the controller until HOME has completed since boot
+    // or since the last E-Stop, so refuse here with a reason the server can act on
+    // instead of letting the first MOVE_ARM fail.
+    if (!homed_ && phase != GripperPhase::kHome) {
+        result.status = GripperCommandStatus::kNotHomed;
+        EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kRejected,
+                            std::string("ERR-GRIPPER-NOT-HOMED"),
+                            "arm is not homed; send INITIALIZE or RECOVERY with component_id=home first");
+        return result;
+    }
+
+    cycle_ = ActiveCycle{
+        .active = true,
+        .phase = phase,
+        .step = FirstStepOf(phase),
+        .work_id = result.work_id,
+        .request_id = command.request_id,
+        .destination = ReadStringParam(command.params, "destination").value_or(std::string{}),
+        .pick_pose = poses_.PickPoseForOffset(ReadIntParam(command.params, "offsetX").value_or(0)),
+        .motion_id = UART_GRIPPER_MOTION_ID_NONE,
+        .motion_type = 0U,
+        .waited = {},
+        .motion_budget = {},
+    };
+
+    if (!DispatchStep(result)) {
+        const std::string message = "failed to start gripper cycle";
+        AbortCycle("ERR-GRIPPER-DISPATCH", message);
+        EmitCommandResponse(result, message);
+        return result;
+    }
+
+    result.status = GripperCommandStatus::kAccepted;
+    result.work_id = cycle_.work_id;
+    EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kProcessing, std::nullopt,
+                        "gripper cycle accepted");
+    EmitCycleStatus(std::string(ToString(cycle_.step)));
+    return result;
+}
+
+GripperCommandResult GripperNode::RunStop(const mqtt::ControlCommandPayload& command) {
+    GripperCommandResult result{ .status = GripperCommandStatus::kUartError,
+                                 .mqtt_command = command.command,
+                                 .request_id = command.request_id };
+
+    result = Execute(std::move(result), UART_CMD_GRIPPER_STOP, {});
+    if (result.Succeeded()) {
+        if (cycle_.active) {
+            AbortCycle("ERR-GRIPPER-STOPPED", "cycle stopped by operator command");
+        }
+        EmitCommandResponse(result, "gripper motion stopped");
+        EmitDeviceStatus("STOPPED");
+    } else {
+        EmitCommandResponse(result, "gripper stop was not accepted by the controller");
+    }
+    return result;
+}
+
+GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayload& command) {
+    GripperCommandResult result{ .status = GripperCommandStatus::kUartError,
+                                 .mqtt_command = command.command,
+                                 .request_id = command.request_id };
+
+    // RESET clears a controller fault and the stale motion bookkeeping; the arm
+    // is only actually safe to move again once HOME has completed after it.
+    result = Execute(std::move(result), UART_CMD_GRIPPER_RESET, {});
+    if (!result.Succeeded()) {
+        EmitCommandResponse(result, "gripper reset was not accepted by the controller");
+        return result;
+    }
+
+    if (cycle_.active) {
+        AbortCycle("ERR-GRIPPER-RESET", "cycle cancelled by initialize");
+    }
+    homed_ = false;
+
+    cycle_ = ActiveCycle{
+        .active = true,
+        .phase = GripperPhase::kHome,
+        .step = GripperCycleStep::kReturnHome,
+        .work_id = {},
+        .request_id = command.request_id,
+        .destination = {},
+        .pick_pose = poses_.pick,
+        .motion_id = UART_GRIPPER_MOTION_ID_NONE,
+        .motion_type = 0U,
+        .waited = {},
+        .motion_budget = {},
+    };
+
+    if (!DispatchStep(result)) {
+        const std::string message = "gripper reset succeeded but homing could not be started";
+        AbortCycle("ERR-GRIPPER-HOME", message);
+        EmitCommandResponse(result, message);
+        return result;
+    }
+
+    result.status = GripperCommandStatus::kAccepted;
+    EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kProcessing, std::nullopt,
+                        "gripper reset accepted; homing in progress");
+    EmitDeviceStatus("HOMING");
+    return result;
+}
+
+GripperCommandResult GripperNode::RunRecovery(const mqtt::ControlCommandPayload& command) {
+    GripperCommandResult result{ .status = GripperCommandStatus::kUartError,
+                                 .mqtt_command = command.command,
+                                 .request_id = command.request_id };
+
+    if (command.component_id == "safety" || command.component_id == "SAFETY") {
+        result = ExecuteAsync(std::move(result), UART_CMD_RESET_DEVICE, {});
+        if (result.Succeeded()) {
+            pending_safety_ = PendingSafetyCommand{ .active = true,
+                                                    .expected = PendingSafetyEvent::kReleased,
+                                                    .command = command.command,
+                                                    .request_id = command.request_id,
+                                                    .elapsed = {} };
+        } else {
+            EmitCommandResponse(result, "safety reset could not be written to the controller");
+        }
+        return result;
+    }
+
+    // Releasing the latch never moves the arm on its own: the controller leaves it
+    // stopped and unhomed on purpose, so homing stays an explicit operator step
+    // taken after the work area has been confirmed clear.
+    if (cycle_.active) {
+        result.status = GripperCommandStatus::kActiveCycleConflict;
+        EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kRejected,
+                            std::string("ERR-ACTIVE-CYCLE-CONFLICT"), "a cycle is already running");
+        return result;
+    }
+
+    cycle_ = ActiveCycle{
+        .active = true,
+        .phase = GripperPhase::kHome,
+        .step = GripperCycleStep::kReturnHome,
+        .work_id = {},
+        .request_id = command.request_id,
+        .destination = {},
+        .pick_pose = poses_.pick,
+        .motion_id = UART_GRIPPER_MOTION_ID_NONE,
+        .motion_type = 0U,
+        .waited = {},
+        .motion_budget = {},
+    };
+
+    if (!DispatchStep(result)) {
+        const std::string message = "homing could not be started";
+        AbortCycle("ERR-GRIPPER-HOME", message);
+        EmitCommandResponse(result, message);
+        return result;
+    }
+
+    result.status = GripperCommandStatus::kAccepted;
+    EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kProcessing, std::nullopt,
+                        "homing in progress");
+    EmitDeviceStatus("HOMING");
+    return result;
+}
+
+GripperCommandResult GripperNode::RunStatusRequest(const mqtt::ControlCommandPayload& command) {
+    GripperCommandResult result{ .status = GripperCommandStatus::kUartError,
+                                 .mqtt_command = command.command,
+                                 .request_id = command.request_id };
+
+    result = Execute(std::move(result), UART_CMD_GRIPPER_GET_STATUS, {});
+    if (result.Succeeded()) {
+        EmitControllerStatus(result.uart_result.response_frame);
+        EmitCommandResponse(result, "gripper status reported");
+    } else {
+        EmitCommandResponse(result, "gripper status request failed");
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Sequencer
+// ---------------------------------------------------------------------------
+
+GripperCycleStep GripperNode::FirstStepOf(GripperPhase phase) noexcept {
+    switch (phase) {
+        case GripperPhase::kFullCycle:
+        case GripperPhase::kPick:
+            return GripperCycleStep::kOpenClaw;
+        case GripperPhase::kTransfer:
+            return GripperCycleStep::kPickRetreat;
+        case GripperPhase::kPlace:
+            return GripperCycleStep::kPlaceDescend;
+        case GripperPhase::kHome:
+            return GripperCycleStep::kReturnHome;
+    }
+    return GripperCycleStep::kIdle;
+}
+
+GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step) noexcept {
+    switch (step) {
+        case GripperCycleStep::kOpenClaw:
+            return GripperCycleStep::kPickApproach;
+        case GripperCycleStep::kPickApproach:
+            return GripperCycleStep::kPickDescend;
+        case GripperCycleStep::kPickDescend:
+            return GripperCycleStep::kCloseClaw;
+        case GripperCycleStep::kCloseClaw:
+            // "Pick only" stops with the box held above the input conveyor so a
+            // separate TRANSFER command can continue from there.
+            return (phase == GripperPhase::kPick) ? GripperCycleStep::kCompleted : GripperCycleStep::kPickRetreat;
+        case GripperCycleStep::kPickRetreat:
+            return GripperCycleStep::kPlaceApproach;
+        case GripperCycleStep::kPlaceApproach:
+            return (phase == GripperPhase::kTransfer) ? GripperCycleStep::kCompleted : GripperCycleStep::kPlaceDescend;
+        case GripperCycleStep::kPlaceDescend:
+            return GripperCycleStep::kReleaseClaw;
+        case GripperCycleStep::kReleaseClaw:
+            return GripperCycleStep::kPlaceRetreat;
+        case GripperCycleStep::kPlaceRetreat:
+            return (phase == GripperPhase::kPlace) ? GripperCycleStep::kCompleted : GripperCycleStep::kReturnHome;
+        case GripperCycleStep::kReturnHome:
+            return GripperCycleStep::kCompleted;
+        case GripperCycleStep::kIdle:
+        case GripperCycleStep::kCompleted:
+            return GripperCycleStep::kCompleted;
+    }
+    return GripperCycleStep::kCompleted;
+}
+
+bool GripperNode::DispatchStep(GripperCommandResult& result) {
+    const std::uint16_t motion_id = AllocateMotionId();
+    std::uint8_t uart_command{};
+    std::uint8_t motion_type{};
+    std::uint16_t duration_ms{};
+
+    const auto send_arm = [&](const GripperPose& pose) {
+        std::array<std::uint8_t, UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE> payload{};
+        WriteU16(payload.data(), UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, motion_id);
+        WriteU16(payload.data(), UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, pose.base_deci_deg);
+        WriteU16(payload.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, pose.shoulder_deci_deg);
+        WriteU16(payload.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, pose.elbow_deci_deg);
+        WriteU16(payload.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, poses_.arm_duration_ms);
+        uart_command = UART_CMD_GRIPPER_MOVE_ARM;
+        motion_type = UART_GRIPPER_MOTION_ARM;
+        duration_ms = poses_.arm_duration_ms;
+        result = Execute(std::move(result), uart_command, payload);
+    };
+
+    const auto send_claw = [&](std::uint8_t position_percent) {
+        std::array<std::uint8_t, UART_GRIPPER_SET_GRIPPER_PAYLOAD_SIZE> payload{};
+        WriteU16(payload.data(), UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, motion_id);
+        payload[UART_GRIPPER_SET_POSITION_INDEX] = position_percent;
+        WriteU16(payload.data(), UART_GRIPPER_SET_DURATION_LOW_INDEX, poses_.claw_duration_ms);
+        uart_command = UART_CMD_GRIPPER_SET_GRIPPER;
+        motion_type = UART_GRIPPER_MOTION_GRIPPER;
+        duration_ms = poses_.claw_duration_ms;
+        result = Execute(std::move(result), uart_command, payload);
+    };
+
+    switch (cycle_.step) {
+        case GripperCycleStep::kOpenClaw:
+        case GripperCycleStep::kReleaseClaw:
+            send_claw(poses_.open_position_percent);
+            break;
+
+        case GripperCycleStep::kCloseClaw:
+            send_claw(poses_.closed_position_percent);
+            break;
+
+        case GripperCycleStep::kPickApproach:
+        case GripperCycleStep::kPickRetreat:
+            send_arm(poses_.pick_approach);
+            break;
+
+        case GripperCycleStep::kPickDescend:
+            send_arm(cycle_.pick_pose);
+            break;
+
+        case GripperCycleStep::kPlaceApproach:
+        case GripperCycleStep::kPlaceRetreat:
+            send_arm(poses_.place_approach);
+            break;
+
+        case GripperCycleStep::kPlaceDescend:
+            send_arm(poses_.place);
+            break;
+
+        case GripperCycleStep::kReturnHome: {
+            std::array<std::uint8_t, UART_GRIPPER_HOME_PAYLOAD_SIZE> payload{};
+            WriteU16(payload.data(), UART_GRIPPER_HOME_MOTION_ID_LOW_INDEX, motion_id);
+            uart_command = UART_CMD_GRIPPER_HOME;
+            motion_type = UART_GRIPPER_MOTION_HOME;
+            duration_ms = poses_.arm_duration_ms;
+            result = Execute(std::move(result), uart_command, payload);
+            break;
+        }
+
+        case GripperCycleStep::kIdle:
+        case GripperCycleStep::kCompleted:
+            return false;
+    }
+
+    if (!result.Succeeded()) {
+        return false;
+    }
+
+    cycle_.motion_id = motion_id;
+    cycle_.motion_type = motion_type;
+    cycle_.waited = std::chrono::milliseconds{ 0 };
+    cycle_.motion_budget = std::chrono::milliseconds{ duration_ms } + kMotionTimeoutSlack;
+    result.motion_id = motion_id;
+    return true;
+}
+
+void GripperNode::AdvanceCycle() {
+    const GripperCycleStep previous = cycle_.step;
+    cycle_.step = NextStep(cycle_.phase, cycle_.step);
+
+    if (cycle_.step == GripperCycleStep::kCompleted) {
+        if (previous == GripperCycleStep::kReturnHome) {
+            homed_ = true;
+        }
+        FinishCycle();
+        return;
+    }
+
+    GripperCommandResult dispatch{ .status = GripperCommandStatus::kUartError,
+                                   .mqtt_command = mqtt::ControlCommand::kStart,
+                                   .request_id = cycle_.request_id,
+                                   .work_id = cycle_.work_id };
+    if (!DispatchStep(dispatch)) {
+        AbortCycle("ERR-GRIPPER-DISPATCH", "next gripper motion could not be sent");
+        return;
+    }
+
+    const std::string state{ ToString(cycle_.step) };
+    if (state != ToString(previous)) {
+        EmitCycleStatus(state);
+    }
+}
+
+void GripperNode::FinishCycle() {
+    const std::string work_id = cycle_.work_id;
+    const std::string request_id = cycle_.request_id;
+    const bool was_home_only = cycle_.phase == GripperPhase::kHome;
+
+    cycle_ = ActiveCycle{};
+
+    if (was_home_only) {
+        EmitCommandResponse(request_id, mqtt::ControlCommand::kRecovery, mqtt::CommandResult::kSuccess, std::nullopt,
+                            "gripper returned home");
+        EmitDeviceStatus("READY");
+        return;
+    }
+
+    EmitCommandResponse(request_id, mqtt::ControlCommand::kStart, mqtt::CommandResult::kSuccess, std::nullopt,
+                        "gripper transfer completed");
+    // COMPLETED with the job ID attached is what advances the server's work state
+    // machine, so it is published exactly once and only from here.
+    EmitDeviceStatus("COMPLETED", std::nullopt, work_id.empty() ? std::nullopt : std::optional{ work_id });
+}
+
+void GripperNode::AbortCycle(std::string error_code, std::string message) {
+    if (!cycle_.active) {
+        return;
+    }
+    const std::string work_id = cycle_.work_id;
+    const std::string request_id = cycle_.request_id;
+    cycle_ = ActiveCycle{};
+
+    const std::optional<std::string> job_id = work_id.empty() ? std::nullopt : std::optional{ work_id };
+    EmitCommandResponse(request_id, mqtt::ControlCommand::kStart, mqtt::CommandResult::kFailed,
+                        std::optional{ error_code }, message);
+    EmitError(std::move(error_code), "ERROR", std::move(message), job_id);
+}
+
+// ---------------------------------------------------------------------------
+// UART execution
+// ---------------------------------------------------------------------------
+
+GripperCommandResult GripperNode::Execute(GripperCommandResult result, std::uint8_t command,
+                                          std::span<const std::uint8_t> payload) {
+    result.uart_command = command;
+    if (!uart_session_.IsOpen()) {
+        result.status = GripperCommandStatus::kUartNotOpen;
+        return result;
+    }
+
+    result.uart_result = uart_session_.Transact(command, payload);
+    switch (result.uart_result.status) {
+        case InputTransactStatus::kSuccess:
+            result.status = GripperCommandStatus::kSuccess;
+            break;
+        case InputTransactStatus::kRejected:
+            result.status = (result.uart_result.response_error == UART_GRIPPER_ERROR_NOT_HOMED)
+                                ? GripperCommandStatus::kNotHomed
+                                : GripperCommandStatus::kRejected;
+            break;
+        case InputTransactStatus::kTimeout:
+            result.status = GripperCommandStatus::kTimeout;
+            break;
+        case InputTransactStatus::kNotOpen:
+            result.status = GripperCommandStatus::kUartNotOpen;
+            break;
+        case InputTransactStatus::kInvalidArgument:
+            result.status = GripperCommandStatus::kInvalidParameters;
+            break;
+        case InputTransactStatus::kSent:
+        case InputTransactStatus::kEncodeError:
+        case InputTransactStatus::kTransportError:
+            result.status = GripperCommandStatus::kUartError;
+            break;
+    }
+    return result;
+}
+
+GripperCommandResult GripperNode::ExecuteAsync(GripperCommandResult result, std::uint8_t command,
+                                               std::span<const std::uint8_t> payload) {
+    result.uart_command = command;
+    if (!uart_session_.IsOpen()) {
+        result.status = GripperCommandStatus::kUartNotOpen;
+        return result;
+    }
+
+    result.uart_result = uart_session_.SendCommand(command, payload);
+    result.status = (result.uart_result.status == InputTransactStatus::kSent) ? GripperCommandStatus::kAccepted
+                                                                             : GripperCommandStatus::kUartError;
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Controller frames
+// ---------------------------------------------------------------------------
+
+void GripperNode::HandleUartFrame(const uart_frame_t& frame) {
+    switch (frame.command) {
+        case UART_CMD_EVENT:
+            HandleControllerEvent(frame);
+            break;
+        case UART_CMD_DEVICE_STATUS:
+            HandleDeviceStatus(frame);
+            break;
+        default:
+            break;
+    }
+}
+
+void GripperNode::HandleControllerEvent(const uart_frame_t& frame) {
+    if (frame.length < UART_EVENT_HEADER_SIZE) {
+        return;
+    }
+    const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
+
+    // Both families share these IDs; the length decides which one this is.
+    if (event_id == kAppEventHeartbeat) {
+        if (frame.length == kHeartbeatPayloadSize) {
+            HandleControllerHeartbeat(frame);
+        } else if (frame.length == UART_GRIPPER_MOTION_EVENT_PAYLOAD_SIZE) {
+            HandleMotionComplete(frame);
+        }
+        return;
+    }
+
+    if (event_id == kAppEventSafety) {
+        if (frame.length == kSafetyEventPayloadSize) {
+            HandleSafetyEvent(frame);
+        } else if (frame.length == UART_GRIPPER_FAULT_EVENT_PAYLOAD_SIZE) {
+            HandleMotionFault(frame);
+        }
+        return;
+    }
+}
+
+void GripperNode::HandleMotionComplete(const uart_frame_t& frame) {
+    const std::uint16_t motion_id = ReadU16(frame.payload, UART_GRIPPER_EVENT_MOTION_ID_LOW_INDEX);
+    const std::uint8_t motion_type = frame.payload[UART_GRIPPER_EVENT_MOTION_TYPE_INDEX];
+
+    // A completion for a motion that is no longer current belongs to a cycle that
+    // was stopped or superseded; acting on it would advance the wrong sequence.
+    if (!cycle_.active || motion_id != cycle_.motion_id || motion_type != cycle_.motion_type) {
+        return;
+    }
+    AdvanceCycle();
+}
+
+void GripperNode::HandleMotionFault(const uart_frame_t& frame) {
+    const std::uint16_t motion_id = ReadU16(frame.payload, UART_GRIPPER_EVENT_MOTION_ID_LOW_INDEX);
+    const std::uint8_t error = frame.payload[UART_GRIPPER_FAULT_EVENT_ERROR_INDEX];
+
+    if (error == UART_ERROR_EMERGENCY_STOP) {
+        homed_ = false;
+    }
+    if (!cycle_.active || motion_id != cycle_.motion_id) {
+        EmitError(DescribeUartError(error), "ERROR", "gripper reported a motion fault", std::nullopt);
+        return;
+    }
+    AbortCycle(DescribeUartError(error), "gripper motion faulted during " + std::string(ToString(cycle_.step)));
+}
+
+void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
+    const bool latched = frame.payload[kSafetyEventLatchedIndex] != 0U;
+    const std::uint8_t cause = frame.payload[kSafetyEventCauseIndex];
+    estop_latched_ = latched;
+
+    if (latched) {
+        // The controller drops the active motion and forgets its home reference,
+        // so both must be invalidated here to keep this node's view honest.
+        homed_ = false;
+        if (cycle_.active) {
+            AbortCycle("ERR-EMERGENCY-STOP", "cycle aborted by emergency stop");
+        }
+    }
+
+    if (pending_safety_.active) {
+        const bool matched = (pending_safety_.expected == PendingSafetyEvent::kEstopLatched && latched) ||
+                             (pending_safety_.expected == PendingSafetyEvent::kReleased && !latched);
+        if (matched) {
+            EmitCommandResponse(pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kSuccess,
+                                std::nullopt,
+                                latched ? "emergency stop latched"
+                                        : "emergency stop released; send RECOVERY to home the arm");
+            pending_safety_ = PendingSafetyCommand{};
+        }
+    }
+
+    if (latched) {
+        EmitError("ERR-EMERGENCY-STOP", "CRITICAL",
+                  "controller latched an emergency stop (cause 0x" + std::to_string(static_cast<int>(cause)) + ")",
+                  std::nullopt);
+        EmitDeviceStatus("EMERGENCY_STOP", std::string("ERR-EMERGENCY-STOP"));
+    } else {
+        // Released but deliberately not homed: report STOPPED, never READY, so the
+        // server does not treat the arm as ready to accept work yet.
+        EmitDeviceStatus("STOPPED");
+    }
+}
+
+void GripperNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
+    since_controller_heartbeat_ = std::chrono::milliseconds{ 0 };
+    const HeartbeatState state{ .device_state = frame.payload[kHeartbeatStateIndex],
+                                .error_code = frame.payload[kHeartbeatErrorIndex] };
+
+    if (controller_heartbeat_lost_) {
+        controller_heartbeat_lost_ = false;
+        EmitError("ERR-CONTROLLER-HEARTBEAT-RECOVERED", "WARNING", "controller heartbeat resumed", std::nullopt);
+    }
+
+    // Only state changes are published; a 1 Hz heartbeat would otherwise flood the
+    // status topic with identical payloads.
+    if (last_heartbeat_state_.has_value() && last_heartbeat_state_->device_state == state.device_state &&
+        last_heartbeat_state_->error_code == state.error_code) {
+        return;
+    }
+    last_heartbeat_state_ = state;
+
+    // While a cycle runs, the sequencer owns the reported state; overwriting it
+    // with the controller's coarse RUNNING/READY would either mask progress or,
+    // worse, publish READY and make the server think the transfer finished.
+    if (cycle_.active) {
+        return;
+    }
+
+    const std::optional<std::string> error_code =
+        (state.error_code == UART_ERROR_NONE) ? std::nullopt : std::optional{ DescribeUartError(state.error_code) };
+    EmitDeviceStatus(DescribeDeviceState(state.device_state), error_code);
+}
+
+void GripperNode::HandleDeviceStatus(const uart_frame_t& frame) {
+    if (frame.length < 2U) {
+        return;
+    }
+    const std::uint8_t device_state = frame.payload[0];
+    const std::uint8_t error_code = frame.payload[1];
+    if (cycle_.active) {
+        return;
+    }
+    const std::optional<std::string> error =
+        (error_code == UART_ERROR_NONE) ? std::nullopt : std::optional{ DescribeUartError(error_code) };
+    EmitDeviceStatus(DescribeDeviceState(device_state), error);
+}
+
+void GripperNode::EmitControllerStatus(const uart_frame_t& response) {
+    if (response.length < UART_GRIPPER_STATUS_PAYLOAD_SIZE) {
+        return;
+    }
+    const std::uint8_t state = response.payload[UART_GRIPPER_STATUS_STATE_INDEX];
+    homed_ = response.payload[UART_GRIPPER_STATUS_HOMED_INDEX] != 0U;
+    estop_latched_ = state == UART_GRIPPER_STATE_EMERGENCY_STOP;
+
+    const std::optional<std::string> error_code =
+        estop_latched_ ? std::optional{ std::string("ERR-EMERGENCY-STOP") } : std::nullopt;
+    EmitDeviceStatus(DescribeGripperState(state), error_code);
+}
+
+// ---------------------------------------------------------------------------
+// Timing
+// ---------------------------------------------------------------------------
+
+void GripperNode::Tick(std::chrono::milliseconds elapsed) {
+    if (cycle_.active && cycle_.motion_id != UART_GRIPPER_MOTION_ID_NONE) {
+        cycle_.waited += elapsed;
+        if (cycle_.waited >= cycle_.motion_budget) {
+            AbortCycle("ERR-GRIPPER-MOTION-TIMEOUT", "no completion event for the active gripper motion");
+        }
+    }
+
+    if (pending_safety_.active) {
+        pending_safety_.elapsed += elapsed;
+        if (pending_safety_.elapsed >= kSafetyEventTimeout) {
+            EmitCommandResponse(pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kTimeout,
+                                std::string("ERR-SAFETY-EVENT-TIMEOUT"), "controller did not confirm the safety change");
+            pending_safety_ = PendingSafetyCommand{};
+        }
+    }
+
+    since_controller_heartbeat_ += elapsed;
+    if (!controller_heartbeat_lost_ && since_controller_heartbeat_ >= kControllerHeartbeatTimeout) {
+        controller_heartbeat_lost_ = true;
+        EmitError("ERR-CONTROLLER-HEARTBEAT-LOST", "ERROR", "no controller heartbeat within the expected interval",
+                  std::nullopt);
+    }
+}
+
+void GripperNode::ResetControllerHeartbeatMonitor() noexcept {
+    since_controller_heartbeat_ = std::chrono::milliseconds{ 0 };
+    controller_heartbeat_lost_ = false;
+    last_heartbeat_state_.reset();
+    // A reconnect says nothing about the arm's pose, so the home reference is
+    // dropped until GET_STATUS or a completed HOME proves otherwise.
+    homed_ = false;
+}
+
+// ---------------------------------------------------------------------------
+// Reporting
+// ---------------------------------------------------------------------------
+
+void GripperNode::EmitCommandResponse(const GripperCommandResult& result, std::string message) const {
+    mqtt::CommandResult outcome = mqtt::CommandResult::kFailed;
+    std::optional<std::string> error_code;
+
+    switch (result.status) {
+        case GripperCommandStatus::kSuccess:
+            outcome = mqtt::CommandResult::kSuccess;
+            break;
+        case GripperCommandStatus::kAccepted:
+            outcome = mqtt::CommandResult::kProcessing;
+            break;
+        case GripperCommandStatus::kDuplicate:
+            outcome = mqtt::CommandResult::kDuplicated;
+            break;
+        case GripperCommandStatus::kTimeout:
+            outcome = mqtt::CommandResult::kTimeout;
+            error_code = "ERR-CONTROLLER-TIMEOUT";
+            break;
+        case GripperCommandStatus::kNotHomed:
+            outcome = mqtt::CommandResult::kRejected;
+            error_code = "ERR-GRIPPER-NOT-HOMED";
+            break;
+        case GripperCommandStatus::kActiveCycleConflict:
+            outcome = mqtt::CommandResult::kRejected;
+            error_code = "ERR-ACTIVE-CYCLE-CONFLICT";
+            break;
+        case GripperCommandStatus::kRejected:
+            outcome = mqtt::CommandResult::kRejected;
+            error_code = DescribeUartError(result.uart_result.response_error);
+            break;
+        case GripperCommandStatus::kUnsupportedMessage:
+        case GripperCommandStatus::kUnsupportedCommand:
+            outcome = mqtt::CommandResult::kRejected;
+            error_code = "ERR-UNSUPPORTED-COMMAND";
+            break;
+        case GripperCommandStatus::kInvalidMessage:
+        case GripperCommandStatus::kInvalidParameters:
+            outcome = mqtt::CommandResult::kRejected;
+            error_code = "ERR-INVALID-COMMAND";
+            break;
+        case GripperCommandStatus::kInvalidTarget:
+            outcome = mqtt::CommandResult::kRejected;
+            error_code = "ERR-INVALID-TARGET";
+            break;
+        case GripperCommandStatus::kUartNotOpen:
+            outcome = mqtt::CommandResult::kFailed;
+            error_code = "ERR-UART-DISCONNECTED";
+            break;
+        case GripperCommandStatus::kControllerFailure:
+        case GripperCommandStatus::kUartError:
+            outcome = mqtt::CommandResult::kFailed;
+            error_code = "ERR-UART-IO";
+            break;
+    }
+
+    EmitCommandResponse(result.request_id, result.mqtt_command, outcome, std::move(error_code), std::move(message));
+}
+
+void GripperNode::EmitCommandResponse(std::string request_id, mqtt::ControlCommand command, mqtt::CommandResult result,
+                                      std::optional<std::string> error_code, std::string message) const {
+    if (request_id.empty()) {
+        return;
+    }
+    EmitReport(GripperReport{ .channel = GripperReportChannel::kResponse,
+                              .message_type = mqtt::MessageType::kCommandResponse,
+                              .data = mqtt::CommandResponsePayload{ .request_id = std::move(request_id),
+                                                                    .command = command,
+                                                                    .result = result,
+                                                                    .error_code = std::move(error_code),
+                                                                    .message = std::move(message) } });
+}
+
+void GripperNode::EmitCycleStatus(std::string current_state) const {
+    EmitDeviceStatus(std::move(current_state), std::nullopt,
+                     cycle_.work_id.empty() ? std::nullopt : std::optional{ cycle_.work_id });
+}
+
+void GripperNode::EmitDeviceStatus(std::string current_state, std::optional<std::string> error_code,
+                                   std::optional<std::string> job_id) const {
+    EmitReport(GripperReport{
+        .channel = GripperReportChannel::kStatus,
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .data = mqtt::DeviceStatusPayload{ .status = error_code.has_value() ? mqtt::ConnectionState::kUartError
+                                                                           : mqtt::ConnectionState::kOnline,
+                                           .current_state = std::move(current_state),
+                                           .job_id = std::move(job_id),
+                                           .error_code = std::move(error_code) } });
+}
+
+void GripperNode::EmitError(std::string error_code, std::string error_level, std::string message,
+                            std::optional<std::string> job_id) const {
+    EmitReport(GripperReport{ .channel = GripperReportChannel::kError,
+                              .message_type = mqtt::MessageType::kErrorOccurred,
+                              .data = mqtt::ErrorOccurredPayload{ .job_id = std::move(job_id),
+                                                                  .error_code = std::move(error_code),
+                                                                  .error_level = std::move(error_level),
+                                                                  .current_state = "GRIPPER",
+                                                                  .message = std::move(message),
+                                                                  .distance = std::nullopt } });
+}
+
+void GripperNode::EmitReport(GripperReport report) const {
+    if (report_handler_) {
+        report_handler_(report);
+    }
+}
+
+}  // namespace logistics::device

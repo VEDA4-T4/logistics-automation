@@ -25,18 +25,38 @@ target_include_directories(device_linetracer_node PUBLIC common/include)
 target_link_libraries(device_linetracer_node PUBLIC logistics::contracts logistics::device_uart_session)
 logistics_enable_warnings(device_linetracer_node)
 
-add_library(
-    device_input_node
-    input-node/input_uart_session.cpp
-    input-node/input_node.cpp
+# Shared by every controller that answers a command with a sequence-matched
+# RESPONSE frame instead of an ACK (input conveyor and gripper today).
+add_library(device_response_uart_session input-node/input_uart_session.cpp)
+add_library(logistics::device_response_uart_session ALIAS device_response_uart_session)
+target_include_directories(device_response_uart_session PUBLIC common/include)
+target_link_libraries(
+    device_response_uart_session
+    PUBLIC logistics::contracts logistics::uart logistics::device_uart_transport
 )
+logistics_enable_warnings(device_response_uart_session)
+
+add_library(device_input_node input-node/input_node.cpp)
 add_library(logistics::device_input_node ALIAS device_input_node)
 target_include_directories(device_input_node PUBLIC common/include)
 target_link_libraries(
     device_input_node
-    PUBLIC logistics::contracts logistics::uart logistics::device_uart_transport
+    PUBLIC logistics::contracts logistics::uart logistics::device_response_uart_session
 )
 logistics_enable_warnings(device_input_node)
+
+add_library(
+    device_gripper_node
+    gripper-node/gripper_pose_config.cpp
+    gripper-node/gripper_node.cpp
+)
+add_library(logistics::device_gripper_node ALIAS device_gripper_node)
+target_include_directories(device_gripper_node PUBLIC common/include)
+target_link_libraries(
+    device_gripper_node
+    PUBLIC logistics::contracts logistics::uart logistics::device_response_uart_session
+)
+logistics_enable_warnings(device_gripper_node)
 
 add_library(device_sorting_node sorting-node/sorting_node.cpp)
 add_library(logistics::device_sorting_node ALIAS device_sorting_node)
@@ -68,6 +88,11 @@ if(BUILD_TESTING)
     target_link_libraries(device_input_node_test PRIVATE logistics::device_input_node)
     logistics_enable_warnings(device_input_node_test)
     add_test(NAME device_input_node_test COMMAND device_input_node_test)
+
+    add_executable(device_gripper_node_test tests/gripper_node_test.cpp)
+    target_link_libraries(device_gripper_node_test PRIVATE logistics::device_gripper_node)
+    logistics_enable_warnings(device_gripper_node_test)
+    add_test(NAME device_gripper_node_test COMMAND device_gripper_node_test)
 
     add_executable(device_sorting_node_test tests/sorting_node_test.cpp)
     target_link_libraries(device_sorting_node_test PRIVATE logistics::device_sorting_node)
@@ -230,6 +255,21 @@ endif()
 if(LOGISTICS_BUILD_SORTING_NODE)
     add_device_node(logistics_sorting_node sorting-node/main.cpp)
     target_link_libraries(logistics_sorting_node PRIVATE logistics::device_sorting_node logistics::device_uart_session)
+endif()
+
+if(LOGISTICS_BUILD_GRIPPER_NODE)
+    add_device_node(logistics_gripper_node gripper-node/main.cpp)
+
+    if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+        target_compile_definitions(logistics_gripper_node PRIVATE LOGISTICS_GRIPPER_DAEMON_ENABLED=1)
+        target_link_libraries(
+            logistics_gripper_node
+            PRIVATE
+                logistics::device_gripper_node
+                logistics::device_mqtt_mosquitto
+                logistics::device_status
+        )
+    endif()
 endif()
 
 if(LOGISTICS_BUILD_LINETRACER_NODE)
