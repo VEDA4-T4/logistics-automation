@@ -244,7 +244,11 @@ static void health_check_queue_overflow(void) {
     }
 }
 
-static void health_check_uart_channels(uint32_t now) {
+/* now를 여기서 새로 뜨는 이유는 health_check_sensor_staleness와 동일하다 -
+ * lastRxTick은 CommRxTask가 동시에 갱신하므로 오래된 now와 비교하면 unsigned
+ * 뺄셈이 언더플로우해 가짜 채널 단절로 오판된다. */
+static void health_check_uart_channels(void) {
+    uint32_t now = HAL_GetTick();
     uint32_t lastRxTick;
     uint8_t channel;
 
@@ -264,7 +268,19 @@ static void health_check_uart_channels(uint32_t now) {
     }
 }
 
-static void health_check_sensor_staleness(uint32_t now) {
+static void health_check_sensor_staleness(void) {
+    /*
+     * now를 RunCycle 시작 시점 값(파라미터)으로 재사용하지 않고 여기서 새로
+     * 뜬다. HealthTask는 앱 태스크 중 최하위 우선순위라, RunCycle 시작에서
+     * 여기 도달하기까지 다른 태스크에 밀려 지연될 수 있다. 그 사이 SensorTask는
+     * 계속 돌아서 lastPollTick을 그 "오래된 now"보다 더 큰 값으로 갱신해버릴 수
+     * 있는데, 그러면 unsigned 뺄셈 now-lastPollTick이 음수가 되어 약 42억으로
+     * 언더플로우돼 실제 지연 여부와 무관하게 항상 stale로 오판된다(2026-07-28
+     * 실기기 라이브 디버깅으로 확인 - lastPollTick이 전부 200ms 이내로 멀쩡한데도
+     * 이 지점에 도달했었음). 여기서 새로 떠야 now가 항상 lastPollTick 이상임이
+     * 보장된다.
+     */
+    uint32_t now = HAL_GetTick();
     uint8_t count = SensorTask_GetChannelCount();
     uint8_t i;
 
@@ -328,8 +344,8 @@ void HealthTask_RunCycle(void) {
     health_check_task_alive(now);
     health_check_stack_margin();
     health_check_queue_overflow();
-    health_check_uart_channels(now);
-    health_check_sensor_staleness(now);
+    health_check_uart_channels();
+    health_check_sensor_staleness();
 
     if (health_watchdog_gate_ok() != 0U) {
         HealthHw_IwdgRefresh();

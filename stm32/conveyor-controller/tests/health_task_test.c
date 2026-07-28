@@ -30,8 +30,14 @@
 
 static uint32_t fakeTick;
 
+/* 0이면 tick이 고정(대부분의 테스트). 0이 아니면 HAL_GetTick 호출마다 그만큼
+ * 흘러서, RunCycle 도중 선점되어 시간이 지나는 상황을 재현할 수 있다. */
+static uint32_t fakeTickAdvancePerCall;
+
 uint32_t HAL_GetTick(void) {
-    return fakeTick;
+    uint32_t value = fakeTick;
+    fakeTick += fakeTickAdvancePerCall;
+    return value;
 }
 
 osStatus_t osDelay(uint32_t ticks) {
@@ -175,6 +181,7 @@ static void health_ping_all_except(health_task_id_t exceptId) {
 
 static void reset_all(void) {
     fakeTick = 0U;
+    fakeTickAdvancePerCall = 0U;
     memset(&fakeCommRxStats, 0, sizeof(fakeCommRxStats));
     memset(fakeCommRxLastRxTick, 0, sizeof(fakeCommRxLastRxTick));
     memset(&fakeInputStats, 0, sizeof(fakeInputStats));
@@ -344,6 +351,46 @@ static void test_sensor_staleness_reports_to_owning_process(void) {
 }
 
 /*
+ * HealthTask가 RunCycle 도중 선점되어 늦게 도착해도, 그 사이 정상적으로 폴링된
+ * 센서를 stale로 오판하면 안 된다.
+ *
+ * HealthTask는 앱 태스크 중 최하위 우선순위라, RunCycle 시작에서 센서 검사까지
+ * 도달하는 동안 다른 태스크에 밀릴 수 있다. 그 사이 SensorTask는 계속 돌아
+ * lastPollTick을 RunCycle 시작 시점보다 더 나중 값으로 갱신한다. 이때 시작
+ * 시점의 now를 그대로 쓰면 unsigned 뺄셈이 언더플로우해(약 42억) 실제 지연과
+ * 무관하게 항상 stale로 오판됐다 - 2026-07-28 실기기 라이브 디버깅에서 네 채널
+ * lastPollTick이 전부 200ms 이내인데도 STALE 보고 지점에 도달한 것으로 확인.
+ */
+static void test_late_health_cycle_does_not_underflow_sensor_age(void) {
+    reset_all();
+    HealthTask_Init();
+
+    health_ping_all();
+    HealthTask_RunCycle();
+    assert(commTxSendCallCount == 0U);
+
+    /* RunCycle이 now를 뜬 뒤 매 검사 사이 150ms씩 밀리는 상황을 만든다. */
+    fakeTick = 5000U;
+    fakeTickAdvancePerCall = 150U;
+
+    /* 네 채널 모두 RunCycle 시작(5000)보다 나중인 5100에 정상 폴링됨 -
+     * 즉 stale이 아니라 오히려 now보다 최신이다. */
+    fakeSensorLastPollTick[0] = 5100U;
+    fakeSensorLastPollTick[1] = 5100U;
+    fakeSensorLastPollTick[2] = 5100U;
+    fakeSensorLastPollTick[3] = 5100U;
+    /* UART 채널도 같은 이유로 최신 상태여야 단절 오판이 끼어들지 않는다. */
+    fakeCommRxLastRxTick[0] = 5100U;
+    fakeCommRxLastRxTick[1] = 5100U;
+
+    health_ping_all();
+    HealthTask_RunCycle();
+
+    assert(safetyTriggerCalls == 0U);
+    assert(commTxSendCallCount == 0U); /* 어떤 EVENT도 나가면 안 된다 */
+}
+
+/*
  * Queue drop이 한두 사이클만 늘고 멈추면(일시적) 비치명 보고만 하고 fatal로
  * 승격하지 않는다.
  */
@@ -420,6 +467,7 @@ int main(void) {
     test_stack_margin_triggers_fatal();
     test_uart_channel_timeout_reports_to_opposite_channel();
     test_sensor_staleness_reports_to_owning_process();
+    test_late_health_cycle_does_not_underflow_sensor_age();
     test_transient_queue_overflow_reports_without_fatal();
     test_sustained_queue_overflow_escalates_to_fatal();
     test_no_persisted_record_reports_none();
