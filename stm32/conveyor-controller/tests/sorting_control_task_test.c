@@ -62,6 +62,8 @@ static fake_queue_t sortingQueue;
 static fake_queue_t txQueue;
 static sorting_motor_port_t productionMotorPort;
 static sorting_gate_port_t productionGatePort;
+static uint8_t lastDeviceState;
+static uint8_t lastDeviceError;
 
 static sorting_motor_result_t fake_motor_initialize(void* context) {
     fake_motor_t* motor = (fake_motor_t*)context;
@@ -193,6 +195,12 @@ int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uin
     return enqueue_tx(1U, sequence, command, payload, length);
 }
 
+void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code) {
+    assert(channel == COMM_TX_CH_SORTING);
+    lastDeviceState = device_state;
+    lastDeviceError = error_code;
+}
+
 static control_command_t command(uint8_t sequence, uint8_t commandId, const uint8_t* payload, uint8_t length) {
     control_command_t message;
 
@@ -231,6 +239,8 @@ static void initialize(sorting_control_t* controller, fake_motor_t* motor, fake_
     assert(sorting_control_task_get_safety_sync_state() == SORTING_CONTROL_SAFETY_RELEASED);
     fake_queue_reset(&sortingQueue, sizeof(control_command_t));
     fake_queue_reset(&txQueue, sizeof(tx_request_t));
+    lastDeviceState = UART_DEVICE_READY;
+    lastDeviceError = UART_ERROR_NONE;
     sortingControlQueueHandle = &sortingQueue;
     memset(motor, 0, sizeof(*motor));
     memset(gate, 0, sizeof(*gate));
@@ -265,6 +275,8 @@ static void test_response_cache_and_retry(void) {
     assert(response.sequence == 10U);
     assert(response.command == UART_CMD_OPERATION_RESULT);
     assert(response.payload[UART_OPERATION_RESULT_STATUS_INDEX] == UART_STATUS_SUCCESS);
+    assert(lastDeviceState == UART_DEVICE_STOPPED);
+    assert(lastDeviceError == UART_ERROR_NONE);
 
     applyCalls = motor.applyCalls;
     assert(sorting_control_task_process_message(&controller, &message) == SORTING_CONTROL_OK);
@@ -287,6 +299,7 @@ static void test_response_cache_and_retry(void) {
     assert(sorting_control_task_service_tx() == 1U);
     response = pop_tx();
     assert(response.sequence == 11U);
+    assert(lastDeviceState == UART_DEVICE_RUNNING);
 }
 
 static void test_route_return_home_emits_event(void) {

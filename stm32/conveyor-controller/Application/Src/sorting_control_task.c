@@ -108,6 +108,34 @@ static uart_error_t sorting_control_task_result_error(sorting_control_result_t r
     }
 }
 
+static void sorting_control_task_update_device_status(uint8_t command, sorting_control_result_t result,
+                                                      const sorting_control_t* controller) {
+    uint8_t deviceState;
+
+    if (controller == NULL) {
+        return;
+    }
+
+    if ((result == SORTING_CONTROL_MOTOR_ERROR) || (result == SORTING_CONTROL_GATE_ERROR)) {
+        CommTx_SetChannelDeviceStatus(COMM_TX_CH_SORTING, UART_DEVICE_ERROR,
+                                      (result == SORTING_CONTROL_MOTOR_ERROR) ? UART_ERROR_MOTOR : UART_ERROR_SERVO);
+        return;
+    }
+
+    if (result != SORTING_CONTROL_OK) {
+        return;
+    }
+
+    if ((command != UART_CMD_SORTING_CONVEYOR_START) && (command != UART_CMD_SORTING_CONVEYOR_STOP) &&
+        (command != UART_CMD_SORTING_CONVEYOR_SET_SPEED) && (command != UART_CMD_SORTING_RESET)) {
+        return;
+    }
+
+    deviceState =
+        (controller->state.conveyorState == UART_SORTING_CONVEYOR_RUNNING) ? UART_DEVICE_RUNNING : UART_DEVICE_STOPPED;
+    CommTx_SetChannelDeviceStatus(COMM_TX_CH_SORTING, deviceState, UART_ERROR_NONE);
+}
+
 static uint8_t sorting_control_task_send_tx(const sorting_control_task_response_t* response) {
     int32_t sendResult;
 
@@ -403,6 +431,8 @@ sorting_control_result_t sorting_control_task_process_message(sorting_control_t*
         (void)sorting_control_task_apply_requested_stop(controller);
         result = SORTING_CONTROL_STALE_COMMAND;
     }
+
+    sorting_control_task_update_device_status(message->frame.command, result, controller);
 
     response = sorting_control_task_build_response(message, result, controller);
     sorting_control_task_cache_transaction(message, result, &response);

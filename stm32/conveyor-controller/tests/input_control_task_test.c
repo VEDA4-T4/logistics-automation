@@ -55,6 +55,8 @@ osMessageQueueId_t safetyCommandQueueHandle;
 static fake_queue_t inputQueue;
 static fake_queue_t txQueue;
 static input_motor_port_t productionMotorPort;
+static uint8_t lastDeviceState;
+static uint8_t lastDeviceError;
 
 static input_motor_result_t fake_motor_initialize(void* context) {
     fake_motor_t* motor;
@@ -149,12 +151,11 @@ osStatus_t osDelay(uint32_t ticks) {
     return osOK;
 }
 
-int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command,
-                                const uint8_t* payload, uint8_t length) {
+int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command, const uint8_t* payload,
+                                uint8_t length) {
     uart_tx_request_t request;
 
-    if ((channel >= COMM_TX_CH_COUNT) || (length > UART_MAX_PAYLOAD_SIZE) ||
-        ((length != 0U) && (payload == NULL))) {
+    if ((channel >= COMM_TX_CH_COUNT) || (length > UART_MAX_PAYLOAD_SIZE) || ((length != 0U) && (payload == NULL))) {
         return -2;
     }
 
@@ -172,6 +173,12 @@ int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uin
     return (osMessageQueuePut(&txQueue, &request, 0U, 0U) == osOK) ? 0 : -3;
 }
 
+void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code) {
+    assert(channel == COMM_TX_CH_INPUT);
+    lastDeviceState = device_state;
+    lastDeviceError = error_code;
+}
+
 static void fake_queue_reset(fake_queue_t* queue, size_t itemSize) {
     memset(queue, 0, sizeof(*queue));
     queue->itemSize = itemSize;
@@ -186,6 +193,8 @@ static void reset_queues(void) {
     inputControlQueueHandle = &inputQueue;
     sortingControlQueueHandle = NULL;
     safetyCommandQueueHandle = NULL;
+    lastDeviceState = UART_DEVICE_READY;
+    lastDeviceError = UART_ERROR_NONE;
 }
 
 static control_command_t command_message(uint8_t sequence, uint8_t command, const uint8_t* payload, uint8_t length) {
@@ -332,12 +341,15 @@ static void test_operation_results(void) {
     assert(request.frame.sequence == 0x42U);
     assert(request.frame.payload[UART_OPERATION_RESULT_STATUS_INDEX] == UART_STATUS_SUCCESS);
     assert(controller.state.conveyorState == UART_INPUT_CONVEYOR_RUNNING);
+    assert(lastDeviceState == UART_DEVICE_RUNNING);
+    assert(lastDeviceError == UART_ERROR_NONE);
 
     message = command_message(0x43U, UART_CMD_INPUT_CONVEYOR_STOP, NULL, 0U);
     assert(input_control_task_process_message(&controller, &message) == INPUT_CONTROL_OK);
     request = pop_tx();
     assert(request.frame.sequence == 0x43U);
     assert(controller.state.conveyorState == UART_INPUT_CONVEYOR_STOPPED);
+    assert(lastDeviceState == UART_DEVICE_STOPPED);
 }
 
 static void test_motor_error_reports_result(void) {
@@ -363,6 +375,8 @@ static void test_motor_error_reports_result(void) {
     assert(request.frame.payload[UART_OPERATION_RESULT_ERROR_INDEX] == UART_ERROR_MOTOR);
     assert(controller.state.conveyorState == UART_INPUT_CONVEYOR_FAULT);
     assert(controller.state.lastError == UART_ERROR_MOTOR);
+    assert(lastDeviceState == UART_DEVICE_ERROR);
+    assert(lastDeviceError == UART_ERROR_MOTOR);
 }
 
 static void test_failed_tx_is_retried_before_next_command(void) {

@@ -99,6 +99,33 @@ static uart_error_t input_control_task_result_error(input_control_result_t resul
     }
 }
 
+static void input_control_task_update_device_status(uint8_t command, input_control_result_t result,
+                                                    const input_control_t* controller) {
+    uint8_t deviceState;
+
+    if (controller == NULL) {
+        return;
+    }
+
+    if (result == INPUT_CONTROL_MOTOR_ERROR) {
+        CommTx_SetChannelDeviceStatus(COMM_TX_CH_INPUT, UART_DEVICE_ERROR, UART_ERROR_MOTOR);
+        return;
+    }
+
+    if (result != INPUT_CONTROL_OK) {
+        return;
+    }
+
+    if ((command != UART_CMD_INPUT_CONVEYOR_START) && (command != UART_CMD_INPUT_CONVEYOR_STOP) &&
+        (command != UART_CMD_INPUT_CONVEYOR_SET_SPEED) && (command != UART_CMD_INPUT_CONTROL_RESET)) {
+        return;
+    }
+
+    deviceState =
+        (controller->state.conveyorState == UART_INPUT_CONVEYOR_RUNNING) ? UART_DEVICE_RUNNING : UART_DEVICE_STOPPED;
+    CommTx_SetChannelDeviceStatus(COMM_TX_CH_INPUT, deviceState, UART_ERROR_NONE);
+}
+
 static uint8_t input_control_task_send_tx(const input_control_task_response_t* response) {
     comm_tx_channel_t channel;
 
@@ -116,8 +143,8 @@ static uint8_t input_control_task_send_tx(const input_control_task_response_t* r
         return 0U;
     }
 
-    if (CommTx_SendWithSequence(channel, response->sequence, response->command, response->payload,
-                                response->length) != 0) {
+    if (CommTx_SendWithSequence(channel, response->sequence, response->command, response->payload, response->length) !=
+        0) {
         inputControlTaskStats.txQueueDrops++;
         return 0U;
     }
@@ -178,8 +205,7 @@ static input_control_task_response_t input_control_task_build_response(const con
 
         if (result != INPUT_CONTROL_OK) {
             response.payload[UART_RESPONSE_STATUS_INDEX] = UART_STATUS_ERROR;
-            response.payload[UART_RESPONSE_ERROR_INDEX] =
-                (uint8_t)input_control_task_result_error(result, controller);
+            response.payload[UART_RESPONSE_ERROR_INDEX] = (uint8_t)input_control_task_result_error(result, controller);
         }
     } else {
         response.command = UART_CMD_OPERATION_RESULT;
@@ -386,6 +412,8 @@ input_control_result_t input_control_task_process_message(input_control_t* contr
 
             result = INPUT_CONTROL_STALE_COMMAND;
         }
+
+        input_control_task_update_device_status(message->frame.command, result, controller);
 
         response = input_control_task_build_response(message, result, controller);
         input_control_task_cache_transaction(message, result, &response);
