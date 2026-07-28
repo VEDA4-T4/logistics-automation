@@ -23,8 +23,8 @@ using logistics::device::UartIoStatus;
 using logistics::device::UartTransport;
 
 constexpr auto kResponseTimeout = 500ms;
-constexpr auto kHomeTimeout = 4s;
-constexpr auto kMotionTimeout = 3s;
+constexpr auto kHomeTimeout = 12s;
+constexpr auto kMotionTimeout = 12s;
 constexpr auto kSafetyEventTimeout = 1s;
 constexpr auto kSafetySettleDelay = 100ms;
 constexpr std::uint8_t kMaxAttempts = UART_MAX_RETRY_COUNT + 1U;
@@ -32,6 +32,10 @@ constexpr std::uint8_t kSafetyEventId = 0x02U;
 constexpr std::uint8_t kSafetyEventLatchedIndex = 1U;
 constexpr std::uint8_t kSafetyEventCauseIndex = 2U;
 constexpr std::uint8_t kSafetyEventPayloadSize = 3U;
+constexpr std::uint32_t kBaseSpeedDeciDegreesPerSecond = 300U;
+constexpr std::uint32_t kShoulderSpeedDeciDegreesPerSecond = 150U;
+constexpr std::uint32_t kElbowSpeedDeciDegreesPerSecond = 200U;
+constexpr std::uint32_t kClawSpeedPercentPerSecond = 40U;
 
 struct StatusSnapshot {
     std::uint8_t state{};
@@ -370,11 +374,42 @@ void PrintStatus(const StatusSnapshot& status) {
     WriteU16(payload.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, shoulder_angle);
     WriteU16(payload.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, elbow_angle);
     WriteU16(payload.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, duration_ms);
+    std::printf("  Calculated duration: %u ms\n", duration_ms);
 
     if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_MOVE_ARM, payload, UART_STATUS_ACK)) {
         return false;
     }
     return roundtrip.WaitForMotion(motion_id, UART_GRIPPER_MOTION_ARM, kMotionTimeout);
+}
+
+[[nodiscard]] constexpr std::uint32_t AbsoluteDifference(std::uint32_t first, std::uint32_t second) {
+    return (first >= second) ? (first - second) : (second - first);
+}
+
+[[nodiscard]] constexpr std::uint32_t DurationForDelta(std::uint32_t delta, std::uint32_t units_per_second) {
+    if (delta == 0U) {
+        return UART_GRIPPER_DURATION_MS_MIN;
+    }
+
+    const std::uint32_t duration = ((delta * 1000U) + units_per_second - 1U) / units_per_second;
+    return std::max(duration, static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MIN));
+}
+
+[[nodiscard]] constexpr std::uint16_t ArmDuration(std::uint16_t start_base, std::uint16_t start_shoulder,
+                                                  std::uint16_t start_elbow, std::uint16_t target_base,
+                                                  std::uint16_t target_shoulder, std::uint16_t target_elbow) {
+    std::uint32_t duration = DurationForDelta(AbsoluteDifference(start_base, target_base),
+                                              kBaseSpeedDeciDegreesPerSecond);
+    duration = std::max(duration, DurationForDelta(AbsoluteDifference(start_shoulder, target_shoulder),
+                                                   kShoulderSpeedDeciDegreesPerSecond));
+    duration = std::max(duration, DurationForDelta(AbsoluteDifference(start_elbow, target_elbow),
+                                                   kElbowSpeedDeciDegreesPerSecond));
+    return static_cast<std::uint16_t>(duration);
+}
+
+[[nodiscard]] constexpr std::uint16_t ClawDuration(std::uint8_t start_position, std::uint8_t target_position) {
+    return static_cast<std::uint16_t>(DurationForDelta(
+        AbsoluteDifference(start_position, target_position), kClawSpeedPercentPerSecond));
 }
 
 [[nodiscard]] bool RunGripperMotion(Roundtrip& roundtrip, std::uint8_t& sequence, std::uint16_t motion_id,
@@ -383,6 +418,7 @@ void PrintStatus(const StatusSnapshot& status) {
     WriteU16(payload.data(), UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, motion_id);
     payload[UART_GRIPPER_SET_POSITION_INDEX] = position_percent;
     WriteU16(payload.data(), UART_GRIPPER_SET_DURATION_LOW_INDEX, duration_ms);
+    std::printf("  Calculated duration: %u ms\n", duration_ms);
 
     if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_SET_GRIPPER, payload, UART_STATUS_ACK)) {
         return false;
@@ -399,8 +435,6 @@ void PrintStatus(const StatusSnapshot& status) {
     constexpr std::uint16_t kCenterAngle = 900U;
     const std::uint16_t low_angle = wide_sweep ? 450U : 600U;
     const std::uint16_t high_angle = wide_sweep ? 1350U : 1200U;
-    const std::uint16_t edge_duration_ms = wide_sweep ? 2000U : 1500U;
-    const std::uint16_t cross_duration_ms = wide_sweep ? 2500U : 2000U;
 
     std::printf("GRIPPER BASE %sCALIBRATION SWEEP\nDevice: %.*s\n", wide_sweep ? "WIDE " : "",
                 static_cast<int>(device.size()), device.data());
@@ -413,17 +447,20 @@ void PrintStatus(const StatusSnapshot& status) {
     }
 
     std::printf("[2/4] Move Base to %.1f degrees\n", static_cast<double>(low_angle) / 10.0);
-    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, low_angle, 900U, 900U, edge_duration_ms)) {
+    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, low_angle, 900U, 900U,
+                      ArmDuration(kCenterAngle, 900U, 900U, low_angle, 900U, 900U))) {
         return 1;
     }
 
     std::printf("[3/4] Move Base to %.1f degrees\n", static_cast<double>(high_angle) / 10.0);
-    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, high_angle, 900U, 900U, cross_duration_ms)) {
+    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, high_angle, 900U, 900U,
+                      ArmDuration(low_angle, 900U, 900U, high_angle, 900U, 900U))) {
         return 1;
     }
 
     std::printf("[4/4] Return Base to 90.0 degrees\n");
-    if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, kCenterAngle, 900U, 900U, edge_duration_ms)) {
+    if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, kCenterAngle, 900U, 900U,
+                      ArmDuration(high_angle, 900U, 900U, kCenterAngle, 900U, 900U))) {
         return 1;
     }
 
@@ -461,17 +498,20 @@ void PrintStatus(const StatusSnapshot& status) {
     }
 
     std::printf("[2/4] Move Shoulder to %.1f degrees\n", static_cast<double>(first_angle) / 10.0);
-    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, 900U, first_angle, 900U, 1500U)) {
+    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, 900U, first_angle, 900U,
+                      ArmDuration(900U, kCenterAngle, 900U, 900U, first_angle, 900U))) {
         return 1;
     }
 
     std::printf("[3/4] Move Shoulder to %.1f degrees\n", static_cast<double>(second_angle) / 10.0);
-    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, 900U, second_angle, 900U, 2000U)) {
+    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, 900U, second_angle, 900U,
+                      ArmDuration(900U, first_angle, 900U, 900U, second_angle, 900U))) {
         return 1;
     }
 
     std::printf("[4/4] Return Shoulder to 90.0 degrees\n");
-    if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, 900U, kCenterAngle, 900U, 1500U)) {
+    if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, 900U, kCenterAngle, 900U,
+                      ArmDuration(900U, second_angle, 900U, 900U, kCenterAngle, 900U))) {
         return 1;
     }
 
@@ -502,17 +542,17 @@ void PrintStatus(const StatusSnapshot& status) {
     }
 
     std::printf("[2/4] Move Gripper to 80%%\n");
-    if (!RunGripperMotion(roundtrip, sequence, kFirstMotionId, 80U, 1500U)) {
+    if (!RunGripperMotion(roundtrip, sequence, kFirstMotionId, 80U, ClawDuration(100U, 80U))) {
         return 1;
     }
 
     std::printf("[3/4] Move Gripper to 60%%\n");
-    if (!RunGripperMotion(roundtrip, sequence, kSecondMotionId, 60U, 1500U)) {
+    if (!RunGripperMotion(roundtrip, sequence, kSecondMotionId, 60U, ClawDuration(80U, 60U))) {
         return 1;
     }
 
     std::printf("[4/4] Open Gripper to 100%%\n");
-    if (!RunGripperMotion(roundtrip, sequence, kOpenMotionId, 100U, 2000U)) {
+    if (!RunGripperMotion(roundtrip, sequence, kOpenMotionId, 100U, ClawDuration(60U, 100U))) {
         return 1;
     }
 
