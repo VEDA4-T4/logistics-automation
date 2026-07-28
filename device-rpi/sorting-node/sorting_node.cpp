@@ -36,6 +36,7 @@ inline constexpr std::uint8_t kHealthUartChannelTimeout = 1U;
 inline constexpr std::uint8_t kHealthQueueOverflow = 2U;
 inline constexpr std::uint8_t kHealthSensorStale = 3U;
 inline constexpr std::uint8_t kHealthSensorIdNone = 0xFFU;
+inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
 
 [[nodiscard]] SortingCommandStatus ToCommandStatus(UartSessionSendStatus status) noexcept {
     switch (status) {
@@ -434,7 +435,14 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
         case mqtt::ControlCommand::kRecovery:
             if (NormalizeIdentifier(command.component_id) == "SAFETY") {
                 result.uart_command = UART_CMD_RESET_DEVICE;
-                return SendOneWay(std::move(result), UART_CMD_RESET_DEVICE, nullptr, 0U);
+                result = SendOneWay(std::move(result), UART_CMD_RESET_DEVICE, nullptr, 0U);
+                if (result.Succeeded()) {
+                    pending_safety_ = { .active = true,
+                                        .expected = PendingSafetyEvent::kResetComplete,
+                                        .command = result.mqtt_command,
+                                        .request_id = result.request_id };
+                }
+                return result;
             }
             if (!command.component_id.empty() && NormalizeIdentifier(command.component_id) != "GATE") {
                 result.status = SortingCommandStatus::kUnsupportedCommand;
@@ -484,7 +492,44 @@ SortingCommandResult SortingNode::HandleEmergencyStop(const mqtt::EmergencyStopP
         ClearPending();
     }
     static_cast<void>(uart_session_.CancelPendingCommand());
-    return SendOneWay(std::move(result), UART_CMD_EMERGENCY_STOP, nullptr, 0U);
+    result = SendOneWay(std::move(result), UART_CMD_EMERGENCY_STOP, nullptr, 0U);
+    if (result.Succeeded()) {
+        pending_safety_ = { .active = true,
+                            .expected = PendingSafetyEvent::kEstopLatched,
+                            .command = result.mqtt_command,
+                            .request_id = result.request_id };
+    }
+    return result;
+}
+
+void SortingNode::ResetControllerHeartbeatMonitor() noexcept {
+    controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
+    controller_heartbeat_timed_out_ = false;
+    last_device_state_ = 0xffU;
+    last_device_error_ = 0xffU;
+}
+
+void SortingNode::Tick(std::chrono::milliseconds elapsed) noexcept {
+    if (elapsed <= std::chrono::milliseconds::zero()) {
+        return;
+    }
+    if (pending_safety_.active) {
+        pending_safety_.elapsed += elapsed;
+        if (pending_safety_.elapsed >= mqtt::kEmergencyStopConfirmationTimeout) {
+            EmitSafetyResponse(mqtt::CommandResult::kTimeout, std::string("ERR-SAFETY-CONFIRMATION-TIMEOUT"),
+                               "sorting controller did not confirm the safety command");
+            pending_safety_ = {};
+        }
+    }
+    if (!controller_heartbeat_timed_out_) {
+        controller_heartbeat_elapsed_ += elapsed;
+        if (controller_heartbeat_elapsed_ >= kControllerHeartbeatTimeout) {
+            controller_heartbeat_timed_out_ = true;
+            EmitStatus("UART_HEARTBEAT_TIMEOUT", std::string("ERR-UART-HEARTBEAT-TIMEOUT"));
+            EmitError("ERR-UART-HEARTBEAT-TIMEOUT", "ERROR", "UART_HEARTBEAT_TIMEOUT",
+                      "sorting controller heartbeat timed out");
+        }
+    }
 }
 
 SortingCommandResult SortingNode::Send(SortingCommandResult result, std::uint8_t command, const std::uint8_t* payload,
@@ -614,10 +659,10 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
                 EmitStatus("IDLE");
                 break;
             case UART_CMD_SORTING_CONVEYOR_START:
-                EmitStatus("CONVEYOR_RUNNING");
+                EmitStatus("RUNNING");
                 break;
             case UART_CMD_SORTING_CONVEYOR_STOP:
-                EmitStatus("CONVEYOR_STOPPED");
+                EmitStatus("STOPPED");
                 break;
             case UART_CMD_EMERGENCY_STOP:
                 EmitStatus("EMERGENCY_STOP", std::string("ERR-EMERGENCY-STOP"));
@@ -694,10 +739,9 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
             return false;
         }
         configured_speed_ = speed;
-        std::string current_state =
-            state == UART_SORTING_CONVEYOR_RUNNING
-                ? "CONVEYOR_RUNNING_" + std::to_string(speed)
-                : (state == UART_SORTING_CONVEYOR_STOPPED ? "CONVEYOR_STOPPED" : "CONVEYOR_FAULT");
+        const std::string current_state = state == UART_SORTING_CONVEYOR_RUNNING   ? "RUNNING"
+                                          : state == UART_SORTING_CONVEYOR_STOPPED ? "STOPPED"
+                                                                                   : "ERROR";
         EmitStatus(std::move(current_state),
                    state == UART_SORTING_CONVEYOR_FAULT ? std::optional<std::string>{ "ERR-MOTOR" } : std::nullopt);
         return true;
@@ -746,8 +790,11 @@ void SortingNode::HandleHeartbeat(const uart_frame_t& frame) noexcept {
     if (state > UART_DEVICE_EMERGENCY_STOP) {
         return;
     }
+    const bool recovered = controller_heartbeat_timed_out_;
+    controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
+    controller_heartbeat_timed_out_ = false;
     ClearControllerEventDedupIfHealthy(state, error);
-    if (state == last_device_state_ && error == last_device_error_) {
+    if (!recovered && state == last_device_state_ && error == last_device_error_) {
         return;
     }
     last_device_state_ = state;
@@ -782,8 +829,6 @@ void SortingNode::HandleSensorStatus(const uart_frame_t& frame) noexcept {
         return;
     }
     sensor_states_[index] = state;
-    EmitStatus("SENSOR_" + std::to_string(sensor_id) + '_' + SensorStateName(state),
-               state == UART_SENSOR_FAULT ? std::optional<std::string>{ "ERR-SENSOR" } : std::nullopt);
     if (state == UART_SENSOR_FAULT) {
         EmitError("ERR-SENSOR", "ERROR", "SENSOR_" + std::to_string(sensor_id) + "_FAULT",
                   "sorting ultrasonic sensor reported a fault",
@@ -818,6 +863,22 @@ void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
     const std::uint8_t kind = frame.payload[kSafetyKindIndex];
     const std::uint8_t cause = frame.payload[kSafetyCauseIndex];
     const std::uint8_t result = frame.payload[kSafetyResultIndex];
+    if (pending_safety_.active) {
+        const bool estopConfirmed =
+            pending_safety_.expected == PendingSafetyEvent::kEstopLatched && kind == kSafetyEstopLatched;
+        const bool resetConfirmed =
+            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == kSafetyResetComplete;
+        const bool resetRejected =
+            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == kSafetyResetRejected;
+        if (estopConfirmed || resetConfirmed || resetRejected) {
+            EmitSafetyResponse(resetRejected ? mqtt::CommandResult::kRejected : mqtt::CommandResult::kSuccess,
+                               resetRejected ? std::optional<std::string>{ "ERR-SAFETY-RESET-REJECTED" } : std::nullopt,
+                               resetRejected
+                                   ? "sorting controller rejected safety recovery result " + std::to_string(result)
+                                   : "sorting controller confirmed the safety command");
+            pending_safety_ = {};
+        }
+    }
     if (IsRepeatedControllerEvent(kSafetyEvent, kind, cause, result)) {
         return;
     }
@@ -909,6 +970,23 @@ void SortingNode::EmitPendingResponse(mqtt::CommandResult result, std::optional<
                 .error_code = std::move(error_code),
                 .message = std::move(message),
             },
+    });
+}
+
+void SortingNode::EmitSafetyResponse(mqtt::CommandResult result, std::optional<std::string> error_code,
+                                     std::string message) const noexcept {
+    if (!pending_safety_.active || pending_safety_.request_id.empty() ||
+        pending_safety_.command == mqtt::ControlCommand::kUnknown) {
+        return;
+    }
+    EmitReport({
+        .channel = SortingReportChannel::kResponse,
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .data = mqtt::CommandResponsePayload{ .request_id = pending_safety_.request_id,
+                                              .command = pending_safety_.command,
+                                              .result = result,
+                                              .error_code = std::move(error_code),
+                                              .message = std::move(message) },
     });
 }
 

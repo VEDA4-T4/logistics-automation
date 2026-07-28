@@ -139,8 +139,6 @@ void UpdateDeviceStatus(const SortingReport& report, const std::shared_ptr<Devic
         return;
     }
     if (const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&report.data); error != nullptr) {
-        device_status->SetCurrentState(error->current_state);
-        device_status->SetJobId(error->job_id);
         device_status->SetErrorCode(error->error_code);
     }
 }
@@ -219,7 +217,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case SortingCommandStatus::kSent:
             return mqtt::CommandResult::kProcessing;
         case SortingCommandStatus::kSentNoReply:
-            return mqtt::CommandResult::kSuccess;
+            return mqtt::CommandResult::kProcessing;
     }
     return mqtt::CommandResult::kFailed;
 }
@@ -419,6 +417,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
 
         if (!uart_session.IsOpen() && now >= next_uart_reconnect) {
             if (uart_session.Open(uart_path)) {
+                sorting_node.ResetControllerHeartbeatMonitor();
                 device_status->SetUartConnected(true);
                 uart_disconnected_reported = false;
                 uart_failure_pending = false;
@@ -448,6 +447,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
 
         if (uart_session.IsOpen()) {
             const UartIoResult read_result = uart_session.PollOnce(kUartPollTimeout);
+            sorting_node.Tick(elapsed);
             if (read_result.status == UartIoStatus::kDisconnected || read_result.status == UartIoStatus::kNotOpen ||
                 read_result.status == UartIoStatus::kIoError) {
                 uart_failure_pending = true;

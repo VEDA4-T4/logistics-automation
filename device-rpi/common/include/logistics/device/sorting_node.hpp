@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -73,6 +74,8 @@ public:
     [[nodiscard]] SortingCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] SortingCommandResult RequestControllerStatus();
     void HandleUartEvent(const UartSessionEvent& event) noexcept;
+    void Tick(std::chrono::milliseconds elapsed) noexcept;
+    void ResetControllerHeartbeatMonitor() noexcept;
 
     [[nodiscard]] bool HasActiveCycle() const noexcept;
     [[nodiscard]] std::string_view ActiveWorkId() const noexcept;
@@ -102,6 +105,20 @@ private:
         std::uint8_t requested_speed{};
     };
 
+    enum class PendingSafetyEvent {
+        kNone,
+        kEstopLatched,
+        kResetComplete,
+    };
+
+    struct PendingSafetyContext {
+        bool active{};
+        PendingSafetyEvent expected{ PendingSafetyEvent::kNone };
+        contracts::mqtt::ControlCommand command{ contracts::mqtt::ControlCommand::kUnknown };
+        std::string request_id;
+        std::chrono::milliseconds elapsed{};
+    };
+
     [[nodiscard]] SortingCommandResult HandleDestinationSet(const contracts::mqtt::DestinationSetPayload& command);
     [[nodiscard]] SortingCommandResult HandleControlCommand(const contracts::mqtt::ControlCommandPayload& command);
     [[nodiscard]] SortingCommandResult HandleEmergencyStop(const contracts::mqtt::EmergencyStopPayload& command);
@@ -128,6 +145,8 @@ private:
     void ClearControllerEventDedupIfHealthy(std::uint8_t state, std::uint8_t error) noexcept;
     void EmitPendingResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
                              std::string message) const noexcept;
+    void EmitSafetyResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
+                            std::string message) const noexcept;
     void EmitStatus(std::string current_state, std::optional<std::string> error_code = std::nullopt) const noexcept;
     void EmitError(std::string error_code, std::string level, std::string current_state, std::string message,
                    std::optional<std::int32_t> distance = std::nullopt) const noexcept;
@@ -140,11 +159,14 @@ private:
     std::uint8_t active_destination_{};
     std::uint16_t next_cycle_id_{ UART_SORTING_CYCLE_ID_MIN };
     PendingContext pending_{};
+    PendingSafetyContext pending_safety_{};
     std::array<std::uint8_t, 3U> sensor_states_{ 0xffU, 0xffU, 0xffU };
     std::uint8_t last_device_state_{ 0xffU };
     std::uint8_t last_device_error_{ 0xffU };
     std::uint8_t configured_speed_{};
     std::optional<std::uint32_t> last_controller_event_signature_;
+    std::chrono::milliseconds controller_heartbeat_elapsed_{};
+    bool controller_heartbeat_timed_out_{};
     SortingReportHandler report_handler_;
 };
 
