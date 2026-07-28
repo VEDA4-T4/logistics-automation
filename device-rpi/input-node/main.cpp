@@ -232,13 +232,17 @@ int RunInputDaemon(int argc, char* argv[]) {
 
     auto next_uart_reconnect = Clock::now();
     auto next_heartbeat = Clock::now();
+    auto last_tick = Clock::now();
     std::clog << "[input][INFO] daemon started: id=" << device_id << "; uart=" << uart_path << '\n';
 
     while (stop_requested == 0) {
         const auto now = Clock::now();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick);
+        last_tick = now;
 
         if (!uart_session.IsOpen() && now >= next_uart_reconnect) {
             if (uart_session.Open(uart_path)) {
+                input_node.ResetControllerHeartbeatMonitor();
                 device_status->SetUartConnected(true);
                 queue_report(MakeUartLinkStatus("UART_CONNECTED", std::nullopt));
                 std::clog << "[input][uart][INFO] connected: " << uart_path << '\n';
@@ -255,6 +259,7 @@ int RunInputDaemon(int argc, char* argv[]) {
 
         if (uart_session.IsOpen()) {
             static_cast<void>(uart_session.PollSpontaneous(kSpontaneousPollTimeout));
+            input_node.Tick(elapsed);
         }
 
         if (was_open && !uart_session.IsOpen()) {

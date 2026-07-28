@@ -185,6 +185,10 @@ constexpr std::uint8_t kHealthIssueSensorStale = 3U;  // HEALTH_ISSUE_SENSOR_STA
 constexpr std::uint8_t kHealthSensorIdNone = 0xFFU;   // HEALTH_ISSUE_SENSOR_ID_NONE
 
 constexpr std::uint8_t kSafetyEventResetComplete = 0x02U;  // SAFETY_EVENT_RESET_COMPLETE
+constexpr std::uint8_t kSafetyEventEstopLatched = 0x01U;
+constexpr std::uint8_t kSafetyEventResetRejected = 0x03U;
+constexpr std::size_t kSafetyEventResultIndex = 7U;
+constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
 
 // APP_EVENT_HEARTBEAT payload (app_comm_tx.h APP_HEARTBEAT_*):
 //   [1] device_state, [2] error_code, [3..6] uptime seconds (LE u32),
@@ -291,7 +295,18 @@ InputCommandResult InputNode::HandleEmergencyStop(const mqtt::EmergencyStopPaylo
     }
 
     result = ExecuteAsync(std::move(result), UART_CMD_EMERGENCY_STOP, {});
-    EmitCommandResponse(result, "input conveyor emergency stop");
+    if (result.Succeeded()) {
+        pending_safety_ = {
+            .active = true,
+            .expected = PendingSafetyEvent::kEstopLatched,
+            .command = result.mqtt_command,
+            .request_id = result.request_id,
+        };
+        EmitCommandResponse(result.request_id, result.mqtt_command, mqtt::CommandResult::kProcessing, std::nullopt,
+                            "input emergency stop sent; waiting for controller confirmation");
+    } else {
+        EmitCommandResponse(result, "input conveyor emergency stop could not be sent");
+    }
     return result;
 }
 
@@ -320,11 +335,17 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
             }
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_START, conveyor_payload);
             EmitCommandResponse(result, "input conveyor start");
+            if (result.Succeeded()) {
+                EmitDeviceStatus("RUNNING");
+            }
             return result;
         }
         case mqtt::ControlCommand::kStop:
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_STOP, conveyor_payload);
             EmitCommandResponse(result, "input conveyor stop");
+            if (result.Succeeded()) {
+                EmitDeviceStatus("STOPPED");
+            }
             return result;
         case mqtt::ControlCommand::kStatusRequest:
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_GET_STATUS, conveyor_payload);
@@ -346,7 +367,18 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
             // answered with an asynchronous EVENT/DEVICE_STATUS broadcast rather
             // than a sequence-matched reply, so it must be fire-and-forget.
             result = ExecuteAsync(std::move(result), UART_CMD_RESET_DEVICE, {});
-            EmitCommandResponse(result, "input controller recovery");
+            if (result.Succeeded()) {
+                pending_safety_ = {
+                    .active = true,
+                    .expected = PendingSafetyEvent::kResetComplete,
+                    .command = result.mqtt_command,
+                    .request_id = result.request_id,
+                };
+                EmitCommandResponse(result.request_id, result.mqtt_command, mqtt::CommandResult::kProcessing,
+                                    std::nullopt, "input recovery sent; waiting for controller confirmation");
+            } else {
+                EmitCommandResponse(result, "input controller recovery could not be sent");
+            }
             return result;
         case mqtt::ControlCommand::kRestart:
         case mqtt::ControlCommand::kDestinationSet:
@@ -411,6 +443,72 @@ void InputNode::EmitCommandResponse(const InputCommandResult& result, std::strin
                 .message = std::move(message),
             },
     });
+}
+
+void InputNode::EmitCommandResponse(std::string request_id, mqtt::ControlCommand command, mqtt::CommandResult result,
+                                    std::optional<std::string> error_code, std::string message) const {
+    if (request_id.empty() || command == mqtt::ControlCommand::kUnknown) {
+        return;
+    }
+    EmitReport({
+        .channel = InputReportChannel::kResponse,
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .data = mqtt::CommandResponsePayload{ .request_id = std::move(request_id),
+                                              .command = command,
+                                              .result = result,
+                                              .error_code = std::move(error_code),
+                                              .message = std::move(message) },
+    });
+}
+
+void InputNode::EmitDeviceStatus(std::string current_state, std::optional<std::string> error_code) const {
+    EmitReport({
+        .channel = InputReportChannel::kStatus,
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .data = mqtt::DeviceStatusPayload{ .status = error_code.has_value() ? mqtt::ConnectionState::kUartError
+                                                                            : mqtt::ConnectionState::kOnline,
+                                           .current_state = std::move(current_state),
+                                           .job_id = std::nullopt,
+                                           .error_code = std::move(error_code) },
+    });
+}
+
+void InputNode::ResetControllerHeartbeatMonitor() noexcept {
+    controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
+    controller_heartbeat_timed_out_ = false;
+    last_heartbeat_state_.reset();
+}
+
+void InputNode::Tick(std::chrono::milliseconds elapsed) {
+    if (elapsed <= std::chrono::milliseconds::zero()) {
+        return;
+    }
+    if (pending_safety_.active) {
+        pending_safety_.elapsed += elapsed;
+        if (pending_safety_.elapsed >= mqtt::kEmergencyStopConfirmationTimeout) {
+            EmitCommandResponse(pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kTimeout,
+                                std::string("ERR-SAFETY-CONFIRMATION-TIMEOUT"),
+                                "input controller did not confirm the safety command");
+            pending_safety_ = {};
+        }
+    }
+    if (!controller_heartbeat_timed_out_) {
+        controller_heartbeat_elapsed_ += elapsed;
+        if (controller_heartbeat_elapsed_ >= kControllerHeartbeatTimeout) {
+            controller_heartbeat_timed_out_ = true;
+            EmitDeviceStatus("UART_HEARTBEAT_TIMEOUT", std::string("ERR-UART-HEARTBEAT-TIMEOUT"));
+            EmitReport({
+                .channel = InputReportChannel::kError,
+                .message_type = mqtt::MessageType::kErrorOccurred,
+                .data = mqtt::ErrorOccurredPayload{ .job_id = std::nullopt,
+                                                    .error_code = "ERR-UART-HEARTBEAT-TIMEOUT",
+                                                    .error_level = "ERROR",
+                                                    .current_state = "UART_HEARTBEAT_TIMEOUT",
+                                                    .message = "input controller heartbeat timed out",
+                                                    .distance = std::nullopt },
+            });
+        }
+    }
 }
 
 void InputNode::HandleUartFrame(const uart_frame_t& frame) {
@@ -506,6 +604,9 @@ void InputNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
     const std::uint8_t device_state = frame.payload[kHeartbeatStateIndex];
     const std::uint8_t error_code = frame.payload[kHeartbeatErrorIndex];
     const std::uint8_t sensor_state = frame.payload[kHeartbeatInputSensorIndex];
+    const bool recovered = controller_heartbeat_timed_out_;
+    controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
+    controller_heartbeat_timed_out_ = false;
 
     // The sensor state travels in every heartbeat too, but UART_CMD_SENSOR_STATUS
     // (HandleSensorStatus) already reports its transitions with the correct
@@ -514,7 +615,7 @@ void InputNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
     // gate this report on its own, or every sensor transition would also emit a
     // misleading device_state-only report ("READY") right alongside the correct
     // sensor report.
-    const bool device_state_changed = !last_heartbeat_state_.has_value() ||
+    const bool device_state_changed = recovered || !last_heartbeat_state_.has_value() ||
                                       last_heartbeat_state_->device_state != device_state ||
                                       last_heartbeat_state_->error_code != error_code;
     last_heartbeat_state_ = HeartbeatState{ device_state, error_code, sensor_state };
@@ -550,6 +651,26 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     const bool has_detail = frame.length > kAppEventCauseIndex;
     const std::uint8_t kind = has_detail ? frame.payload[kAppEventKindIndex] : 0U;
     const std::uint8_t cause = has_detail ? frame.payload[kAppEventCauseIndex] : 0U;
+
+    if ((event_id == kAppEventSafety) && pending_safety_.active) {
+        const bool estopConfirmed =
+            (pending_safety_.expected == PendingSafetyEvent::kEstopLatched) && (kind == kSafetyEventEstopLatched);
+        const bool resetConfirmed =
+            (pending_safety_.expected == PendingSafetyEvent::kResetComplete) && (kind == kSafetyEventResetComplete);
+        const bool resetRejected =
+            (pending_safety_.expected == PendingSafetyEvent::kResetComplete) && (kind == kSafetyEventResetRejected);
+        if (estopConfirmed || resetConfirmed || resetRejected) {
+            const std::uint8_t resetResult =
+                (frame.length > kSafetyEventResultIndex) ? frame.payload[kSafetyEventResultIndex] : 0U;
+            EmitCommandResponse(
+                pending_safety_.request_id, pending_safety_.command,
+                resetRejected ? mqtt::CommandResult::kRejected : mqtt::CommandResult::kSuccess,
+                resetRejected ? std::optional<std::string>{ "ERR-SAFETY-RESET-REJECTED" } : std::nullopt,
+                resetRejected ? "input controller rejected safety recovery result " + std::to_string(resetResult)
+                              : "input controller confirmed the safety command");
+            pending_safety_ = {};
+        }
+    }
 
     // sensor_id is only meaningful for a HEALTH/SENSOR_STALE event; every other event
     // (including all SAFETY events) has a timestamp byte at that same offset instead.

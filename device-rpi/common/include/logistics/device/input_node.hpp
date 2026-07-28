@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -70,6 +71,8 @@ public:
 
     [[nodiscard]] InputCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
     void HandleUartFrame(const uart_frame_t& frame);
+    void Tick(std::chrono::milliseconds elapsed);
+    void ResetControllerHeartbeatMonitor() noexcept;
 
 private:
     [[nodiscard]] InputCommandResult HandleControlCommand(const contracts::mqtt::ControlCommandPayload& command);
@@ -83,6 +86,10 @@ private:
                                                   std::span<const std::uint8_t> payload);
     void EmitConveyorStatus(const uart_frame_t& response) const;
     void EmitCommandResponse(const InputCommandResult& result, std::string message) const;
+    void EmitCommandResponse(std::string request_id, contracts::mqtt::ControlCommand command,
+                             contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
+                             std::string message) const;
+    void EmitDeviceStatus(std::string current_state, std::optional<std::string> error_code = std::nullopt) const;
     void EmitReport(InputReport report) const;
     [[nodiscard]] bool IsTargetedToThisNode(std::string_view target_device_id) const noexcept;
 
@@ -97,12 +104,29 @@ private:
         std::uint8_t sensor_state{};
     };
 
+    enum class PendingSafetyEvent {
+        kNone,
+        kEstopLatched,
+        kResetComplete,
+    };
+
+    struct PendingSafetyCommand {
+        bool active{};
+        PendingSafetyEvent expected{ PendingSafetyEvent::kNone };
+        contracts::mqtt::ControlCommand command{ contracts::mqtt::ControlCommand::kUnknown };
+        std::string request_id;
+        std::chrono::milliseconds elapsed{};
+    };
+
     std::string device_id_;
     InputUartSession& uart_session_;
     InputReportHandler report_handler_;
     std::optional<std::uint8_t> last_sensor_state_;
     std::optional<std::uint32_t> last_controller_event_signature_;
     std::optional<HeartbeatState> last_heartbeat_state_;
+    PendingSafetyCommand pending_safety_{};
+    std::chrono::milliseconds controller_heartbeat_elapsed_{};
+    bool controller_heartbeat_timed_out_{};
 };
 
 }  // namespace logistics::device

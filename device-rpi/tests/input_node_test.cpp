@@ -1,6 +1,7 @@
 #include "logistics/device/input_node.hpp"
 
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -106,6 +107,8 @@ void TestStartSuccess() {
     assert(response != nullptr);
     assert(response->command == mqtt::ControlCommand::kStart);
     assert(response->result == mqtt::CommandResult::kSuccess);
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
+    assert(status != nullptr && status->current_state == "RUNNING");
 }
 
 void TestStartWithSpeed() {
@@ -172,7 +175,7 @@ void TestRecoveryReleasesLatchFireAndForget() {
     assert(fixture.backend->write_calls == 1);
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
-    assert(response->result == mqtt::CommandResult::kSuccess);
+    assert(response->result == mqtt::CommandResult::kProcessing);
 }
 
 void TestControllerRejection() {
@@ -216,6 +219,7 @@ void TestEmergencyStop() {
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
     assert(response->command == mqtt::ControlCommand::kEmergencyStop);
+    assert(response->result == mqtt::CommandResult::kProcessing);
 }
 
 void TestEmergencyStopDoesNotWaitForReply() {
@@ -232,7 +236,45 @@ void TestEmergencyStopDoesNotWaitForReply() {
     assert(fixture.backend->write_calls == 1);
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
-    assert(response->result == mqtt::CommandResult::kSuccess);
+    assert(response->result == mqtt::CommandResult::kProcessing);
+}
+
+void TestSafetyCommandsCompleteWithOriginalRequestId() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t&) { return std::vector<uart_frame_t>{}; };
+
+    static_cast<void>(fixture.node->HandleMqttCommand(MakeEmergencyStop(std::string(kDeviceId))));
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 1U, 0U));
+    const auto* estop = fixture.LastResponse();
+    assert(estop != nullptr);
+    assert(estop->request_id == "req-e");
+    assert(estop->result == mqtt::CommandResult::kSuccess);
+
+    static_cast<void>(
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, std::string(kDeviceId))));
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 2U, 0U));
+    const auto* recovery = fixture.LastResponse();
+    assert(recovery != nullptr);
+    assert(recovery->request_id == "req-1");
+    assert(recovery->result == mqtt::CommandResult::kSuccess);
+}
+
+void TestSafetyAndHeartbeatTimeoutsAreReported() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t&) { return std::vector<uart_frame_t>{}; };
+    static_cast<void>(fixture.node->HandleMqttCommand(MakeEmergencyStop(std::string(kDeviceId))));
+    fixture.node->Tick(mqtt::kEmergencyStopConfirmationTimeout);
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr && response->result == mqtt::CommandResult::kTimeout);
+
+    fixture.reports.clear();
+    fixture.node->ResetControllerHeartbeatMonitor();
+    fixture.node->Tick(std::chrono::seconds{ 3 });
+    assert(fixture.reports.size() == 2U);
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+    const auto* recovered = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
+    assert(recovered != nullptr && recovered->current_state == "RUNNING");
 }
 
 void TestInvalidTarget() {
@@ -541,6 +583,8 @@ int main() {
     TestUnsupportedCommand();
     TestEmergencyStop();
     TestEmergencyStopDoesNotWaitForReply();
+    TestSafetyCommandsCompleteWithOriginalRequestId();
+    TestSafetyAndHeartbeatTimeoutsAreReported();
     TestInvalidTarget();
     TestControllerTimeout();
     TestSensorDetectedReport();
