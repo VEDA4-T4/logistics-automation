@@ -351,19 +351,98 @@ void PrintStatus(const StatusSnapshot& status) {
                 status.gripper_position, status.homed);
 }
 
+[[nodiscard]] bool RunHome(Roundtrip& roundtrip, std::uint8_t& sequence, std::uint16_t motion_id) {
+    std::array<std::uint8_t, UART_GRIPPER_HOME_PAYLOAD_SIZE> payload{};
+    WriteU16(payload.data(), UART_GRIPPER_HOME_MOTION_ID_LOW_INDEX, motion_id);
+
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_HOME, payload, UART_STATUS_ACK)) {
+        return false;
+    }
+    return roundtrip.WaitForMotion(motion_id, UART_GRIPPER_MOTION_HOME, kHomeTimeout);
+}
+
+[[nodiscard]] bool RunArmMotion(Roundtrip& roundtrip, std::uint8_t& sequence, std::uint16_t motion_id,
+                                std::uint16_t base_angle, std::uint16_t duration_ms) {
+    std::array<std::uint8_t, UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE> payload{};
+    WriteU16(payload.data(), UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, motion_id);
+    WriteU16(payload.data(), UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, base_angle);
+    WriteU16(payload.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, 900U);
+    WriteU16(payload.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, 900U);
+    WriteU16(payload.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, duration_ms);
+
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_MOVE_ARM, payload, UART_STATUS_ACK)) {
+        return false;
+    }
+    return roundtrip.WaitForMotion(motion_id, UART_GRIPPER_MOTION_ARM, kMotionTimeout);
+}
+
+[[nodiscard]] int RunBaseSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device) {
+    constexpr std::uint16_t kHomeMotionId = 100U;
+    constexpr std::uint16_t kLowMotionId = 101U;
+    constexpr std::uint16_t kHighMotionId = 102U;
+    constexpr std::uint16_t kCenterMotionId = 103U;
+    constexpr std::uint16_t kLowAngle = 600U;
+    constexpr std::uint16_t kHighAngle = 1200U;
+    constexpr std::uint16_t kCenterAngle = 900U;
+
+    std::printf("GRIPPER BASE CALIBRATION SWEEP\nDevice: %.*s\n", static_cast<int>(device.size()), device.data());
+    std::printf("Motion: 90.0 -> 60.0 -> 120.0 -> 90.0 degrees\n\n");
+
+    std::printf("[1/4] HOME to 90.0 degrees\n");
+    if (!RunHome(roundtrip, sequence, kHomeMotionId)) {
+        return 1;
+    }
+    std::this_thread::sleep_for(500ms);
+
+    std::printf("[2/4] Move Base to 60.0 degrees\n");
+    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, kLowAngle, 1500U)) {
+        return 1;
+    }
+    std::this_thread::sleep_for(500ms);
+
+    std::printf("[3/4] Move Base to 120.0 degrees\n");
+    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, kHighAngle, 2000U)) {
+        return 1;
+    }
+    std::this_thread::sleep_for(500ms);
+
+    std::printf("[4/4] Return Base to 90.0 degrees\n");
+    if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, kCenterAngle, 1500U)) {
+        return 1;
+    }
+
+    uart_frame_t response{};
+    StatusSnapshot status{};
+    if (!roundtrip.Transact(sequence, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE ||
+        status.base_angle != kCenterAngle || status.shoulder_angle != 900U || status.elbow_angle != 900U ||
+        status.homed != 1U) {
+        return 1;
+    }
+    PrintStatus(status);
+    std::printf("\nGRIPPER BASE CALIBRATION SWEEP: 4/4 PASS\n");
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     const std::string_view device = (argc >= 2) ? argv[1] : "/dev/vedauart";
     std::uint8_t sequence = 10U;
-    if (argc >= 3 && !ParseSequence(argv[2], &sequence)) {
-        std::fprintf(stderr, "usage: %s [device] [initial_sequence:0..255]\n", argv[0]);
+    const std::string_view mode = (argc >= 4) ? argv[3] : "roundtrip";
+    if ((argc >= 3 && !ParseSequence(argv[2], &sequence)) || argc > 4 ||
+        (mode != "roundtrip" && mode != "base-sweep")) {
+        std::fprintf(stderr, "usage: %s [device] [initial_sequence:0..255] [roundtrip|base-sweep]\n", argv[0]);
         return 2;
     }
 
     Roundtrip roundtrip;
     if (!roundtrip.Open(device)) {
         return 1;
+    }
+
+    if (mode == "base-sweep") {
+        return RunBaseSweep(roundtrip, sequence, device);
     }
 
     int passed = 0;
