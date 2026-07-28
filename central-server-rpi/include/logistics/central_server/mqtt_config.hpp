@@ -17,7 +17,7 @@ struct MqttConfig final {
     std::uint16_t keep_alive_seconds{ 30 };
     std::uint32_t reconnect_min_delay_seconds{ 1 };
     std::uint32_t reconnect_max_delay_seconds{ 30 };
-    bool clean_session{ true };
+    bool clean_session{ false };
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

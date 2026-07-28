@@ -94,7 +94,11 @@ ProcessOrchestrationResult ProcessOrchestrator::Handle(const mqtt::MqttMessage& 
     if (!config_.enabled) {
         return NotHandled();
     }
-    return HandleWith(state_machine_, message, true);
+    auto result = HandleWith(state_machine_, message, true);
+    if (result.transition.Applied()) {
+        ++revision_;
+    }
+    return result;
 }
 
 ProcessTransition ProcessOrchestrator::BeginWork(std::string_view message_id, std::string_view work_id,
@@ -107,7 +111,7 @@ ProcessTransition ProcessOrchestrator::BeginWork(std::string_view message_id, st
             .reason = {},
         };
     }
-    return state_machine_.Apply({
+    auto transition = state_machine_.Apply({
         .type = ProcessEventType::kWorkCreated,
         .message_id = std::string(message_id),
         .work_id = std::string(work_id),
@@ -115,6 +119,10 @@ ProcessTransition ProcessOrchestrator::BeginWork(std::string_view message_id, st
         .destination = {},
         .reason = {},
     });
+    if (transition.Applied()) {
+        ++revision_;
+    }
+    return transition;
 }
 
 ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id) {
@@ -126,7 +134,7 @@ ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view 
             .reason = {},
         };
     }
-    return state_machine_.Apply({
+    auto transition = state_machine_.Apply({
         .type = ProcessEventType::kVisionCommandDispatched,
         .message_id = std::string(message_id) + "-VISION-DISPATCHED",
         .work_id = std::string(work_id),
@@ -134,10 +142,14 @@ ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view 
         .destination = {},
         .reason = {},
     });
+    if (transition.Applied()) {
+        ++revision_;
+    }
+    return transition;
 }
 
 ProcessTransition ProcessOrchestrator::ConfirmDispatch(const ProcessCommandIntent& intent) {
-    return state_machine_.Apply({
+    auto transition = state_machine_.Apply({
         .type = intent.dispatched_event,
         .message_id = intent.message.message_id + "-DISPATCHED",
         .work_id = intent.work_id,
@@ -145,10 +157,14 @@ ProcessTransition ProcessOrchestrator::ConfirmDispatch(const ProcessCommandInten
         .destination = {},
         .reason = {},
     });
+    if (transition.Applied()) {
+        ++revision_;
+    }
+    return transition;
 }
 
 ProcessTransition ProcessOrchestrator::FailDispatch(const ProcessCommandIntent& intent, std::string reason) {
-    return state_machine_.Apply({
+    auto transition = state_machine_.Apply({
         .type = ProcessEventType::kWorkFailed,
         .message_id = intent.message.message_id + "-FAILED",
         .work_id = intent.work_id,
@@ -156,6 +172,10 @@ ProcessTransition ProcessOrchestrator::FailDispatch(const ProcessCommandIntent& 
         .destination = {},
         .reason = std::move(reason),
     });
+    if (transition.Applied()) {
+        ++revision_;
+    }
+    return transition;
 }
 
 ProcessTransition ProcessOrchestrator::PreviewSystemCommand(mqtt::ControlCommand command) const {
@@ -172,7 +192,11 @@ ProcessTransition ProcessOrchestrator::ApplySystemCommand(mqtt::ControlCommand c
             .reason = {},
         };
     }
-    return state_machine_.ApplySystemCommand(command);
+    auto transition = state_machine_.ApplySystemCommand(command);
+    if (transition.Applied()) {
+        ++revision_;
+    }
+    return transition;
 }
 
 ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
@@ -184,7 +208,30 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
             .reason = {},
         };
     }
-    return state_machine_.CompleteSystemRecovery();
+    auto transition = state_machine_.CompleteSystemRecovery();
+    if (transition.Applied()) {
+        ++revision_;
+    }
+    return transition;
+}
+
+bool ProcessOrchestrator::RestoreAfterServerRestart(ProcessSystemState stored_state,
+                                                    std::vector<WorkProcessSnapshot> works,
+                                                    std::uint64_t message_sequence) {
+    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
+        return false;
+    }
+    message_sequence_ = message_sequence;
+    ++revision_;
+    return true;
+}
+
+std::uint64_t ProcessOrchestrator::MessageSequence() const noexcept {
+    return message_sequence_;
+}
+
+std::uint64_t ProcessOrchestrator::Revision() const noexcept {
+    return revision_;
 }
 
 ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& machine,

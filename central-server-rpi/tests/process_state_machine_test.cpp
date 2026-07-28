@@ -194,6 +194,30 @@ void TestNodeFailureWithoutWorkStopsTheProcess() {
     assert(work->failure_reason == "input conveyor fault");
 }
 
+void TestServerRestartRestoresSafeState() {
+    central_server::ProcessStateMachine machine;
+    std::vector works{
+        central_server::WorkProcessSnapshot{
+            .work_id = kWorkOne,
+            .stage = central_server::WorkStage::kVisionProcessing,
+            .suspended_stage = std::nullopt,
+            .destination = "1",
+            .last_source_id = "PI-VISION-01",
+            .failure_reason = {},
+        },
+    };
+    assert(machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, works));
+    assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
+    assert(machine.FindWork(kWorkOne)->suspended_stage == central_server::WorkStage::kVisionProcessing);
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kVisionProcessing);
+
+    assert(machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kEmergencyStop, works));
+    assert(machine.SystemState() == central_server::ProcessSystemState::kEmergencyStop);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kEmergencyStopped);
+}
+
 }  // namespace
 
 int main() {
@@ -204,5 +228,6 @@ int main() {
     TestErrorEmergencyStopAndRecovery();
     TestParallelWorksRemainIndependent();
     TestNodeFailureWithoutWorkStopsTheProcess();
+    TestServerRestartRestoresSafeState();
     return 0;
 }

@@ -205,6 +205,47 @@ ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
     };
 }
 
+bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_state,
+                                                    std::vector<WorkProcessSnapshot> works) {
+    std::unordered_map<std::string, WorkProcessSnapshot> restored;
+    for (auto& work : works) {
+        if (!contracts::IsValidUuid(work.work_id) || IsTerminal(work.stage) || restored.contains(work.work_id)) {
+            return false;
+        }
+
+        const WorkStage resumable_stage = work.suspended_stage.value_or(work.stage);
+        if (IsTerminal(resumable_stage) || IsSuspended(resumable_stage)) {
+            return false;
+        }
+        work.suspended_stage = resumable_stage;
+        if (stored_state == ProcessSystemState::kEmergencyStop) {
+            work.stage = WorkStage::kEmergencyStopped;
+        } else if (stored_state == ProcessSystemState::kError) {
+            work.stage = WorkStage::kFailed;
+        } else if (stored_state == ProcessSystemState::kRecovery) {
+            work.stage = WorkStage::kFailed;
+            work.failure_reason = "server restarted while recovery was in progress";
+        } else {
+            work.stage = WorkStage::kStopped;
+        }
+        restored.emplace(work.work_id, std::move(work));
+    }
+
+    works_ = std::move(restored);
+    processed_message_ids_.clear();
+    processed_message_order_.clear();
+    if (stored_state == ProcessSystemState::kEmergencyStop) {
+        system_state_ = ProcessSystemState::kEmergencyStop;
+    } else if (stored_state == ProcessSystemState::kError || stored_state == ProcessSystemState::kRecovery) {
+        system_state_ = ProcessSystemState::kError;
+    } else if (stored_state == ProcessSystemState::kIdle && works_.empty()) {
+        system_state_ = ProcessSystemState::kIdle;
+    } else {
+        system_state_ = ProcessSystemState::kStopped;
+    }
+    return true;
+}
+
 std::optional<WorkProcessSnapshot> ProcessStateMachine::FindWork(std::string_view work_id) const {
     const auto iterator = works_.find(std::string(work_id));
     return iterator == works_.end() ? std::nullopt : std::optional<WorkProcessSnapshot>{ iterator->second };
@@ -492,6 +533,55 @@ std::string_view ToString(ProcessEventType type) noexcept {
             return "WORK_FAILED";
     }
     return "UNKNOWN";
+}
+
+std::optional<ProcessSystemState> ParseProcessSystemState(std::string_view value) noexcept {
+    if (value == "IDLE") {
+        return ProcessSystemState::kIdle;
+    }
+    if (value == "RUNNING") {
+        return ProcessSystemState::kRunning;
+    }
+    if (value == "STOPPED") {
+        return ProcessSystemState::kStopped;
+    }
+    if (value == "ERROR") {
+        return ProcessSystemState::kError;
+    }
+    if (value == "ESTOP") {
+        return ProcessSystemState::kEmergencyStop;
+    }
+    if (value == "RECOVERY") {
+        return ProcessSystemState::kRecovery;
+    }
+    return std::nullopt;
+}
+
+std::optional<WorkStage> ParseWorkStage(std::string_view value) noexcept {
+    constexpr WorkStage stages[] = {
+        WorkStage::kInputDetected,
+        WorkStage::kVisionAssigned,
+        WorkStage::kVisionProcessing,
+        WorkStage::kBarcodeRecognized,
+        WorkStage::kProductIdentified,
+        WorkStage::kGripperRequested,
+        WorkStage::kGripperTransferring,
+        WorkStage::kSortingRequested,
+        WorkStage::kSorting,
+        WorkStage::kTransportRequested,
+        WorkStage::kTransporting,
+        WorkStage::kCompleted,
+        WorkStage::kStopped,
+        WorkStage::kFailed,
+        WorkStage::kEmergencyStopped,
+        WorkStage::kRecovering,
+    };
+    for (const WorkStage stage : stages) {
+        if (ToString(stage) == value) {
+            return stage;
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace logistics::central_server

@@ -15,6 +15,7 @@ add_library(
     src/db_manager/history_service.cpp
     src/http_upload/upload_service.cpp
     src/db_manager/persistence.cpp
+    src/db_manager/process_state_store.cpp
 )
 add_library(logistics::central_storage ALIAS logistics_central_storage)
 
@@ -138,6 +139,10 @@ target_link_libraries(
     PUBLIC logistics::contracts
 )
 logistics_enable_warnings(logistics_central_server_process_state_machine)
+target_link_libraries(
+    logistics_central_storage
+    PUBLIC logistics::central_server_process_state_machine
+)
 
 add_library(
     logistics_central_server_process_orchestrator
@@ -158,6 +163,19 @@ target_link_libraries(
         logistics::contracts
 )
 logistics_enable_warnings(logistics_central_server_process_orchestrator)
+
+# ------------------------------------------------------------------------------
+# Server configuration
+# ------------------------------------------------------------------------------
+
+add_library(logistics_central_server_config src/server_config.cpp)
+add_library(logistics::central_server_config ALIAS logistics_central_server_config)
+target_include_directories(logistics_central_server_config PUBLIC include)
+target_link_libraries(
+    logistics_central_server_config
+    PUBLIC logistics::central_server_process_orchestrator
+)
+logistics_enable_warnings(logistics_central_server_config)
 
 # ------------------------------------------------------------------------------
 # MQTT handler
@@ -280,6 +298,7 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
             logistics::central_http_upload_server
             logistics::central_server_command_manager
             logistics::central_server_process_orchestrator
+            logistics::central_server_config
             logistics::central_server_mosquitto
             logistics::central_server_mqtt_handler
             Threads::Threads
@@ -316,6 +335,12 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         DESTINATION share/logistics/migrations
         FILES_MATCHING PATTERN "*.sql"
     )
+    if(UNIX)
+        install(
+            FILES "${CMAKE_CURRENT_LIST_DIR}/../deploy/systemd/logistics-central-server.service"
+            DESTINATION lib/systemd/system
+        )
+    endif()
 endif()
 
 # ------------------------------------------------------------------------------
@@ -336,6 +361,11 @@ if(BUILD_TESTING)
         NAME central_server_mqtt_test
         COMMAND central_server_mqtt_test
     )
+
+    add_executable(central_server_config_test tests/server_config_test.cpp)
+    target_link_libraries(central_server_config_test PRIVATE logistics::central_server_config)
+    logistics_enable_warnings(central_server_config_test)
+    add_test(NAME central_server_config_test COMMAND central_server_config_test)
 
     add_executable(
         central_server_device_manager_test
@@ -378,6 +408,20 @@ if(BUILD_TESTING)
         NAME central_server_process_state_machine_test
         COMMAND central_server_process_state_machine_test
     )
+
+    add_executable(central_server_process_state_store_test tests/process_state_store_test.cpp)
+    target_link_libraries(
+        central_server_process_state_store_test
+        PRIVATE
+            logistics::central_storage
+            logistics::central_server_process_state_machine
+    )
+    target_compile_definitions(
+        central_server_process_state_store_test
+        PRIVATE LOGISTICS_TEST_MIGRATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/db/migrations"
+    )
+    logistics_enable_warnings(central_server_process_state_store_test)
+    add_test(NAME central_server_process_state_store_test COMMAND central_server_process_state_store_test)
 
     add_executable(
         central_server_process_orchestrator_test

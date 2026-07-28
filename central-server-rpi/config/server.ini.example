@@ -7,7 +7,8 @@ password=
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
-clean_session=true
+# Keep the broker session so QoS 1 messages can be delivered after a server restart.
+clean_session=false
 
 [device_registry]
 # Relative paths are resolved from this server.ini file.
@@ -20,7 +21,6 @@ busy_timeout_ms=5000
 
 [storage]
 image_root=/var/lib/logistics/images
-log_root=/var/log/logistics
 cleanup_interval_hours=24
 mqtt_retention_days=30
 device_status_retention_days=30

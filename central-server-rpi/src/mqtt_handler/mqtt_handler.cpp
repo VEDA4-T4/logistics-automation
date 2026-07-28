@@ -8,6 +8,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "logistics/central_server/device_manager.hpp"
@@ -201,8 +202,15 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             .source_address = {},
             .raw_payload = std::string(payload),
         };
-        const auto result = persistence_service_->PersistValidatedEvent(
-            envelope, MakeEventPayload(decoded.value, details_json), transport);
+        PersistenceResult result;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            result = persistence_service_->PersistValidatedEvent(
+                envelope, MakeEventPayload(decoded.value, details_json), transport);
+            if (result.ok() || result.status != PersistenceStatus::kRetryableError) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25 * (attempt + 1)));
+        }
         if (!result.ok()) {
             Log(MqttHandlerLogLevel::kError, "MQTT persistence failed: " + result.message);
             return false;
