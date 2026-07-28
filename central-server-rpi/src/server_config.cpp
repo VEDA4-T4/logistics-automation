@@ -65,6 +65,14 @@ namespace {
 void AssignPath(ServerConfig& config, const std::filesystem::path& path, std::size_t line_number,
                 std::string_view section, std::string_view key, std::string_view value) {
     if (value.empty()) {
+        if (section == "http" && key == "tls_certificate") {
+            config.http.tls_certificate.clear();
+            return;
+        }
+        if (section == "http" && key == "tls_private_key") {
+            config.http.tls_private_key.clear();
+            return;
+        }
         ThrowLineError(path, line_number, std::string(key) + " must not be empty");
     }
     const auto resolved = ResolvePath(path, value);

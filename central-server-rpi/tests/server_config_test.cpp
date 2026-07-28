@@ -52,8 +52,8 @@ enabled=true
 port=8081
 tls_enabled=false
 bearer_token=test-token
-tls_certificate=tls/server.crt
-tls_private_key=tls/server.key
+tls_certificate=
+tls_private_key=
 upload_root=uploads
 [routing]
 qt_client_id=control-center
@@ -72,6 +72,8 @@ line_tracer_device_id=PI-LT-01
     assert(config.database.migration_dir == path.parent_path() / "migrations");
     assert(config.storage.image_root == path.parent_path() / "images");
     assert(config.http.upload_root == path.parent_path() / "uploads");
+    assert(config.http.tls_certificate.empty());
+    assert(config.http.tls_private_key.empty());
     assert(config.http.port == 8081);
     assert(config.process.enabled);
     Remove(path);
@@ -96,6 +98,9 @@ void TestInvalidSettingsAreRejected() {
     ExpectRejected("duplicate", "[http]\nenabled=false\nenabled=true\n");
     ExpectRejected("port", "[http]\nenabled=false\nport=70000\n");
     ExpectRejected("token", "[http]\nenabled=true\nbearer_token=\n");
+    ExpectRejected("tls-empty",
+                   "[http]\nenabled=true\nbearer_token=token\ntls_enabled=true\n"
+                   "tls_certificate=\ntls_private_key=\n");
     ExpectRejected("tls-files",
                    "[http]\nenabled=true\nbearer_token=token\ntls_enabled=true\n"
                    "tls_certificate=missing.crt\ntls_private_key=missing.key\n");
