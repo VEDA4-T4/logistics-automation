@@ -12,11 +12,11 @@ typedef struct {
 
 static gripper_servo_mg90s_t gripperServo;
 
-static uint32_t gripper_servo_angle_to_pulse(uint16_t angle_deci_deg) {
-    const uint32_t pulse_range = GRIPPER_SERVO_MAX_PULSE_US - GRIPPER_SERVO_MIN_PULSE_US;
+static uint32_t gripper_servo_angle_to_pulse(uint16_t angle_deci_deg, uint32_t minimum_pulse_us,
+                                             uint32_t maximum_pulse_us) {
+    const uint32_t pulse_range = maximum_pulse_us - minimum_pulse_us;
 
-    return GRIPPER_SERVO_MIN_PULSE_US +
-           (((uint32_t)angle_deci_deg * pulse_range) / UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+    return minimum_pulse_us + (((uint32_t)angle_deci_deg * pulse_range) / UART_GRIPPER_ANGLE_DECI_DEG_MAX);
 }
 
 static uint32_t gripper_servo_position_to_pulse(uint8_t position_percent) {
@@ -67,9 +67,15 @@ static int32_t gripper_servo_write_arm(void* context, uint16_t base_angle, uint1
         return -1;
     }
 
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, gripper_servo_angle_to_pulse(base_angle));
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, gripper_servo_angle_to_pulse(shoulder_angle));
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, gripper_servo_angle_to_pulse(elbow_angle));
+    __HAL_TIM_SET_COMPARE(
+        &htim3, TIM_CHANNEL_1,
+        gripper_servo_angle_to_pulse(base_angle, GRIPPER_SERVO_MIN_PULSE_US, GRIPPER_SERVO_MAX_PULSE_US));
+    __HAL_TIM_SET_COMPARE(
+        &htim3, TIM_CHANNEL_2,
+        gripper_servo_angle_to_pulse(shoulder_angle, GRIPPER_SERVO_MIN_PULSE_US, GRIPPER_SERVO_MAX_PULSE_US));
+    __HAL_TIM_SET_COMPARE(
+        &htim3, TIM_CHANNEL_3,
+        gripper_servo_angle_to_pulse(elbow_angle, GRIPPER_ELBOW_SERVO_MIN_PULSE_US, GRIPPER_ELBOW_SERVO_MAX_PULSE_US));
     return 0;
 }
 
