@@ -331,6 +331,43 @@ private:
     return true;
 }
 
+enum class ArmJoint : std::uint8_t {
+    kBase,
+    kShoulder,
+    kElbow,
+};
+
+[[nodiscard]] bool ParseJoint(std::string_view text, ArmJoint* joint) {
+    if (text == "base") {
+        *joint = ArmJoint::kBase;
+        return true;
+    }
+    if (text == "shoulder") {
+        *joint = ArmJoint::kShoulder;
+        return true;
+    }
+    if (text == "elbow") {
+        *joint = ArmJoint::kElbow;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseAngleDegrees(std::string_view text, std::uint16_t* angle_deci_degrees) {
+    unsigned int value{};
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || value > 180U) {
+        return false;
+    }
+    *angle_deci_degrees = static_cast<std::uint16_t>(value * 10U);
+    return true;
+}
+
+[[nodiscard]] std::uint8_t AutomaticSequence() {
+    const auto ticks = Clock::now().time_since_epoch().count();
+    return static_cast<std::uint8_t>(static_cast<std::uint64_t>(ticks) & 0xFFU);
+}
+
 [[nodiscard]] bool DecodeStatus(const uart_frame_t& response, StatusSnapshot* status) {
     if (response.command != UART_CMD_RESPONSE || response.length != UART_GRIPPER_STATUS_PAYLOAD_SIZE ||
         response.payload[UART_RESPONSE_STATUS_INDEX] != UART_STATUS_SUCCESS ||
@@ -366,8 +403,8 @@ void PrintStatus(const StatusSnapshot& status) {
 }
 
 [[nodiscard]] bool RunArmMotion(Roundtrip& roundtrip, std::uint8_t& sequence, std::uint16_t motion_id,
-                                std::uint16_t base_angle, std::uint16_t shoulder_angle,
-                                std::uint16_t elbow_angle, std::uint16_t duration_ms) {
+                                std::uint16_t base_angle, std::uint16_t shoulder_angle, std::uint16_t elbow_angle,
+                                std::uint16_t duration_ms) {
     std::array<std::uint8_t, UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE> payload{};
     WriteU16(payload.data(), UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, motion_id);
     WriteU16(payload.data(), UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, base_angle);
@@ -398,18 +435,18 @@ void PrintStatus(const StatusSnapshot& status) {
 [[nodiscard]] constexpr std::uint16_t ArmDuration(std::uint16_t start_base, std::uint16_t start_shoulder,
                                                   std::uint16_t start_elbow, std::uint16_t target_base,
                                                   std::uint16_t target_shoulder, std::uint16_t target_elbow) {
-    std::uint32_t duration = DurationForDelta(AbsoluteDifference(start_base, target_base),
-                                              kBaseSpeedDeciDegreesPerSecond);
+    std::uint32_t duration =
+        DurationForDelta(AbsoluteDifference(start_base, target_base), kBaseSpeedDeciDegreesPerSecond);
     duration = std::max(duration, DurationForDelta(AbsoluteDifference(start_shoulder, target_shoulder),
                                                    kShoulderSpeedDeciDegreesPerSecond));
-    duration = std::max(duration, DurationForDelta(AbsoluteDifference(start_elbow, target_elbow),
-                                                   kElbowSpeedDeciDegreesPerSecond));
+    duration = std::max(
+        duration, DurationForDelta(AbsoluteDifference(start_elbow, target_elbow), kElbowSpeedDeciDegreesPerSecond));
     return static_cast<std::uint16_t>(duration);
 }
 
 [[nodiscard]] constexpr std::uint16_t ClawDuration(std::uint8_t start_position, std::uint8_t target_position) {
-    return static_cast<std::uint16_t>(DurationForDelta(
-        AbsoluteDifference(start_position, target_position), kClawSpeedPercentPerSecond));
+    return static_cast<std::uint16_t>(
+        DurationForDelta(AbsoluteDifference(start_position, target_position), kClawSpeedPercentPerSecond));
 }
 
 [[nodiscard]] bool RunGripperMotion(Roundtrip& roundtrip, std::uint8_t& sequence, std::uint16_t motion_id,
@@ -426,8 +463,68 @@ void PrintStatus(const StatusSnapshot& status) {
     return roundtrip.WaitForMotion(motion_id, UART_GRIPPER_MOTION_GRIPPER, kMotionTimeout);
 }
 
-[[nodiscard]] int RunBaseSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device,
-                               bool wide_sweep) {
+[[nodiscard]] bool ReadStatus(Roundtrip& roundtrip, std::uint8_t& sequence, StatusSnapshot* status) {
+    uart_frame_t response{};
+    return roundtrip.Transact(sequence++, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) &&
+           DecodeStatus(response, status);
+}
+
+[[nodiscard]] int RunJointAngle(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device, ArmJoint joint,
+                                std::uint16_t target_angle) {
+    constexpr std::uint16_t kAutomaticHomeMotionId = 140U;
+    constexpr std::uint16_t kJointMotionId = 141U;
+    StatusSnapshot status{};
+
+    std::printf("GRIPPER DIRECT JOINT MOVE\nDevice: %.*s\n", static_cast<int>(device.size()), device.data());
+    if (!ReadStatus(roundtrip, sequence, &status)) {
+        return 1;
+    }
+    PrintStatus(status);
+
+    if (status.homed == 0U) {
+        std::printf("Controller is not homed; running HOME first\n");
+        if (!RunHome(roundtrip, sequence, kAutomaticHomeMotionId) || !ReadStatus(roundtrip, sequence, &status)) {
+            return 1;
+        }
+        PrintStatus(status);
+    }
+
+    std::uint16_t base_angle = status.base_angle;
+    std::uint16_t shoulder_angle = status.shoulder_angle;
+    std::uint16_t elbow_angle = status.elbow_angle;
+    const char* joint_name = nullptr;
+    switch (joint) {
+        case ArmJoint::kBase:
+            base_angle = target_angle;
+            joint_name = "Base";
+            break;
+        case ArmJoint::kShoulder:
+            shoulder_angle = target_angle;
+            joint_name = "Shoulder";
+            break;
+        case ArmJoint::kElbow:
+            elbow_angle = target_angle;
+            joint_name = "Elbow";
+            break;
+    }
+
+    std::printf("Move %s to %.1f degrees\n", joint_name, static_cast<double>(target_angle) / 10.0);
+    if (!RunArmMotion(roundtrip, sequence, kJointMotionId, base_angle, shoulder_angle, elbow_angle,
+                      ArmDuration(status.base_angle, status.shoulder_angle, status.elbow_angle, base_angle,
+                                  shoulder_angle, elbow_angle)) ||
+        !ReadStatus(roundtrip, sequence, &status)) {
+        return 1;
+    }
+
+    const bool reached_target = status.state == UART_GRIPPER_STATE_IDLE && status.homed == 1U &&
+                                status.base_angle == base_angle && status.shoulder_angle == shoulder_angle &&
+                                status.elbow_angle == elbow_angle;
+    PrintStatus(status);
+    std::printf("\nGRIPPER DIRECT JOINT MOVE: %s\n", reached_target ? "PASS" : "FAIL");
+    return reached_target ? 0 : 1;
+}
+
+[[nodiscard]] int RunBaseSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device, bool wide_sweep) {
     constexpr std::uint16_t kHomeMotionId = 100U;
     constexpr std::uint16_t kLowMotionId = 101U;
     constexpr std::uint16_t kHighMotionId = 102U;
@@ -489,8 +586,8 @@ void PrintStatus(const StatusSnapshot& status) {
 
     std::printf("GRIPPER SHOULDER %sCALIBRATION SWEEP\nDevice: %.*s\n", high_sweep ? "HIGH " : "",
                 static_cast<int>(device.size()), device.data());
-    std::printf("Motion: 90.0 -> %.1f -> %.1f -> 90.0 degrees\n\n",
-                static_cast<double>(first_angle) / 10.0, static_cast<double>(second_angle) / 10.0);
+    std::printf("Motion: 90.0 -> %.1f -> %.1f -> 90.0 degrees\n\n", static_cast<double>(first_angle) / 10.0,
+                static_cast<double>(second_angle) / 10.0);
 
     std::printf("[1/4] HOME all joints to 90.0 degrees\n");
     if (!RunHome(roundtrip, sequence, kHomeMotionId)) {
@@ -527,8 +624,7 @@ void PrintStatus(const StatusSnapshot& status) {
     return 0;
 }
 
-[[nodiscard]] int RunElbowSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device,
-                                bool high_sweep) {
+[[nodiscard]] int RunElbowSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device, bool high_sweep) {
     constexpr std::uint16_t kHomeMotionId = 130U;
     constexpr std::uint16_t kLowMotionId = 131U;
     constexpr std::uint16_t kHighMotionId = 132U;
@@ -539,8 +635,8 @@ void PrintStatus(const StatusSnapshot& status) {
 
     std::printf("GRIPPER ELBOW %sCALIBRATION SWEEP\nDevice: %.*s\n", high_sweep ? "HIGH " : "",
                 static_cast<int>(device.size()), device.data());
-    std::printf("Motion: 90.0 -> %.1f -> %.1f -> 90.0 degrees\n\n",
-                static_cast<double>(first_angle) / 10.0, static_cast<double>(second_angle) / 10.0);
+    std::printf("Motion: 90.0 -> %.1f -> %.1f -> 90.0 degrees\n\n", static_cast<double>(first_angle) / 10.0,
+                static_cast<double>(second_angle) / 10.0);
 
     std::printf("[1/4] HOME all joints to 90.0 degrees\n");
     if (!RunHome(roundtrip, sequence, kHomeMotionId)) {
@@ -624,22 +720,38 @@ void PrintStatus(const StatusSnapshot& status) {
 int main(int argc, char** argv) {
     const std::string_view device = (argc >= 2) ? argv[1] : "/dev/vedauart";
     std::uint8_t sequence = 10U;
+    ArmJoint direct_joint{};
+    std::uint16_t direct_angle{};
+    const bool direct_mode = argc == 4 && ParseJoint(argv[2], &direct_joint);
+    if (direct_mode) {
+        if (!ParseAngleDegrees(argv[3], &direct_angle)) {
+            std::fprintf(stderr, "angle must be an integer from 0 to 180 degrees\n");
+            return 2;
+        }
+        sequence = AutomaticSequence();
+    }
+
     const std::string_view mode = (argc >= 4) ? argv[3] : "roundtrip";
-    if ((argc >= 3 && !ParseSequence(argv[2], &sequence)) || argc > 4 ||
-        (mode != "roundtrip" && mode != "base-sweep" && mode != "base-wide-sweep" &&
-         mode != "shoulder-sweep" && mode != "shoulder-high-sweep" && mode != "elbow-sweep" &&
-         mode != "elbow-high-sweep" && mode != "gripper-sweep")) {
+    if (!direct_mode && ((argc >= 3 && !ParseSequence(argv[2], &sequence)) || argc > 4 ||
+                         (mode != "roundtrip" && mode != "base-sweep" && mode != "base-wide-sweep" &&
+                          mode != "shoulder-sweep" && mode != "shoulder-high-sweep" && mode != "elbow-sweep" &&
+                          mode != "elbow-high-sweep" && mode != "gripper-sweep"))) {
         std::fprintf(stderr,
-                     "usage: %s [device] [initial_sequence:0..255] "
+                     "usage: %s [device] [base|shoulder|elbow] [angle:0..180]\n"
+                     "   or: %s [device] [initial_sequence:0..255] "
                      "[roundtrip|base-sweep|base-wide-sweep|shoulder-sweep|shoulder-high-sweep|elbow-sweep|"
                      "elbow-high-sweep|gripper-sweep]\n",
-                     argv[0]);
+                     argv[0], argv[0]);
         return 2;
     }
 
     Roundtrip roundtrip;
     if (!roundtrip.Open(device)) {
         return 1;
+    }
+
+    if (direct_mode) {
+        return RunJointAngle(roundtrip, sequence, device, direct_joint, direct_angle);
     }
 
     if (mode == "base-sweep" || mode == "base-wide-sweep") {
