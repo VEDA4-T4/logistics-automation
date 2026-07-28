@@ -362,12 +362,13 @@ void PrintStatus(const StatusSnapshot& status) {
 }
 
 [[nodiscard]] bool RunArmMotion(Roundtrip& roundtrip, std::uint8_t& sequence, std::uint16_t motion_id,
-                                std::uint16_t base_angle, std::uint16_t duration_ms) {
+                                std::uint16_t base_angle, std::uint16_t shoulder_angle,
+                                std::uint16_t elbow_angle, std::uint16_t duration_ms) {
     std::array<std::uint8_t, UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE> payload{};
     WriteU16(payload.data(), UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, motion_id);
     WriteU16(payload.data(), UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, base_angle);
-    WriteU16(payload.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, 900U);
-    WriteU16(payload.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, 900U);
+    WriteU16(payload.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, shoulder_angle);
+    WriteU16(payload.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, elbow_angle);
     WriteU16(payload.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, duration_ms);
 
     if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_MOVE_ARM, payload, UART_STATUS_ACK)) {
@@ -399,17 +400,17 @@ void PrintStatus(const StatusSnapshot& status) {
     }
 
     std::printf("[2/4] Move Base to %.1f degrees\n", static_cast<double>(low_angle) / 10.0);
-    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, low_angle, edge_duration_ms)) {
+    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, low_angle, 900U, 900U, edge_duration_ms)) {
         return 1;
     }
 
     std::printf("[3/4] Move Base to %.1f degrees\n", static_cast<double>(high_angle) / 10.0);
-    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, high_angle, cross_duration_ms)) {
+    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, high_angle, 900U, 900U, cross_duration_ms)) {
         return 1;
     }
 
     std::printf("[4/4] Return Base to 90.0 degrees\n");
-    if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, kCenterAngle, edge_duration_ms)) {
+    if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, kCenterAngle, 900U, 900U, edge_duration_ms)) {
         return 1;
     }
 
@@ -426,6 +427,51 @@ void PrintStatus(const StatusSnapshot& status) {
     return 0;
 }
 
+[[nodiscard]] int RunShoulderSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device) {
+    constexpr std::uint16_t kHomeMotionId = 110U;
+    constexpr std::uint16_t kLowMotionId = 111U;
+    constexpr std::uint16_t kHighMotionId = 112U;
+    constexpr std::uint16_t kCenterMotionId = 113U;
+    constexpr std::uint16_t kLowAngle = 750U;
+    constexpr std::uint16_t kHighAngle = 1050U;
+    constexpr std::uint16_t kCenterAngle = 900U;
+
+    std::printf("GRIPPER SHOULDER CALIBRATION SWEEP\nDevice: %.*s\n", static_cast<int>(device.size()),
+                device.data());
+    std::printf("Motion: 90.0 -> 75.0 -> 105.0 -> 90.0 degrees\n\n");
+
+    std::printf("[1/4] HOME all joints to 90.0 degrees\n");
+    if (!RunHome(roundtrip, sequence, kHomeMotionId)) {
+        return 1;
+    }
+
+    std::printf("[2/4] Move Shoulder to 75.0 degrees\n");
+    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, 900U, kLowAngle, 900U, 1500U)) {
+        return 1;
+    }
+
+    std::printf("[3/4] Move Shoulder to 105.0 degrees\n");
+    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, 900U, kHighAngle, 900U, 2000U)) {
+        return 1;
+    }
+
+    std::printf("[4/4] Return Shoulder to 90.0 degrees\n");
+    if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, 900U, kCenterAngle, 900U, 1500U)) {
+        return 1;
+    }
+
+    uart_frame_t response{};
+    StatusSnapshot status{};
+    if (!roundtrip.Transact(sequence, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE || status.base_angle != 900U ||
+        status.shoulder_angle != kCenterAngle || status.elbow_angle != 900U || status.homed != 1U) {
+        return 1;
+    }
+    PrintStatus(status);
+    std::printf("\nGRIPPER SHOULDER CALIBRATION SWEEP: 4/4 PASS\n");
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -433,9 +479,11 @@ int main(int argc, char** argv) {
     std::uint8_t sequence = 10U;
     const std::string_view mode = (argc >= 4) ? argv[3] : "roundtrip";
     if ((argc >= 3 && !ParseSequence(argv[2], &sequence)) || argc > 4 ||
-        (mode != "roundtrip" && mode != "base-sweep" && mode != "base-wide-sweep")) {
+        (mode != "roundtrip" && mode != "base-sweep" && mode != "base-wide-sweep" &&
+         mode != "shoulder-sweep")) {
         std::fprintf(stderr,
-                     "usage: %s [device] [initial_sequence:0..255] [roundtrip|base-sweep|base-wide-sweep]\n",
+                     "usage: %s [device] [initial_sequence:0..255] "
+                     "[roundtrip|base-sweep|base-wide-sweep|shoulder-sweep]\n",
                      argv[0]);
         return 2;
     }
@@ -447,6 +495,9 @@ int main(int argc, char** argv) {
 
     if (mode == "base-sweep" || mode == "base-wide-sweep") {
         return RunBaseSweep(roundtrip, sequence, device, mode == "base-wide-sweep");
+    }
+    if (mode == "shoulder-sweep") {
+        return RunShoulderSweep(roundtrip, sequence, device);
     }
 
     int passed = 0;
