@@ -28,6 +28,21 @@ namespace {
     return mqtt::SerializeMessage(message);
 }
 
+[[nodiscard]] std::string_view RequestIdFromCommand(const contracts::mqtt::MqttMessage& message) noexcept {
+    namespace mqtt = contracts::mqtt;
+
+    if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message); command != nullptr) {
+        return command->request_id;
+    }
+    if (const auto* command = mqtt::GetPayload<mqtt::DestinationSetPayload>(message); command != nullptr) {
+        return command->request_id;
+    }
+    if (const auto* command = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message); command != nullptr) {
+        return command->request_id;
+    }
+    return {};
+}
+
 }  // namespace
 
 namespace mqtt = contracts::mqtt;
@@ -198,6 +213,39 @@ mqtt::EncodeResult MqttMessageProcessor::EncodeDeviceEvent(const mqtt::MqttMessa
 
 mqtt::EncodeResult MqttMessageProcessor::EncodeDeviceError(const mqtt::MqttMessage& message) const {
     return ValidateAndSerialize(mqtt::DeviceErrorTopic(device_id_), message);
+}
+
+void MqttMessageProcessor::RememberCommandResponse(const mqtt::MqttMessage& message) {
+    const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(message);
+    if (!message.IsValid() || message.message_type != mqtt::MessageType::kCommandResponse || response == nullptr ||
+        response->request_id.empty()) {
+        return;
+    }
+
+    std::lock_guard lock(response_cache_mutex_);
+    const auto existing = response_cache_.find(response->request_id);
+    if (existing != response_cache_.end()) {
+        existing->second = message;
+        return;
+    }
+
+    response_cache_order_.push_back(response->request_id);
+    response_cache_.emplace(response->request_id, message);
+    if (response_cache_order_.size() > kRecentMessageLimit) {
+        response_cache_.erase(response_cache_order_.front());
+        response_cache_order_.pop_front();
+    }
+}
+
+std::optional<mqtt::MqttMessage> MqttMessageProcessor::CachedCommandResponse(const mqtt::MqttMessage& command) const {
+    const std::string_view request_id = RequestIdFromCommand(command);
+    if (request_id.empty()) {
+        return std::nullopt;
+    }
+
+    std::lock_guard lock(response_cache_mutex_);
+    const auto cached = response_cache_.find(std::string(request_id));
+    return cached == response_cache_.end() ? std::nullopt : std::optional<mqtt::MqttMessage>{ cached->second };
 }
 
 }  // namespace logistics::device

@@ -52,7 +52,7 @@ namespace validation_detail {
 [[nodiscard]] constexpr bool IsDeviceEventMessage(MessageType type) noexcept {
     return type == MessageType::kBoxDetected || type == MessageType::kWorkCompleted ||
            type == MessageType::kPositionDetected || type == MessageType::kBarcodeDetected ||
-           type == MessageType::kProductImage;
+           type == MessageType::kProductImage || type == MessageType::kSensorStatus;
 }
 
 [[nodiscard]] constexpr bool IsQtProductMessage(MessageType type) noexcept {

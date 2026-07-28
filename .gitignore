@@ -44,6 +44,32 @@ build/
 Build/
 build-*/
 
+# STM32CubeIDE local build and workspace artifacts
+stm32/**/Debug/
+stm32/**/Release/
+stm32/**/.metadata/
+stm32/**/.settings/language.settings.xml
+
+# STM32CubeIDE generated binaries and reports
+*.elf
+*.map
+*.bin
+*.hex
+*.srec
+*.lst
+*.su
+*.cyclo
+*.crl
+
+# Developer-specific debug configurations
+*.launch
+*.jlink
+
+# TouchGFX generated files
+**/TouchGFX/generated/
+**/TouchGFX/build/
+**/TouchGFX/simulator/msvs/.vs/
+
 # CMake generated files
 CMakeFiles/
 CMakeCache.txt
@@ -155,3 +181,9 @@ Module.symvers
 *creator.user*
 
 *_qmlcache.qrc
+
+# STM32CubeIDE per-user debug view state
+**/.settings/com.st.stm32cube.ide.mcu.sfrview.prefs
+
+# Personal learning notes (not for team sharing)
+stm32/conveyor-controller/docs/

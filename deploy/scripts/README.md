@@ -43,7 +43,34 @@ export LOGISTICS_INSTALL_OPENCV=1
 
 생성 설정은 `runtime/vision-node/vision-node.ini`입니다.
 
+The setup scripts assume build dependencies are already installed. To install the required Ubuntu packages as part of
+the run, explicitly opt in:
+
+```sh
+export LOGISTICS_INSTALL_DEPENDENCIES=1
+```
+
+## 3. Input conveyor Raspberry Pi
+
+The input node bridges MQTT commands to the input-controller STM32 over the `/dev/vedauart` character device and
+reports sensor/motor status back to the central server.
+
+```sh
+export LOGISTICS_CENTRAL_HOST='192.168.0.10'
+export LOGISTICS_DEVICE_ID='PI-INPUT-01'
+export LOGISTICS_DEVICE_IP='192.168.0.22'
+export LOGISTICS_UART_DEVICE='/dev/vedauart'
+./deploy/scripts/setup-input-node.sh
+```
+
+The generated runtime configuration is `runtime/input-node/input-node.ini`. The daemon is started manually (or by a
+future systemd unit) with the UART device supplied through `LOGISTICS_UART_DEVICE` or as the second argument. The
+script configures with `LOGISTICS_BUILD_VISION_NODE=OFF`, `LOGISTICS_BUILD_SORTING_NODE=OFF`, and
+`LOGISTICS_BUILD_LINETRACER_NODE=OFF`, so OpenCV is not required to build the input node.
+
 ## 연결 검사
+
+Run this from the Vision Pi after the MQTT broker and central server have started:
 
 ```sh
 export LOGISTICS_CENTRAL_HOST='192.168.0.10'

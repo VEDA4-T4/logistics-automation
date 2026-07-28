@@ -82,6 +82,13 @@ void TestAllMqttMessageRoundTrips() {
                                                               .image_name = "JOB-0001-BOX.jpg",
                                                           }));
 
+    AssertRoundTrip<mqtt::SensorStatusPayload>(MakeMessage("MSG-0003-S", mqtt::MessageType::kSensorStatus,
+                                                           mqtt::SensorStatusPayload{
+                                                               .sensor_id = 2,
+                                                               .measurement_status = "DETECTED",
+                                                               .distance_cm = 17,
+                                                           }));
+
     AssertRoundTrip<mqtt::WorkCreatedPayload>(MakeMessage("MSG-0003-A", mqtt::MessageType::kWorkCreated,
                                                           mqtt::WorkCreatedPayload{
                                                               .work_id = std::string(kTestWorkId),
@@ -516,6 +523,14 @@ void TestMqttTopicMessageValidation() {
                                             });
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", work_completed).IsSuccess());
 
+    const auto sensor_status = MakeMessage("MSG-TOPIC-04-S", mqtt::MessageType::kSensorStatus,
+                                           mqtt::SensorStatusPayload{
+                                               .sensor_id = 1,
+                                               .measurement_status = "CLEAR",
+                                               .distance_cm = 42,
+                                           });
+    assert(mqtt::ValidateTopicMessage("device/PI-01/event", sensor_status).IsSuccess());
+
     const auto work_created = MakeMessage("MSG-TOPIC-05", mqtt::MessageType::kWorkCreated,
                                           mqtt::WorkCreatedPayload{ .work_id = std::string(kTestWorkId) }, "SERVER-01");
     assert(mqtt::ValidateTopicMessage("qt/QT-01/event", work_created).IsSuccess());
@@ -572,6 +587,7 @@ int main() {
     assert(mqtt::MessageTypeFromString("CONTROL_COMMAND") == mqtt::MessageType::kControlCommand);
     assert(mqtt::MessageTypeFromString("WORK_CREATED") == mqtt::MessageType::kWorkCreated);
     assert(mqtt::MessageTypeFromString("WORK_COMPLETED") == mqtt::MessageType::kWorkCompleted);
+    assert(mqtt::MessageTypeFromString("SENSOR_STATUS") == mqtt::MessageType::kSensorStatus);
     assert(mqtt::kWorkIdField == "workId");
     assert(mqtt::IsValidUuid(kTestWorkId));
     assert(mqtt::ControlCommandFromString("EMERGENCY_STOP") == mqtt::ControlCommand::kEmergencyStop);
