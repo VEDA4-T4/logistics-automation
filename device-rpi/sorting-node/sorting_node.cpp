@@ -200,7 +200,7 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
     }
 }
 
-[[nodiscard]] mqtt::CommandResult CommandResultFromUartStatus(std::uint8_t status) noexcept {
+[[nodiscard]] mqtt::CommandResult CommandResultFromUartStatus(std::uint8_t status, std::uint8_t error) noexcept {
     switch (status) {
         case UART_STATUS_ACK:
         case UART_STATUS_SUCCESS:
@@ -209,7 +209,7 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
         case UART_STATUS_BUSY:
             return mqtt::CommandResult::kRejected;
         case UART_STATUS_ERROR:
-            return mqtt::CommandResult::kFailed;
+            return error == UART_ERROR_EMERGENCY_STOP ? mqtt::CommandResult::kRejected : mqtt::CommandResult::kFailed;
         default:
             return mqtt::CommandResult::kFailed;
     }
@@ -615,7 +615,7 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
         error = event.frame.payload[UART_RESPONSE_ERROR_INDEX];
     }
 
-    mqtt::CommandResult command_result = CommandResultFromUartStatus(status);
+    mqtt::CommandResult command_result = CommandResultFromUartStatus(status, error);
     bool accepted = command_result == mqtt::CommandResult::kSuccess;
     if (accepted && event.frame.command == UART_CMD_RESPONSE && !HandleStatusResponse(event.frame)) {
         accepted = false;
@@ -673,9 +673,12 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
     }
 
     const std::string error_code = UartErrorCode(error);
-    EmitPendingResponse(
-        command_result, error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code },
-        accepted ? "sorting command completed by controller" : "sorting controller rejected or failed the command");
+    const char* response_message = accepted ? "sorting command completed by controller"
+                                   : command_result == mqtt::CommandResult::kRejected
+                                       ? "sorting controller rejected the command"
+                                       : "sorting controller failed the command";
+    EmitPendingResponse(command_result, error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code },
+                        response_message);
     ClearPending();
 }
 
@@ -888,7 +891,9 @@ void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
     } else if (kind == kSafetyResetComplete) {
         ClearActiveCycle();
         configured_speed_ = 0U;
-        EmitStatus("IDLE");
+        last_device_state_ = UART_DEVICE_READY;
+        last_device_error_ = UART_ERROR_NONE;
+        EmitStatus("READY");
     } else if (kind == kSafetyResetRejected) {
         EmitError("ERR-SAFETY-RESET-REJECTED", "ERROR", "EMERGENCY_STOP",
                   "sorting controller rejected safety reset result " + std::to_string(result));

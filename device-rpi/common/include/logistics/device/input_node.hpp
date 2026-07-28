@@ -17,6 +17,7 @@ namespace logistics::device {
 enum class InputCommandStatus {
     kSuccess,
     kRejected,
+    kControllerFailure,
     kTimeout,
     kUnsupportedMessage,
     kUnsupportedCommand,

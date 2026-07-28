@@ -22,6 +22,8 @@ namespace mqtt = contracts::mqtt;
         case InputCommandStatus::kUnsupportedCommand:
         case InputCommandStatus::kInvalidTarget:
             return mqtt::CommandResult::kRejected;
+        case InputCommandStatus::kControllerFailure:
+            return mqtt::CommandResult::kFailed;
         case InputCommandStatus::kTimeout:
             return mqtt::CommandResult::kTimeout;
         case InputCommandStatus::kInvalidMessage:
@@ -51,6 +53,19 @@ namespace mqtt = contracts::mqtt;
     return InputCommandStatus::kUartError;
 }
 
+[[nodiscard]] bool IsControllerExecutionFailure(std::uint8_t error) noexcept {
+    switch (error) {
+        case UART_ERROR_TIMEOUT:
+        case UART_ERROR_SENSOR:
+        case UART_ERROR_MOTOR:
+        case UART_ERROR_SERVO:
+        case UART_ERROR_INTERNAL:
+            return true;
+        default:
+            return false;
+    }
+}
+
 [[nodiscard]] std::string UartErrorCode(std::uint8_t error) {
     switch (error) {
         case UART_ERROR_TIMEOUT:
@@ -63,6 +78,8 @@ namespace mqtt = contracts::mqtt;
             return "ERR-SENSOR";
         case UART_ERROR_MOTOR:
             return "ERR-MOTOR";
+        case UART_ERROR_SERVO:
+            return "ERR-SERVO";
         case UART_ERROR_EMERGENCY_STOP:
             return "ERR-EMERGENCY-STOP";
         case UART_ERROR_INVALID_PAYLOAD:
@@ -81,6 +98,8 @@ namespace mqtt = contracts::mqtt;
         case InputCommandStatus::kSuccess:
             return std::nullopt;
         case InputCommandStatus::kRejected:
+            return UartErrorCode(result.uart_result.response_error);
+        case InputCommandStatus::kControllerFailure:
             return UartErrorCode(result.uart_result.response_error);
         case InputCommandStatus::kTimeout:
             return std::string("ERR-UART-ACK-TIMEOUT");
@@ -396,6 +415,10 @@ InputCommandResult InputNode::Execute(InputCommandResult result, std::uint8_t co
     result.uart_command = command;
     result.uart_result = uart_session_.Transact(command, payload);
     result.status = CommandStatusFromTransact(result.uart_result.status);
+    if (result.status == InputCommandStatus::kRejected &&
+        IsControllerExecutionFailure(result.uart_result.response_error)) {
+        result.status = InputCommandStatus::kControllerFailure;
+    }
     return result;
 }
 

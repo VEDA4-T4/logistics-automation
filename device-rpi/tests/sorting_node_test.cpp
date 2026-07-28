@@ -367,6 +367,28 @@ void TestNackDoesNotActivateCycleAndReportsFailure() {
     assert(response.error_code == "ERR-UART-PAYLOAD");
 }
 
+void TestControllerErrorsDistinguishRejectionFromFailure() {
+    Fixture rejectedFixture;
+    assert(rejectedFixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    rejectedFixture.PushOperationResult(UART_STATUS_ERROR, UART_ERROR_EMERGENCY_STOP);
+
+    assert(!rejectedFixture.node->HasActiveCycle());
+    assert(rejectedFixture.reports.size() == 1U);
+    const auto& rejected = ReportPayload<mqtt::CommandResponsePayload>(rejectedFixture.reports.front());
+    assert(rejected.result == mqtt::CommandResult::kRejected);
+    assert(rejected.error_code == "ERR-EMERGENCY-STOP");
+
+    Fixture failedFixture;
+    assert(failedFixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    failedFixture.PushOperationResult(UART_STATUS_ERROR, UART_ERROR_MOTOR);
+
+    assert(!failedFixture.node->HasActiveCycle());
+    assert(failedFixture.reports.size() == 1U);
+    const auto& failed = ReportPayload<mqtt::CommandResponsePayload>(failedFixture.reports.front());
+    assert(failed.result == mqtt::CommandResult::kFailed);
+    assert(failed.error_code == "ERR-MOTOR");
+}
+
 void TestStartConfiguresSpeedBeforeStartingConveyor() {
     Fixture fixture;
     assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart)).status ==
@@ -438,9 +460,15 @@ void TestSafetyCommandsCompleteWithOriginalRequestId() {
         recoveryFixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery, "SAFETY"));
     assert(recoveryResult.status == SortingCommandStatus::kSentNoReply);
     recoveryFixture.PushControllerEvent(0x03U, 2U, 0U);
+    assert(recoveryFixture.reports.size() == 2U);
     const auto& recovery = ReportPayload<mqtt::CommandResponsePayload>(recoveryFixture.reports.front());
     assert(recovery.request_id == "REQ-CONTROL-01");
     assert(recovery.result == mqtt::CommandResult::kSuccess);
+    const auto& ready = ReportPayload<mqtt::DeviceStatusPayload>(recoveryFixture.reports.back());
+    assert(ready.current_state == "READY");
+
+    recoveryFixture.PushHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE);
+    assert(recoveryFixture.reports.size() == 2U);
 }
 
 void TestSafetyAndHeartbeatTimeoutsAreReported() {
@@ -619,6 +647,7 @@ int main() {
     TestDuplicateAndConflictingWorkAreRejectedWithoutSecondMotion();
     TestBusyPreservesCommandOrderAtNodeBoundary();
     TestNackDoesNotActivateCycleAndReportsFailure();
+    TestControllerErrorsDistinguishRejectionFromFailure();
     TestStartConfiguresSpeedBeforeStartingConveyor();
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
     TestSafetyRecoveryUsesOneWayDeviceReset();

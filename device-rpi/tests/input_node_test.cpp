@@ -178,10 +178,27 @@ void TestRecoveryReleasesLatchFireAndForget() {
     assert(response->result == mqtt::CommandResult::kProcessing);
 }
 
-void TestControllerRejection() {
+void TestControllerFailure() {
     Fixture fixture;
     fixture.backend->responder = [](const uart_frame_t& request) {
         return std::vector<uart_frame_t>{ MakeOperationResult(request.sequence, UART_STATUS_ERROR, UART_ERROR_MOTOR) };
+    };
+
+    const InputCommandResult result =
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId)));
+
+    assert(result.status == InputCommandStatus::kControllerFailure);
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr);
+    assert(response->result == mqtt::CommandResult::kFailed);
+    assert(response->error_code.has_value() && *response->error_code == "ERR-MOTOR");
+}
+
+void TestControllerPolicyRejection() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t& request) {
+        return std::vector<uart_frame_t>{ MakeOperationResult(request.sequence, UART_STATUS_ERROR,
+                                                              UART_ERROR_EMERGENCY_STOP) };
     };
 
     const InputCommandResult result =
@@ -191,7 +208,7 @@ void TestControllerRejection() {
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
     assert(response->result == mqtt::CommandResult::kRejected);
-    assert(response->error_code.has_value() && *response->error_code == "ERR-MOTOR");
+    assert(response->error_code.has_value() && *response->error_code == "ERR-EMERGENCY-STOP");
 }
 
 void TestUnsupportedCommand() {
@@ -579,7 +596,8 @@ int main() {
     TestStatusRequest();
     TestReset();
     TestRecoveryReleasesLatchFireAndForget();
-    TestControllerRejection();
+    TestControllerFailure();
+    TestControllerPolicyRejection();
     TestUnsupportedCommand();
     TestEmergencyStop();
     TestEmergencyStopDoesNotWaitForReply();
