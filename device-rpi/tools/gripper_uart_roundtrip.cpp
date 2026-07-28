@@ -363,6 +363,16 @@ enum class ArmJoint : std::uint8_t {
     return true;
 }
 
+[[nodiscard]] bool ParsePositionPercent(std::string_view text, std::uint8_t* position_percent) {
+    unsigned int value{};
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || value > 100U) {
+        return false;
+    }
+    *position_percent = static_cast<std::uint8_t>(value);
+    return true;
+}
+
 [[nodiscard]] std::uint8_t AutomaticSequence() {
     const auto ticks = Clock::now().time_since_epoch().count();
     return static_cast<std::uint8_t>(static_cast<std::uint64_t>(ticks) & 0xFFU);
@@ -521,6 +531,36 @@ void PrintStatus(const StatusSnapshot& status) {
                                 status.elbow_angle == elbow_angle;
     PrintStatus(status);
     std::printf("\nGRIPPER DIRECT JOINT MOVE: %s\n", reached_target ? "PASS" : "FAIL");
+    return reached_target ? 0 : 1;
+}
+
+[[nodiscard]] int RunGripperPosition(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device,
+                                     std::uint8_t target_position) {
+    constexpr std::uint16_t kGripperMotionId = 142U;
+    StatusSnapshot status{};
+
+    std::printf("GRIPPER DIRECT CLAW MOVE\nDevice: %.*s\n", static_cast<int>(device.size()), device.data());
+    if (!ReadStatus(roundtrip, sequence, &status)) {
+        return 1;
+    }
+    PrintStatus(status);
+
+    if (status.homed == 0U) {
+        std::fprintf(stderr, "controller is not homed; direct gripper calibration will not run HOME automatically\n");
+        return 1;
+    }
+
+    std::printf("Move Gripper to %u%%\n", target_position);
+    if (!RunGripperMotion(roundtrip, sequence, kGripperMotionId, target_position,
+                          ClawDuration(status.gripper_position, target_position)) ||
+        !ReadStatus(roundtrip, sequence, &status)) {
+        return 1;
+    }
+
+    const bool reached_target =
+        status.state == UART_GRIPPER_STATE_IDLE && status.homed == 1U && status.gripper_position == target_position;
+    PrintStatus(status);
+    std::printf("\nGRIPPER DIRECT CLAW MOVE: %s\n", reached_target ? "PASS" : "FAIL");
     return reached_target ? 0 : 1;
 }
 
@@ -722,10 +762,19 @@ int main(int argc, char** argv) {
     std::uint8_t sequence = 10U;
     ArmJoint direct_joint{};
     std::uint16_t direct_angle{};
-    const bool direct_mode = argc == 4 && ParseJoint(argv[2], &direct_joint);
-    if (direct_mode) {
+    std::uint8_t direct_position{};
+    const bool direct_arm_mode = argc == 4 && ParseJoint(argv[2], &direct_joint);
+    const bool direct_gripper_mode = argc == 4 && std::string_view(argv[2]) == "gripper";
+    const bool direct_mode = direct_arm_mode || direct_gripper_mode;
+    if (direct_arm_mode) {
         if (!ParseAngleDegrees(argv[3], &direct_angle)) {
             std::fprintf(stderr, "angle must be an integer from 0 to 180 degrees\n");
+            return 2;
+        }
+        sequence = AutomaticSequence();
+    } else if (direct_gripper_mode) {
+        if (!ParsePositionPercent(argv[3], &direct_position)) {
+            std::fprintf(stderr, "gripper position must be an integer from 0 to 100 percent\n");
             return 2;
         }
         sequence = AutomaticSequence();
@@ -738,10 +787,11 @@ int main(int argc, char** argv) {
                           mode != "elbow-high-sweep" && mode != "gripper-sweep"))) {
         std::fprintf(stderr,
                      "usage: %s [device] [base|shoulder|elbow] [angle:0..180]\n"
+                     "   or: %s [device] gripper [position:0..100]\n"
                      "   or: %s [device] [initial_sequence:0..255] "
                      "[roundtrip|base-sweep|base-wide-sweep|shoulder-sweep|shoulder-high-sweep|elbow-sweep|"
                      "elbow-high-sweep|gripper-sweep]\n",
-                     argv[0], argv[0]);
+                     argv[0], argv[0], argv[0]);
         return 2;
     }
 
@@ -750,8 +800,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (direct_mode) {
+    if (direct_arm_mode) {
         return RunJointAngle(roundtrip, sequence, device, direct_joint, direct_angle);
+    }
+    if (direct_gripper_mode) {
+        return RunGripperPosition(roundtrip, sequence, device, direct_position);
     }
 
     if (mode == "base-sweep" || mode == "base-wide-sweep") {
