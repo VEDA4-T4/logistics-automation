@@ -9,10 +9,17 @@
  */
 #define SENSOR_LINE_ACTIVE_LOW 0U
 
-/* A physical marker is a short CENTERED -> WHITE_GAP -> CENTERED sequence. */
+/*
+ * A physical marker is one to four short white stripes separated by centered
+ * black line. The group is complete
+ * when no next stripe arrives before the
+ * group timeout.
+ */
 #define SENSOR_MARKER_MIN_GAP_MS 20U
 #define SENSOR_MARKER_MAX_GAP_MS 300U
 #define SENSOR_MARKER_REARM_MS 50U
+#define SENSOR_MARKER_GROUP_TIMEOUT_MS 250U
+#define SENSOR_MARKER_MAX_STRIPES 4U
 #define SENSOR_LINE_LOST_TIMEOUT_MS 500U
 
 /* FSR ADC1_IN0 is 12-bit (0..4095). Calibrate these with the actual load. */
@@ -50,6 +57,18 @@
 
 #if (SENSOR_MARKER_REARM_MS < APP_TIMING_SENSOR_PERIOD_MS)
 #error "Marker rearm time must cover at least one SensorTask period"
+#endif
+
+#if (SENSOR_MARKER_GROUP_TIMEOUT_MS <= SENSOR_MARKER_REARM_MS)
+#error "Marker group timeout must exceed marker rearm time"
+#endif
+
+#if (SENSOR_MARKER_GROUP_TIMEOUT_MS >= SENSOR_LINE_LOST_TIMEOUT_MS)
+#error "Marker group timeout must be shorter than line-lost time"
+#endif
+
+#if (SENSOR_MARKER_MAX_STRIPES != 4U)
+#error "Marker contract currently defines exactly four valid stripe counts"
 #endif
 
 #if (SENSOR_FSR_LOAD_OFF_THRESHOLD >= SENSOR_FSR_LOAD_ON_THRESHOLD)

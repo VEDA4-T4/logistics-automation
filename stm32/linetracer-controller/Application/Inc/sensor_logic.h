@@ -58,7 +58,8 @@ typedef enum {
     SENSOR_MARKER_EVENT_NONE = 0,
     SENSOR_MARKER_EVENT_DETECTED,
     SENSOR_MARKER_EVENT_INVALID_WIDTH,
-    SENSOR_MARKER_EVENT_INVALID_TRANSITION
+    SENSOR_MARKER_EVENT_INVALID_TRANSITION,
+    SENSOR_MARKER_EVENT_INVALID_COUNT
 } sensor_marker_event_type_t;
 
 typedef struct {
@@ -89,6 +90,8 @@ typedef struct {
     uint16_t gap_duration_ms;
     linetracer_line_state_t entry_state;
     linetracer_line_state_t exit_state;
+    app_marker_code_t code;
+    uint8_t count;
 } sensor_marker_event_t;
 
 typedef struct {
@@ -118,6 +121,7 @@ typedef struct {
     sensor_marker_event_t latest_marker_event;
     uint32_t line_white_since_ms;
     uint32_t marker_rearm_since_ms;
+    uint32_t marker_group_last_stripe_at_ms;
     uint32_t fsr_candidate_since_ms;
     uint32_t overload_candidate_since_ms;
     uint32_t last_fsr_sample_ms;
@@ -130,6 +134,8 @@ typedef struct {
     uint8_t line_lost_active;
     uint8_t marker_event_valid;
     uint8_t marker_rearm_centered;
+    uint8_t marker_group_count;
+    uint8_t marker_group_active;
     uint8_t fsr_candidate_loaded;
     uint8_t overload_candidate_active;
 } sensor_logic_context_t;

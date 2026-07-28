@@ -81,29 +81,126 @@ static void SensorLogic_SetErrorFlags(sensor_logic_context_t *context,
     }
 }
 
-static void SensorLogic_RecordMarker(sensor_logic_context_t *context,
-                                     sensor_marker_event_type_t type,
-                                     linetracer_line_state_t exit_state,
-                                     uint32_t duration_ms,
-                                     uint32_t now_ms,
-                                     sensor_logic_update_t *update)
+static app_marker_code_t SensorLogic_MarkerCodeFromCount(uint8_t count)
 {
-    context->diagnostics.marker_detected_at_ms = now_ms;
+    switch (count) {
+        case 1U:
+            return APP_MARKER_JUNCTION;
+        case 2U:
+            return APP_MARKER_DEST_A;
+        case 3U:
+            return APP_MARKER_DEST_B;
+        case 4U:
+            return APP_MARKER_DEST_C;
+        default:
+            return APP_MARKER_INVALID;
+    }
+}
+
+static void SensorLogic_ResetMarkerGroup(sensor_logic_context_t *context)
+{
+    context->marker_group_active = 0U;
+    context->marker_group_count = 0U;
+    context->marker_group_last_stripe_at_ms = 0U;
+}
+
+static void SensorLogic_PublishMarker(sensor_logic_context_t *context,
+                                      sensor_marker_event_type_t type,
+                                      app_marker_code_t code,
+                                      uint8_t count,
+                                      linetracer_line_state_t exit_state,
+                                      uint32_t duration_ms,
+                                      uint32_t detected_at_ms,
+                                      sensor_logic_update_t *update)
+{
+    context->diagnostics.marker_detected_at_ms = detected_at_ms;
     context->diagnostics.marker_duration_ms =
         (duration_ms <= UINT16_MAX) ? (uint16_t)duration_ms : UINT16_MAX;
+    context->diagnostics.marker_sequence++;
 
-    if (type == SENSOR_MARKER_EVENT_DETECTED) {
-        context->diagnostics.marker_sequence++;
-        update->event_flags |= APP_SENSOR_EVENT_MARKER;
-    }
+    context->snapshot.marker_code = code;
+    context->snapshot.marker_count = count;
+    context->snapshot.marker_detected_at_ms = detected_at_ms;
+    update->event_flags |= APP_SENSOR_EVENT_MARKER;
 
     context->latest_marker_event.type = type;
     context->latest_marker_event.sequence = context->diagnostics.marker_sequence;
-    context->latest_marker_event.detected_at_ms = now_ms;
+    context->latest_marker_event.detected_at_ms = detected_at_ms;
     context->latest_marker_event.gap_duration_ms = context->diagnostics.marker_duration_ms;
     context->latest_marker_event.entry_state = context->marker_entry_state;
     context->latest_marker_event.exit_state = exit_state;
+    context->latest_marker_event.code = code;
+    context->latest_marker_event.count = count;
     context->marker_event_valid = 1U;
+}
+
+static void SensorLogic_AccumulateMarkerStripe(sensor_logic_context_t *context,
+                                               uint32_t duration_ms,
+                                               uint32_t now_ms)
+{
+    if (context->marker_group_count < UINT8_MAX) {
+        context->marker_group_count++;
+    }
+
+    context->marker_group_active = 1U;
+    context->marker_group_last_stripe_at_ms = now_ms;
+    context->diagnostics.marker_duration_ms =
+        (duration_ms <= UINT16_MAX) ? (uint16_t)duration_ms : UINT16_MAX;
+}
+
+static void SensorLogic_PublishInvalidMarker(sensor_logic_context_t *context,
+                                             sensor_marker_event_type_t type,
+                                             linetracer_line_state_t exit_state,
+                                             uint32_t duration_ms,
+                                             uint32_t now_ms,
+                                             sensor_logic_update_t *update)
+{
+    uint8_t observed_count = context->marker_group_count;
+
+    if (observed_count < UINT8_MAX) {
+        observed_count++;
+    }
+
+    SensorLogic_PublishMarker(context,
+                              type,
+                              APP_MARKER_INVALID,
+                              observed_count,
+                              exit_state,
+                              duration_ms,
+                              now_ms,
+                              update);
+    SensorLogic_ResetMarkerGroup(context);
+}
+
+static void SensorLogic_FinalizeMarkerGroup(sensor_logic_context_t *context,
+                                            uint32_t now_ms,
+                                            sensor_logic_update_t *update)
+{
+    app_marker_code_t code;
+    sensor_marker_event_type_t type;
+
+    if ((context->marker_group_active == 0U) ||
+        (context->line_white_active != 0U) ||
+        (SensorLogic_TimeElapsed(now_ms,
+                                 context->marker_group_last_stripe_at_ms,
+                                 SENSOR_MARKER_GROUP_TIMEOUT_MS) == 0U)) {
+        return;
+    }
+
+    code = SensorLogic_MarkerCodeFromCount(context->marker_group_count);
+    type = (code == APP_MARKER_INVALID)
+               ? SENSOR_MARKER_EVENT_INVALID_COUNT
+               : SENSOR_MARKER_EVENT_DETECTED;
+
+    SensorLogic_PublishMarker(context,
+                              type,
+                              code,
+                              context->marker_group_count,
+                              LINETRACER_LINE_CENTERED,
+                              context->diagnostics.marker_duration_ms,
+                              context->marker_group_last_stripe_at_ms,
+                              update);
+    SensorLogic_ResetMarkerGroup(context);
 }
 
 static void SensorLogic_UpdateMarkerRearm(sensor_logic_context_t *context,
@@ -212,6 +309,8 @@ void SensorLogic_UpdateLine(sensor_logic_context_t *context,
         return;
     }
 
+    SensorLogic_FinalizeMarkerGroup(context, now_ms, update);
+
     left_changed = SensorLogic_DebounceUpdate(&context->line_left_filter, line_left);
     right_changed = SensorLogic_DebounceUpdate(&context->line_right_filter, line_right);
 
@@ -253,14 +352,11 @@ void SensorLogic_UpdateLine(sensor_logic_context_t *context,
                            (next_state == LINETRACER_LINE_CENTERED) &&
                            (white_duration_ms >= SENSOR_MARKER_MIN_GAP_MS) &&
                            (white_duration_ms <= SENSOR_MARKER_MAX_GAP_MS)) {
-                    SensorLogic_RecordMarker(context,
-                                             SENSOR_MARKER_EVENT_DETECTED,
-                                             next_state,
-                                             white_duration_ms,
-                                             now_ms,
-                                             update);
+                    SensorLogic_AccumulateMarkerStripe(context,
+                                                       white_duration_ms,
+                                                       now_ms);
                 } else if (white_duration_ms >= SENSOR_MARKER_MIN_GAP_MS) {
-                    SensorLogic_RecordMarker(
+                    SensorLogic_PublishInvalidMarker(
                         context,
                         (white_duration_ms > SENSOR_MARKER_MAX_GAP_MS)
                             ? SENSOR_MARKER_EVENT_INVALID_WIDTH
@@ -289,6 +385,7 @@ void SensorLogic_UpdateLine(sensor_logic_context_t *context,
                                  SENSOR_LINE_LOST_TIMEOUT_MS) != 0U)) {
         context->line_lost_active = 1U;
         context->marker_state = SENSOR_MARKER_LINE_LOST;
+        SensorLogic_ResetMarkerGroup(context);
         update->event_flags |= APP_SENSOR_EVENT_LINE_LOST;
         update->safety_activated_flags |= SENSOR_LOGIC_SAFETY_LINE_LOST;
     }

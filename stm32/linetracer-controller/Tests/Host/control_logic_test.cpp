@@ -332,13 +332,14 @@ void TestMarkerValidationAndDuplicateSuppression() {
     assert(context.stop_reason == LINETRACER_STOP_REASON_MARKER_SEQUENCE);
 }
 
-void TestUnclassifiedMarkerMigrationCompatibility() {
+void TestUnclassifiedMarkerIsRejected() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, 303U, 0U);
     assert(ControlLogic_CompleteTurn(&context, 10U) != 0U);
 
-    assert(ControlLogic_HandleMarker(&context, APP_MARKER_NONE, 100U, 100U) == ROUTE_ACTION_GO_STRAIGHT);
-    assert(ControlLogic_ExpectedMarkerCode(&context) == APP_MARKER_JUNCTION);
+    assert(ControlLogic_HandleMarker(&context, APP_MARKER_NONE, 100U, 100U) == ROUTE_ACTION_ERROR);
+    assert(context.state == LINETRACER_CONTROL_ERROR);
+    assert(context.stop_reason == LINETRACER_STOP_REASON_MARKER_SEQUENCE);
 }
 
 void TestRouteTimeouts() {
@@ -557,7 +558,7 @@ int main() {
     TestRouteTransitionRules();
     TestSameRoutesSkipCommonLine();
     TestMarkerValidationAndDuplicateSuppression();
-    TestUnclassifiedMarkerMigrationCompatibility();
+    TestUnclassifiedMarkerIsRejected();
     TestRouteTimeouts();
     TestJobCompletionAllowsNextAssignment();
     TestCompletionOutsideUnloadingDoesNothing();
