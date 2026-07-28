@@ -37,6 +37,37 @@ sensor_logic_update_t UpdateFsr(sensor_logic_context_t& context, std::uint16_t r
     return update;
 }
 
+void InitializeCentered(sensor_logic_context_t& context, std::uint32_t start_ms) {
+    (void)UpdateLine(context, 1U, 1U, start_ms);
+    (void)UpdateLine(context, 1U, 1U, start_ms + 10U);
+    (void)UpdateLine(context, 1U, 1U, start_ms + 20U);
+}
+
+std::uint32_t EmitMarkerStripe(sensor_logic_context_t& context, std::uint32_t start_ms) {
+    (void)UpdateLine(context, 0U, 0U, start_ms);
+    (void)UpdateLine(context, 0U, 0U, start_ms + 10U);
+    (void)UpdateLine(context, 0U, 0U, start_ms + 20U);
+    (void)UpdateLine(context, 1U, 1U, start_ms + 60U);
+    (void)UpdateLine(context, 1U, 1U, start_ms + 70U);
+    (void)UpdateLine(context, 1U, 1U, start_ms + 80U);
+    (void)UpdateLine(context, 1U, 1U, start_ms + 130U);
+    return start_ms + 80U;
+}
+
+sensor_logic_update_t EmitMarkerGroup(sensor_logic_context_t& context, std::uint8_t stripe_count,
+                                      std::uint32_t first_stripe_at_ms, std::uint32_t& last_stripe_at_ms) {
+    auto next_stripe_at_ms = first_stripe_at_ms;
+
+    for (std::uint8_t index = 0U; index < stripe_count; ++index) {
+        last_stripe_at_ms = EmitMarkerStripe(context, next_stripe_at_ms);
+        next_stripe_at_ms = last_stripe_at_ms + 60U;
+    }
+
+    auto update = UpdateLine(context, 1U, 1U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS - 1U);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
+    return UpdateLine(context, 1U, 1U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS);
+}
+
 void TestMarkerMessageContract() {
     app_sensor_snapshot_t snapshot{};
     sensor_logic_context_t context{};
@@ -93,26 +124,38 @@ void TestLineNormalizationAndDebounce() {
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
 }
 
-void TestMarkerIsOneShot() {
-    sensor_logic_context_t context{};
+void TestMarkerGroupClassification() {
+    struct MarkerCase {
+        std::uint8_t count;
+        app_marker_code_t expected_code;
+    };
 
-    SensorLogic_Init(&context, 0U);
-    (void)UpdateLine(context, 1U, 1U, 0U);
-    (void)UpdateLine(context, 1U, 1U, 10U);
-    (void)UpdateLine(context, 1U, 1U, 20U);
+    constexpr MarkerCase kCases[] = {
+        { 1U, APP_MARKER_JUNCTION }, { 2U, APP_MARKER_DEST_A },  { 3U, APP_MARKER_DEST_B },
+        { 4U, APP_MARKER_DEST_C },   { 5U, APP_MARKER_INVALID },
+    };
 
-    (void)UpdateLine(context, 0U, 0U, 30U);
-    (void)UpdateLine(context, 0U, 0U, 40U);
-    (void)UpdateLine(context, 0U, 0U, 50U);
-    (void)UpdateLine(context, 0U, 0U, 60U);
-    (void)UpdateLine(context, 1U, 1U, 70U);
-    (void)UpdateLine(context, 1U, 1U, 80U);
-    auto update = UpdateLine(context, 1U, 1U, 90U);
+    for (const auto& marker_case : kCases) {
+        sensor_logic_context_t context{};
+        std::uint32_t last_stripe_at_ms = 0U;
 
-    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
-    CHECK_TRUE(context.diagnostics.marker_sequence == 1U);
-    CHECK_TRUE((UpdateLine(context, 1U, 1U, 100U).event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
-    CHECK_TRUE((UpdateLine(context, 1U, 1U, 150U).event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
+        SensorLogic_Init(&context, 0U);
+        InitializeCentered(context, 0U);
+        const auto update = EmitMarkerGroup(context, marker_case.count, 30U, last_stripe_at_ms);
+
+        CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
+        CHECK_TRUE(context.snapshot.marker_code == marker_case.expected_code);
+        CHECK_TRUE(context.snapshot.marker_count == marker_case.count);
+        CHECK_TRUE(context.snapshot.marker_detected_at_ms == last_stripe_at_ms);
+        CHECK_TRUE(context.diagnostics.marker_sequence == 1U);
+        CHECK_TRUE(context.latest_marker_event.code == marker_case.expected_code);
+        CHECK_TRUE(context.latest_marker_event.count == marker_case.count);
+        CHECK_TRUE(context.latest_marker_event.type == ((marker_case.expected_code == APP_MARKER_INVALID)
+                                                            ? SENSOR_MARKER_EVENT_INVALID_COUNT
+                                                            : SENSOR_MARKER_EVENT_DETECTED));
+        CHECK_TRUE((UpdateLine(context, 1U, 1U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS + 10U).event_flags &
+                    APP_SENSOR_EVENT_MARKER) == 0U);
+    }
 }
 
 void TestInvalidMarkerEntryAndLineLost() {
@@ -131,7 +174,22 @@ void TestInvalidMarkerEntryAndLineLost() {
     (void)UpdateLine(context, 1U, 1U, 100U);
     (void)UpdateLine(context, 1U, 1U, 110U);
     auto update = UpdateLine(context, 1U, 1U, 120U);
-    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
+    CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_INVALID);
+    CHECK_TRUE(context.snapshot.marker_count == 1U);
+    CHECK_TRUE(context.latest_marker_event.type == SENSOR_MARKER_EVENT_INVALID_TRANSITION);
+
+    SensorLogic_Init(&context, 0U);
+    InitializeCentered(context, 0U);
+    (void)UpdateLine(context, 0U, 0U, 30U);
+    (void)UpdateLine(context, 0U, 0U, 40U);
+    (void)UpdateLine(context, 0U, 0U, 50U);
+    (void)UpdateLine(context, 1U, 1U, 370U);
+    (void)UpdateLine(context, 1U, 1U, 380U);
+    update = UpdateLine(context, 1U, 1U, 390U);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
+    CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_INVALID);
+    CHECK_TRUE(context.latest_marker_event.type == SENSOR_MARKER_EVENT_INVALID_WIDTH);
 
     SensorLogic_Init(&context, 0U);
     (void)UpdateLine(context, 1U, 1U, 0U);
@@ -160,7 +218,12 @@ void TestInvalidMarkerEntryAndLineLost() {
     (void)UpdateLine(context, 1U, 1U, 700U);
     (void)UpdateLine(context, 1U, 1U, 710U);
     update = UpdateLine(context, 1U, 1U, 720U);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
+    update = UpdateLine(context, 1U, 1U, 969U);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
+    update = UpdateLine(context, 1U, 1U, 970U);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
+    CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_JUNCTION);
 }
 
 void TestFsrStabilityAndHysteresis() {
@@ -282,7 +345,7 @@ void TestSensorErrorsAndStaleness() {
 int main() {
     TestMarkerMessageContract();
     TestLineNormalizationAndDebounce();
-    TestMarkerIsOneShot();
+    TestMarkerGroupClassification();
     TestInvalidMarkerEntryAndLineLost();
     TestFsrStabilityAndHysteresis();
     TestOverloadAndObstacleHysteresis();

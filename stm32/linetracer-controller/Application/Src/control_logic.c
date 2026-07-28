@@ -748,16 +748,6 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, app_marker_
     expected_marker = ControlLogic_ExpectedMarkerCode(context);
     event_time = (marker_detected_at_ms != 0U) ? marker_detected_at_ms : now_ms;
 
-    /*
-     * APP_MARKER_NONE preserves compatibility while SensorTask is migrated to
-     * the classified marker
-     * interface. Classified and invalid markers are
-     * always validated.
-     */
-    if (marker_code == APP_MARKER_NONE) {
-        marker_code = expected_marker;
-    }
-
     if (ControlLogic_MarkerIsDuplicate(context, marker_code, event_time) != 0U) {
         return ROUTE_ACTION_NONE;
     }
