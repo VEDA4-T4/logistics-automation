@@ -79,8 +79,7 @@ bool CommandManager::TrackCommand(const mqtt::MqttMessage& message, const std::v
     PendingCommand pending{
         .command = identity->second,
         .started_at = now_provider_(),
-        .timeout = identity->second == mqtt::ControlCommand::kEmergencyStop ? mqtt::kEmergencyStopConfirmationTimeout
-                                                                            : mqtt::kMqttResponseTimeout,
+        .timeout = mqtt::CommandResponseTimeout(identity->second),
         .expected_devices = {},
         .completed_devices = {},
         .response_message_ids = {},

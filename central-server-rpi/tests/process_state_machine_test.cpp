@@ -132,7 +132,7 @@ void TestStartEnablesAnIdleSystem() {
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).disposition ==
-           central_server::TransitionDisposition::kRejected);
+           central_server::TransitionDisposition::kDuplicate);
 }
 
 void TestErrorEmergencyStopAndRecovery() {
@@ -144,9 +144,15 @@ void TestErrorEmergencyStopAndRecovery() {
     assert(machine.SystemState() == central_server::ProcessSystemState::kError);
     assert(machine.FindWork(kWorkOne)->failure_reason == "gripper timeout");
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kRecovery);
     assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kRecovering);
-    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kInitialize).Applied());
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).disposition ==
+           central_server::TransitionDisposition::kDuplicate);
+    assert(machine.CompleteSystemRecovery().Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kInitialize).disposition ==
+           central_server::TransitionDisposition::kDuplicate);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
     assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kInputDetected);
 
@@ -154,6 +160,11 @@ void TestErrorEmergencyStopAndRecovery() {
     assert(machine.SystemState() == central_server::ProcessSystemState::kEmergencyStop);
     assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kEmergencyStopped);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kRecovery);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kRecovering);
+    assert(machine.CompleteSystemRecovery().Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
 }
 
 void TestParallelWorksRemainIndependent() {
@@ -183,6 +194,30 @@ void TestNodeFailureWithoutWorkStopsTheProcess() {
     assert(work->failure_reason == "input conveyor fault");
 }
 
+void TestServerRestartRestoresSafeState() {
+    central_server::ProcessStateMachine machine;
+    std::vector works{
+        central_server::WorkProcessSnapshot{
+            .work_id = kWorkOne,
+            .stage = central_server::WorkStage::kVisionProcessing,
+            .suspended_stage = std::nullopt,
+            .destination = "1",
+            .last_source_id = "PI-VISION-01",
+            .failure_reason = {},
+        },
+    };
+    assert(machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, works));
+    assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
+    assert(machine.FindWork(kWorkOne)->suspended_stage == central_server::WorkStage::kVisionProcessing);
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kVisionProcessing);
+
+    assert(machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kEmergencyStop, works));
+    assert(machine.SystemState() == central_server::ProcessSystemState::kEmergencyStop);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kEmergencyStopped);
+}
+
 }  // namespace
 
 int main() {
@@ -193,5 +228,6 @@ int main() {
     TestErrorEmergencyStopAndRecovery();
     TestParallelWorksRemainIndependent();
     TestNodeFailureWithoutWorkStopsTheProcess();
+    TestServerRestartRestoresSafeState();
     return 0;
 }

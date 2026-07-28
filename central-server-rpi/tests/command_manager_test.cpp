@@ -223,6 +223,23 @@ void TestEmergencyStopUsesShortConfirmationTimeout() {
     assert(timeout->result == mqtt::CommandResult::kTimeout);
 }
 
+void TestRecoveryUsesExtendedCompletionTimeout() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    assert(manager.TrackCommand(MakeCommand("REQ-RECOVERY", "PI-01", mqtt::ControlCommand::kRecovery), { "PI-01" }));
+
+    now += mqtt::kMqttResponseTimeout;
+    assert(manager.CheckTimeouts("2026-07-25T01:00:03Z").empty());
+
+    now += mqtt::kRecoveryCompletionTimeout - mqtt::kMqttResponseTimeout;
+    const auto timed_out = manager.CheckTimeouts("2026-07-25T01:00:30Z");
+    assert(timed_out.size() == 1);
+    const auto* timeout = mqtt::GetPayload<mqtt::CommandResponsePayload>(timed_out[0]);
+    assert(timeout != nullptr);
+    assert(timeout->command == mqtt::ControlCommand::kRecovery);
+    assert(timeout->result == mqtt::CommandResult::kTimeout);
+}
+
 }  // namespace
 
 int main() {
@@ -232,5 +249,6 @@ int main() {
     TestNoTargetProducesImmediateRejection();
     TestWrongDeviceIsRejectedAndTimeoutIsGenerated();
     TestEmergencyStopUsesShortConfirmationTimeout();
+    TestRecoveryUsesExtendedCompletionTimeout();
     return 0;
 }

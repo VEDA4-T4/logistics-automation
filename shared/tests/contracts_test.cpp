@@ -530,6 +530,7 @@ void TestMqttTopicMessageValidation() {
                                                .distance_cm = 42,
                                            });
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", sensor_status).IsSuccess());
+    assert(mqtt::ValidateTopicMessage("qt/QT-01/event", sensor_status).IsSuccess());
 
     const auto work_created = MakeMessage("MSG-TOPIC-05", mqtt::MessageType::kWorkCreated,
                                           mqtt::WorkCreatedPayload{ .work_id = std::string(kTestWorkId) }, "SERVER-01");

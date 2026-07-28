@@ -49,6 +49,12 @@ public:
     [[nodiscard]] ProcessTransition FailDispatch(const ProcessCommandIntent& intent, std::string reason);
     [[nodiscard]] ProcessTransition PreviewSystemCommand(contracts::mqtt::ControlCommand command) const;
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
+    [[nodiscard]] ProcessTransition CompleteSystemRecovery();
+    [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
+                                                 std::vector<WorkProcessSnapshot> works,
+                                                 std::uint64_t message_sequence);
+    [[nodiscard]] std::uint64_t MessageSequence() const noexcept;
+    [[nodiscard]] std::uint64_t Revision() const noexcept;
 
 private:
     [[nodiscard]] ProcessOrchestrationResult HandleWith(ProcessStateMachine& machine,
@@ -65,6 +71,7 @@ private:
     ProcessOrchestratorConfig config_;
     ProcessStateMachine state_machine_;
     std::uint64_t message_sequence_{};
+    std::uint64_t revision_{};
 };
 
 }  // namespace logistics::central_server

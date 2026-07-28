@@ -37,6 +37,7 @@ public:
     [[nodiscard]] std::optional<AssignedVisionWork> TakeAssignedWork();
     void CancelPendingWork();
     void CompleteWork();
+    void Reset();
 
 private:
     enum class Phase { kIdle, kAwaitingWork, kAssigned, kProcessing, kAwaitingClear };

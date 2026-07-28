@@ -103,6 +103,9 @@ public:
     [[nodiscard]] ProcessTransition Apply(const ProcessEvent& event);
     [[nodiscard]] ProcessTransition ApplySystemFailure(std::string reason);
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
+    [[nodiscard]] ProcessTransition CompleteSystemRecovery();
+    [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
+                                                 std::vector<WorkProcessSnapshot> works);
     [[nodiscard]] std::optional<WorkProcessSnapshot> FindWork(std::string_view work_id) const;
     [[nodiscard]] std::vector<WorkProcessSnapshot> ActiveWorks() const;
 
@@ -126,5 +129,7 @@ private:
 [[nodiscard]] std::string_view ToString(ProcessSystemState state) noexcept;
 [[nodiscard]] std::string_view ToString(WorkStage stage) noexcept;
 [[nodiscard]] std::string_view ToString(ProcessEventType type) noexcept;
+[[nodiscard]] std::optional<ProcessSystemState> ParseProcessSystemState(std::string_view value) noexcept;
+[[nodiscard]] std::optional<WorkStage> ParseWorkStage(std::string_view value) noexcept;
 
 }  // namespace logistics::central_server

@@ -19,6 +19,12 @@ inline constexpr auto kGripperProcessKey = "gripper";
 inline constexpr auto kSortingProcessKey = "sorting";
 inline constexpr auto kLineTracerProcessKey = "linetracer";
 
+[[nodiscard]] inline bool IsSensorStaleErrorCode(const QString& error_code) {
+    auto normalized = error_code.trimmed().toUpper();
+    normalized.replace(QLatin1Char('_'), QLatin1Char('-'));
+    return normalized == QStringLiteral("ERR-HEALTH-SENSOR-STALE");
+}
+
 enum class OverallProcessState {
     Idle,
     Running,
@@ -35,6 +41,14 @@ struct ProcessDefinition {
     QString device_id;
 };
 
+struct SensorUnitStatus {
+    int sensor_id{ 0 };
+    QString display_name;
+    QString measurement_status{ QStringLiteral("UNKNOWN") };
+    int distance_cm{ -1 };
+    QDateTime updated_at;
+};
+
 struct ProcessUnitStatus {
     QString key;
     QString display_name;
@@ -47,6 +61,8 @@ struct ProcessUnitStatus {
     QString error_code;
     QDateTime updated_at;
     bool has_error{ false };
+    bool has_warning{ false };
+    QList<SensorUnitStatus> sensors;
 };
 
 struct ProcessDashboardStatus {
@@ -71,13 +87,19 @@ public:
     OperationsDashboardState();
 
     void configureProcesses(const QList<ProcessDefinition>& definitions);
-    [[nodiscard]] DashboardUpdateResult applyEnvelope(const QJsonObject& envelope);
+    void markMqttConnectedAwaitingStatus(const QDateTime& timestamp);
+    void markMqttDisconnected(const QDateTime& timestamp);
+    [[nodiscard]] bool expireStaleProcesses(const QDateTime& timestamp);
+    [[nodiscard]] DashboardUpdateResult applyEnvelope(const QJsonObject& envelope, const QDateTime& received_at = {},
+                                                      bool apply_command_to_overall = true);
     [[nodiscard]] const QList<ProcessUnitStatus>& processes() const noexcept;
     [[nodiscard]] const ProcessDashboardStatus& overall() const noexcept;
 
 private:
     struct ProcessRuntime {
         ProcessUnitStatus status;
+        QDateTime last_received_at;
+        QDateTime last_event_at;
         QSet<QString> retired_work_ids;
         QQueue<QString> retired_work_order;
     };
@@ -87,9 +109,10 @@ private:
     void updateOverallForCommand(const QJsonObject& data, const QDateTime& timestamp);
     [[nodiscard]] int processIndexForDevice(const QString& device_id) const;
     [[nodiscard]] int processIndexForEvent(logistics::contracts::mqtt::MessageType type) const;
-    [[nodiscard]] bool updateProcessWork(ProcessRuntime& process, const QString& work_id, const QDateTime& timestamp);
+    [[nodiscard]] bool updateProcessWork(ProcessRuntime& process, const QString& work_id);
     void retireProcessWork(ProcessRuntime& process, const QString& work_id);
     void publishProcessSnapshots();
+    void resetForMqttTransition(const QString& current_state, const QString& detail, const QDateTime& timestamp);
 
     QList<ProcessRuntime> process_runtime_;
     QList<ProcessUnitStatus> process_snapshots_;

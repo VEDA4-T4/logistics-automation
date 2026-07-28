@@ -86,6 +86,8 @@ public:
     [[nodiscard]] DatabaseStatus Commit();
     [[nodiscard]] DatabaseStatus Rollback();
     [[nodiscard]] DatabaseStatus IntegrityCheck();
+    [[nodiscard]] DatabaseStatus Checkpoint();
+    [[nodiscard]] DatabaseStatus Close();
     [[nodiscard]] bool IsOpen() const noexcept {
         return handle_ != nullptr;
     }

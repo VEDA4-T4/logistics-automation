@@ -1197,6 +1197,12 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
            ReadRequiredString(data, kImageNameField, payload.image_name, status);
 }
 
+[[nodiscard]] inline bool DeserializePayload(const Json& data, SensorStatusPayload& payload, CodecStatus& status) {
+    return ReadRequiredSignedInteger(data, kSensorIdField, payload.sensor_id, status) &&
+           ReadRequiredString(data, kMeasurementStatusField, payload.measurement_status, status) &&
+           ReadRequiredSignedInteger(data, kDistanceCmField, payload.distance_cm, status);
+}
+
 [[nodiscard]] inline bool DeserializePayload(const Json& data, WorkCreatedPayload& payload, CodecStatus& status) {
     return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status);
 }
@@ -1235,12 +1241,6 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
            ReadOptionalStringValue(data, kImagePathField, payload.image_path, status) &&
            ReadRequiredString(data, kChecksumField, payload.checksum, status) &&
            ReadRequiredString(data, kUploadStatusField, payload.upload_status, status);
-}
-
-[[nodiscard]] inline bool DeserializePayload(const Json& data, SensorStatusPayload& payload, CodecStatus& status) {
-    return ReadRequiredSignedInteger(data, kSensorIdField, payload.sensor_id, status) &&
-           ReadRequiredString(data, kMeasurementStatusField, payload.measurement_status, status) &&
-           ReadRequiredSignedInteger(data, kDistanceCmField, payload.distance_cm, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ProductInfoPayload& payload, CodecStatus& status) {
