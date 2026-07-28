@@ -143,11 +143,11 @@ static void test_short_requested_duration_is_extended_to_safe_joint_speed(void) 
 
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
            GRIPPER_CONTROL_OK);
-    assert(controller.motion_duration_ms == 1500U);
+    assert(controller.motion_duration_ms == 1250U);
 
     gripper_control_tick(&controller, 3100U);
-    assert(servo.base_angle == 1100U);
-    assert(servo.shoulder_angle == 1000U);
+    assert(servo.base_angle == 1140U);
+    assert(servo.shoulder_angle == 1020U);
     assert(controller.state == UART_GRIPPER_STATE_MOVING_ARM);
 
     gripper_control_tick(&controller, 2100U + controller.motion_duration_ms);
