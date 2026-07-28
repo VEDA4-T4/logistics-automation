@@ -362,8 +362,12 @@ GripperCommandResult GripperNode::StartCycle(const mqtt::ControlCommandPayload& 
     };
 
     if (!DispatchStep(result)) {
+        // No response for this request has gone out yet, so unlike the
+        // mid-cycle abort below, only one report belongs here: AbortCycle
+        // would additionally publish its own (mislabeled) response for the
+        // same request_id.
         const std::string message = "failed to start gripper cycle";
-        AbortCycle("ERR-GRIPPER-DISPATCH", message);
+        cycle_ = ActiveCycle{};
         EmitCommandResponse(result, message);
         return result;
     }
@@ -427,8 +431,10 @@ GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayloa
     };
 
     if (!DispatchStep(result)) {
+        // Same reasoning as StartCycle: this request has not been answered yet,
+        // so AbortCycle's own (kStart-labeled) response would duplicate this one.
         const std::string message = "gripper reset succeeded but homing could not be started";
-        AbortCycle("ERR-GRIPPER-HOME", message);
+        cycle_ = ActiveCycle{};
         EmitCommandResponse(result, message);
         return result;
     }
@@ -484,8 +490,10 @@ GripperCommandResult GripperNode::RunRecovery(const mqtt::ControlCommandPayload&
     };
 
     if (!DispatchStep(result)) {
+        // Same reasoning as StartCycle: this request has not been answered yet,
+        // so AbortCycle's own (kStart-labeled) response would duplicate this one.
         const std::string message = "homing could not be started";
-        AbortCycle("ERR-GRIPPER-HOME", message);
+        cycle_ = ActiveCycle{};
         EmitCommandResponse(result, message);
         return result;
     }

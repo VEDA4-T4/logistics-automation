@@ -490,6 +490,59 @@ void test_missing_completion_event_times_out_the_cycle() {
     assert(fixture.AnyErrorEquals("ERR-GRIPPER-MOTION-TIMEOUT"));
 }
 
+// Regression: a real-device MQTT test caught StartCycle publishing two
+// responses for the same requestId when the very first motion write failed
+// (one from AbortCycle, hardcoded to command=START, and one from the caller's
+// own EmitCommandResponse) - only the second was actually correct. No prior
+// unit test exercised this because the fake backend always succeeded a write;
+// forcing a write failure reproduces it.
+void test_start_cycle_dispatch_failure_reports_exactly_one_response() {
+    Fixture fixture;
+    fixture.Home();
+    fixture.backend->fail_write = true;
+
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
+
+    assert(result.status == GripperCommandStatus::kUartError);
+    assert(!fixture.node->HasActiveCycle());
+    int response_count = 0;
+    for (const GripperReport& report : fixture.reports) {
+        if (report.channel != GripperReportChannel::kResponse) {
+            continue;
+        }
+        ++response_count;
+        const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
+        assert(response != nullptr && response->command == mqtt::ControlCommand::kStart &&
+              response->request_id == "req-1");
+    }
+    assert(response_count == 1);
+}
+
+// Same bug, but for RECOVERY(home): the stray first response reported
+// command=START instead of RECOVERY, since AbortCycle always hardcoded kStart
+// regardless of which command actually created the cycle.
+void test_recovery_home_dispatch_failure_reports_the_recovery_command() {
+    Fixture fixture;
+    fixture.backend->fail_write = true;
+
+    const GripperCommandResult result =
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-home", "home"));
+
+    assert(result.status == GripperCommandStatus::kUartError);
+    assert(!fixture.node->HasActiveCycle());
+    int response_count = 0;
+    for (const GripperReport& report : fixture.reports) {
+        if (report.channel != GripperReportChannel::kResponse) {
+            continue;
+        }
+        ++response_count;
+        const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
+        assert(response != nullptr && response->command == mqtt::ControlCommand::kRecovery &&
+              response->request_id == "req-home");
+    }
+    assert(response_count == 1);
+}
+
 void test_stop_cancels_the_active_cycle() {
     Fixture fixture;
     fixture.Home();
@@ -610,6 +663,8 @@ int main() {
     test_safety_release_reports_stopped_rather_than_ready();
     test_recovery_homes_the_arm_after_a_safety_release();
     test_missing_completion_event_times_out_the_cycle();
+    test_start_cycle_dispatch_failure_reports_exactly_one_response();
+    test_recovery_home_dispatch_failure_reports_the_recovery_command();
     test_stop_cancels_the_active_cycle();
     test_status_request_reports_the_controller_state();
     test_commands_for_another_device_are_ignored();
