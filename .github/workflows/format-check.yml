@@ -22,7 +22,7 @@ jobs:
 
       - name: Check formatting
         run: |
-          # CubeMX-generated and third-party sources keep upstream formatting.
+
           FILES=$(find . \
             -type f \( \
               -name "*.cpp" -o \
