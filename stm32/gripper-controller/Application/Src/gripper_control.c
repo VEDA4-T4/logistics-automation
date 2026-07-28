@@ -186,9 +186,6 @@ gripper_control_result_t gripper_control_process_command(gripper_control_t* cont
                 uart_gripper_move_elbow_angle(payload), uart_gripper_move_duration_ms(payload), now_ms);
 
         case UART_CMD_GRIPPER_SET_GRIPPER:
-            if (controller->homed == 0U) {
-                return GRIPPER_CONTROL_NOT_HOMED;
-            }
             if (gripper_control_is_moving(controller) != 0U) {
                 return GRIPPER_CONTROL_BUSY;
             }

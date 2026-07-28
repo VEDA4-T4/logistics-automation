@@ -216,12 +216,35 @@ static void test_gripper_motion_and_servo_fault(void) {
     assert(completion.error == UART_ERROR_SERVO);
 }
 
+static void test_gripper_can_move_before_arm_home(void) {
+    fake_servo_t servo = { 0 };
+    gripper_servo_port_t port = make_port(&servo);
+    gripper_control_t controller;
+    uint8_t payload[UART_GRIPPER_SET_GRIPPER_PAYLOAD_SIZE] = { 0 };
+
+    assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
+    write_u16(payload, UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, 10U);
+    payload[UART_GRIPPER_SET_POSITION_INDEX] = 50U;
+    write_u16(payload, UART_GRIPPER_SET_DURATION_LOW_INDEX, UART_GRIPPER_DURATION_MS_MIN);
+
+    assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_SET_GRIPPER, payload, sizeof(payload), 0U) ==
+           GRIPPER_CONTROL_OK);
+    assert(controller.homed == 0U);
+    assert(controller.motion_duration_ms == 1250U);
+
+    gripper_control_tick(&controller, controller.motion_duration_ms);
+    assert(servo.gripper_position == 50U);
+    assert(controller.state == UART_GRIPPER_STATE_IDLE);
+    assert(controller.homed == 0U);
+}
+
 int main(void) {
     test_arm_motion_is_interpolated_and_completed();
     test_mechanical_limits_reject_unsafe_target();
     test_short_requested_duration_is_extended_to_safe_joint_speed();
     test_safety_stop_requires_release_and_explicit_home();
     test_gripper_motion_and_servo_fault();
+    test_gripper_can_move_before_arm_home();
     puts("gripper_control_test: PASS");
     return 0;
 }

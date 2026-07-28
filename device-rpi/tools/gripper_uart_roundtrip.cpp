@@ -546,8 +546,7 @@ void PrintStatus(const StatusSnapshot& status) {
     PrintStatus(status);
 
     if (status.homed == 0U) {
-        std::fprintf(stderr, "controller is not homed; direct gripper calibration will not run HOME automatically\n");
-        return 1;
+        std::printf("Arm is not homed; moving the independent Gripper only\n");
     }
 
     std::printf("Move Gripper to %u%%\n", target_position);
@@ -557,8 +556,7 @@ void PrintStatus(const StatusSnapshot& status) {
         return 1;
     }
 
-    const bool reached_target =
-        status.state == UART_GRIPPER_STATE_IDLE && status.homed == 1U && status.gripper_position == target_position;
+    const bool reached_target = status.state == UART_GRIPPER_STATE_IDLE && status.gripper_position == target_position;
     PrintStatus(status);
     std::printf("\nGRIPPER DIRECT CLAW MOVE: %s\n", reached_target ? "PASS" : "FAIL");
     return reached_target ? 0 : 1;
