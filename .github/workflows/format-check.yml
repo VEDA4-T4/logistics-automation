@@ -22,7 +22,6 @@ jobs:
 
       - name: Check formatting
         run: |
-
           FILES=$(find . \
             -type f \( \
               -name "*.cpp" -o \
