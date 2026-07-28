@@ -119,20 +119,24 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
         config.database.busy_timeout_ms = ParseInteger(path, line_number, key, value, 0, 600'000);
         return;
     }
+    if (section == "storage" && key == "log_root") {
+        // Kept for compatibility with configurations generated before log_root
+        // was removed from StorageConfig.
+        return;
+    }
     if (section == "storage") {
-        const int parsed = ParseInteger(path, line_number, key, value, 1, 3'650);
         if (key == "cleanup_interval_hours") {
             config.storage.cleanup_interval_hours = ParseInteger(path, line_number, key, value, 1, 8'760);
         } else if (key == "mqtt_retention_days") {
-            config.storage.mqtt_retention_days = parsed;
+            config.storage.mqtt_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else if (key == "device_status_retention_days") {
-            config.storage.device_status_retention_days = parsed;
+            config.storage.device_status_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else if (key == "error_retention_days") {
-            config.storage.error_retention_days = parsed;
+            config.storage.error_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else if (key == "security_retention_days") {
-            config.storage.security_retention_days = parsed;
+            config.storage.security_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else if (key == "image_retention_days") {
-            config.storage.image_retention_days = parsed;
+            config.storage.image_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else {
             ThrowLineError(path, line_number, "unknown [storage] setting: " + std::string(key));
         }

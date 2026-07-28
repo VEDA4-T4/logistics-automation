@@ -40,6 +40,7 @@ migration_dir=migrations
 busy_timeout_ms=1000
 [storage]
 image_root=images
+log_root=logs
 cleanup_interval_hours=12
 mqtt_retention_days=10
 device_status_retention_days=11
@@ -91,6 +92,7 @@ void ExpectRejected(std::string_view name, std::string_view content) {
 
 void TestInvalidSettingsAreRejected() {
     ExpectRejected("unknown-key", "[database]\npat=/tmp/server.db\n");
+    ExpectRejected("unknown-storage-key", "[storage]\nlog_rooot=/tmp/logs\n");
     ExpectRejected("duplicate", "[http]\nenabled=false\nenabled=true\n");
     ExpectRejected("port", "[http]\nenabled=false\nport=70000\n");
     ExpectRejected("token", "[http]\nenabled=true\nbearer_token=\n");

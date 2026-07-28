@@ -51,7 +51,7 @@ password=
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
-clean_session=true
+clean_session=false
 
 [device_registry]
 path=${runtime_dir}/devices.json
@@ -63,7 +63,6 @@ busy_timeout_ms=5000
 
 [storage]
 image_root=${runtime_dir}/images
-log_root=${runtime_dir}/logs
 cleanup_interval_hours=24
 mqtt_retention_days=30
 device_status_retention_days=30
