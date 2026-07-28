@@ -24,7 +24,7 @@ using logistics::device::UartTransport;
 
 constexpr auto kResponseTimeout = 500ms;
 constexpr auto kHomeTimeout = 12s;
-constexpr auto kMotionTimeout = 12s;
+constexpr auto kMotionTimeout = 20s;
 constexpr auto kSafetyEventTimeout = 1s;
 constexpr auto kSafetySettleDelay = 100ms;
 constexpr std::uint8_t kMaxAttempts = UART_MAX_RETRY_COUNT + 1U;
@@ -33,7 +33,7 @@ constexpr std::uint8_t kSafetyEventLatchedIndex = 1U;
 constexpr std::uint8_t kSafetyEventCauseIndex = 2U;
 constexpr std::uint8_t kSafetyEventPayloadSize = 3U;
 constexpr std::uint32_t kBaseSpeedDeciDegreesPerSecond = 300U;
-constexpr std::uint32_t kShoulderSpeedDeciDegreesPerSecond = 150U;
+constexpr std::uint32_t kShoulderSpeedDeciDegreesPerSecond = 80U;
 constexpr std::uint32_t kElbowSpeedDeciDegreesPerSecond = 200U;
 constexpr std::uint32_t kClawSpeedPercentPerSecond = 40U;
 

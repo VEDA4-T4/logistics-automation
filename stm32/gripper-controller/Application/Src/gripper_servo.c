@@ -70,9 +70,9 @@ static int32_t gripper_servo_write_arm(void* context, uint16_t base_angle, uint1
     __HAL_TIM_SET_COMPARE(
         &htim3, TIM_CHANNEL_1,
         gripper_servo_angle_to_pulse(base_angle, GRIPPER_SERVO_MIN_PULSE_US, GRIPPER_SERVO_MAX_PULSE_US));
-    __HAL_TIM_SET_COMPARE(
-        &htim3, TIM_CHANNEL_2,
-        gripper_servo_angle_to_pulse(shoulder_angle, GRIPPER_SERVO_MIN_PULSE_US, GRIPPER_SERVO_MAX_PULSE_US));
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2,
+                          gripper_servo_angle_to_pulse(shoulder_angle, GRIPPER_SHOULDER_SERVO_MIN_PULSE_US,
+                                                       GRIPPER_SHOULDER_SERVO_MAX_PULSE_US));
     __HAL_TIM_SET_COMPARE(
         &htim3, TIM_CHANNEL_3,
         gripper_servo_angle_to_pulse(elbow_angle, GRIPPER_ELBOW_SERVO_MIN_PULSE_US, GRIPPER_ELBOW_SERVO_MAX_PULSE_US));

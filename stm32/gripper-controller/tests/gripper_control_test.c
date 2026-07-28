@@ -1,9 +1,10 @@
+#include "gripper_control.h"
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 
 #include "gripper_calibration.h"
-#include "gripper_control.h"
 
 typedef struct {
     uint32_t enable_calls;
@@ -23,8 +24,7 @@ static int32_t fake_enable(void* context) {
     return 0;
 }
 
-static int32_t fake_write_arm(void* context, uint16_t base_angle, uint16_t shoulder_angle,
-                              uint16_t elbow_angle) {
+static int32_t fake_write_arm(void* context, uint16_t base_angle, uint16_t shoulder_angle, uint16_t elbow_angle) {
     fake_servo_t* servo = (fake_servo_t*)context;
 
     servo->arm_writes++;
@@ -60,7 +60,7 @@ static gripper_servo_port_t make_port(fake_servo_t* servo) {
 
 static void home_controller(gripper_control_t* controller, uint32_t start_tick) {
     gripper_control_completion_t completion;
-    uint8_t payload[UART_GRIPPER_HOME_PAYLOAD_SIZE] = {0};
+    uint8_t payload[UART_GRIPPER_HOME_PAYLOAD_SIZE] = { 0 };
 
     write_u16(payload, UART_GRIPPER_HOME_MOTION_ID_LOW_INDEX, 1U);
     assert(gripper_control_process_command(controller, UART_CMD_GRIPPER_HOME, payload, sizeof(payload), start_tick) ==
@@ -71,11 +71,11 @@ static void home_controller(gripper_control_t* controller, uint32_t start_tick) 
 }
 
 static void test_arm_motion_is_interpolated_and_completed(void) {
-    fake_servo_t servo = {0};
+    fake_servo_t servo = { 0 };
     gripper_servo_port_t port = make_port(&servo);
     gripper_control_t controller;
     gripper_control_completion_t completion;
-    uint8_t payload[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = {0};
+    uint8_t payload[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = { 0 };
 
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     assert(controller.homed == 0U);
@@ -91,14 +91,15 @@ static void test_arm_motion_is_interpolated_and_completed(void) {
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
            GRIPPER_CONTROL_OK);
     assert(servo.enable_calls == 1U);
-    gripper_control_tick(&controller, 2600U);
+    assert(controller.motion_duration_ms == 1250U);
+    gripper_control_tick(&controller, 2100U + (controller.motion_duration_ms / 2U));
     assert(servo.base_angle == 1050U);
     assert(servo.shoulder_angle == 950U);
     assert(servo.elbow_angle == 850U);
-    assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_HOME, payload,
-                                           UART_GRIPPER_HOME_PAYLOAD_SIZE, 2600U) == GRIPPER_CONTROL_BUSY);
+    assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_HOME, payload, UART_GRIPPER_HOME_PAYLOAD_SIZE,
+                                           2100U + (controller.motion_duration_ms / 2U)) == GRIPPER_CONTROL_BUSY);
 
-    gripper_control_tick(&controller, 3100U);
+    gripper_control_tick(&controller, 2100U + controller.motion_duration_ms);
     assert(servo.base_angle == 1200U);
     assert(controller.state == UART_GRIPPER_STATE_IDLE);
     assert(gripper_control_take_completion(&controller, &completion) == 1U);
@@ -108,10 +109,10 @@ static void test_arm_motion_is_interpolated_and_completed(void) {
 }
 
 static void test_mechanical_limits_reject_unsafe_target(void) {
-    fake_servo_t servo = {0};
+    fake_servo_t servo = { 0 };
     gripper_servo_port_t port = make_port(&servo);
     gripper_control_t controller;
-    uint8_t payload[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = {0};
+    uint8_t payload[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = { 0 };
 
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     home_controller(&controller, 0U);
@@ -127,10 +128,10 @@ static void test_mechanical_limits_reject_unsafe_target(void) {
 }
 
 static void test_short_requested_duration_is_extended_to_safe_joint_speed(void) {
-    fake_servo_t servo = {0};
+    fake_servo_t servo = { 0 };
     gripper_servo_port_t port = make_port(&servo);
     gripper_control_t controller;
-    uint8_t payload[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = {0};
+    uint8_t payload[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = { 0 };
 
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     home_controller(&controller, 0U);
@@ -142,25 +143,25 @@ static void test_short_requested_duration_is_extended_to_safe_joint_speed(void) 
 
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
            GRIPPER_CONTROL_OK);
-    assert(controller.motion_duration_ms == 1000U);
-
-    gripper_control_tick(&controller, 2600U);
-    assert(servo.base_angle == 1050U);
-    assert(servo.shoulder_angle == 975U);
-    assert(controller.state == UART_GRIPPER_STATE_MOVING_ARM);
+    assert(controller.motion_duration_ms == 1875U);
 
     gripper_control_tick(&controller, 3100U);
+    assert(servo.base_angle == 1060U);
+    assert(servo.shoulder_angle == 980U);
+    assert(controller.state == UART_GRIPPER_STATE_MOVING_ARM);
+
+    gripper_control_tick(&controller, 2100U + controller.motion_duration_ms);
     assert(servo.base_angle == 1200U);
     assert(servo.shoulder_angle == 1050U);
     assert(controller.state == UART_GRIPPER_STATE_IDLE);
 }
 
 static void test_safety_stop_requires_release_and_explicit_home(void) {
-    fake_servo_t servo = {0};
+    fake_servo_t servo = { 0 };
     gripper_servo_port_t port = make_port(&servo);
     gripper_control_t controller;
-    uint8_t move[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = {0};
-    uint8_t home[UART_GRIPPER_HOME_PAYLOAD_SIZE] = {0};
+    uint8_t move[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = { 0 };
+    uint8_t home[UART_GRIPPER_HOME_PAYLOAD_SIZE] = { 0 };
     uint32_t writes_before_stop;
 
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
@@ -192,11 +193,11 @@ static void test_safety_stop_requires_release_and_explicit_home(void) {
 }
 
 static void test_gripper_motion_and_servo_fault(void) {
-    fake_servo_t servo = {0};
+    fake_servo_t servo = { 0 };
     gripper_servo_port_t port = make_port(&servo);
     gripper_control_t controller;
     gripper_control_completion_t completion;
-    uint8_t payload[UART_GRIPPER_SET_GRIPPER_PAYLOAD_SIZE] = {0};
+    uint8_t payload[UART_GRIPPER_SET_GRIPPER_PAYLOAD_SIZE] = { 0 };
 
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     home_controller(&controller, 0U);
@@ -204,8 +205,7 @@ static void test_gripper_motion_and_servo_fault(void) {
     payload[UART_GRIPPER_SET_POSITION_INDEX] = 20U;
     write_u16(payload, UART_GRIPPER_SET_DURATION_LOW_INDEX, 100U);
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_SET_GRIPPER, payload, sizeof(payload),
-                                           2100U) ==
-           GRIPPER_CONTROL_OK);
+                                           2100U) == GRIPPER_CONTROL_OK);
     assert(controller.motion_duration_ms == 2000U);
 
     servo.write_result = -1;
