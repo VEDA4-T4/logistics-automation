@@ -392,19 +392,16 @@ void PrintStatus(const StatusSnapshot& status) {
     if (!RunHome(roundtrip, sequence, kHomeMotionId)) {
         return 1;
     }
-    std::this_thread::sleep_for(500ms);
 
     std::printf("[2/4] Move Base to 60.0 degrees\n");
     if (!RunArmMotion(roundtrip, sequence, kLowMotionId, kLowAngle, 1500U)) {
         return 1;
     }
-    std::this_thread::sleep_for(500ms);
 
     std::printf("[3/4] Move Base to 120.0 degrees\n");
     if (!RunArmMotion(roundtrip, sequence, kHighMotionId, kHighAngle, 2000U)) {
         return 1;
     }
-    std::this_thread::sleep_for(500ms);
 
     std::printf("[4/4] Return Base to 90.0 degrees\n");
     if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, kCenterAngle, 1500U)) {
