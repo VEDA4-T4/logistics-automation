@@ -377,6 +377,19 @@ void PrintStatus(const StatusSnapshot& status) {
     return roundtrip.WaitForMotion(motion_id, UART_GRIPPER_MOTION_ARM, kMotionTimeout);
 }
 
+[[nodiscard]] bool RunGripperMotion(Roundtrip& roundtrip, std::uint8_t& sequence, std::uint16_t motion_id,
+                                    std::uint8_t position_percent, std::uint16_t duration_ms) {
+    std::array<std::uint8_t, UART_GRIPPER_SET_GRIPPER_PAYLOAD_SIZE> payload{};
+    WriteU16(payload.data(), UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, motion_id);
+    payload[UART_GRIPPER_SET_POSITION_INDEX] = position_percent;
+    WriteU16(payload.data(), UART_GRIPPER_SET_DURATION_LOW_INDEX, duration_ms);
+
+    if (!roundtrip.Transact(sequence++, UART_CMD_GRIPPER_SET_GRIPPER, payload, UART_STATUS_ACK)) {
+        return false;
+    }
+    return roundtrip.WaitForMotion(motion_id, UART_GRIPPER_MOTION_GRIPPER, kMotionTimeout);
+}
+
 [[nodiscard]] int RunBaseSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device,
                                bool wide_sweep) {
     constexpr std::uint16_t kHomeMotionId = 100U;
@@ -472,6 +485,48 @@ void PrintStatus(const StatusSnapshot& status) {
     return 0;
 }
 
+[[nodiscard]] int RunGripperSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device) {
+    constexpr std::uint16_t kHomeMotionId = 120U;
+    constexpr std::uint16_t kFirstMotionId = 121U;
+    constexpr std::uint16_t kSecondMotionId = 122U;
+    constexpr std::uint16_t kOpenMotionId = 123U;
+
+    std::printf("GRIPPER CLAW CALIBRATION SWEEP\nDevice: %.*s\n", static_cast<int>(device.size()), device.data());
+    std::printf("Position: 100%% -> 80%% -> 60%% -> 100%%\n\n");
+
+    std::printf("[1/4] HOME arm and open Gripper to 100%%\n");
+    if (!RunHome(roundtrip, sequence, kHomeMotionId)) {
+        return 1;
+    }
+
+    std::printf("[2/4] Move Gripper to 80%%\n");
+    if (!RunGripperMotion(roundtrip, sequence, kFirstMotionId, 80U, 1500U)) {
+        return 1;
+    }
+
+    std::printf("[3/4] Move Gripper to 60%%\n");
+    if (!RunGripperMotion(roundtrip, sequence, kSecondMotionId, 60U, 1500U)) {
+        return 1;
+    }
+
+    std::printf("[4/4] Open Gripper to 100%%\n");
+    if (!RunGripperMotion(roundtrip, sequence, kOpenMotionId, 100U, 2000U)) {
+        return 1;
+    }
+
+    uart_frame_t response{};
+    StatusSnapshot status{};
+    if (!roundtrip.Transact(sequence, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
+        !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE || status.base_angle != 900U ||
+        status.shoulder_angle != 900U || status.elbow_angle != 900U || status.gripper_position != 100U ||
+        status.homed != 1U) {
+        return 1;
+    }
+    PrintStatus(status);
+    std::printf("\nGRIPPER CLAW CALIBRATION SWEEP: 4/4 PASS\n");
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -480,10 +535,10 @@ int main(int argc, char** argv) {
     const std::string_view mode = (argc >= 4) ? argv[3] : "roundtrip";
     if ((argc >= 3 && !ParseSequence(argv[2], &sequence)) || argc > 4 ||
         (mode != "roundtrip" && mode != "base-sweep" && mode != "base-wide-sweep" &&
-         mode != "shoulder-sweep")) {
+         mode != "shoulder-sweep" && mode != "gripper-sweep")) {
         std::fprintf(stderr,
                      "usage: %s [device] [initial_sequence:0..255] "
-                     "[roundtrip|base-sweep|base-wide-sweep|shoulder-sweep]\n",
+                     "[roundtrip|base-sweep|base-wide-sweep|shoulder-sweep|gripper-sweep]\n",
                      argv[0]);
         return 2;
     }
@@ -498,6 +553,9 @@ int main(int argc, char** argv) {
     }
     if (mode == "shoulder-sweep") {
         return RunShoulderSweep(roundtrip, sequence, device);
+    }
+    if (mode == "gripper-sweep") {
+        return RunGripperSweep(roundtrip, sequence, device);
     }
 
     int passed = 0;
