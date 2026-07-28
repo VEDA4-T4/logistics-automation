@@ -33,7 +33,7 @@ constexpr std::uint8_t kSafetyEventLatchedIndex = 1U;
 constexpr std::uint8_t kSafetyEventCauseIndex = 2U;
 constexpr std::uint8_t kSafetyEventPayloadSize = 3U;
 constexpr std::uint32_t kBaseSpeedDeciDegreesPerSecond = 300U;
-constexpr std::uint32_t kShoulderSpeedDeciDegreesPerSecond = 80U;
+constexpr std::uint32_t kShoulderSpeedDeciDegreesPerSecond = 100U;
 constexpr std::uint32_t kElbowSpeedDeciDegreesPerSecond = 200U;
 constexpr std::uint32_t kClawSpeedPercentPerSecond = 40U;
 

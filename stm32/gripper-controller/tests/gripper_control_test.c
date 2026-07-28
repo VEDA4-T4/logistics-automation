@@ -91,7 +91,7 @@ static void test_arm_motion_is_interpolated_and_completed(void) {
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
            GRIPPER_CONTROL_OK);
     assert(servo.enable_calls == 1U);
-    assert(controller.motion_duration_ms == 1250U);
+    assert(controller.motion_duration_ms == 1000U);
     gripper_control_tick(&controller, 2100U + (controller.motion_duration_ms / 2U));
     assert(servo.base_angle == 1050U);
     assert(servo.shoulder_angle == 950U);
@@ -143,11 +143,11 @@ static void test_short_requested_duration_is_extended_to_safe_joint_speed(void) 
 
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
            GRIPPER_CONTROL_OK);
-    assert(controller.motion_duration_ms == 1875U);
+    assert(controller.motion_duration_ms == 1500U);
 
     gripper_control_tick(&controller, 3100U);
-    assert(servo.base_angle == 1060U);
-    assert(servo.shoulder_angle == 980U);
+    assert(servo.base_angle == 1100U);
+    assert(servo.shoulder_angle == 1000U);
     assert(controller.state == UART_GRIPPER_STATE_MOVING_ARM);
 
     gripper_control_tick(&controller, 2100U + controller.motion_duration_ms);
