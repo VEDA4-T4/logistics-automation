@@ -62,6 +62,40 @@ void TestCommandDecoding() {
     assert(!malformed.IsSuccess());
 }
 
+void TestDuplicateCommandFindsCachedResponse() {
+    device::MqttMessageProcessor processor("PI-01");
+    const auto first = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
+    assert(first.IsSuccess());
+    assert(!processor.CachedCommandResponse(first.message).has_value());
+
+    const mqtt::MqttMessage response{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-RESPONSE-01",
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .source_id = "PI-01",
+        .timestamp = "2026-07-15T17:30:01+09:00",
+        .data =
+            mqtt::CommandResponsePayload{
+                .request_id = "REQ-COMMAND-01",
+                .command = mqtt::ControlCommand::kStatusRequest,
+                .result = mqtt::CommandResult::kSuccess,
+                .error_code = std::nullopt,
+                .message = "status returned",
+            },
+    };
+    processor.RememberCommandResponse(response);
+
+    const auto duplicate = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
+    assert(duplicate.IsSuccess());
+    assert(duplicate.duplicate);
+    const auto cached = processor.CachedCommandResponse(duplicate.message);
+    assert(cached.has_value());
+    assert(cached->message_id == response.message_id);
+    const auto* payload = mqtt::GetPayload<mqtt::CommandResponsePayload>(*cached);
+    assert(payload != nullptr);
+    assert(payload->result == mqtt::CommandResult::kSuccess);
+}
+
 void TestHeartbeatEncoding() {
     const device::MqttMessageProcessor processor("PI-01");
     const auto encoded = processor.EncodeHeartbeat("MSG-HEARTBEAT-01", "2026-07-15T17:30:00+09:00", "IDLE", 42,
@@ -178,6 +212,7 @@ void TestDeviceEventAndErrorEncoding() {
 
 int main() {
     TestCommandDecoding();
+    TestDuplicateCommandFindsCachedResponse();
     TestHeartbeatEncoding();
     TestWorkCreatedCommandDecoding();
     TestRegistrationAndOnlineStatusEncoding();

@@ -202,6 +202,7 @@ public:
     }
 
     [[nodiscard]] bool PublishResponse(const mqtt::MqttMessage& message) {
+        processor_.RememberCommandResponse(message);
         return PublishMessage(mqtt::DeviceResponseTopic(config_.device_id), message, 1, false, "command response");
     }
 
@@ -340,7 +341,16 @@ private:
             return;
         }
         if (decoded.duplicate) {
-            std::clog << "[device][mqtt][INFO] duplicate MQTT command ignored: " << decoded.message.message_id << '\n';
+            const auto cached_response = processor_.CachedCommandResponse(decoded.message);
+            if (cached_response.has_value()) {
+                static_cast<void>(PublishMessage(mqtt::DeviceResponseTopic(config_.device_id), *cached_response, 1,
+                                                 false, "cached command response"));
+                std::clog << "[device][mqtt][INFO] cached response replayed for duplicate MQTT command: "
+                          << decoded.message.message_id << '\n';
+            } else {
+                std::clog << "[device][mqtt][INFO] duplicate MQTT command is still pending: "
+                          << decoded.message.message_id << '\n';
+            }
             return;
         }
 

@@ -47,6 +47,10 @@ public:
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceEvent(const contracts::mqtt::MqttMessage& message) const;
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceError(const contracts::mqtt::MqttMessage& message) const;
 
+    void RememberCommandResponse(const contracts::mqtt::MqttMessage& message);
+    [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> CachedCommandResponse(
+        const contracts::mqtt::MqttMessage& command) const;
+
 private:
     static constexpr std::size_t kRecentMessageLimit = 256;
 
@@ -54,6 +58,9 @@ private:
     std::mutex recent_messages_mutex_;
     std::unordered_map<std::string, std::string> recent_messages_;
     std::deque<std::string> recent_message_order_;
+    mutable std::mutex response_cache_mutex_;
+    std::unordered_map<std::string, contracts::mqtt::MqttMessage> response_cache_;
+    std::deque<std::string> response_cache_order_;
 };
 
 }  // namespace logistics::device

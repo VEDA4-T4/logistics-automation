@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "logistics/contracts/uart/linetracer_commands.h"
+#include "logistics/contracts/uart/sorting_commands.h"
 #include "logistics/contracts/uart_crc16.h"
 
 namespace {
@@ -123,16 +123,16 @@ std::vector<std::uint8_t> EncodeFrame(const uart_frame_t& frame) {
     return { encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(encoded_length) };
 }
 
-uart_frame_t MakeEventFrame(std::uint8_t sequence, std::uint16_t job_id = 1U) {
+uart_frame_t MakeEventFrame(std::uint8_t sequence, std::uint16_t cycle_id = 1U) {
     uart_frame_t frame{};
     frame.version = UART_PROTOCOL_VERSION;
     frame.sequence = sequence;
     frame.command = UART_CMD_EVENT;
-    frame.length = UART_LINETRACER_JOB_EVENT_PAYLOAD_SIZE;
-    frame.payload[UART_EVENT_ID_INDEX] = UART_LINETRACER_EVENT_ARRIVED;
-    frame.payload[UART_LINETRACER_EVENT_JOB_ID_LOW_INDEX] = static_cast<std::uint8_t>(job_id & 0xffU);
-    frame.payload[UART_LINETRACER_EVENT_JOB_ID_HIGH_INDEX] = static_cast<std::uint8_t>((job_id >> 8U) & 0xffU);
-    frame.payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX] = UART_LINETRACER_ROUTE_A;
+    frame.length = UART_SORTING_CYCLE_EVENT_PAYLOAD_SIZE;
+    frame.payload[UART_EVENT_ID_INDEX] = UART_SORTING_EVENT_CYCLE_COMPLETE;
+    frame.payload[UART_SORTING_EVENT_CYCLE_ID_LOW_INDEX] = static_cast<std::uint8_t>(cycle_id & 0xffU);
+    frame.payload[UART_SORTING_EVENT_CYCLE_ID_HIGH_INDEX] = static_cast<std::uint8_t>((cycle_id >> 8U) & 0xffU);
+    frame.payload[UART_SORTING_EVENT_DESTINATION_INDEX] = UART_SORTING_DESTINATION_1;
     return frame;
 }
 
@@ -152,11 +152,23 @@ uart_frame_t MakeAckFrame(std::uint8_t sequence, std::uint8_t original_command,
     return frame;
 }
 
+uart_frame_t MakeOperationResultFrame(std::uint8_t sequence, std::uint8_t status = UART_STATUS_SUCCESS,
+                                      std::uint8_t error = UART_ERROR_NONE) {
+    uart_frame_t frame{};
+    frame.version = UART_PROTOCOL_VERSION;
+    frame.sequence = sequence;
+    frame.command = UART_CMD_OPERATION_RESULT;
+    frame.length = UART_OPERATION_RESULT_PAYLOAD_SIZE;
+    frame.payload[UART_OPERATION_RESULT_STATUS_INDEX] = status;
+    frame.payload[UART_OPERATION_RESULT_ERROR_INDEX] = error;
+    return frame;
+}
+
 std::uint8_t SendRouteCommand(Fixture& fixture) {
-    constexpr std::array<std::uint8_t, UART_LINETRACER_START_PAYLOAD_SIZE> kPayload{ 0x34U, 0x12U,
-                                                                                     UART_LINETRACER_ROUTE_B };
+    constexpr std::array<std::uint8_t, UART_SORTING_ROUTE_PAYLOAD_SIZE> kPayload{ 0x34U, 0x12U,
+                                                                                  UART_SORTING_DESTINATION_2 };
     fixture.backend->PushWrite(UART_FRAME_OVERHEAD_SIZE + kPayload.size());
-    const auto result = fixture.session->SendCommand(UART_CMD_LINETRACER_ASSIGN_ROUTE, kPayload);
+    const auto result = fixture.session->SendCommand(UART_CMD_SORTING_ROUTE_ITEM, kPayload);
     assert(result.Succeeded());
     return result.sequence;
 }
@@ -233,10 +245,10 @@ void TestPartialFrameTimeoutThenRecovery() {
 
 void TestMatchingAckCompletesPendingCommand() {
     Fixture fixture;
-    constexpr std::array<std::uint8_t, UART_LINETRACER_START_PAYLOAD_SIZE> kPayload{ 0x34U, 0x12U,
-                                                                                     UART_LINETRACER_ROUTE_B };
+    constexpr std::array<std::uint8_t, UART_SORTING_ROUTE_PAYLOAD_SIZE> kPayload{ 0x34U, 0x12U,
+                                                                                  UART_SORTING_DESTINATION_2 };
     const std::uint8_t sequence = SendRouteCommand(fixture);
-    const auto ack = EncodeFrame(MakeAckFrame(sequence, UART_CMD_LINETRACER_ASSIGN_ROUTE, kPayload));
+    const auto ack = EncodeFrame(MakeAckFrame(sequence, UART_CMD_SORTING_ROUTE_ITEM, kPayload));
     fixture.backend->PushRead(ack);
 
     assert(fixture.session->PollOnce().Succeeded());
@@ -247,11 +259,11 @@ void TestMatchingAckCompletesPendingCommand() {
 
 void TestWrongSequenceAckDoesNotCompleteCommand() {
     Fixture fixture;
-    constexpr std::array<std::uint8_t, UART_LINETRACER_START_PAYLOAD_SIZE> kPayload{ 0x34U, 0x12U,
-                                                                                     UART_LINETRACER_ROUTE_B };
+    constexpr std::array<std::uint8_t, UART_SORTING_ROUTE_PAYLOAD_SIZE> kPayload{ 0x34U, 0x12U,
+                                                                                  UART_SORTING_DESTINATION_2 };
     const std::uint8_t sequence = SendRouteCommand(fixture);
     const auto ack =
-        EncodeFrame(MakeAckFrame(static_cast<std::uint8_t>(sequence + 1U), UART_CMD_LINETRACER_ASSIGN_ROUTE, kPayload));
+        EncodeFrame(MakeAckFrame(static_cast<std::uint8_t>(sequence + 1U), UART_CMD_SORTING_ROUTE_ITEM, kPayload));
     fixture.backend->PushRead(ack);
 
     assert(fixture.session->PollOnce().Succeeded());
@@ -262,10 +274,10 @@ void TestWrongSequenceAckDoesNotCompleteCommand() {
 
 void TestWrongPayloadCrcAckDoesNotCompleteCommand() {
     Fixture fixture;
-    constexpr std::array<std::uint8_t, UART_LINETRACER_START_PAYLOAD_SIZE> kPayload{ 0x34U, 0x12U,
-                                                                                     UART_LINETRACER_ROUTE_B };
+    constexpr std::array<std::uint8_t, UART_SORTING_ROUTE_PAYLOAD_SIZE> kPayload{ 0x34U, 0x12U,
+                                                                                  UART_SORTING_DESTINATION_2 };
     const std::uint8_t sequence = SendRouteCommand(fixture);
-    uart_frame_t ack = MakeAckFrame(sequence, UART_CMD_LINETRACER_ASSIGN_ROUTE, kPayload);
+    uart_frame_t ack = MakeAckFrame(sequence, UART_CMD_SORTING_ROUTE_ITEM, kPayload);
     ack.payload[UART_ACK_CRC_LOW_INDEX] ^= 0x01U;
     const auto encoded = EncodeFrame(ack);
     fixture.backend->PushRead(encoded);
@@ -276,6 +288,50 @@ void TestWrongPayloadCrcAckDoesNotCompleteCommand() {
     assert(fixture.session->HasPendingCommand());
 }
 
+void TestOperationResultCompletesPendingCommand() {
+    Fixture fixture;
+    const std::uint8_t sequence = SendRouteCommand(fixture);
+    fixture.backend->PushRead(EncodeFrame(MakeOperationResultFrame(sequence)));
+
+    assert(fixture.session->PollOnce().Succeeded());
+    assert(fixture.events.size() == 1U);
+    assert(fixture.events[0].type == UartSessionEventType::kCommandResponseReceived);
+    assert(fixture.events[0].pending_sequence == sequence);
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.session->Diagnostics().command_responses == 1U);
+}
+
+void TestWrongSequenceOperationResultDoesNotCompleteCommand() {
+    Fixture fixture;
+    const std::uint8_t sequence = SendRouteCommand(fixture);
+    fixture.backend->PushRead(EncodeFrame(MakeOperationResultFrame(static_cast<std::uint8_t>(sequence + 1U))));
+
+    assert(fixture.session->PollOnce().Succeeded());
+    assert(fixture.events.size() == 1U);
+    assert(fixture.events[0].type == UartSessionEventType::kUnexpectedCommandResponse);
+    assert(fixture.session->HasPendingCommand());
+    assert(fixture.session->Diagnostics().unexpected_command_responses == 1U);
+}
+
+void TestUnexpectedResponseDoesNotPoisonNextSequence() {
+    Fixture fixture;
+    const std::uint8_t first_sequence = SendRouteCommand(fixture);
+    const std::uint8_t next_sequence = static_cast<std::uint8_t>(first_sequence + 1U);
+    const auto early_next_response = EncodeFrame(MakeOperationResultFrame(next_sequence));
+    fixture.backend->PushRead(early_next_response);
+    assert(fixture.session->PollOnce().Succeeded());
+    assert(fixture.session->HasPendingCommand());
+
+    fixture.backend->PushRead(EncodeFrame(MakeOperationResultFrame(first_sequence)));
+    assert(fixture.session->PollOnce().Succeeded());
+    assert(!fixture.session->HasPendingCommand());
+
+    assert(SendRouteCommand(fixture) == next_sequence);
+    fixture.backend->PushRead(early_next_response);
+    assert(fixture.session->PollOnce().Succeeded());
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.events.back().type == UartSessionEventType::kCommandResponseReceived);
+}
 void TestDuplicateFrameIsNotDeliveredTwice() {
     Fixture fixture;
     const auto encoded = EncodeFrame(MakeEventFrame(20U));
@@ -311,6 +367,36 @@ void TestAckTimeoutRetriesSameFrameThreeTimes() {
     assert(fixture.events.back().type == UartSessionEventType::kAckTimeout);
 }
 
+void TestOneWayCommandIsWrittenOnceWithoutPendingRetry() {
+    Fixture fixture;
+    fixture.backend->PushWrite(UART_FRAME_OVERHEAD_SIZE);
+
+    const auto result = fixture.session->SendOneWayCommand(UART_CMD_EMERGENCY_STOP);
+
+    assert(result.Succeeded());
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.backend->writes.size() == 1U);
+    fixture.session->Tick(std::chrono::milliseconds{ UART_ACK_TIMEOUT_MS * 4U });
+    assert(fixture.backend->writes.size() == 1U);
+    assert(fixture.session->Diagnostics().command_retries == 0U);
+    assert(fixture.session->Diagnostics().ack_timeouts == 0U);
+}
+
+void TestPendingCommandCanBeCancelledBeforeOneWaySafetyCommand() {
+    Fixture fixture;
+    static_cast<void>(SendRouteCommand(fixture));
+    assert(fixture.session->HasPendingCommand());
+
+    assert(fixture.session->CancelPendingCommand());
+    assert(!fixture.session->HasPendingCommand());
+    assert(!fixture.session->CancelPendingCommand());
+
+    fixture.backend->PushWrite(UART_FRAME_OVERHEAD_SIZE);
+    const auto result = fixture.session->SendOneWayCommand(UART_CMD_RESET_DEVICE);
+    assert(result.Succeeded());
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.backend->writes.size() == 2U);
+}
 void TestDisconnectFailsPendingCommand() {
     Fixture fixture;
     const std::uint8_t sequence = SendRouteCommand(fixture);
@@ -337,8 +423,13 @@ int main() {
     TestMatchingAckCompletesPendingCommand();
     TestWrongSequenceAckDoesNotCompleteCommand();
     TestWrongPayloadCrcAckDoesNotCompleteCommand();
+    TestOperationResultCompletesPendingCommand();
+    TestWrongSequenceOperationResultDoesNotCompleteCommand();
+    TestUnexpectedResponseDoesNotPoisonNextSequence();
     TestDuplicateFrameIsNotDeliveredTwice();
     TestAckTimeoutRetriesSameFrameThreeTimes();
+    TestOneWayCommandIsWrittenOnceWithoutPendingRetry();
+    TestPendingCommandCanBeCancelledBeforeOneWaySafetyCommand();
     TestDisconnectFailsPendingCommand();
     return 0;
 }
