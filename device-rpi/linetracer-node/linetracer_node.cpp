@@ -176,6 +176,38 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
     if (event.type == UartSessionEventType::kAckReceived) {
         const std::uint8_t status = event.frame.payload[UART_ACK_STATUS_INDEX];
         const bool accepted = status == UART_STATUS_ACK || status == UART_STATUS_SUCCESS;
+        if (accepted && pending_.stage == PendingStage::kResetBeforePosition) {
+            active_work_id_.clear();
+            active_uart_job_id_ = UART_LINETRACER_JOB_ID_NONE;
+            active_route_id_ = UART_LINETRACER_ROUTE_NONE;
+            current_position_ = UART_LINETRACER_POSITION_NONE;
+
+            const std::array<std::uint8_t, UART_LINETRACER_SET_POSITION_PAYLOAD_SIZE> payload{
+                pending_.requested_position
+            };
+            const UartSessionSendResult send_result =
+                uart_session_.SendCommand(UART_CMD_LINETRACER_SET_CURRENT_POSITION, payload);
+            if (send_result.Succeeded()) {
+                pending_.sequence = send_result.sequence;
+                pending_.stage = PendingStage::kSetPosition;
+                return;
+            }
+
+            const LineTracerCommandStatus send_status = ToCommandStatus(send_result.status);
+            if (send_status == LineTracerCommandStatus::kUartBusy) {
+                EmitPendingResponse(mqtt::CommandResult::kRejected, std::string("ERR-UART-BUSY"),
+                                    "UART is busy before current position could be set");
+            } else if (send_status == LineTracerCommandStatus::kUartNotOpen) {
+                EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
+                                    "UART disconnected before current position could be set");
+            } else {
+                EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-IO"),
+                                    "failed to send current position after reset");
+            }
+            ClearPending();
+            return;
+        }
+
         if (accepted && pending_.effect == PendingEffect::kActivateJob) {
             active_work_id_ = pending_.work_id;
             active_uart_job_id_ = pending_.uart_job_id;
@@ -184,6 +216,10 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             active_work_id_.clear();
             active_uart_job_id_ = UART_LINETRACER_JOB_ID_NONE;
             active_route_id_ = UART_LINETRACER_ROUTE_NONE;
+            current_position_ = UART_LINETRACER_POSITION_NONE;
+        }
+        if (accepted && pending_.stage == PendingStage::kSetPosition) {
+            current_position_ = pending_.requested_position;
         }
         if (accepted) {
             EmitPendingResponse(mqtt::CommandResult::kSuccess, std::nullopt,
@@ -242,6 +278,10 @@ std::uint8_t LineTracerNode::ActiveRouteId() const noexcept {
     return active_route_id_;
 }
 
+std::uint8_t LineTracerNode::CurrentPosition() const noexcept {
+    return current_position_;
+}
+
 std::optional<std::uint8_t> LineTracerNode::RouteFromDestination(std::string_view destination) {
     const std::string normalized = NormalizeDestination(destination);
     if (normalized == "A" || normalized == "1" || normalized == "DESTA" || normalized == "DEST01" ||
@@ -259,6 +299,24 @@ std::optional<std::uint8_t> LineTracerNode::RouteFromDestination(std::string_vie
     return std::nullopt;
 }
 
+std::optional<std::uint8_t> LineTracerNode::PositionFromDestination(std::string_view destination) {
+    const std::optional<std::uint8_t> route_id = RouteFromDestination(destination);
+    if (!route_id.has_value()) {
+        return std::nullopt;
+    }
+
+    switch (*route_id) {
+        case UART_LINETRACER_ROUTE_A:
+            return UART_LINETRACER_POSITION_DEST_A;
+        case UART_LINETRACER_ROUTE_B:
+            return UART_LINETRACER_POSITION_DEST_B;
+        case UART_LINETRACER_ROUTE_C:
+            return UART_LINETRACER_POSITION_DEST_C;
+        default:
+            return std::nullopt;
+    }
+}
+
 LineTracerCommandResult LineTracerNode::HandleDestinationSet(const mqtt::DestinationSetPayload& command) {
     LineTracerCommandResult result{
         .mqtt_command = command.command,
@@ -274,6 +332,10 @@ LineTracerCommandResult LineTracerNode::HandleDestinationSet(const mqtt::Destina
     const std::optional<std::uint8_t> route_id = RouteFromDestination(command.destination);
     if (!route_id.has_value()) {
         result.status = LineTracerCommandStatus::kInvalidDestination;
+        return result;
+    }
+    if (current_position_ == UART_LINETRACER_POSITION_NONE) {
+        result.status = LineTracerCommandStatus::kCurrentPositionUnknown;
         return result;
     }
 
@@ -314,6 +376,7 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
 
     std::uint8_t uart_command = UART_CMD_NONE;
     PendingEffect effect = PendingEffect::kNone;
+    std::optional<std::uint8_t> requested_position;
     std::array<std::uint8_t, UART_LINETRACER_STOP_PAYLOAD_SIZE> payload{};
     std::size_t payload_length = 0U;
 
@@ -338,6 +401,17 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
         case DeviceControlAction::kInitialize:
             uart_command = UART_CMD_LINETRACER_RESET_SYSTEM;
             effect = PendingEffect::kClearJob;
+            if (const auto position = command.params.find("currentPosition"); position != command.params.end()) {
+                if (!position->is_string()) {
+                    result.status = LineTracerCommandStatus::kInvalidPosition;
+                    return result;
+                }
+                requested_position = PositionFromDestination(position->get<std::string>());
+                if (!requested_position.has_value()) {
+                    result.status = LineTracerCommandStatus::kInvalidPosition;
+                    return result;
+                }
+            }
             break;
         case DeviceControlAction::kSafetyRecovery:
             uart_command = UART_CMD_RESET_DEVICE;
@@ -355,6 +429,10 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
     result = Send(std::move(result), uart_command, payload.data(), payload_length);
     if (result.Succeeded()) {
         RememberPending(effect, result);
+        if (requested_position.has_value()) {
+            pending_.stage = PendingStage::kResetBeforePosition;
+            pending_.requested_position = *requested_position;
+        }
     }
     return result;
 }
@@ -554,6 +632,7 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
                 },
         });
 
+        current_position_ = route_id;
         active_work_id_.clear();
         active_uart_job_id_ = UART_LINETRACER_JOB_ID_NONE;
         active_route_id_ = UART_LINETRACER_ROUTE_NONE;

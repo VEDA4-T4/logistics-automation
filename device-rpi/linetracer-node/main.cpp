@@ -154,6 +154,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     switch (status) {
         case LineTracerCommandStatus::kInvalidTarget:
         case LineTracerCommandStatus::kInvalidDestination:
+        case LineTracerCommandStatus::kInvalidPosition:
+        case LineTracerCommandStatus::kCurrentPositionUnknown:
         case LineTracerCommandStatus::kNoActiveJob:
         case LineTracerCommandStatus::kUnsupportedMessage:
         case LineTracerCommandStatus::kUnsupportedCommand:
@@ -179,6 +181,10 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
             return "ERR-MQTT-INVALID-TARGET";
         case LineTracerCommandStatus::kInvalidDestination:
             return "ERR-MQTT-INVALID-DESTINATION";
+        case LineTracerCommandStatus::kInvalidPosition:
+            return "ERR-MQTT-INVALID-POSITION";
+        case LineTracerCommandStatus::kCurrentPositionUnknown:
+            return "ERR-CURRENT-POSITION-UNKNOWN";
         case LineTracerCommandStatus::kNoActiveJob:
             return "ERR-NO-ACTIVE-JOB";
         case LineTracerCommandStatus::kUnsupportedMessage:
