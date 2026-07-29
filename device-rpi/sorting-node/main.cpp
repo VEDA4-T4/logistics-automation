@@ -123,11 +123,14 @@ void UpdateDeviceStatus(const SortingReport& report, const std::shared_ptr<Devic
                    queued.message.message_type == mqtt::MessageType::kSensorStatus;
         });
         if (stale_status == outbox.end()) {
-            std::cerr
-                << "[sorting][mqtt][ERROR] outbound queue full; preserving responses, process events, and errors\n";
-            return false;
+            if (report.channel != SortingReportChannel::kResponse) {
+                std::cerr << "[sorting][mqtt][ERROR] outbound queue full; preserving queued command responses\n";
+                return false;
+            }
+            std::cerr << "[sorting][mqtt][WARN] outbound queue capacity exceeded to preserve a command response\n";
+        } else {
+            outbox.erase(stale_status);
         }
-        outbox.erase(stale_status);
     }
     outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
     return true;

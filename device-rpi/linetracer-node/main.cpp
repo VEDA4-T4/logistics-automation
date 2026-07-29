@@ -114,10 +114,14 @@ void UpdateDeviceStatus(const LineTracerReport& report, const std::shared_ptr<De
             return queued.channel == LineTracerReportChannel::kStatus;
         });
         if (stale_status == outbox.end()) {
-            std::cerr << "[linetracer][mqtt][ERROR] outbound queue full; preserving queued responses and events\n";
-            return false;
+            if (report.channel != LineTracerReportChannel::kResponse) {
+                std::cerr << "[linetracer][mqtt][ERROR] outbound queue full; preserving queued command responses\n";
+                return false;
+            }
+            std::cerr << "[linetracer][mqtt][WARN] outbound queue capacity exceeded to preserve a command response\n";
+        } else {
+            outbox.erase(stale_status);
         }
-        outbox.erase(stale_status);
     }
     outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
     return true;
