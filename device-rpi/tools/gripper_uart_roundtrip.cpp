@@ -544,6 +544,43 @@ void PrintStatus(const StatusSnapshot& status) {
     return reached_target ? 0 : 1;
 }
 
+[[nodiscard]] int RunShoulderElbowAngles(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device,
+                                         std::uint16_t target_shoulder, std::uint16_t target_elbow) {
+    constexpr std::uint16_t kAutomaticHomeMotionId = 143U;
+    constexpr std::uint16_t kCoordinatedMotionId = 144U;
+    StatusSnapshot status{};
+
+    std::printf("GRIPPER COORDINATED SHOULDER-ELBOW MOVE\nDevice: %.*s\n", static_cast<int>(device.size()),
+                device.data());
+    if (!ReadStatus(roundtrip, sequence, &status)) {
+        return 1;
+    }
+    PrintStatus(status);
+
+    if (status.homed == 0U) {
+        std::printf("Controller is not homed; running HOME first\n");
+        if (!RunHome(roundtrip, sequence, kAutomaticHomeMotionId) || !ReadStatus(roundtrip, sequence, &status)) {
+            return 1;
+        }
+        PrintStatus(status);
+    }
+
+    std::printf("Move Shoulder to %.1f degrees and Elbow to %.1f degrees\n",
+                static_cast<double>(target_shoulder) / 10.0, static_cast<double>(target_elbow) / 10.0);
+    if (!RunArmMotion(roundtrip, sequence, kCoordinatedMotionId, status.base_angle, target_shoulder, target_elbow,
+                      ArmDuration(status.base_angle, status.shoulder_angle, status.elbow_angle, status.base_angle,
+                                  target_shoulder, target_elbow)) ||
+        !ReadStatus(roundtrip, sequence, &status)) {
+        return 1;
+    }
+
+    const bool reached_target = status.state == UART_GRIPPER_STATE_IDLE && status.homed == 1U &&
+                                status.shoulder_angle == target_shoulder && status.elbow_angle == target_elbow;
+    PrintStatus(status);
+    std::printf("\nGRIPPER COORDINATED SHOULDER-ELBOW MOVE: %s\n", reached_target ? "PASS" : "FAIL");
+    return reached_target ? 0 : 1;
+}
+
 [[nodiscard]] int RunGripperAngle(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device,
                                   std::uint16_t target_angle) {
     constexpr std::uint16_t kGripperMotionId = 142U;
@@ -772,10 +809,19 @@ int main(int argc, char** argv) {
     std::uint8_t sequence = 10U;
     ArmJoint direct_joint{};
     std::uint16_t direct_angle{};
+    std::uint16_t direct_shoulder_angle{};
+    std::uint16_t direct_elbow_angle{};
     const bool direct_arm_mode = argc == 4 && ParseJoint(argv[2], &direct_joint);
     const bool direct_gripper_mode = argc == 4 && std::string_view(argv[2]) == "gripper";
-    const bool direct_mode = direct_arm_mode || direct_gripper_mode;
-    if (direct_arm_mode) {
+    const bool direct_shoulder_elbow_mode = argc == 5 && std::string_view(argv[2]) == "shoulder-elbow";
+    const bool direct_mode = direct_arm_mode || direct_gripper_mode || direct_shoulder_elbow_mode;
+    if (direct_shoulder_elbow_mode) {
+        if (!ParseAngleDegrees(argv[3], &direct_shoulder_angle) || !ParseAngleDegrees(argv[4], &direct_elbow_angle)) {
+            std::fprintf(stderr, "shoulder and elbow angles must be integers from 0 to 180 degrees\n");
+            return 2;
+        }
+        sequence = AutomaticSequence();
+    } else if (direct_arm_mode) {
         if (!ParseAngleDegrees(argv[3], &direct_angle)) {
             std::fprintf(stderr, "angle must be an integer from 0 to 180 degrees\n");
             return 2;
@@ -796,11 +842,12 @@ int main(int argc, char** argv) {
                           mode != "elbow-high-sweep" && mode != "gripper-sweep"))) {
         std::fprintf(stderr,
                      "usage: %s [device] [base|shoulder|elbow] [angle:0..180]\n"
+                     "   or: %s [device] shoulder-elbow [shoulder_angle:0..180] [elbow_angle:0..180]\n"
                      "   or: %s [device] gripper [angle:0..180]\n"
                      "   or: %s [device] [initial_sequence:0..255] "
                      "[roundtrip|base-sweep|base-wide-sweep|shoulder-sweep|shoulder-high-sweep|elbow-sweep|"
                      "elbow-high-sweep|gripper-sweep]\n",
-                     argv[0], argv[0], argv[0]);
+                     argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
 
@@ -809,6 +856,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (direct_shoulder_elbow_mode) {
+        return RunShoulderElbowAngles(roundtrip, sequence, device, direct_shoulder_angle, direct_elbow_angle);
+    }
     if (direct_arm_mode) {
         return RunJointAngle(roundtrip, sequence, device, direct_joint, direct_angle);
     }
