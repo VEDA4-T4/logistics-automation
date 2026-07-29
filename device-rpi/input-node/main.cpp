@@ -222,6 +222,7 @@ int RunInputDaemon(int argc, char* argv[]) {
     auto next_uart_reconnect = Clock::now();
     auto next_heartbeat = Clock::now();
     auto last_tick = Clock::now();
+    bool uart_disconnected_reported = false;
     std::clog << "[input][INFO] daemon started: id=" << device_id << "; uart=" << uart_path << '\n';
 
     while (stop_requested == 0) {
@@ -234,9 +235,17 @@ int RunInputDaemon(int argc, char* argv[]) {
             if (uart_session.Open(uart_path)) {
                 input_node.ResetControllerHeartbeatMonitor();
                 device_status->SetUartConnected(true);
-                queue_report(MakeUartLinkStatus("UART_CONNECTED", std::nullopt));
+                queue_report(MakeUartLinkStatus(uart_disconnected_reported ? "UART_RECONNECTED" : "UART_CONNECTED",
+                                                std::nullopt));
+                uart_disconnected_reported = false;
                 std::clog << "[input][uart][INFO] connected: " << uart_path << '\n';
             } else {
+                device_status->SetUartConnected(false);
+                if (!uart_disconnected_reported) {
+                    queue_report(MakeUartLinkStatus("UART_DISCONNECTED", std::string("ERR-UART-DISCONNECTED")));
+                    uart_disconnected_reported = true;
+                    std::cerr << "[input][uart][WARN] initial connection failed; reconnect scheduled\n";
+                }
                 next_uart_reconnect = now + kUartReconnectInterval;
             }
         }
@@ -258,9 +267,10 @@ int RunInputDaemon(int argc, char* argv[]) {
             input_node.Tick(elapsed);
         }
 
-        if (was_open && !uart_session.IsOpen()) {
+        if (was_open && !uart_session.IsOpen() && !uart_disconnected_reported) {
             device_status->SetUartConnected(false);
             queue_report(MakeUartLinkStatus("UART_DISCONNECTED", std::string("ERR-UART-DISCONNECTED")));
+            uart_disconnected_reported = true;
             next_uart_reconnect = Clock::now() + kUartReconnectInterval;
             std::cerr << "[input][uart][WARN] disconnected; reconnect scheduled\n";
         }
