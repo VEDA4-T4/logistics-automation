@@ -164,6 +164,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case LineTracerCommandStatus::kUartError:
             return mqtt::CommandResult::kFailed;
         case LineTracerCommandStatus::kSent:
+        case LineTracerCommandStatus::kSentNoReply:
             return mqtt::CommandResult::kProcessing;
     }
     return mqtt::CommandResult::kFailed;
@@ -189,6 +190,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case LineTracerCommandStatus::kUartError:
             return "ERR-UART-IO";
         case LineTracerCommandStatus::kSent:
+        case LineTracerCommandStatus::kSentNoReply:
             return {};
     }
     return "ERR-INTERNAL";
@@ -312,6 +314,7 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick);
         last_tick = now;
         uart_session.Tick(elapsed);
+        line_tracer.Tick(elapsed);
 
         if (!uart_session.IsOpen() && now >= next_uart_reconnect) {
             if (uart_session.Open(uart_path)) {

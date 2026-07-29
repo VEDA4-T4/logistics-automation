@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@ namespace logistics::device {
 
 enum class LineTracerCommandStatus {
     kSent,
+    kSentNoReply,
     kInvalidMessage,
     kInvalidTarget,
     kInvalidDestination,
@@ -67,6 +69,7 @@ public:
     void SetReportHandler(LineTracerReportHandler handler);
     [[nodiscard]] LineTracerCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
     void HandleUartEvent(const UartSessionEvent& event) noexcept;
+    void Tick(std::chrono::milliseconds elapsed) noexcept;
 
     [[nodiscard]] bool HasActiveJob() const noexcept;
     [[nodiscard]] std::string_view ActiveWorkId() const noexcept;
@@ -93,10 +96,19 @@ private:
         std::uint8_t route_id{};
     };
 
+    struct PendingSafetyContext {
+        bool active{};
+        contracts::mqtt::ControlCommand command{ contracts::mqtt::ControlCommand::kUnknown };
+        std::string request_id;
+        std::chrono::milliseconds elapsed{};
+    };
+
     [[nodiscard]] LineTracerCommandResult HandleDestinationSet(const contracts::mqtt::DestinationSetPayload& command);
     [[nodiscard]] LineTracerCommandResult HandleControlCommand(const contracts::mqtt::ControlCommandPayload& command);
+    [[nodiscard]] LineTracerCommandResult HandleEmergencyStop(const contracts::mqtt::EmergencyStopPayload& command);
     [[nodiscard]] LineTracerCommandResult Send(LineTracerCommandResult result, std::uint8_t command,
                                                const std::uint8_t* payload, std::size_t payload_length);
+    [[nodiscard]] LineTracerCommandResult SendOneWay(LineTracerCommandResult result, std::uint8_t command);
     [[nodiscard]] bool IsTargetedToThisNode(std::string_view target_device_id) const noexcept;
     [[nodiscard]] std::uint16_t AllocateJobId() noexcept;
     void RememberPending(PendingEffect effect, const LineTracerCommandResult& result);
@@ -104,6 +116,8 @@ private:
     void HandleLineTracerFrame(const uart_frame_t& frame) noexcept;
     void EmitPendingResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
                              std::string message) const noexcept;
+    void EmitSafetyResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
+                            std::string message) const noexcept;
     void EmitReport(LineTracerReport report) const noexcept;
 
     std::string device_id_;
@@ -113,6 +127,7 @@ private:
     std::uint8_t active_route_id_{};
     std::uint16_t next_uart_job_id_{ UART_LINETRACER_JOB_ID_MIN };
     PendingContext pending_{};
+    PendingSafetyContext pending_safety_{};
     std::uint8_t last_uart_state_{ UART_LINETRACER_STATE_IDLE };
     LineTracerReportHandler report_handler_;
 };

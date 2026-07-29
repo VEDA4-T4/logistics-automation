@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/device/device_control_policy.hpp"
 
 namespace logistics::device {
 namespace {
@@ -116,7 +117,7 @@ namespace mqtt = contracts::mqtt;
 }  // namespace
 
 bool LineTracerCommandResult::Succeeded() const noexcept {
-    return status == LineTracerCommandStatus::kSent;
+    return status == LineTracerCommandStatus::kSent || status == LineTracerCommandStatus::kSentNoReply;
 }
 
 LineTracerNode::LineTracerNode(std::string device_id, UartSession& uart_session)
@@ -141,12 +142,30 @@ LineTracerCommandResult LineTracerNode::HandleMqttCommand(const mqtt::MqttMessag
     if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
         return HandleControlCommand(*command);
     }
+    if (const auto* command = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message)) {
+        return HandleEmergencyStop(*command);
+    }
     return { .status = LineTracerCommandStatus::kUnsupportedMessage, .request_id = {}, .work_id = {} };
 }
 
 void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
     if (event.type == UartSessionEventType::kFrameReceived) {
         HandleLineTracerFrame(event.frame);
+        return;
+    }
+
+    if (event.type == UartSessionEventType::kTransportDisconnected ||
+        event.type == UartSessionEventType::kTransportError) {
+        if (pending_.active) {
+            EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
+                                "UART transport disconnected before acknowledgement");
+            ClearPending();
+        }
+        if (pending_safety_.active) {
+            EmitSafetyResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
+                               "UART transport disconnected before emergency stop confirmation");
+            pending_safety_ = {};
+        }
         return;
     }
 
@@ -189,12 +208,17 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
         ClearPending();
         return;
     }
+}
 
-    if (event.type == UartSessionEventType::kTransportDisconnected ||
-        event.type == UartSessionEventType::kTransportError) {
-        EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
-                            "UART transport disconnected before acknowledgement");
-        ClearPending();
+void LineTracerNode::Tick(const std::chrono::milliseconds elapsed) noexcept {
+    if (!pending_safety_.active || elapsed <= std::chrono::milliseconds::zero()) {
+        return;
+    }
+    pending_safety_.elapsed += elapsed;
+    if (pending_safety_.elapsed >= mqtt::kEmergencyStopConfirmationTimeout) {
+        EmitSafetyResponse(mqtt::CommandResult::kTimeout, std::string("ERR-SAFETY-CONFIRMATION-TIMEOUT"),
+                           "line tracer controller did not confirm the emergency stop");
+        pending_safety_ = {};
     }
 }
 
@@ -278,47 +302,80 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
         return result;
     }
 
-    if (command.command == mqtt::ControlCommand::kStop) {
-        result.uart_command = UART_CMD_LINETRACER_STOP_DRIVE;
-        if (!HasActiveJob()) {
-            result.status = LineTracerCommandStatus::kNoActiveJob;
+    std::uint8_t uart_command = UART_CMD_NONE;
+    PendingEffect effect = PendingEffect::kNone;
+    std::array<std::uint8_t, UART_LINETRACER_STOP_PAYLOAD_SIZE> payload{};
+    std::size_t payload_length = 0U;
+
+    switch (ResolveDeviceControlAction(command.command, command.component_id)) {
+        case DeviceControlAction::kStop:
+            if (!HasActiveJob()) {
+                result.status = LineTracerCommandStatus::kNoActiveJob;
+                return result;
+            }
+            uart_command = UART_CMD_LINETRACER_STOP_DRIVE;
+            payload[0] = static_cast<std::uint8_t>(active_uart_job_id_ & 0xffU);
+            payload[1] = static_cast<std::uint8_t>((active_uart_job_id_ >> 8U) & 0xffU);
+            payload_length = UART_LINETRACER_STOP_PAYLOAD_SIZE;
+            break;
+        case DeviceControlAction::kStart:
+            if (!HasActiveJob()) {
+                result.status = LineTracerCommandStatus::kNoActiveJob;
+                return result;
+            }
+            uart_command = UART_CMD_LINETRACER_RESUME_DRIVE;
+            break;
+        case DeviceControlAction::kInitialize:
+            uart_command = UART_CMD_LINETRACER_RESET_SYSTEM;
+            effect = PendingEffect::kClearJob;
+            break;
+        case DeviceControlAction::kSafetyRecovery:
+            uart_command = UART_CMD_RESET_DEVICE;
+            effect = PendingEffect::kClearJob;
+            break;
+        case DeviceControlAction::kStatusRequest:
+        case DeviceControlAction::kComponentRecovery:
+        case DeviceControlAction::kEmergencyStop:
+        case DeviceControlAction::kUnsupported:
+            result.status = LineTracerCommandStatus::kUnsupportedCommand;
             return result;
-        }
-        const std::array<std::uint8_t, UART_LINETRACER_STOP_PAYLOAD_SIZE> payload{
-            static_cast<std::uint8_t>(active_uart_job_id_ & 0xffU),
-            static_cast<std::uint8_t>((active_uart_job_id_ >> 8U) & 0xffU)
+    }
+
+    result.uart_command = uart_command;
+    result = Send(std::move(result), uart_command, payload.data(), payload_length);
+    if (result.Succeeded()) {
+        RememberPending(effect, result);
+    }
+    return result;
+}
+
+LineTracerCommandResult LineTracerNode::HandleEmergencyStop(const mqtt::EmergencyStopPayload& command) {
+    LineTracerCommandResult result{
+        .mqtt_command = command.command,
+        .request_id = command.request_id,
+        .work_id = active_work_id_,
+        .uart_job_id = active_uart_job_id_,
+        .uart_route_id = active_route_id_,
+        .uart_command = UART_CMD_EMERGENCY_STOP,
+    };
+    if (!IsTargetedToThisNode(command.target_device_id)) {
+        result.status = LineTracerCommandStatus::kInvalidTarget;
+        return result;
+    }
+    if (pending_.active) {
+        EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-EMERGENCY-STOP"),
+                            "line tracer command was preempted by an emergency stop");
+        ClearPending();
+    }
+    static_cast<void>(uart_session_.CancelPendingCommand());
+    result = SendOneWay(std::move(result), UART_CMD_EMERGENCY_STOP);
+    if (result.Succeeded()) {
+        pending_safety_ = {
+            .active = true,
+            .command = result.mqtt_command,
+            .request_id = result.request_id,
         };
-        result = Send(std::move(result), UART_CMD_LINETRACER_STOP_DRIVE, payload.data(), payload.size());
-        if (result.Succeeded()) {
-            RememberPending(PendingEffect::kNone, result);
-        }
-        return result;
     }
-
-    if (command.command == mqtt::ControlCommand::kStart || command.command == mqtt::ControlCommand::kRestart) {
-        result.uart_command = UART_CMD_LINETRACER_RESUME_DRIVE;
-        if (!HasActiveJob()) {
-            result.status = LineTracerCommandStatus::kNoActiveJob;
-            return result;
-        }
-        result = Send(std::move(result), UART_CMD_LINETRACER_RESUME_DRIVE, nullptr,
-                      UART_LINETRACER_RESUME_DRIVE_PAYLOAD_SIZE);
-        if (result.Succeeded()) {
-            RememberPending(PendingEffect::kNone, result);
-        }
-        return result;
-    }
-
-    if (command.command == mqtt::ControlCommand::kInitialize || command.command == mqtt::ControlCommand::kRecovery) {
-        result.uart_command = UART_CMD_LINETRACER_RESET_SYSTEM;
-        result = Send(std::move(result), UART_CMD_LINETRACER_RESET_SYSTEM, nullptr, UART_LINETRACER_RESET_PAYLOAD_SIZE);
-        if (result.Succeeded()) {
-            RememberPending(PendingEffect::kClearJob, result);
-        }
-        return result;
-    }
-
-    result.status = LineTracerCommandStatus::kUnsupportedCommand;
     return result;
 }
 
@@ -329,6 +386,14 @@ LineTracerCommandResult LineTracerNode::Send(LineTracerCommandResult result, std
     result.uart_result = uart_session_.SendCommand(command, payload_view);
     result.uart_sequence = result.uart_result.sequence;
     result.status = ToCommandStatus(result.uart_result.status);
+    return result;
+}
+
+LineTracerCommandResult LineTracerNode::SendOneWay(LineTracerCommandResult result, const std::uint8_t command) {
+    result.uart_result = uart_session_.SendOneWayCommand(command);
+    result.uart_sequence = result.uart_result.sequence;
+    result.status = result.uart_result.Succeeded() ? LineTracerCommandStatus::kSentNoReply
+                                                   : ToCommandStatus(result.uart_result.status);
     return result;
 }
 
@@ -370,13 +435,49 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
         return;
     }
 
+    const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
     const std::uint16_t job_id = uart_linetracer_event_job_id(frame.payload);
     const std::uint8_t route_id = frame.payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX];
+    if (event_id == UART_LINETRACER_EVENT_FAULT &&
+        frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX] == UART_ERROR_EMERGENCY_STOP) {
+        last_uart_state_ = UART_LINETRACER_STATE_EMERGENCY_STOP;
+        if (pending_safety_.active) {
+            EmitSafetyResponse(mqtt::CommandResult::kSuccess, std::nullopt,
+                               "line tracer controller confirmed the emergency stop");
+            pending_safety_ = {};
+        }
+        const auto active_job =
+            HasActiveJob() ? std::optional<std::string>{ active_work_id_ } : std::optional<std::string>{};
+        EmitReport({
+            .channel = LineTracerReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kUartError,
+                    .current_state = "EMERGENCY_STOP",
+                    .job_id = active_job,
+                    .error_code = std::string("ERR-EMERGENCY-STOP"),
+                },
+        });
+        EmitReport({
+            .channel = LineTracerReportChannel::kError,
+            .message_type = mqtt::MessageType::kErrorOccurred,
+            .data =
+                mqtt::ErrorOccurredPayload{
+                    .job_id = active_job,
+                    .error_code = "ERR-EMERGENCY-STOP",
+                    .error_level = "CRITICAL",
+                    .current_state = "EMERGENCY_STOP",
+                    .message = "line tracer controller reported an emergency stop",
+                    .distance = std::nullopt,
+                },
+        });
+        return;
+    }
     if (!HasActiveJob() || job_id != active_uart_job_id_ || route_id != active_route_id_) {
         return;
     }
 
-    const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
     const auto active_job = std::optional<std::string>{ active_work_id_ };
 
     if (event_id == UART_LINETRACER_EVENT_STATE_CHANGED) {
@@ -507,6 +608,26 @@ void LineTracerNode::EmitPendingResponse(mqtt::CommandResult result, std::option
             mqtt::CommandResponsePayload{
                 .request_id = pending_.request_id,
                 .command = pending_.mqtt_command,
+                .result = result,
+                .error_code = std::move(error_code),
+                .message = std::move(message),
+            },
+    });
+}
+
+void LineTracerNode::EmitSafetyResponse(mqtt::CommandResult result, std::optional<std::string> error_code,
+                                        std::string message) const noexcept {
+    if (!pending_safety_.active || pending_safety_.request_id.empty() ||
+        pending_safety_.command == mqtt::ControlCommand::kUnknown) {
+        return;
+    }
+    EmitReport({
+        .channel = LineTracerReportChannel::kResponse,
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .data =
+            mqtt::CommandResponsePayload{
+                .request_id = pending_safety_.request_id,
+                .command = pending_safety_.command,
                 .result = result,
                 .error_code = std::move(error_code),
                 .message = std::move(message),

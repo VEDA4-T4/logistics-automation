@@ -212,6 +212,22 @@ mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string target =
     };
 }
 
+mqtt::MqttMessage MakeEmergencyStop(std::string target = "PI-LT-01") {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-ESTOP-01",
+        .message_type = mqtt::MessageType::kEmergencyStop,
+        .source_id = "SERVER-01",
+        .timestamp = "2026-07-22T10:00:02+09:00",
+        .data =
+            mqtt::EmergencyStopPayload{
+                .request_id = "REQ-ESTOP-01",
+                .command = mqtt::ControlCommand::kEmergencyStop,
+                .target_device_id = std::move(target),
+            },
+    };
+}
+
 void AssignAndAcknowledge(Fixture& fixture) {
     const auto result = fixture.node->HandleMqttCommand(MakeDestination());
     assert(result.Succeeded());
@@ -277,6 +293,74 @@ void TestInitializeMapsToResetAndClearsActiveJob() {
     fixture.AcknowledgeLastFrame();
     assert(!fixture.node->HasActiveJob());
     assert(fixture.node->ActiveWorkId().empty());
+}
+
+void TestRecoveryUsesCommonDeviceResetAndClearsActiveJob() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const uart_frame_t frame = fixture.LastFrame();
+
+    assert(result.Succeeded());
+    assert(frame.command == UART_CMD_RESET_DEVICE);
+    assert(frame.length == 0U);
+    assert(fixture.node->HasActiveJob());
+    fixture.AcknowledgeLastFrame();
+    assert(!fixture.node->HasActiveJob());
+}
+
+void TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    assert(fixture.session->HasPendingCommand());
+
+    const auto result = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+
+    assert(result.status == LineTracerCommandStatus::kSentNoReply);
+    assert(fixture.LastFrame().command == UART_CMD_EMERGENCY_STOP);
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.reports.size() == 1U);
+    const auto& preempted = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(preempted.result == mqtt::CommandResult::kFailed);
+    assert(preempted.error_code == "ERR-EMERGENCY-STOP");
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_EMERGENCY_STOP);
+
+    assert(fixture.reports.size() == 4U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports[1]);
+    assert(response.request_id == "REQ-ESTOP-01");
+    assert(response.result == mqtt::CommandResult::kSuccess);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[2]);
+    assert(status.current_state == "EMERGENCY_STOP");
+    const auto& error = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports[3]);
+    assert(error.error_level == "CRITICAL");
+}
+
+void TestEmergencyStopConfirmationTimesOut() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+
+    fixture.node->Tick(mqtt::kEmergencyStopConfirmationTimeout);
+
+    assert(fixture.reports.size() == 1U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(response.result == mqtt::CommandResult::kTimeout);
+    assert(response.error_code == "ERR-SAFETY-CONFIRMATION-TIMEOUT");
+}
+
+void TestEmergencyStopFailsImmediatelyWhenUartDisconnects() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+
+    fixture.node->HandleUartEvent({
+        .type = logistics::device::UartSessionEventType::kTransportDisconnected,
+    });
+
+    assert(fixture.reports.size() == 1U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(response.result == mqtt::CommandResult::kFailed);
+    assert(response.error_code == "ERR-UART-DISCONNECTED");
 }
 
 void TestInvalidDestinationIsRejectedWithoutUartWrite() {
@@ -452,6 +536,10 @@ int main() {
     TestStopUsesActiveJobId();
     TestRestartMapsToResume();
     TestInitializeMapsToResetAndClearsActiveJob();
+    TestRecoveryUsesCommonDeviceResetAndClearsActiveJob();
+    TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault();
+    TestEmergencyStopConfirmationTimesOut();
+    TestEmergencyStopFailsImmediatelyWhenUartDisconnects();
     TestInvalidDestinationIsRejectedWithoutUartWrite();
     TestStopWithoutActiveJobIsRejected();
     TestWrongTargetIsRejected();
