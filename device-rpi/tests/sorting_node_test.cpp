@@ -468,10 +468,10 @@ void TestSafetyCommandsCompleteWithOriginalRequestId() {
     const auto& recovery = ReportPayload<mqtt::CommandResponsePayload>(recoveryFixture.reports.front());
     assert(recovery.request_id == "REQ-CONTROL-01");
     assert(recovery.result == mqtt::CommandResult::kSuccess);
-    const auto& ready = ReportPayload<mqtt::DeviceStatusPayload>(recoveryFixture.reports.back());
-    assert(ready.current_state == "READY");
+    const auto& stopped = ReportPayload<mqtt::DeviceStatusPayload>(recoveryFixture.reports.back());
+    assert(stopped.current_state == "STOPPED");
 
-    recoveryFixture.PushHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE);
+    recoveryFixture.PushHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE);
     assert(recoveryFixture.reports.size() == 2U);
 }
 
@@ -489,6 +489,18 @@ void TestSafetyAndHeartbeatTimeoutsAreReported() {
     fixture.PushHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE);
     const auto& recovered = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.back());
     assert(recovered.current_state == "RUNNING");
+}
+
+void TestEmergencyHeartbeatIsSafetyStateNotError() {
+    Fixture fixture;
+
+    fixture.PushHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP);
+
+    assert(fixture.reports.size() == 1U);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
+    assert(status.current_state == "EMERGENCY_STOP");
+    assert(status.status == mqtt::ConnectionState::kOnline);
+    assert(!status.error_code.has_value());
 }
 
 void TestReturnHomeAndCycleCompletePublishCompletion() {
@@ -579,9 +591,13 @@ void TestSafetyAndHealthEventsAreDecodedAndDeduplicated() {
 
     fixture.PushControllerEvent(0x03U, 1U, 2U);
     fixture.PushControllerEvent(0x03U, 1U, 2U);
-    assert(fixture.reports.size() == 2U);
-    const auto& safety = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.back());
-    assert(safety.error_code == "ERR-EMERGENCY-STOP");
+    assert(fixture.reports.size() == 1U);
+    const auto& safety = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.back());
+    assert(safety.current_state == "EMERGENCY_STOP");
+    assert(safety.status == mqtt::ConnectionState::kOnline);
+    assert(!safety.error_code.has_value());
+    fixture.PushHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE);
+    assert(fixture.reports.size() == 1U);
 
     fixture.reports.clear();
     fixture.PushControllerEvent(0x04U, 2U, 3U);
@@ -665,6 +681,7 @@ int main() {
     TestSafetyRecoveryUsesOneWayDeviceReset();
     TestSafetyCommandsCompleteWithOriginalRequestId();
     TestSafetyAndHeartbeatTimeoutsAreReported();
+    TestEmergencyHeartbeatIsSafetyStateNotError();
     TestReturnHomeAndCycleCompletePublishCompletion();
     TestReconnectStatusQueryPublishesControllerState();
     TestReconnectStatusRejectsDestinationMappingMismatch();

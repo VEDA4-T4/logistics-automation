@@ -614,7 +614,8 @@ void InputNode::HandleDeviceStatus(const uart_frame_t& frame) {
     }
     const std::uint8_t device_state = frame.payload[UART_DEVICE_STATUS_STATE_INDEX];
     const std::uint8_t error_code = frame.payload[UART_DEVICE_STATUS_ERROR_INDEX];
-    const bool has_error = error_code != UART_ERROR_NONE;
+    const bool emergency_stopped = device_state == UART_DEVICE_EMERGENCY_STOP;
+    const bool has_error = error_code != UART_ERROR_NONE && !emergency_stopped;
 
     EmitReport({
         .channel = InputReportChannel::kStatus,
@@ -658,7 +659,8 @@ void InputNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
         return;
     }
 
-    const bool has_error = error_code != UART_ERROR_NONE;
+    const bool emergency_stopped = device_state == UART_DEVICE_EMERGENCY_STOP;
+    const bool has_error = error_code != UART_ERROR_NONE && !emergency_stopped;
     EmitReport({
         .channel = InputReportChannel::kStatus,
         .message_type = mqtt::MessageType::kDeviceStatus,
@@ -736,18 +738,37 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     }
     last_controller_event_signature_ = signature;
 
-    if (event_id == kAppEventSafety && kind == kSafetyEventResetComplete) {
-        // The emergency-stop latch was released successfully. That is a recovery,
-        // not a fault, so report the resulting state instead of publishing good
-        // news on the error channel. The controller sets DEVICE_READY at the same
-        // moment (safety_task.c), so mirror that state here.
+    if (event_id == kAppEventSafety && kind == kSafetyEventEstopLatched) {
         EmitReport({
             .channel = InputReportChannel::kStatus,
             .message_type = mqtt::MessageType::kDeviceStatus,
             .data =
                 mqtt::DeviceStatusPayload{
                     .status = mqtt::ConnectionState::kOnline,
-                    .current_state = DeviceStateName(UART_DEVICE_READY),
+                    .current_state = DeviceStateName(UART_DEVICE_EMERGENCY_STOP),
+                    .job_id = std::nullopt,
+                    .error_code = std::nullopt,
+                },
+        });
+        if (last_heartbeat_state_.has_value()) {
+            last_heartbeat_state_->device_state = UART_DEVICE_EMERGENCY_STOP;
+            last_heartbeat_state_->error_code = UART_ERROR_NONE;
+        } else {
+            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE, UART_SENSOR_CLEAR };
+        }
+        return;
+    }
+
+    if (event_id == kAppEventSafety && kind == kSafetyEventResetComplete) {
+        // Recovery releases the safety latch but does not start the process.
+        // Report STOPPED so an explicit START is still required.
+        EmitReport({
+            .channel = InputReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = DeviceStateName(UART_DEVICE_STOPPED),
                     .job_id = std::nullopt,
                     .error_code = std::nullopt,
                 },
@@ -757,10 +778,10 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
         // second later. The sensor field is left as whatever heartbeat last saw (or
         // CLEAR if none yet) since this event carries no sensor information.
         if (last_heartbeat_state_.has_value()) {
-            last_heartbeat_state_->device_state = UART_DEVICE_READY;
+            last_heartbeat_state_->device_state = UART_DEVICE_STOPPED;
             last_heartbeat_state_->error_code = UART_ERROR_NONE;
         } else {
-            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR };
+            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR };
         }
         return;
     }

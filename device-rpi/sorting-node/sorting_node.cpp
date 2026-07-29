@@ -667,7 +667,7 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
                 EmitStatus("STOPPED");
                 break;
             case UART_CMD_EMERGENCY_STOP:
-                EmitStatus("EMERGENCY_STOP", std::string("ERR-EMERGENCY-STOP"));
+                EmitStatus("EMERGENCY_STOP");
                 break;
             default:
                 break;
@@ -804,7 +804,7 @@ void SortingNode::HandleHeartbeat(const uart_frame_t& frame) noexcept {
     }
     last_device_state_ = state;
     last_device_error_ = error;
-    const std::string error_code = UartErrorCode(error);
+    const std::string error_code = state == UART_DEVICE_EMERGENCY_STOP ? std::string{} : UartErrorCode(error);
     EmitStatus(DeviceStateName(state), error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code });
     if (!error_code.empty()) {
         EmitError(error_code, state == UART_DEVICE_EMERGENCY_STOP ? "CRITICAL" : "ERROR", DeviceStateName(state),
@@ -853,7 +853,7 @@ void SortingNode::HandleDeviceStatus(const uart_frame_t& frame) noexcept {
         return;
     }
     ClearControllerEventDedupIfHealthy(state, error);
-    const std::string error_code = UartErrorCode(error);
+    const std::string error_code = state == UART_DEVICE_EMERGENCY_STOP ? std::string{} : UartErrorCode(error);
     EmitStatus(DeviceStateName(state), error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code });
     if (!error_code.empty()) {
         EmitError(error_code, state == UART_DEVICE_EMERGENCY_STOP ? "CRITICAL" : "ERROR", DeviceStateName(state),
@@ -888,14 +888,15 @@ void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
         return;
     }
     if (kind == kSafetyEstopLatched) {
-        EmitStatus("EMERGENCY_STOP", std::string("ERR-EMERGENCY-STOP"));
-        EmitError("ERR-EMERGENCY-STOP", "CRITICAL", "EMERGENCY_STOP", "sorting controller latched the emergency stop");
+        last_device_state_ = UART_DEVICE_EMERGENCY_STOP;
+        last_device_error_ = UART_ERROR_NONE;
+        EmitStatus("EMERGENCY_STOP");
     } else if (kind == kSafetyResetComplete) {
         ClearActiveCycle();
         configured_speed_ = 0U;
-        last_device_state_ = UART_DEVICE_READY;
+        last_device_state_ = UART_DEVICE_STOPPED;
         last_device_error_ = UART_ERROR_NONE;
-        EmitStatus("READY");
+        EmitStatus("STOPPED");
     } else if (kind == kSafetyResetRejected) {
         EmitError("ERR-SAFETY-RESET-REJECTED", "ERROR", "EMERGENCY_STOP",
                   "sorting controller rejected safety reset result " + std::to_string(result));

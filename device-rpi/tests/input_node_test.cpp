@@ -550,10 +550,15 @@ void TestSafetyEventIsDecoded() {
     fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 1U, 0U));
 
     assert(fixture.reports.size() == 1);
-    const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.front().data);
-    assert(error != nullptr);
-    assert(error->error_code == "ERR-SAFETY-ESTOP-LATCHED");
-    assert(error->error_level == "ERROR");
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(status != nullptr);
+    assert(status->current_state == "EMERGENCY_STOP");
+    assert(status->status == mqtt::ConnectionState::kOnline);
+    assert(!status->error_code.has_value());
+
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+    assert(fixture.reports.size() == 1);
 }
 
 void TestSafetyResetCompleteIsReportedAsStatus() {
@@ -566,7 +571,7 @@ void TestSafetyResetCompleteIsReportedAsStatus() {
     assert(fixture.reports.front().channel == InputReportChannel::kStatus);
     const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
     assert(status != nullptr);
-    assert(status->current_state == "READY");
+    assert(status->current_state == "STOPPED");
     assert(status->status == mqtt::ConnectionState::kOnline);
     assert(!status->error_code.has_value());
 }
@@ -589,14 +594,19 @@ void TestSafetyResetCompleteSuppressesFollowingHeartbeatDuplicate() {
     fixture.node->HandleUartFrame(
         input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP, UART_SENSOR_CLEAR));
     assert(fixture.reports.size() == 1);
+    const auto* emergency = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(emergency != nullptr);
+    assert(emergency->current_state == "EMERGENCY_STOP");
+    assert(emergency->status == mqtt::ConnectionState::kOnline);
+    assert(!emergency->error_code.has_value());
 
     // SAFETY RESET_COMPLETE reports the recovery.
     fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 2U, 0U));
     assert(fixture.reports.size() == 2);
 
-    // The next heartbeat carries the same READY/NONE state; it must not re-report.
+    // The next heartbeat carries the same STOPPED/NONE state; it must not re-report.
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR));
     assert(fixture.reports.size() == 2);
 }
 
