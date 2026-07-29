@@ -127,6 +127,27 @@ static void test_mechanical_limits_reject_unsafe_target(void) {
     assert(servo.enable_calls == 1U);
 }
 
+static void test_elbow_accepts_full_calibration_range(void) {
+    fake_servo_t servo = { 0 };
+    gripper_servo_port_t port = make_port(&servo);
+    gripper_control_t controller;
+    uint8_t payload[UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE] = { 0 };
+
+    assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
+    home_controller(&controller, 0U);
+    write_u16(payload, UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, 19U);
+    write_u16(payload, UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, GRIPPER_BASE_HOME_ANGLE_DECI_DEG);
+    write_u16(payload, UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, GRIPPER_SHOULDER_HOME_ANGLE_DECI_DEG);
+    write_u16(payload, UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, GRIPPER_ELBOW_MAX_ANGLE_DECI_DEG);
+    write_u16(payload, UART_GRIPPER_MOVE_DURATION_LOW_INDEX, UART_GRIPPER_DURATION_MS_MIN);
+
+    assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
+           GRIPPER_CONTROL_OK);
+    gripper_control_tick(&controller, 2100U + controller.motion_duration_ms);
+    assert(servo.elbow_angle == GRIPPER_ELBOW_MAX_ANGLE_DECI_DEG);
+    assert(controller.state == UART_GRIPPER_STATE_IDLE);
+}
+
 static void test_short_requested_duration_is_extended_to_safe_joint_speed(void) {
     fake_servo_t servo = { 0 };
     gripper_servo_port_t port = make_port(&servo);
@@ -241,6 +262,7 @@ static void test_gripper_can_move_before_arm_home(void) {
 int main(void) {
     test_arm_motion_is_interpolated_and_completed();
     test_mechanical_limits_reject_unsafe_target();
+    test_elbow_accepts_full_calibration_range();
     test_short_requested_duration_is_extended_to_safe_joint_speed();
     test_safety_stop_requires_release_and_explicit_home();
     test_gripper_motion_and_servo_fault();

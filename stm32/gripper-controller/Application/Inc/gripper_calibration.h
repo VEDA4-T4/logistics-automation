@@ -17,7 +17,7 @@
 #define GRIPPER_SHOULDER_HOME_ANGLE_DECI_DEG 900U
 
 #define GRIPPER_ELBOW_MIN_ANGLE_DECI_DEG 300U
-#define GRIPPER_ELBOW_MAX_ANGLE_DECI_DEG 1650U
+#define GRIPPER_ELBOW_MAX_ANGLE_DECI_DEG 1800U
 #define GRIPPER_ELBOW_HOME_ANGLE_DECI_DEG 900U
 
 /* Conservative initial motion limits. Tune after testing the assembled arm. */
