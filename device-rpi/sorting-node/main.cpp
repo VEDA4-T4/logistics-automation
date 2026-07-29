@@ -38,6 +38,7 @@ inline constexpr std::size_t kCommandQueueCapacity = 64U;
 inline constexpr std::size_t kOutboundQueueCapacity = 256U;
 inline constexpr auto kUartPollTimeout = std::chrono::milliseconds{ 5 };
 inline constexpr auto kUartReconnectInterval = std::chrono::seconds{ 2 };
+inline constexpr auto kUartKeepAliveInterval = std::chrono::seconds{ 2 };
 inline constexpr auto kIdleDelay = std::chrono::milliseconds{ 5 };
 
 volatile std::sig_atomic_t stop_requested = 0;
@@ -334,6 +335,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
 
     auto last_tick = Clock::now();
     auto next_uart_reconnect = last_tick;
+    auto next_uart_keepalive = last_tick;
     auto next_heartbeat = last_tick;
     std::clog << "[sorting][INFO] daemon started: id=" << device_id << "; uart=" << uart_path << '\n';
 
@@ -347,6 +349,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
         if (!uart_session.IsOpen() && now >= next_uart_reconnect) {
             if (uart_session.Open(uart_path)) {
                 sorting_node.ResetControllerHeartbeatMonitor();
+                next_uart_keepalive = now + kUartKeepAliveInterval;
                 device_status->SetUartConnected(true);
                 uart_disconnected_reported = false;
                 uart_failure_pending = false;
@@ -419,6 +422,15 @@ int RunSortingDaemon(int argc, char* argv[]) {
                 if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
                     queue_report(*response);
                 }
+            }
+        }
+
+        if (!uart_failure_pending && uart_session.IsOpen() && !uart_session.HasPendingCommand() &&
+            !uart_resync_pending && now >= next_uart_keepalive) {
+            const UartSessionSendResult keepalive = uart_session.SendCommand(UART_CMD_SORTING_GET_STATUS);
+            next_uart_keepalive = now + kUartKeepAliveInterval;
+            if (!keepalive.Succeeded() && keepalive.status != UartSessionSendStatus::kBusy) {
+                uart_failure_pending = true;
             }
         }
 

@@ -595,6 +595,14 @@ void TestSafetyAndHealthEventsAreDecodedAndDeduplicated() {
     assert(fixture.reports.size() == 3U);
 }
 
+void TestOppositeUartChannelTimeoutIsIgnored() {
+    Fixture fixture;
+
+    fixture.PushControllerEvent(0x04U, 1U, 0U);
+
+    assert(fixture.reports.empty());
+}
+
 void TestHealthSensorStaleIncludesSensorId() {
     Fixture fixture;
 
@@ -663,6 +671,7 @@ int main() {
     TestConveyorStatusUsesHeartbeatStateNames();
     TestSensorStatusPublishesEveryDistanceMeasurement();
     TestSafetyAndHealthEventsAreDecodedAndDeduplicated();
+    TestOppositeUartChannelTimeoutIsIgnored();
     TestHealthSensorStaleIncludesSensorId();
     TestCommandTimeoutReportsTimeout();
     return 0;

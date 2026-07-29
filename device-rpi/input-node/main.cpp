@@ -36,6 +36,7 @@ inline constexpr std::size_t kCommandQueueCapacity = 64U;
 inline constexpr std::size_t kOutboundQueueCapacity = 256U;
 inline constexpr auto kSpontaneousPollTimeout = std::chrono::milliseconds{ 20 };
 inline constexpr auto kUartReconnectInterval = std::chrono::seconds{ 2 };
+inline constexpr auto kUartKeepAliveInterval = std::chrono::seconds{ 2 };
 inline constexpr auto kIdleDelay = std::chrono::milliseconds{ 5 };
 
 volatile std::sig_atomic_t stop_requested = 0;
@@ -220,6 +221,7 @@ int RunInputDaemon(int argc, char* argv[]) {
     std::signal(SIGTERM, HandleSignal);
 
     auto next_uart_reconnect = Clock::now();
+    auto next_uart_keepalive = Clock::now();
     auto next_heartbeat = Clock::now();
     auto last_tick = Clock::now();
     bool uart_disconnected_reported = false;
@@ -234,6 +236,7 @@ int RunInputDaemon(int argc, char* argv[]) {
         if (!uart_session.IsOpen() && now >= next_uart_reconnect) {
             if (uart_session.Open(uart_path)) {
                 input_node.ResetControllerHeartbeatMonitor();
+                next_uart_keepalive = now + kUartKeepAliveInterval;
                 device_status->SetUartConnected(true);
                 queue_report(MakeUartLinkStatus(uart_disconnected_reported ? "UART_RECONNECTED" : "UART_CONNECTED",
                                                 std::nullopt));
@@ -265,6 +268,20 @@ int RunInputDaemon(int argc, char* argv[]) {
         if (uart_session.IsOpen()) {
             static_cast<void>(uart_session.PollSpontaneous(kSpontaneousPollTimeout));
             input_node.Tick(elapsed);
+        }
+
+        if (uart_session.IsOpen() && now >= next_uart_keepalive) {
+            const InputCommandResult keepalive = input_node.RequestControllerStatus();
+            next_uart_keepalive = now + kUartKeepAliveInterval;
+            if (keepalive.status == InputCommandStatus::kTimeout ||
+                keepalive.status == InputCommandStatus::kUartNotOpen ||
+                keepalive.status == InputCommandStatus::kUartError) {
+                uart_session.Close();
+            } else if (!keepalive.Succeeded()) {
+                std::cerr << "[input][uart][WARN] keepalive rejected: status="
+                          << static_cast<int>(keepalive.uart_result.response_status)
+                          << "; error=" << static_cast<int>(keepalive.uart_result.response_error) << '\n';
+            }
         }
 
         if (was_open && !uart_session.IsOpen() && !uart_disconnected_reported) {

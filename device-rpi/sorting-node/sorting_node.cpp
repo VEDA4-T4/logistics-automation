@@ -909,6 +909,12 @@ void SortingNode::HandleHealthEvent(const uart_frame_t& frame) noexcept {
     const std::uint8_t kind = frame.payload[kHealthKindIndex];
     const std::uint8_t cause = frame.payload[kHealthCauseIndex];
     const std::uint8_t sensor_id = frame.payload[kHealthSensorIdIndex];
+    // UART timeout events are delivered to the opposite healthy channel.
+    // Reporting one here would incorrectly mark this sorting Pi as faulty;
+    // MQTT heartbeat expiry owns the affected node's offline state.
+    if (kind == kHealthUartChannelTimeout) {
+        return;
+    }
     if (IsRepeatedControllerEvent(kHealthEvent, kind, cause, sensor_id)) {
         return;
     }
@@ -916,10 +922,6 @@ void SortingNode::HandleHealthEvent(const uart_frame_t& frame) noexcept {
     std::string error_code;
     std::string message;
     switch (kind) {
-        case kHealthUartChannelTimeout:
-            error_code = "ERR-HEALTH-UART-CHANNEL-TIMEOUT";
-            message = "sorting controller reported a UART channel timeout";
-            break;
         case kHealthQueueOverflow:
             error_code = "ERR-HEALTH-QUEUE-OVERFLOW";
             message = "sorting controller reported a transient queue overflow";

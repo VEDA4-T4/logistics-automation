@@ -149,6 +149,22 @@ void TestStatusRequest() {
     assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_GET_STATUS);
 }
 
+void TestControllerStatusKeepAliveHasNoCommandResponse() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t& request) {
+        return std::vector<uart_frame_t>{ MakeStatusResponse(request.sequence, UART_INPUT_CONVEYOR_STOPPED, 50U) };
+    };
+
+    const InputCommandResult result = fixture.node->RequestControllerStatus();
+
+    assert(result.Succeeded());
+    assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_GET_STATUS);
+    assert(fixture.LastResponse() == nullptr);
+    assert(fixture.reports.size() == 1U);
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(status != nullptr && status->current_state == "STOPPED");
+}
+
 void TestReset() {
     Fixture fixture;
     fixture.backend->responder = AlwaysSucceed();
@@ -495,6 +511,15 @@ void TestHealthEventIsDecoded() {
     assert(error->error_code == "ERR-HEALTH-SENSOR-STALE");
 }
 
+void TestOppositeUartChannelTimeoutIsIgnored() {
+    Fixture fixture;
+    // The input Pi can only receive a timeout report for the opposite sorting
+    // channel because the timed-out channel itself is not writable.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 1U, 1U));
+
+    assert(fixture.reports.empty());
+}
+
 void TestHealthEventIncludesSensorId() {
     Fixture fixture;
     // APP_EVENT_HEALTH=0x04, kind=3 (SENSOR_STALE), cause=0 (input channel), sensorId=1.
@@ -583,9 +608,10 @@ void TestRepeatedControllerEventIsDeduplicated() {
     fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U));
     assert(fixture.reports.size() == 1);
 
-    // A different condition (kind or cause changes) is a new report.
+    // A timeout for the opposite UART is intentionally ignored; it describes
+    // another Pi and must not change this node's state.
     fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 1U, 1U));
-    assert(fixture.reports.size() == 2);
+    assert(fixture.reports.size() == 1);
 }
 
 }  // namespace
@@ -595,6 +621,7 @@ int main() {
     TestStartWithSpeed();
     TestStop();
     TestStatusRequest();
+    TestControllerStatusKeepAliveHasNoCommandResponse();
     TestReset();
     TestRecoveryReleasesLatchFireAndForget();
     TestControllerFailure();
@@ -618,6 +645,7 @@ int main() {
     TestHeartbeatReportsOnlyOnChange();
     TestHeartbeatDoesNotDuplicateSensorTransition();
     TestHealthEventIsDecoded();
+    TestOppositeUartChannelTimeoutIsIgnored();
     TestHealthEventIncludesSensorId();
     TestSafetyEventIsDecoded();
     TestSafetyResetCompleteIsReportedAsStatus();

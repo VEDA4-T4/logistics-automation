@@ -302,6 +302,18 @@ InputCommandResult InputNode::HandleMqttCommand(const mqtt::MqttMessage& message
     return result;
 }
 
+InputCommandResult InputNode::RequestControllerStatus() {
+    InputCommandResult result{
+        .mqtt_command = mqtt::ControlCommand::kUnknown,
+        .uart_command = UART_CMD_INPUT_CONVEYOR_GET_STATUS,
+    };
+    result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_GET_STATUS, {});
+    if (result.Succeeded()) {
+        EmitConveyorStatus(result.uart_result.response_frame);
+    }
+    return result;
+}
+
 InputCommandResult InputNode::HandleEmergencyStop(const mqtt::EmergencyStopPayload& command) {
     InputCommandResult result{
         .mqtt_command = command.command,
@@ -674,6 +686,13 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     const bool has_detail = frame.length > kAppEventCauseIndex;
     const std::uint8_t kind = has_detail ? frame.payload[kAppEventKindIndex] : 0U;
     const std::uint8_t cause = has_detail ? frame.payload[kAppEventCauseIndex] : 0U;
+
+    // A timed-out UART cannot receive its own health event, so the STM32 sends
+    // this event over the opposite, still healthy channel. The central server
+    // already determines the affected Pi's availability from MQTT heartbeats.
+    if (event_id == kAppEventHealth && kind == 1U) {
+        return;
+    }
 
     if ((event_id == kAppEventSafety) && pending_safety_.active) {
         const bool estopConfirmed =
