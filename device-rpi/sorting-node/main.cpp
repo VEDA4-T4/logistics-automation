@@ -278,7 +278,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
     const std::string uart_path = ResolveUartPath(argc, argv);
     auto device_status = std::make_shared<DeviceStatus>(device_id);
     UartSession uart_session;
-    SortingNode sorting_node(device_id, uart_session);
+    SortingNode sorting_node(device_id, uart_session, config.sorting_default_speed);
     MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(contracts::DeviceRole::kSorting)),
                                device_status);
 

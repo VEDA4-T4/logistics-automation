@@ -391,9 +391,14 @@ void TestControllerErrorsDistinguishRejectionFromFailure() {
 
 void TestStartConfiguresSpeedBeforeStartingConveyor() {
     Fixture fixture;
-    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart)).status ==
-           SortingCommandStatus::kInvalidSpeed);
-    assert(fixture.backend->writes.empty());
+    const auto default_speed_result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart));
+    assert(default_speed_result.Succeeded());
+    assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
+    assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
+    fixture.PushOperationResult();
+    assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_START);
+    fixture.PushOperationResult();
+    fixture.reports.clear();
 
     mqtt::Json params = mqtt::Json::object();
     params["speed"] = 50;
@@ -439,7 +444,7 @@ void TestEmergencyStopPreemptsPendingCommandAndIsNotRetried() {
 void TestSafetyRecoveryUsesOneWayDeviceReset() {
     Fixture fixture;
 
-    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery, "SAFETY"));
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
 
     assert(result.status == SortingCommandStatus::kSentNoReply);
     assert(fixture.LastCommand().command == UART_CMD_RESET_DEVICE);
@@ -456,8 +461,7 @@ void TestSafetyCommandsCompleteWithOriginalRequestId() {
     assert(estop.result == mqtt::CommandResult::kSuccess);
 
     Fixture recoveryFixture;
-    const auto recoveryResult =
-        recoveryFixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery, "SAFETY"));
+    const auto recoveryResult = recoveryFixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
     assert(recoveryResult.status == SortingCommandStatus::kSentNoReply);
     recoveryFixture.PushControllerEvent(0x03U, 2U, 0U);
     assert(recoveryFixture.reports.size() == 2U);
@@ -492,7 +496,7 @@ void TestReturnHomeAndCycleCompletePublishCompletion() {
     ActivateCycle(fixture);
     const std::uint16_t cycle_id = fixture.node->ActiveCycleId();
 
-    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery, "GATE"));
     const uart_frame_t frame = fixture.LastCommand();
     assert(result.Succeeded());
     assert(frame.command == UART_CMD_SORTING_RETURN_HOME);

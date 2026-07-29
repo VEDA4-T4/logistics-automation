@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/device/device_control_policy.hpp"
 
 namespace logistics::device {
 namespace {
@@ -226,9 +227,10 @@ bool SortingCommandResult::Succeeded() const noexcept {
     return status == SortingCommandStatus::kSent || status == SortingCommandStatus::kSentNoReply;
 }
 
-SortingNode::SortingNode(std::string device_id, UartSession& uart_session)
-    : device_id_(std::move(device_id)), uart_session_(uart_session) {
-    if (!mqtt::IsValidTopicLevel(device_id_)) {
+SortingNode::SortingNode(std::string device_id, UartSession& uart_session, const std::uint8_t default_speed)
+    : device_id_(std::move(device_id)), uart_session_(uart_session), default_speed_(default_speed) {
+    if (!mqtt::IsValidTopicLevel(device_id_) || default_speed == 0U ||
+        default_speed > UART_SORTING_CONVEYOR_SPEED_MAX) {
         throw std::invalid_argument("sorting device ID must be one non-wildcard MQTT topic level");
     }
 }
@@ -399,14 +401,16 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
     std::size_t payload_length = 0U;
     std::uint8_t requested_speed = 0U;
 
-    switch (command.command) {
-        case mqtt::ControlCommand::kStart:
-        case mqtt::ControlCommand::kRestart: {
+    switch (ResolveDeviceControlAction(command.command, command.component_id)) {
+        case DeviceControlAction::kStart: {
             bool invalid_speed = false;
-            const std::optional<std::uint8_t> speed = SpeedFromParams(command.params, invalid_speed);
-            if (invalid_speed || (!speed.has_value() && configured_speed_ == 0U)) {
+            std::optional<std::uint8_t> speed = SpeedFromParams(command.params, invalid_speed);
+            if (invalid_speed) {
                 result.status = SortingCommandStatus::kInvalidSpeed;
                 return result;
+            }
+            if (!speed.has_value() && configured_speed_ == 0U) {
+                speed = default_speed_;
             }
             if (speed.has_value()) {
                 requested_speed = *speed;
@@ -420,31 +424,30 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
             }
             break;
         }
-        case mqtt::ControlCommand::kStop:
+        case DeviceControlAction::kStop:
             uart_command = UART_CMD_SORTING_CONVEYOR_STOP;
             break;
-        case mqtt::ControlCommand::kInitialize:
+        case DeviceControlAction::kInitialize:
             uart_command = UART_CMD_SORTING_RESET;
             effect = PendingEffect::kClearCycle;
             break;
-        case mqtt::ControlCommand::kStatusRequest:
+        case DeviceControlAction::kStatusRequest:
             uart_command = NormalizeIdentifier(command.component_id) == "CONVEYOR"
                                ? UART_CMD_SORTING_CONVEYOR_GET_STATUS
                                : UART_CMD_SORTING_GET_STATUS;
             break;
-        case mqtt::ControlCommand::kRecovery:
-            if (NormalizeIdentifier(command.component_id) == "SAFETY") {
-                result.uart_command = UART_CMD_RESET_DEVICE;
-                result = SendOneWay(std::move(result), UART_CMD_RESET_DEVICE, nullptr, 0U);
-                if (result.Succeeded()) {
-                    pending_safety_ = { .active = true,
-                                        .expected = PendingSafetyEvent::kResetComplete,
-                                        .command = result.mqtt_command,
-                                        .request_id = result.request_id };
-                }
-                return result;
+        case DeviceControlAction::kSafetyRecovery:
+            result.uart_command = UART_CMD_RESET_DEVICE;
+            result = SendOneWay(std::move(result), UART_CMD_RESET_DEVICE, nullptr, 0U);
+            if (result.Succeeded()) {
+                pending_safety_ = { .active = true,
+                                    .expected = PendingSafetyEvent::kResetComplete,
+                                    .command = result.mqtt_command,
+                                    .request_id = result.request_id };
             }
-            if (!command.component_id.empty() && NormalizeIdentifier(command.component_id) != "GATE") {
+            return result;
+        case DeviceControlAction::kComponentRecovery:
+            if (NormalizeControlComponent(command.component_id) != "GATE") {
                 result.status = SortingCommandStatus::kUnsupportedCommand;
                 return result;
             }
@@ -458,9 +461,8 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
             payload = cycle_payload.data();
             payload_length = UART_SORTING_RETURN_HOME_PAYLOAD_SIZE;
             break;
-        case mqtt::ControlCommand::kUnknown:
-        case mqtt::ControlCommand::kEmergencyStop:
-        case mqtt::ControlCommand::kDestinationSet:
+        case DeviceControlAction::kEmergencyStop:
+        case DeviceControlAction::kUnsupported:
             result.status = SortingCommandStatus::kUnsupportedCommand;
             return result;
     }

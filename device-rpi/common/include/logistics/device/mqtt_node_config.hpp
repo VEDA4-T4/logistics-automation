@@ -22,6 +22,7 @@ struct MqttNodeConfig final {
     std::uint16_t keep_alive_seconds{ 30 };
     std::uint32_t reconnect_min_delay_seconds{ 1 };
     std::uint32_t reconnect_max_delay_seconds{ 30 };
+    std::uint8_t sorting_default_speed{ 50 };
     bool clean_session{ true };
     bool log_upload_enabled{ false };
     LogSpoolConfig log_upload;

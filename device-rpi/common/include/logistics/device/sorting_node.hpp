@@ -68,7 +68,7 @@ using SortingReportHandler = std::function<void(const SortingReport& report)>;
  */
 class SortingNode final {
 public:
-    SortingNode(std::string device_id, UartSession& uart_session);
+    SortingNode(std::string device_id, UartSession& uart_session, std::uint8_t default_speed = 50U);
 
     void SetReportHandler(SortingReportHandler handler);
     [[nodiscard]] SortingCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
@@ -163,6 +163,7 @@ private:
     std::array<std::uint8_t, 3U> sensor_states_{ 0xffU, 0xffU, 0xffU };
     std::uint8_t last_device_state_{ 0xffU };
     std::uint8_t last_device_error_{ 0xffU };
+    std::uint8_t default_speed_{ 50U };
     std::uint8_t configured_speed_{};
     std::optional<std::uint32_t> last_controller_event_signature_;
     std::chrono::milliseconds controller_heartbeat_elapsed_{};
