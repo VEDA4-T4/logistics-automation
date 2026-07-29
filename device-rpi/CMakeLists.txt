@@ -73,6 +73,12 @@ if(BUILD_TESTING)
     target_link_libraries(device_sorting_node_test PRIVATE logistics::device_sorting_node)
     logistics_enable_warnings(device_sorting_node_test)
     add_test(NAME device_sorting_node_test COMMAND device_sorting_node_test)
+
+    add_executable(device_node_command_queue_test tests/node_command_queue_test.cpp)
+    target_include_directories(device_node_command_queue_test PRIVATE common/include)
+    target_link_libraries(device_node_command_queue_test PRIVATE logistics::contracts)
+    logistics_enable_warnings(device_node_command_queue_test)
+    add_test(NAME device_node_command_queue_test COMMAND device_node_command_queue_test)
 endif()
 
 if(NOT LOGISTICS_BUILD_DEVICE_NODES)

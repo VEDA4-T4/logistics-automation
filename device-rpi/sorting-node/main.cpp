@@ -10,7 +10,6 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,6 +23,7 @@
 #include "logistics/device/mqtt_node_client.hpp"
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
+#include "logistics/device/node_command_queue.hpp"
 #include "logistics/device/sorting_node.hpp"
 #include "logistics/device/uart_session.hpp"
 #include "logistics/device/uart_transport.hpp"
@@ -67,47 +67,6 @@ void HandleSignal(int) {
     }
     return std::string(UartTransport::kDefaultDevicePath);
 }
-
-class CommandInbox final {
-public:
-    [[nodiscard]] bool Push(const mqtt::MqttMessage& message) {
-        std::lock_guard lock(mutex_);
-        if (emergency_messages_.size() + messages_.size() >= kCommandQueueCapacity) {
-            return false;
-        }
-        if (mqtt::GetPayload<mqtt::EmergencyStopPayload>(message) != nullptr) {
-            emergency_messages_.push_back(message);
-        } else {
-            messages_.push_back(message);
-        }
-        return true;
-    }
-
-    [[nodiscard]] std::optional<mqtt::MqttMessage> TryPopEmergency() {
-        std::lock_guard lock(mutex_);
-        if (emergency_messages_.empty()) {
-            return std::nullopt;
-        }
-        mqtt::MqttMessage message = std::move(emergency_messages_.front());
-        emergency_messages_.pop_front();
-        return message;
-    }
-
-    [[nodiscard]] std::optional<mqtt::MqttMessage> TryPop() {
-        std::lock_guard lock(mutex_);
-        if (messages_.empty()) {
-            return std::nullopt;
-        }
-        mqtt::MqttMessage message = std::move(messages_.front());
-        messages_.pop_front();
-        return message;
-    }
-
-private:
-    std::mutex mutex_;
-    std::deque<mqtt::MqttMessage> emergency_messages_;
-    std::deque<mqtt::MqttMessage> messages_;
-};
 
 struct OutboundMessage {
     SortingReportChannel channel{ SortingReportChannel::kStatus };
@@ -277,42 +236,6 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     };
 }
 
-[[nodiscard]] std::optional<mqtt::MqttMessage> MakeQueueFullResponse(const mqtt::MqttMessage& command,
-                                                                     std::string_view device_id) {
-    std::string request_id;
-    mqtt::ControlCommand control_command = mqtt::ControlCommand::kUnknown;
-    if (const auto* payload = mqtt::GetPayload<mqtt::DestinationSetPayload>(command); payload != nullptr) {
-        request_id = payload->request_id;
-        control_command = payload->command;
-    } else if (const auto* payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(command); payload != nullptr) {
-        request_id = payload->request_id;
-        control_command = payload->command;
-    } else if (const auto* payload = mqtt::GetPayload<mqtt::EmergencyStopPayload>(command); payload != nullptr) {
-        request_id = payload->request_id;
-        control_command = payload->command;
-    }
-
-    if (request_id.empty() || control_command == mqtt::ControlCommand::kUnknown) {
-        return std::nullopt;
-    }
-
-    return mqtt::MqttMessage{
-        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = command.message_id + "-QUEUE-FULL",
-        .message_type = mqtt::MessageType::kCommandResponse,
-        .source_id = std::string(device_id),
-        .timestamp = CurrentIso8601Timestamp(),
-        .data =
-            mqtt::CommandResponsePayload{
-                .request_id = std::move(request_id),
-                .command = control_command,
-                .result = mqtt::CommandResult::kRejected,
-                .error_code = std::string("ERR-COMMAND-QUEUE-FULL"),
-                .message = "sorting command rejected because the local command queue is full",
-            },
-    };
-}
-
 [[nodiscard]] SortingReport MakeUartStatus(std::string current_state, std::optional<std::string> work_id,
                                            std::optional<std::string> error_code) {
     return {
@@ -356,7 +279,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
     MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(contracts::DeviceRole::kSorting)),
                                device_status);
 
-    CommandInbox command_inbox;
+    NodeCommandQueue command_inbox(kCommandQueueCapacity);
     std::deque<OutboundMessage> outbox;
     const std::string message_session_id = GenerateMessageSessionId();
     std::uint64_t message_sequence = 1U;
@@ -386,7 +309,10 @@ int RunSortingDaemon(int argc, char* argv[]) {
     mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
         if (!command_inbox.Push(message)) {
             std::cerr << "[sorting][mqtt][ERROR] command queue full; command rejected: " << message.message_id << '\n';
-            const auto response = MakeQueueFullResponse(message, device_id);
+            const auto response = MakeTerminalCommandResponse(
+                message, device_id, message.message_id + "-QUEUE-FULL", CurrentIso8601Timestamp(),
+                mqtt::CommandResult::kRejected, std::string("ERR-COMMAND-QUEUE-FULL"),
+                "sorting command rejected because the local command queue is full");
             if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
                 std::cerr << "[sorting][mqtt][ERROR] unable to publish command queue full response: "
                           << message.message_id << '\n';
@@ -435,6 +361,25 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
+        if (!uart_session.IsOpen()) {
+            const auto reject_disconnected = [&](const mqtt::MqttMessage& command) {
+                const auto response = MakeTerminalCommandResponse(
+                    command, device_id, command.message_id + "-UART-DISCONNECTED", CurrentIso8601Timestamp(),
+                    mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
+                    "sorting command failed because the STM32 UART is disconnected");
+                if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                    std::cerr << "[sorting][mqtt][ERROR] unable to publish UART disconnected response: "
+                              << command.message_id << '\n';
+                }
+            };
+            while (auto command = command_inbox.TryPopEmergency()) {
+                reject_disconnected(*command);
+            }
+            while (auto command = command_inbox.TryPop()) {
+                reject_disconnected(*command);
+            }
+        }
+
         if (uart_session.IsOpen()) {
             if (auto command = command_inbox.TryPopEmergency(); command.has_value()) {
                 const SortingCommandResult result = sorting_node.HandleMqttCommand(*command);
@@ -454,7 +399,8 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
-        if (!emergency_processed && uart_session.IsOpen() && !uart_session.HasPendingCommand() && uart_resync_pending) {
+        if (!emergency_processed && !uart_failure_pending && uart_session.IsOpen() &&
+            !uart_session.HasPendingCommand() && uart_resync_pending) {
             const SortingCommandResult status_result = sorting_node.RequestControllerStatus();
             if (status_result.Succeeded()) {
                 uart_resync_pending = false;
@@ -463,8 +409,8 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
-        if (!emergency_processed && uart_session.IsOpen() && !uart_session.HasPendingCommand() &&
-            !uart_resync_pending) {
+        if (!emergency_processed && !uart_failure_pending && uart_session.IsOpen() &&
+            !uart_session.HasPendingCommand() && !uart_resync_pending) {
             if (auto command = command_inbox.TryPop(); command.has_value()) {
                 const SortingCommandResult result = sorting_node.HandleMqttCommand(*command);
                 if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {

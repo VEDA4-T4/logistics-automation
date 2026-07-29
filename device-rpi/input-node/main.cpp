@@ -9,7 +9,6 @@
 #include <deque>
 #include <filesystem>
 #include <iostream>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,6 +24,7 @@
 #include "logistics/device/mqtt_node_client.hpp"
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
+#include "logistics/device/node_command_queue.hpp"
 
 namespace logistics::device {
 namespace {
@@ -65,29 +65,6 @@ void HandleSignal(int) {
     }
     return std::string(UartTransport::kDefaultDevicePath);
 }
-
-class CommandInbox final {
-public:
-    [[nodiscard]] bool Push(const mqtt::MqttMessage& message) {
-        std::lock_guard lock(mutex_);
-        if (messages_.size() >= kCommandQueueCapacity) {
-            return false;
-        }
-        messages_.push_back(message);
-        return true;
-    }
-
-    [[nodiscard]] std::deque<mqtt::MqttMessage> TakeAll() {
-        std::deque<mqtt::MqttMessage> messages;
-        std::lock_guard lock(mutex_);
-        messages.swap(messages_);
-        return messages;
-    }
-
-private:
-    std::mutex mutex_;
-    std::deque<mqtt::MqttMessage> messages_;
-};
 
 struct OutboundMessage {
     InputReportChannel channel{ InputReportChannel::kStatus };
@@ -203,7 +180,7 @@ int RunInputDaemon(int argc, char* argv[]) {
     MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(contracts::DeviceRole::kInput)),
                                device_status);
 
-    CommandInbox command_inbox;
+    NodeCommandQueue command_inbox(kCommandQueueCapacity);
     std::deque<OutboundMessage> outbox;
     const std::string message_session_id = GenerateMessageSessionId();
     std::uint64_t message_sequence = 1U;
@@ -215,9 +192,17 @@ int RunInputDaemon(int argc, char* argv[]) {
     input_node.SetReportHandler(queue_report);
     uart_session.SetSpontaneousFrameHandler(
         [&input_node](const uart_frame_t& frame) { input_node.HandleUartFrame(frame); });
-    mqtt_client.SetCommandHandler([&command_inbox](const mqtt::MqttMessage& message) {
+    mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
         if (!command_inbox.Push(message)) {
             std::cerr << "[input][mqtt][ERROR] command queue full; command rejected: " << message.message_id << '\n';
+            const auto response = MakeTerminalCommandResponse(
+                message, device_id, message.message_id + "-QUEUE-FULL", CurrentIso8601Timestamp(),
+                mqtt::CommandResult::kRejected, std::string("ERR-COMMAND-QUEUE-FULL"),
+                "input command rejected because the local command queue is full");
+            if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                std::cerr << "[input][mqtt][ERROR] unable to publish command queue full response: "
+                          << message.message_id << '\n';
+            }
         }
     });
 
@@ -236,6 +221,7 @@ int RunInputDaemon(int argc, char* argv[]) {
     std::clog << "[input][INFO] daemon started: id=" << device_id << "; uart=" << uart_path << '\n';
 
     while (stop_requested == 0) {
+        bool emergency_processed = false;
         const auto now = Clock::now();
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick);
         last_tick = now;
@@ -253,8 +239,14 @@ int RunInputDaemon(int argc, char* argv[]) {
 
         const bool was_open = uart_session.IsOpen();
 
-        for (const mqtt::MqttMessage& command : command_inbox.TakeAll()) {
-            static_cast<void>(input_node.HandleMqttCommand(command));
+        if (auto command = command_inbox.TryPopEmergency(); command.has_value()) {
+            static_cast<void>(input_node.HandleMqttCommand(*command));
+            emergency_processed = true;
+        }
+        if (!emergency_processed) {
+            if (auto command = command_inbox.TryPop(); command.has_value()) {
+                static_cast<void>(input_node.HandleMqttCommand(*command));
+            }
         }
 
         if (uart_session.IsOpen()) {
