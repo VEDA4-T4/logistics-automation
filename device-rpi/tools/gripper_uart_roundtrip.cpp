@@ -363,6 +363,16 @@ enum class ArmJoint : std::uint8_t {
     return true;
 }
 
+[[nodiscard]] bool ParsePositionPercent(std::string_view text, std::uint8_t* position_percent) {
+    unsigned int value{};
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || value > UART_GRIPPER_POSITION_MAX) {
+        return false;
+    }
+    *position_percent = static_cast<std::uint8_t>(value);
+    return true;
+}
+
 [[nodiscard]] constexpr std::uint8_t GripperAngleToPositionPercent(std::uint16_t angle_deci_degrees) {
     constexpr std::uint32_t kRoundingOffset = UART_GRIPPER_ANGLE_DECI_DEG_MAX / 2U;
     return static_cast<std::uint8_t>(
@@ -611,6 +621,35 @@ void PrintStatus(const StatusSnapshot& status) {
     return reached_target ? 0 : 1;
 }
 
+[[nodiscard]] int RunGripperPercent(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device,
+                                    std::uint8_t target_position) {
+    constexpr std::uint16_t kGripperMotionId = 145U;
+    StatusSnapshot status{};
+
+    std::printf("GRIPPER DIRECT CLAW PERCENT MOVE\nDevice: %.*s\n", static_cast<int>(device.size()), device.data());
+    if (!ReadStatus(roundtrip, sequence, &status)) {
+        return 1;
+    }
+    PrintStatus(status);
+
+    if (status.homed == 0U) {
+        std::printf("Arm is not homed; moving the independent Gripper only\n");
+    }
+
+    std::printf("Move Gripper to %u%% (~%.1f degrees)\n", target_position,
+                static_cast<double>(GripperPositionPercentToAngle(target_position)) / 10.0);
+    if (!RunGripperMotion(roundtrip, sequence, kGripperMotionId, target_position,
+                          ClawDuration(status.gripper_position, target_position)) ||
+        !ReadStatus(roundtrip, sequence, &status)) {
+        return 1;
+    }
+
+    const bool reached_target = status.state == UART_GRIPPER_STATE_IDLE && status.gripper_position == target_position;
+    PrintStatus(status);
+    std::printf("\nGRIPPER DIRECT CLAW PERCENT MOVE: %s\n", reached_target ? "PASS" : "FAIL");
+    return reached_target ? 0 : 1;
+}
+
 [[nodiscard]] int RunBaseSweep(Roundtrip& roundtrip, std::uint8_t sequence, std::string_view device, bool wide_sweep) {
     constexpr std::uint16_t kHomeMotionId = 100U;
     constexpr std::uint16_t kLowMotionId = 101U;
@@ -811,10 +850,13 @@ int main(int argc, char** argv) {
     std::uint16_t direct_angle{};
     std::uint16_t direct_shoulder_angle{};
     std::uint16_t direct_elbow_angle{};
+    std::uint8_t direct_gripper_percent{};
     const bool direct_arm_mode = argc == 4 && ParseJoint(argv[2], &direct_joint);
     const bool direct_gripper_mode = argc == 4 && std::string_view(argv[2]) == "gripper";
+    const bool direct_gripper_percent_mode = argc == 4 && std::string_view(argv[2]) == "gripper-percent";
     const bool direct_shoulder_elbow_mode = argc == 5 && std::string_view(argv[2]) == "shoulder-elbow";
-    const bool direct_mode = direct_arm_mode || direct_gripper_mode || direct_shoulder_elbow_mode;
+    const bool direct_mode =
+        direct_arm_mode || direct_gripper_mode || direct_gripper_percent_mode || direct_shoulder_elbow_mode;
     if (direct_shoulder_elbow_mode) {
         if (!ParseAngleDegrees(argv[3], &direct_shoulder_angle) || !ParseAngleDegrees(argv[4], &direct_elbow_angle)) {
             std::fprintf(stderr, "shoulder and elbow angles must be integers from 0 to 180 degrees\n");
@@ -833,6 +875,12 @@ int main(int argc, char** argv) {
             return 2;
         }
         sequence = AutomaticSequence();
+    } else if (direct_gripper_percent_mode) {
+        if (!ParsePositionPercent(argv[3], &direct_gripper_percent)) {
+            std::fprintf(stderr, "gripper position must be an integer from 0 to 100 percent\n");
+            return 2;
+        }
+        sequence = AutomaticSequence();
     }
 
     const std::string_view mode = (argc >= 4) ? argv[3] : "roundtrip";
@@ -844,10 +892,11 @@ int main(int argc, char** argv) {
                      "usage: %s [device] [base|shoulder|elbow] [angle:0..180]\n"
                      "   or: %s [device] shoulder-elbow [shoulder_angle:0..180] [elbow_angle:0..180]\n"
                      "   or: %s [device] gripper [angle:0..180]\n"
+                     "   or: %s [device] gripper-percent [position:0..100]\n"
                      "   or: %s [device] [initial_sequence:0..255] "
                      "[roundtrip|base-sweep|base-wide-sweep|shoulder-sweep|shoulder-high-sweep|elbow-sweep|"
                      "elbow-high-sweep|gripper-sweep]\n",
-                     argv[0], argv[0], argv[0], argv[0]);
+                     argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
 
@@ -864,6 +913,9 @@ int main(int argc, char** argv) {
     }
     if (direct_gripper_mode) {
         return RunGripperAngle(roundtrip, sequence, device, direct_angle);
+    }
+    if (direct_gripper_percent_mode) {
+        return RunGripperPercent(roundtrip, sequence, device, direct_gripper_percent);
     }
 
     if (mode == "base-sweep" || mode == "base-wide-sweep") {
