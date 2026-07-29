@@ -13,6 +13,7 @@ typedef struct {
     uint32_t busy_commands;
     uint32_t response_retries;
     uint32_t response_drops;
+    uint32_t event_retries;
     uint32_t motion_completions;
     uint32_t servo_faults;
     uint32_t safety_queue_drops;

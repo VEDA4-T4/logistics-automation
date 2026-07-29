@@ -154,7 +154,7 @@ gripper_control_result_t gripper_control_init(gripper_control_t* controller, con
     controller->base_angle = GRIPPER_BASE_HOME_ANGLE_DECI_DEG;
     controller->shoulder_angle = GRIPPER_SHOULDER_HOME_ANGLE_DECI_DEG;
     controller->elbow_angle = GRIPPER_ELBOW_HOME_ANGLE_DECI_DEG;
-    controller->gripper_position = GRIPPER_HOME_POSITION_PERCENT;
+    controller->gripper_position = GRIPPER_INITIAL_POSITION_PERCENT;
     return GRIPPER_CONTROL_OK;
 }
 

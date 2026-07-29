@@ -36,6 +36,22 @@ static int32_t gripper_servo_enable(void* context) {
         return 0;
     }
 
+    /* Match the first physical PWM output to the controller's logical state. */
+    __HAL_TIM_SET_COMPARE(
+        &htim3, TIM_CHANNEL_1,
+        gripper_servo_angle_to_pulse(GRIPPER_BASE_HOME_ANGLE_DECI_DEG, GRIPPER_SERVO_MIN_PULSE_US,
+                                     GRIPPER_SERVO_MAX_PULSE_US));
+    __HAL_TIM_SET_COMPARE(
+        &htim3, TIM_CHANNEL_2,
+        gripper_servo_angle_to_pulse(GRIPPER_SHOULDER_HOME_ANGLE_DECI_DEG, GRIPPER_SHOULDER_SERVO_MIN_PULSE_US,
+                                     GRIPPER_SHOULDER_SERVO_MAX_PULSE_US));
+    __HAL_TIM_SET_COMPARE(
+        &htim3, TIM_CHANNEL_3,
+        gripper_servo_angle_to_pulse(GRIPPER_ELBOW_HOME_ANGLE_DECI_DEG, GRIPPER_ELBOW_SERVO_MIN_PULSE_US,
+                                     GRIPPER_ELBOW_SERVO_MAX_PULSE_US));
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4,
+                          gripper_servo_position_to_pulse(GRIPPER_INITIAL_POSITION_PERCENT));
+
     if (HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1) != HAL_OK) {
         return -2;
     }

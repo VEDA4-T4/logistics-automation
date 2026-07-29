@@ -39,6 +39,7 @@
 /* MG90S gripper range, calibrated independently from the arm joints. */
 #define GRIPPER_CLOSED_PULSE_US 600U
 #define GRIPPER_OPEN_PULSE_US 2400U
+#define GRIPPER_INITIAL_POSITION_PERCENT 60U
 #define GRIPPER_HOME_POSITION_PERCENT 100U
 
 #define GRIPPER_CONTROL_UPDATE_PERIOD_MS 20U

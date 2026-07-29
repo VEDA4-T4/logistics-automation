@@ -79,6 +79,7 @@ static void test_arm_motion_is_interpolated_and_completed(void) {
 
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     assert(controller.homed == 0U);
+    assert(controller.gripper_position == GRIPPER_INITIAL_POSITION_PERCENT);
     write_u16(payload, UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, 17U);
     write_u16(payload, UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, 1200U);
     write_u16(payload, UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, 1000U);
@@ -251,7 +252,7 @@ static void test_gripper_can_move_before_arm_home(void) {
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_SET_GRIPPER, payload, sizeof(payload), 0U) ==
            GRIPPER_CONTROL_OK);
     assert(controller.homed == 0U);
-    assert(controller.motion_duration_ms == 1250U);
+    assert(controller.motion_duration_ms == 250U);
 
     gripper_control_tick(&controller, controller.motion_duration_ms);
     assert(servo.gripper_position == 50U);

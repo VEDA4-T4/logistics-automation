@@ -17,12 +17,8 @@
 
 #define GRIPPER_QUEUE_WAIT_MS 5U
 
-typedef enum {
-    GRIPPER_TASK_SAFETY_RELEASED = 0U,
-    GRIPPER_TASK_SAFETY_STOP_REQUESTED,
-    GRIPPER_TASK_SAFETY_STOPPED,
-    GRIPPER_TASK_SAFETY_RELEASE_REQUESTED
-} gripper_task_safety_state_t;
+#define GRIPPER_TASK_SAFETY_STOP_PENDING (1U << 0U)
+#define GRIPPER_TASK_SAFETY_RELEASE_PENDING (1U << 1U)
 
 typedef struct {
     uint8_t valid;
@@ -40,11 +36,14 @@ static gripper_control_t gripperController;
 static gripper_control_snapshot_t gripperSnapshot;
 static gripper_control_task_stats_t gripperTaskStats;
 static gripper_transaction_cache_t gripperCache;
-static atomic_uint_fast8_t gripperSafetyState = ATOMIC_VAR_INIT(GRIPPER_TASK_SAFETY_RELEASED);
+static atomic_uint_fast8_t gripperSafetyPendingFlags = ATOMIC_VAR_INIT(0U);
 static uint8_t gripperPendingResponseValid;
 static uint8_t gripperPendingSequence;
 static uint8_t gripperPendingLength;
 static uint8_t gripperPendingResponse[UART_MAX_PAYLOAD_SIZE];
+static uint8_t gripperPendingEventValid;
+static uint8_t gripperPendingEventLength;
+static uint8_t gripperPendingEvent[UART_MAX_PAYLOAD_SIZE];
 
 static void gripper_control_task_publish_snapshot(void) {
     gripper_control_snapshot_t snapshot;
@@ -77,26 +76,37 @@ static uint8_t gripper_control_task_enqueue_safety(app_control_message_kind_t ki
 }
 
 uint8_t gripper_control_task_notify_safety_stop(void) {
-    atomic_store_explicit(&gripperSafetyState, GRIPPER_TASK_SAFETY_STOP_REQUESTED, memory_order_release);
+    (void)atomic_fetch_or_explicit(&gripperSafetyPendingFlags, GRIPPER_TASK_SAFETY_STOP_PENDING,
+                                   memory_order_release);
     return gripper_control_task_enqueue_safety(APP_CONTROL_MESSAGE_SAFETY_STOP, UART_CMD_EMERGENCY_STOP);
 }
 
 uint8_t gripper_control_task_notify_safety_release(void) {
-    atomic_store_explicit(&gripperSafetyState, GRIPPER_TASK_SAFETY_RELEASE_REQUESTED, memory_order_release);
+    (void)atomic_fetch_or_explicit(&gripperSafetyPendingFlags, GRIPPER_TASK_SAFETY_RELEASE_PENDING,
+                                   memory_order_release);
     return gripper_control_task_enqueue_safety(APP_CONTROL_MESSAGE_SAFETY_RELEASE, UART_CMD_RESET_DEVICE);
 }
 
 static uint8_t gripper_control_task_service_tx(void) {
-    if (gripperPendingResponseValid == 0U) {
-        return 1U;
-    }
-    if (CommTx_SendWithSequence(gripperPendingSequence, UART_CMD_RESPONSE, gripperPendingResponse,
-                                gripperPendingLength) != 0) {
-        gripperTaskStats.response_retries++;
-        return 0U;
+    if (gripperPendingResponseValid != 0U) {
+        if (CommTx_SendWithSequence(gripperPendingSequence, UART_CMD_RESPONSE, gripperPendingResponse,
+                                    gripperPendingLength) != 0) {
+            gripperTaskStats.response_retries++;
+            return 0U;
+        }
+
+        gripperPendingResponseValid = 0U;
     }
 
-    gripperPendingResponseValid = 0U;
+    if (gripperPendingEventValid != 0U) {
+        if (CommTx_Send(UART_CMD_EVENT, gripperPendingEvent, gripperPendingEventLength) != 0) {
+            gripperTaskStats.event_retries++;
+            return 0U;
+        }
+
+        gripperPendingEventValid = 0U;
+    }
+
     return 1U;
 }
 
@@ -199,16 +209,17 @@ static void gripper_control_task_cache(const control_command_t* message, gripper
 }
 
 static void gripper_control_task_apply_pending_safety(void) {
-    const uint_fast8_t state = atomic_load_explicit(&gripperSafetyState, memory_order_acquire);
+    const uint_fast8_t pending =
+        atomic_exchange_explicit(&gripperSafetyPendingFlags, 0U, memory_order_acq_rel);
 
-    if (state == GRIPPER_TASK_SAFETY_STOP_REQUESTED) {
+    if ((pending & GRIPPER_TASK_SAFETY_STOP_PENDING) != 0U) {
         gripper_control_apply_safety_stop(&gripperController);
         gripperCache.valid = 0U;
-        atomic_store_explicit(&gripperSafetyState, GRIPPER_TASK_SAFETY_STOPPED, memory_order_release);
-    } else if (state == GRIPPER_TASK_SAFETY_RELEASE_REQUESTED) {
+    }
+
+    if ((pending & GRIPPER_TASK_SAFETY_RELEASE_PENDING) != 0U) {
         gripper_control_release_safety(&gripperController);
         gripperCache.valid = 0U;
-        atomic_store_explicit(&gripperSafetyState, GRIPPER_TASK_SAFETY_RELEASED, memory_order_release);
     }
 }
 
@@ -290,7 +301,9 @@ static void gripper_control_task_emit_completion(void) {
     }
 
     if (CommTx_Send(UART_CMD_EVENT, payload, length) != 0) {
-        gripperTaskStats.response_drops++;
+        memcpy(gripperPendingEvent, payload, length);
+        gripperPendingEventLength = length;
+        gripperPendingEventValid = 1U;
     }
 }
 
