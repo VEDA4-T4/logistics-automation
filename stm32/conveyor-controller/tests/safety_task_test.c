@@ -439,15 +439,23 @@ static void test_estop_during_release_relatches(void) {
     assert(releaseLatchCalls == 0U);
 }
 
-static void test_reset_without_estop_is_ignored(void) {
+static void test_reset_without_estop_is_idempotent(void) {
     safety_task_stats_t stats;
+    const tx_urgent_record_t* event;
 
     reset_all();
     drive_reset(APP_UART_CHANNEL_1);
 
     assert(latchDisableCalls == 0U);
     assert(releaseLatchCalls == 0U);
-    assert(txRecordCount == 0U);
+    assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 1U);
+    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_READY);
+    assert(channelDeviceErrors[COMM_TX_CH_INPUT] == UART_ERROR_NONE);
+    assert(txRecordCount == 1U);
+    event = find_event(COMM_TX_CH_INPUT);
+    assert(event != NULL);
+    assert(event->payload[APP_SAFETY_EVENT_KIND_INDEX] == SAFETY_EVENT_RESET_COMPLETE);
+    assert(event->payload[APP_SAFETY_EVENT_RESULT_INDEX] == SAFETY_RESET_OK);
 
     Safety_GetStats(&stats);
     assert(stats.resetIgnored == 1U);
@@ -482,7 +490,7 @@ int main(void) {
     test_both_scoped_resets_can_progress_independently();
     test_reset_times_out_and_keeps_latched();
     test_estop_during_release_relatches();
-    test_reset_without_estop_is_ignored();
+    test_reset_without_estop_is_idempotent();
     test_fatal_trigger_enters_estop();
     return 0;
 }
