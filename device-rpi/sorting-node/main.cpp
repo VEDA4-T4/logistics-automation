@@ -98,9 +98,10 @@ void UpdateDeviceStatus(const SortingReport& report, const std::shared_ptr<Devic
         device_status->SetErrorCode(status->error_code);
         return;
     }
-    if (const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&report.data); error != nullptr) {
-        device_status->SetErrorCode(error->error_code);
-    }
+    // ERROR_OCCURRED is an event for the operational log, not an authoritative
+    // snapshot of the node's active state. Persisting it in DeviceStatus would
+    // repeat a transient error in every MQTT heartbeat until some unrelated
+    // controller state transition emitted a new DEVICE_STATUS.
 }
 
 [[nodiscard]] bool EnqueueOutbound(std::deque<OutboundMessage>& outbox, const SortingReport& report,

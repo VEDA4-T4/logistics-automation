@@ -95,13 +95,10 @@ void UpdateDeviceStatus(const InputReport& report, DeviceStatus& device_status) 
         device_status.SetErrorCode(status->error_code);
         return;
     }
-    if (const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&report.data); error != nullptr) {
-        // An async error/event updates the active error code but must not overwrite
-        // the operational current_state (conveyor/sensor state from DeviceStatus
-        // reports); otherwise a transient controller event would mask the real
-        // state in the heartbeat until the next operational update.
-        device_status.SetErrorCode(error->error_code);
-    }
+    // ERROR_OCCURRED is an event for the operational log, not an authoritative
+    // snapshot of the node's active state. Persisting it in DeviceStatus would
+    // repeat a transient error in every MQTT heartbeat until some unrelated
+    // controller state transition emitted a new DEVICE_STATUS.
 }
 
 [[nodiscard]] bool EnqueueOutbound(std::deque<OutboundMessage>& outbox, const InputReport& report,
