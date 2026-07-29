@@ -217,6 +217,24 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     return "ERR-INTERNAL";
 }
 
+[[nodiscard]] std::string LocalCommandMessage(SortingCommandStatus status) {
+    switch (status) {
+        case SortingCommandStatus::kDuplicate:
+            return "sorting command already applied; motor action was not repeated";
+        case SortingCommandStatus::kSentNoReply:
+            return "sorting safety command was sent once; controller state follows asynchronously";
+        case SortingCommandStatus::kInvalidTarget:
+            return "sorting command target does not match this node";
+        case SortingCommandStatus::kUartBusy:
+            return "sorting UART is busy with another command";
+        case SortingCommandStatus::kUnsupportedMessage:
+        case SortingCommandStatus::kUnsupportedCommand:
+            return "sorting command is not supported";
+        default:
+            return "sorting command was rejected before STM32 completion";
+    }
+}
+
 [[nodiscard]] std::optional<SortingReport> MakeLocalCommandResponse(const SortingCommandResult& result) {
     if (result.status == SortingCommandStatus::kSent || result.request_id.empty() ||
         result.mqtt_command == mqtt::ControlCommand::kUnknown) {
@@ -232,11 +250,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
                 .command = result.mqtt_command,
                 .result = LocalCommandResult(result.status),
                 .error_code = LocalCommandError(result.status),
-                .message = result.status == SortingCommandStatus::kDuplicate
-                               ? "sorting command already applied; motor action was not repeated"
-                           : result.status == SortingCommandStatus::kSentNoReply
-                               ? "sorting safety command was sent once; controller state follows asynchronously"
-                               : "sorting command was rejected before STM32 completion",
+                .message = LocalCommandMessage(result.status),
             },
     };
 }

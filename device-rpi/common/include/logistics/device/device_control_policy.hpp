@@ -38,6 +38,11 @@ struct DeviceControlRequestView final {
     return normalized;
 }
 
+[[nodiscard]] inline bool IsControlTargetForDevice(std::string_view target_device_id,
+                                                   std::string_view device_id) noexcept {
+    return target_device_id == device_id || target_device_id == "ALL" || target_device_id == "SYSTEM";
+}
+
 [[nodiscard]] inline DeviceControlAction ResolveDeviceControlAction(const contracts::mqtt::ControlCommand command,
                                                                     std::string_view component_id = {}) {
     namespace mqtt = contracts::mqtt;

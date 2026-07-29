@@ -253,7 +253,7 @@ mqtt::MqttMessage MakeDestination(std::string destination = "2", std::string tar
 }
 
 mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string component = {},
-                              mqtt::Json params = mqtt::Json::object()) {
+                              mqtt::Json params = mqtt::Json::object(), std::string target = "PI-SORT-01") {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = "MSG-CONTROL-01",
@@ -264,7 +264,7 @@ mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string componen
             mqtt::ControlCommandPayload{
                 .request_id = "REQ-CONTROL-01",
                 .command = command,
-                .target_device_id = "PI-SORT-01",
+                .target_device_id = std::move(target),
                 .component_id = std::move(component),
                 .params = std::move(params),
             },
@@ -449,6 +449,16 @@ void TestSafetyRecoveryUsesOneWayDeviceReset() {
     assert(result.status == SortingCommandStatus::kSentNoReply);
     assert(fixture.LastCommand().command == UART_CMD_RESET_DEVICE);
     assert(!fixture.session->HasPendingCommand());
+}
+
+void TestSystemTargetUsesSafetyRecovery() {
+    Fixture fixture;
+
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kRecovery, {}, mqtt::Json::object(), "SYSTEM"));
+
+    assert(result.status == SortingCommandStatus::kSentNoReply);
+    assert(fixture.LastCommand().command == UART_CMD_RESET_DEVICE);
 }
 
 void TestSafetyCommandsCompleteWithOriginalRequestId() {
@@ -679,6 +689,7 @@ int main() {
     TestStartConfiguresSpeedBeforeStartingConveyor();
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
     TestSafetyRecoveryUsesOneWayDeviceReset();
+    TestSystemTargetUsesSafetyRecovery();
     TestSafetyCommandsCompleteWithOriginalRequestId();
     TestSafetyAndHeartbeatTimeoutsAreReported();
     TestEmergencyHeartbeatIsSafetyStateNotError();

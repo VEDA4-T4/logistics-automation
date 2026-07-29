@@ -215,7 +215,7 @@ std::string DeviceControlState::CurrentState() const {
 }
 
 bool DeviceControlState::IsTargetedToThisNode(const std::string_view target_device_id) const noexcept {
-    return target_device_id == config_.device_id || target_device_id == "ALL" || target_device_id == "SYSTEM";
+    return IsControlTargetForDevice(target_device_id, config_.device_id);
 }
 
 mqtt::MqttMessage DeviceControlState::MakeResponse(std::string_view request_id, const mqtt::ControlCommand command,

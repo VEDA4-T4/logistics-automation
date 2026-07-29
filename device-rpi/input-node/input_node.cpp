@@ -279,7 +279,7 @@ void InputNode::SetReportHandler(InputReportHandler handler) {
 }
 
 bool InputNode::IsTargetedToThisNode(std::string_view target_device_id) const noexcept {
-    return target_device_id == device_id_ || target_device_id == "ALL";
+    return IsControlTargetForDevice(target_device_id, device_id_);
 }
 
 InputCommandResult InputNode::HandleMqttCommand(const mqtt::MqttMessage& message) {

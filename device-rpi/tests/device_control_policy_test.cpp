@@ -43,6 +43,13 @@ void TestCommonActions() {
            device::DeviceControlAction::kEmergencyStop);
 }
 
+void TestCommonTargets() {
+    assert(device::IsControlTargetForDevice("PI-01", "PI-01"));
+    assert(device::IsControlTargetForDevice("ALL", "PI-01"));
+    assert(device::IsControlTargetForDevice("SYSTEM", "PI-01"));
+    assert(!device::IsControlTargetForDevice("PI-02", "PI-01"));
+}
+
 void TestRecoveryDefaultsToSafety() {
     assert(device::ResolveDeviceControlAction(mqtt::ControlCommand::kRecovery) ==
            device::DeviceControlAction::kSafetyRecovery);
@@ -73,6 +80,7 @@ void TestRequestsUseOneView() {
 
 int main() {
     TestCommonActions();
+    TestCommonTargets();
     TestRecoveryDefaultsToSafety();
     TestRequestsUseOneView();
     return 0;
