@@ -79,6 +79,12 @@ if(BUILD_TESTING)
     target_link_libraries(device_node_command_queue_test PRIVATE logistics::contracts)
     logistics_enable_warnings(device_node_command_queue_test)
     add_test(NAME device_node_command_queue_test COMMAND device_node_command_queue_test)
+
+    add_executable(device_control_policy_test tests/device_control_policy_test.cpp)
+    target_include_directories(device_control_policy_test PRIVATE common/include)
+    target_link_libraries(device_control_policy_test PRIVATE logistics::contracts)
+    logistics_enable_warnings(device_control_policy_test)
+    add_test(NAME device_control_policy_test COMMAND device_control_policy_test)
 endif()
 
 if(NOT LOGISTICS_BUILD_DEVICE_NODES)

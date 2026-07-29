@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/device/device_control_policy.hpp"
 
 namespace logistics::device {
 namespace {
@@ -342,8 +343,8 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
 
     const std::array<std::uint8_t, UART_INPUT_CONVEYOR_COMMAND_PAYLOAD_SIZE> conveyor_payload{};
 
-    switch (command.command) {
-        case mqtt::ControlCommand::kStart: {
+    switch (ResolveDeviceControlAction(command.command, command.component_id)) {
+        case DeviceControlAction::kStart: {
             if (const auto speed = SpeedFromParams(command.params); speed.has_value()) {
                 const std::array<std::uint8_t, UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE> speed_payload{ *speed };
                 InputCommandResult speed_result = Execute(result, UART_CMD_INPUT_CONVEYOR_SET_SPEED, speed_payload);
@@ -359,28 +360,28 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
             }
             return result;
         }
-        case mqtt::ControlCommand::kStop:
+        case DeviceControlAction::kStop:
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_STOP, conveyor_payload);
             EmitCommandResponse(result, "input conveyor stop");
             if (result.Succeeded()) {
                 EmitDeviceStatus("STOPPED");
             }
             return result;
-        case mqtt::ControlCommand::kStatusRequest:
+        case DeviceControlAction::kStatusRequest:
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_GET_STATUS, conveyor_payload);
             if (result.Succeeded()) {
                 EmitConveyorStatus(result.uart_result.response_frame);
             }
             EmitCommandResponse(result, "input conveyor status");
             return result;
-        case mqtt::ControlCommand::kInitialize:
+        case DeviceControlAction::kInitialize:
             // Soft reset: clears control-level errors and stops the conveyor. The
             // controller answers this synchronously and rejects it while an
             // emergency stop is latched (use RECOVERY to clear the latch).
             result = Execute(std::move(result), UART_CMD_INPUT_CONTROL_RESET, {});
             EmitCommandResponse(result, "input controller reset");
             return result;
-        case mqtt::ControlCommand::kRecovery:
+        case DeviceControlAction::kSafetyRecovery:
             // Full device recovery: releases the emergency-stop latch via the
             // controller's SafetyTask. Like EMERGENCY_STOP, RESET_DEVICE is
             // answered with an asynchronous EVENT/DEVICE_STATUS broadcast rather
@@ -399,10 +400,9 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
                 EmitCommandResponse(result, "input controller recovery could not be sent");
             }
             return result;
-        case mqtt::ControlCommand::kRestart:
-        case mqtt::ControlCommand::kDestinationSet:
-        case mqtt::ControlCommand::kEmergencyStop:
-        case mqtt::ControlCommand::kUnknown:
+        case DeviceControlAction::kComponentRecovery:
+        case DeviceControlAction::kEmergencyStop:
+        case DeviceControlAction::kUnsupported:
         default:
             result.status = InputCommandStatus::kUnsupportedCommand;
             EmitCommandResponse(result, "input node does not support this control command");

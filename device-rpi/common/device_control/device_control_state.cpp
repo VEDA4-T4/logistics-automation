@@ -4,35 +4,12 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/device/device_control_policy.hpp"
 
 namespace logistics::device {
 namespace {
 
 namespace mqtt = contracts::mqtt;
-
-struct CommandRequest final {
-    std::string_view request_id;
-    mqtt::ControlCommand command{ mqtt::ControlCommand::kUnknown };
-    std::string_view target_device_id;
-};
-
-[[nodiscard]] std::optional<CommandRequest> ReadCommand(const mqtt::MqttMessage& message) {
-    if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
-        return CommandRequest{
-            .request_id = command->request_id,
-            .command = command->command,
-            .target_device_id = command->target_device_id,
-        };
-    }
-    if (const auto* emergency_stop = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message)) {
-        return CommandRequest{
-            .request_id = emergency_stop->request_id,
-            .command = emergency_stop->command,
-            .target_device_id = emergency_stop->target_device_id,
-        };
-    }
-    return std::nullopt;
-}
 
 }  // namespace
 
@@ -62,7 +39,7 @@ DeviceControlState::DeviceControlState(DeviceControlConfig config) : config_(std
 std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqtt::MqttMessage& message,
                                                                        std::string response_message_id,
                                                                        std::string timestamp) {
-    const auto request = ReadCommand(message);
+    const auto request = ReadDeviceControlRequest(message);
     if (!request.has_value()) {
         return std::nullopt;
     }
@@ -80,9 +57,8 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
             error_code = "ERR-MQTT-INVALID-TARGET";
             response_text = config_.component_name + " command targets a different device";
         } else {
-            switch (request->command) {
-                case mqtt::ControlCommand::kStart:
-                case mqtt::ControlCommand::kRestart:
+            switch (ResolveDeviceControlAction(request->command, request->component_id)) {
+                case DeviceControlAction::kStart:
                     if (state_ == DeviceOperatingState::kRunning) {
                         response_text = config_.component_name + " is already running";
                     } else if (state_ != DeviceOperatingState::kStopped) {
@@ -99,7 +75,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " started";
                     }
                     break;
-                case mqtt::ControlCommand::kStop:
+                case DeviceControlAction::kStop:
                     if (state_ == DeviceOperatingState::kStopped) {
                         response_text = config_.component_name + " is already stopped";
                     } else if (state_ != DeviceOperatingState::kRunning) {
@@ -113,14 +89,14 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " stopped";
                     }
                     break;
-                case mqtt::ControlCommand::kEmergencyStop:
+                case DeviceControlAction::kEmergencyStop:
                     state_changed = state_ != DeviceOperatingState::kEmergencyStop;
                     state_ = DeviceOperatingState::kEmergencyStop;
                     pending_recovery_request_id_.reset();
                     clear_work = true;
                     response_text = config_.component_name + " emergency-stopped";
                     break;
-                case mqtt::ControlCommand::kRecovery:
+                case DeviceControlAction::kSafetyRecovery:
                     if (state_ == DeviceOperatingState::kStopped && ready_) {
                         response_text = config_.component_name + " is already recovered and stopped";
                     } else if (state_ == DeviceOperatingState::kRecovering) {
@@ -151,7 +127,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " recovery started";
                     }
                     break;
-                case mqtt::ControlCommand::kInitialize:
+                case DeviceControlAction::kInitialize:
                     if (state_ == DeviceOperatingState::kStopped) {
                         response_text = config_.component_name + " is already recovered and stopped";
                     } else if (state_ == DeviceOperatingState::kRecovering) {
@@ -164,11 +140,11 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         response_text = config_.component_name + " does not require initialization";
                     }
                     break;
-                case mqtt::ControlCommand::kStatusRequest:
+                case DeviceControlAction::kStatusRequest:
                     response_text = config_.component_name + " state is " + std::string(ToString(state_));
                     break;
-                case mqtt::ControlCommand::kDestinationSet:
-                case mqtt::ControlCommand::kUnknown:
+                case DeviceControlAction::kComponentRecovery:
+                case DeviceControlAction::kUnsupported:
                     result = mqtt::CommandResult::kRejected;
                     error_code = "ERR-UNSUPPORTED-COMMAND";
                     response_text = config_.component_name + " command is not supported";

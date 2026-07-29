@@ -211,18 +211,19 @@ void TestControllerPolicyRejection() {
     assert(response->error_code.has_value() && *response->error_code == "ERR-EMERGENCY-STOP");
 }
 
-void TestUnsupportedCommand() {
+void TestRestartMapsToStart() {
     Fixture fixture;
     fixture.backend->responder = AlwaysSucceed();
 
     const InputCommandResult result =
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRestart, std::string(kDeviceId)));
 
-    assert(result.status == InputCommandStatus::kUnsupportedCommand);
-    assert(fixture.backend->write_calls == 0);
+    assert(result.status == InputCommandStatus::kSuccess);
+    assert(fixture.backend->write_calls == 1);
+    assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_START);
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
-    assert(response->result == mqtt::CommandResult::kRejected);
+    assert(response->result == mqtt::CommandResult::kSuccess);
 }
 
 void TestEmergencyStop() {
@@ -598,7 +599,7 @@ int main() {
     TestRecoveryReleasesLatchFireAndForget();
     TestControllerFailure();
     TestControllerPolicyRejection();
-    TestUnsupportedCommand();
+    TestRestartMapsToStart();
     TestEmergencyStop();
     TestEmergencyStopDoesNotWaitForReply();
     TestSafetyCommandsCompleteWithOriginalRequestId();
