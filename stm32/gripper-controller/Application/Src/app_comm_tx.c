@@ -11,13 +11,27 @@
 
 #define COMM_TX_NORMAL_PRIORITY 0U
 #define COMM_TX_URGENT_PRIORITY 3U
-#define COMM_TX_TIMEOUT_MS 50U
+#define COMM_TX_DMA_TIMEOUT_MS 50U
+#define COMM_TX_ABORT_TIMEOUT_MS 20U
 #define COMM_TX_HEARTBEAT_PERIOD_MS 1000U
+
+#define COMM_TX_FLAG_COMPLETE (1UL << 0U)
+#define COMM_TX_FLAG_ERROR (1UL << 1U)
+#define COMM_TX_FLAG_ABORT_COMPLETE (1UL << 2U)
+
+typedef enum {
+    COMM_TX_STATE_IDLE = 0U,
+    COMM_TX_STATE_IN_FLIGHT,
+    COMM_TX_STATE_ABORTING
+} comm_tx_state_t;
 
 static comm_tx_stats_t commTxStats;
 static uint8_t commTxSequence;
 static uint8_t commTxDeviceState = UART_DEVICE_IDLE;
 static uint8_t commTxError = UART_ERROR_NONE;
+static osThreadId_t commTxTaskId;
+static volatile comm_tx_state_t commTxState = COMM_TX_STATE_IDLE;
+static uint8_t commTxEncodedBuffer[UART_MAX_FRAME_SIZE];
 
 static int32_t comm_tx_enqueue(uint8_t sequence, uint8_t use_sequence, uint8_t command, const uint8_t* payload,
                                uint8_t length, uint8_t priority) {
@@ -78,9 +92,55 @@ void CommTx_GetStats(comm_tx_stats_t* stats) {
     }
 }
 
+static void comm_tx_abort_transmit(void) {
+    uint32_t flags;
+
+    commTxState = COMM_TX_STATE_ABORTING;
+    (void)osThreadFlagsClear(COMM_TX_FLAG_ABORT_COMPLETE);
+    if (HAL_UART_AbortTransmit_IT(&huart1) != HAL_OK) {
+        (void)HAL_UART_AbortTransmit(&huart1);
+        commTxState = COMM_TX_STATE_IDLE;
+        return;
+    }
+
+    commTxStats.aborts++;
+    flags = osThreadFlagsWait(COMM_TX_FLAG_ABORT_COMPLETE, osFlagsWaitAny, COMM_TX_ABORT_TIMEOUT_MS);
+    if ((flags & osFlagsError) != 0U) {
+        commTxStats.abort_timeouts++;
+        (void)HAL_UART_AbortTransmit(&huart1);
+    }
+    commTxState = COMM_TX_STATE_IDLE;
+}
+
+static uint8_t comm_tx_transmit_dma(const uint8_t* encoded, uint16_t encoded_length) {
+    uint32_t flags;
+
+    (void)osThreadFlagsClear(COMM_TX_FLAG_COMPLETE | COMM_TX_FLAG_ERROR | COMM_TX_FLAG_ABORT_COMPLETE);
+    commTxState = COMM_TX_STATE_IN_FLIGHT;
+    if (HAL_UART_Transmit_DMA(&huart1, encoded, encoded_length) != HAL_OK) {
+        commTxStats.dma_start_errors++;
+        commTxState = COMM_TX_STATE_IDLE;
+        return 0U;
+    }
+
+    flags = osThreadFlagsWait(COMM_TX_FLAG_COMPLETE | COMM_TX_FLAG_ERROR, osFlagsWaitAny, COMM_TX_DMA_TIMEOUT_MS);
+    if ((flags & osFlagsError) == 0U && (flags & COMM_TX_FLAG_ERROR) == 0U &&
+        (flags & COMM_TX_FLAG_COMPLETE) != 0U) {
+        commTxState = COMM_TX_STATE_IDLE;
+        return 1U;
+    }
+
+    if (flags == osFlagsErrorTimeout) {
+        commTxStats.dma_timeouts++;
+    } else {
+        commTxStats.dma_errors++;
+    }
+    comm_tx_abort_transmit();
+    return 0U;
+}
+
 static void comm_tx_send_message(const comm_tx_message_t* message) {
     uart_frame_t frame;
-    uint8_t encoded[UART_MAX_FRAME_SIZE];
     size_t encoded_length = 0U;
     uint32_t attempt;
 
@@ -93,13 +153,13 @@ static void comm_tx_send_message(const comm_tx_message_t* message) {
         memcpy(frame.payload, message->payload, message->length);
     }
 
-    if (uart_encode_frame(&frame, encoded, sizeof(encoded), &encoded_length) != UART_CODEC_OK) {
+    if (uart_encode_frame(&frame, commTxEncodedBuffer, sizeof(commTxEncodedBuffer), &encoded_length) != UART_CODEC_OK) {
         commTxStats.encode_errors++;
         return;
     }
 
     for (attempt = 0U; attempt <= UART_MAX_RETRY_COUNT; attempt++) {
-        if (HAL_UART_Transmit(&huart1, encoded, (uint16_t)encoded_length, COMM_TX_TIMEOUT_MS) == HAL_OK) {
+        if (comm_tx_transmit_dma(commTxEncodedBuffer, (uint16_t)encoded_length) != 0U) {
             commTxStats.sent++;
             return;
         }
@@ -109,6 +169,31 @@ static void comm_tx_send_message(const comm_tx_message_t* message) {
         }
     }
     commTxStats.transmit_errors++;
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef* huart) {
+    if (huart != NULL && huart->Instance == USART1 && commTxTaskId != NULL &&
+        commTxState == COMM_TX_STATE_IN_FLIGHT) {
+        (void)osThreadFlagsSet(commTxTaskId, COMM_TX_FLAG_COMPLETE);
+    }
+}
+
+void HAL_UART_AbortTransmitCpltCallback(UART_HandleTypeDef* huart) {
+    if (huart != NULL && huart->Instance == USART1 && commTxTaskId != NULL &&
+        commTxState == COMM_TX_STATE_ABORTING) {
+        (void)osThreadFlagsSet(commTxTaskId, COMM_TX_FLAG_ABORT_COMPLETE);
+    }
+}
+
+uint8_t CommTx_HandleUartError(UART_HandleTypeDef* huart) {
+    if (huart == NULL || huart->Instance != USART1 || commTxTaskId == NULL ||
+        commTxState != COMM_TX_STATE_IN_FLIGHT || (huart->ErrorCode & HAL_UART_ERROR_DMA) == 0U ||
+        huart->hdmatx == NULL || huart->hdmatx->ErrorCode == HAL_DMA_ERROR_NONE) {
+        return 0U;
+    }
+
+    (void)osThreadFlagsSet(commTxTaskId, COMM_TX_FLAG_ERROR);
+    return 1U;
 }
 
 static void comm_tx_enqueue_heartbeat(void) {
@@ -134,6 +219,8 @@ void StartCommTxTask(void* argument) {
 
     (void)argument;
     memset(&commTxStats, 0, sizeof(commTxStats));
+    commTxTaskId = osThreadGetId();
+    commTxState = COMM_TX_STATE_IDLE;
     last_heartbeat = HAL_GetTick();
 
     for (;;) {

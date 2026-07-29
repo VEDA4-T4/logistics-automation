@@ -1,5 +1,6 @@
 #include "uart_rx.h"
 
+#include "app_comm_tx.h"
 #include "app_messages.h"
 #include "app_queues.h"
 #include "usart.h"
@@ -68,7 +69,13 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) {
         return;
     }
 
-    position = (size == UART_RX_DMA_BUFFER_SIZE) ? 0U : size;
+    if (size == UART_RX_DMA_BUFFER_SIZE) {
+        uart_rx_enqueue_range(uartRxLastPosition, UART_RX_DMA_BUFFER_SIZE);
+        uartRxLastPosition = 0U;
+        return;
+    }
+
+    position = size;
     if (position > uartRxLastPosition) {
         uart_rx_enqueue_range(uartRxLastPosition, position);
     } else if (position < uartRxLastPosition) {
@@ -80,6 +87,15 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) {
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart) {
     if (huart != NULL && huart->Instance == USART1) {
-        uartRxError |= HAL_UART_GetError(huart);
+        const uint32_t error = HAL_UART_GetError(huart);
+        const uint8_t tx_dma_error = CommTx_HandleUartError(huart);
+        uint32_t rx_error = error & ~HAL_UART_ERROR_DMA;
+
+        if ((error & HAL_UART_ERROR_DMA) != 0U &&
+            (tx_dma_error == 0U ||
+             (huart->hdmarx != NULL && huart->hdmarx->ErrorCode != HAL_DMA_ERROR_NONE))) {
+            rx_error |= HAL_UART_ERROR_DMA;
+        }
+        uartRxError |= rx_error;
     }
 }

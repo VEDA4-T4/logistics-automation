@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "logistics/contracts/uart_protocol.h"
+#include "stm32f4xx_hal.h"
 
 #define APP_EVENT_HEARTBEAT 0x01U
 #define APP_EVENT_SAFETY 0x02U
@@ -19,6 +20,11 @@ typedef struct {
     uint32_t dropped;
     uint32_t encode_errors;
     uint32_t transmit_errors;
+    uint32_t dma_start_errors;
+    uint32_t dma_timeouts;
+    uint32_t dma_errors;
+    uint32_t aborts;
+    uint32_t abort_timeouts;
     uint32_t retries;
     uint32_t sent;
     uint32_t heartbeats;
@@ -31,6 +37,7 @@ int32_t CommTx_SendUrgentWithSequence(uint8_t sequence, uint8_t command, const u
 
 void CommTx_SetDeviceStatus(uint8_t state, uint8_t error);
 void CommTx_GetStats(comm_tx_stats_t* stats);
+uint8_t CommTx_HandleUartError(UART_HandleTypeDef* huart);
 void StartCommTxTask(void* argument);
 
 #endif /* APP_COMM_TX_H */
