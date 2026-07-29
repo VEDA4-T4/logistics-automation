@@ -81,6 +81,7 @@ int main(int argc, char* argv[]) {
     }
     assert(sorting_sensor_2 != nullptr);
     assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("UNKNOWN"));
+    assert(sorting_sensor_2->property("distanceCm").toInt() == -1);
     assert(sorting_sensor_2->text() == QStringLiteral("● S2 대기"));
     assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
     bool has_gripper_title = false;
@@ -99,7 +100,8 @@ int main(int argc, char* argv[]) {
     panel.setState(state);
     application.processEvents();
     assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("CLEAR"));
-    assert(sorting_sensor_2->text() == QStringLiteral("● S2 없음"));
+    assert(sorting_sensor_2->property("distanceCm").toInt() == 42);
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 없음 · 42 cm"));
     assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#89d185")));
 
     assert(state
@@ -142,7 +144,8 @@ int main(int argc, char* argv[]) {
     for (const auto* indicator : panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator"))) {
         if (indicator->property("sensorId").toInt() == 2 &&
             indicator->property("measurementStatus").toString() == QStringLiteral("DETECTED")) {
-            has_detected_sensor = indicator->text() == QStringLiteral("● S2 감지");
+            has_detected_sensor = indicator->text() == QStringLiteral("● S2 감지 · 11 cm");
+            assert(indicator->property("distanceCm").toInt() == 11);
             assert(indicator->toolTip().contains(QStringLiteral("11 cm")));
         }
     }
@@ -155,7 +158,7 @@ int main(int argc, char* argv[]) {
     panel.setState(state);
     application.processEvents();
     assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("FAULT"));
-    assert(sorting_sensor_2->text() == QStringLiteral("● S2 오류"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 오류 · 0 cm"));
     assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#f14c4c")));
 
     assert(state
@@ -165,6 +168,7 @@ int main(int argc, char* argv[]) {
     panel.setState(state);
     application.processEvents();
     assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("CLEAR"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 없음 · 40 cm"));
     assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#89d185")));
 
     assert(state.applyEnvelope(DeviceEnvelope("VISION-WAITING", "PI-VISION-01", "WAITING_FOR_PRODUCT", "", 5)).applied);
