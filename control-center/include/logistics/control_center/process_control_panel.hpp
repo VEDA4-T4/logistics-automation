@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QWidget>
 
 #include "logistics/contracts/mqtt_message.hpp"
@@ -32,8 +33,15 @@ signals:
     void commandRequested(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id);
 
 private:
+    struct CommandPresentation {
+        QString text;
+        QString style;
+    };
+
     void requestCommand(logistics::contracts::mqtt::ControlCommand command, const QString& confirmation);
     [[nodiscard]] bool hasBlockingSensorWarning() const;
+    void setCommandPresentation(const QString& target_device_id, const QString& text, const QString& style);
+    void updateCommandPresentation();
     void updateTargetPresentation();
     void applySelectedTargetState();
     void updateButtonStates();
@@ -51,6 +59,7 @@ private:
     QString selected_target_device_id_{ QStringLiteral("SYSTEM") };
     QString selected_target_display_name_{ QStringLiteral("전체 공정") };
     QString command_target_device_id_;
+    QHash<QString, CommandPresentation> command_presentations_;
 };
 
 }  // namespace logistics::control_center
