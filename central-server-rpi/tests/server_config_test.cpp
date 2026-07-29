@@ -65,6 +65,7 @@ vision_device_id=PI-VISION-01
 gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
+line_tracer_initial_position=A
 )ini");
 
     const auto config = central_server::LoadServerConfig(path);
@@ -76,6 +77,7 @@ line_tracer_device_id=PI-LT-01
     assert(config.http.tls_private_key.empty());
     assert(config.http.port == 8081);
     assert(config.process.enabled);
+    assert(config.process.line_tracer_initial_position == "A");
     Remove(path);
 }
 
@@ -104,6 +106,7 @@ void TestInvalidSettingsAreRejected() {
     ExpectRejected("tls-files",
                    "[http]\nenabled=true\nbearer_token=token\ntls_enabled=true\n"
                    "tls_certificate=missing.crt\ntls_private_key=missing.key\n");
+    ExpectRejected("line-tracer-position", "[process]\nline_tracer_initial_position=D\n");
     ExpectRejected("section", "[databse]\npath=/tmp/server.db\n");
 }
 

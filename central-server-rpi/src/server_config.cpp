@@ -174,6 +174,11 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
     if (section == "process") {
         if (key == "enabled") {
             config.process.enabled = ParseBoolean(path, line_number, key, value);
+        } else if (key == "line_tracer_initial_position") {
+            if (value != "A" && value != "B" && value != "C") {
+                ThrowLineError(path, line_number, "line_tracer_initial_position must be A, B, or C");
+            }
+            config.process.line_tracer_initial_position = value;
         } else if (key == "server_id" || key == "input_device_id" || key == "vision_device_id" ||
                    key == "gripper_device_id" || key == "sorting_device_id" || key == "line_tracer_device_id") {
             AssignProcessId(config, path, line_number, key, value);

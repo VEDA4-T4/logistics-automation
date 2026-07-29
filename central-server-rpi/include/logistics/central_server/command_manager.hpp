@@ -29,6 +29,10 @@ struct CommandRoutePlan final {
 
 [[nodiscard]] CommandRoutePlan ResolveCommandTargets(const contracts::mqtt::MqttMessage& message,
                                                      const std::vector<DeviceSnapshot>& registered_devices);
+[[nodiscard]] contracts::mqtt::MqttMessage PrepareCommandForDevice(const contracts::mqtt::MqttMessage& message,
+                                                                   std::string_view device_id,
+                                                                   std::string_view line_tracer_device_id,
+                                                                   std::string_view line_tracer_initial_position);
 
 enum class CommandResponseDisposition : std::uint8_t {
     kForward,

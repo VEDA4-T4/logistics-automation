@@ -315,7 +315,7 @@ int Application::Run(int argc, char* argv[]) {
     });
 
     const auto dispatch_command = [&mqtt_client, &device_manager, &command_manager, &process_orchestrator,
-                                   &active_system_recovery_request_id,
+                                   &server_config, &active_system_recovery_request_id,
                                    &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
         std::optional<contracts::mqtt::ControlCommand> system_command;
         if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
@@ -386,15 +386,10 @@ int Application::Run(int argc, char* argv[]) {
             return failed.has_value() && publish_qt_response(*failed);
         }
 
-        const auto publish_to_device = [&mqtt_client, &message](std::string_view device_id) {
-            auto forwarded = message;
-            forwarded.message_id += "-" + std::string(device_id);
-            if (auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(forwarded)) {
-                command->target_device_id = device_id;
-            } else if (auto* destination =
-                           contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(forwarded)) {
-                destination->target_device_id = device_id;
-            }
+        const auto publish_to_device = [&mqtt_client, &message, &server_config](std::string_view device_id) {
+            const auto forwarded =
+                PrepareCommandForDevice(message, device_id, server_config.process.line_tracer_device_id,
+                                        server_config.process.line_tracer_initial_position);
             return mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), forwarded,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         };
