@@ -314,6 +314,10 @@ InputCommandResult InputNode::RequestControllerStatus() {
     return result;
 }
 
+bool InputNode::HasPendingSafetyCommand() const noexcept {
+    return pending_safety_.active;
+}
+
 InputCommandResult InputNode::HandleEmergencyStop(const mqtt::EmergencyStopPayload& command) {
     InputCommandResult result{
         .mqtt_command = command.command,
@@ -323,6 +327,11 @@ InputCommandResult InputNode::HandleEmergencyStop(const mqtt::EmergencyStopPaylo
     if (!IsTargetedToThisNode(command.target_device_id)) {
         result.status = InputCommandStatus::kInvalidTarget;
         EmitCommandResponse(result, "emergency stop was not addressed to this device");
+        return result;
+    }
+    if (pending_safety_.active) {
+        result.status = InputCommandStatus::kRejected;
+        EmitCommandResponse(result, "another safety command is waiting for controller confirmation");
         return result;
     }
 
@@ -353,9 +362,16 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
         return result;
     }
 
+    const DeviceControlAction action = ResolveDeviceControlAction(command.command, command.component_id);
+    if (pending_safety_.active && action != DeviceControlAction::kStatusRequest) {
+        result.status = InputCommandStatus::kRejected;
+        EmitCommandResponse(result, "another safety command is waiting for controller confirmation");
+        return result;
+    }
+
     const std::array<std::uint8_t, UART_INPUT_CONVEYOR_COMMAND_PAYLOAD_SIZE> conveyor_payload{};
 
-    switch (ResolveDeviceControlAction(command.command, command.component_id)) {
+    switch (action) {
         case DeviceControlAction::kStart: {
             if (const auto speed = SpeedFromParams(command.params); speed.has_value()) {
                 const std::array<std::uint8_t, UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE> speed_payload{ *speed };

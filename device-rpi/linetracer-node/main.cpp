@@ -157,6 +157,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case LineTracerCommandStatus::kNoActiveJob:
         case LineTracerCommandStatus::kUnsupportedMessage:
         case LineTracerCommandStatus::kUnsupportedCommand:
+        case LineTracerCommandStatus::kSafetyCommandPending:
         case LineTracerCommandStatus::kUartBusy:
             return mqtt::CommandResult::kRejected;
         case LineTracerCommandStatus::kInvalidMessage:
@@ -183,6 +184,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case LineTracerCommandStatus::kUnsupportedMessage:
         case LineTracerCommandStatus::kUnsupportedCommand:
             return "ERR-UNSUPPORTED-COMMAND";
+        case LineTracerCommandStatus::kSafetyCommandPending:
+            return "ERR-SAFETY-COMMAND-PENDING";
         case LineTracerCommandStatus::kUartNotOpen:
             return "ERR-UART-DISCONNECTED";
         case LineTracerCommandStatus::kUartBusy:
@@ -280,7 +283,8 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
         }
     });
     mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
-        if (!command_inbox.Push(message)) {
+        std::deque<mqtt::MqttMessage> preempted;
+        if (!command_inbox.Push(message, &preempted)) {
             std::cerr << "[linetracer][mqtt][ERROR] command queue full; command rejected: " << message.message_id
                       << '\n';
             const auto response = MakeTerminalCommandResponse(
@@ -290,6 +294,16 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
             if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
                 std::cerr << "[linetracer][mqtt][ERROR] unable to publish command queue full response: "
                           << message.message_id << '\n';
+            }
+        }
+        for (const auto& command : preempted) {
+            const auto response = MakeTerminalCommandResponse(
+                command, device_id, command.message_id + "-ESTOP-PREEMPTED", CurrentIso8601Timestamp(),
+                mqtt::CommandResult::kRejected, std::string("ERR-EMERGENCY-STOP-PREEMPTED"),
+                "line tracer command was preempted by an emergency stop");
+            if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                std::cerr << "[linetracer][mqtt][ERROR] unable to publish emergency preemption response: "
+                          << command.message_id << '\n';
             }
         }
     });
@@ -366,8 +380,8 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
                 emergency_processed = true;
             }
         }
-        if (!emergency_processed && !uart_failure_pending && uart_session.IsOpen() &&
-            !uart_session.HasPendingCommand()) {
+        if (!emergency_processed && !line_tracer.HasPendingSafetyCommand() && !uart_failure_pending &&
+            uart_session.IsOpen() && !uart_session.HasPendingCommand()) {
             if (auto command = command_inbox.TryPop(); command.has_value()) {
                 const LineTracerCommandResult result = line_tracer.HandleMqttCommand(*command);
                 if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {

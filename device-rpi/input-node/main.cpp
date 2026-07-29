@@ -195,7 +195,8 @@ int RunInputDaemon(int argc, char* argv[]) {
     uart_session.SetSpontaneousFrameHandler(
         [&input_node](const uart_frame_t& frame) { input_node.HandleUartFrame(frame); });
     mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
-        if (!command_inbox.Push(message)) {
+        std::deque<mqtt::MqttMessage> preempted;
+        if (!command_inbox.Push(message, &preempted)) {
             std::cerr << "[input][mqtt][ERROR] command queue full; command rejected: " << message.message_id << '\n';
             const auto response = MakeTerminalCommandResponse(
                 message, device_id, message.message_id + "-QUEUE-FULL", CurrentIso8601Timestamp(),
@@ -204,6 +205,16 @@ int RunInputDaemon(int argc, char* argv[]) {
             if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
                 std::cerr << "[input][mqtt][ERROR] unable to publish command queue full response: "
                           << message.message_id << '\n';
+            }
+        }
+        for (const auto& command : preempted) {
+            const auto response = MakeTerminalCommandResponse(
+                command, device_id, command.message_id + "-ESTOP-PREEMPTED", CurrentIso8601Timestamp(),
+                mqtt::CommandResult::kRejected, std::string("ERR-EMERGENCY-STOP-PREEMPTED"),
+                "input command was preempted by an emergency stop");
+            if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                std::cerr << "[input][mqtt][ERROR] unable to publish emergency preemption response: "
+                          << command.message_id << '\n';
             }
         }
     });
@@ -256,7 +267,7 @@ int RunInputDaemon(int argc, char* argv[]) {
             static_cast<void>(input_node.HandleMqttCommand(*command));
             emergency_processed = true;
         }
-        if (!emergency_processed) {
+        if (!emergency_processed && !input_node.HasPendingSafetyCommand()) {
             if (auto command = command_inbox.TryPop(); command.has_value()) {
                 static_cast<void>(input_node.HandleMqttCommand(*command));
             }

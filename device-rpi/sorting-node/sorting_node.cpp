@@ -311,6 +311,10 @@ bool SortingNode::HasActiveCycle() const noexcept {
     return active_cycle_id_ != UART_SORTING_CYCLE_ID_NONE;
 }
 
+bool SortingNode::HasPendingSafetyCommand() const noexcept {
+    return pending_safety_.active;
+}
+
 std::string_view SortingNode::ActiveWorkId() const noexcept {
     return active_work_id_;
 }
@@ -394,6 +398,12 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
         return result;
     }
 
+    const DeviceControlAction action = ResolveDeviceControlAction(command.command, command.component_id);
+    if (pending_safety_.active && action != DeviceControlAction::kStatusRequest) {
+        result.status = SortingCommandStatus::kSafetyCommandPending;
+        return result;
+    }
+
     std::uint8_t uart_command = UART_CMD_NONE;
     PendingEffect effect = PendingEffect::kNone;
     std::array<std::uint8_t, UART_SORTING_CANCEL_PAYLOAD_SIZE> cycle_payload{};
@@ -401,7 +411,7 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
     std::size_t payload_length = 0U;
     std::uint8_t requested_speed = 0U;
 
-    switch (ResolveDeviceControlAction(command.command, command.component_id)) {
+    switch (action) {
         case DeviceControlAction::kStart: {
             bool invalid_speed = false;
             std::optional<std::uint8_t> speed = SpeedFromParams(command.params, invalid_speed);
@@ -486,6 +496,10 @@ SortingCommandResult SortingNode::HandleEmergencyStop(const mqtt::EmergencyStopP
     };
     if (!IsTargetedToThisNode(command.target_device_id)) {
         result.status = SortingCommandStatus::kInvalidTarget;
+        return result;
+    }
+    if (pending_safety_.active) {
+        result.status = SortingCommandStatus::kSafetyCommandPending;
         return result;
     }
     if (pending_.active) {

@@ -50,16 +50,16 @@ void TestEmergencyStopPreemptsNormalCommands() {
     NodeCommandQueue queue(3U);
     assert(queue.Push(Control("MSG-START", mqtt::ControlCommand::kStart)));
     assert(queue.Push(Control("MSG-STOP", mqtt::ControlCommand::kStop)));
-    assert(queue.Push(EmergencyStop()));
+    std::deque<mqtt::MqttMessage> preempted;
+    assert(queue.Push(EmergencyStop(), &preempted));
 
     const auto emergency = queue.TryPopEmergency();
     assert(emergency.has_value());
     assert(emergency->message_id == "MSG-ESTOP");
-
-    const auto first = queue.TryPop();
-    const auto second = queue.TryPop();
-    assert(first.has_value() && first->message_id == "MSG-START");
-    assert(second.has_value() && second->message_id == "MSG-STOP");
+    assert(preempted.size() == 2U);
+    assert(preempted[0].message_id == "MSG-START");
+    assert(preempted[1].message_id == "MSG-STOP");
+    assert(!queue.TryPop().has_value());
     assert(queue.Size() == 0U);
 }
 
@@ -69,15 +69,17 @@ void TestQueueCapacityIncludesBothPriorities() {
     assert(queue.Push(Control("MSG-STOP", mqtt::ControlCommand::kStop)));
     assert(!queue.Push(Control("MSG-START-2", mqtt::ControlCommand::kStart)));
     assert(queue.Push(EmergencyStop()));
-    assert(!queue.Push(Control("MSG-STOP-2", mqtt::ControlCommand::kStop)));
+    assert(queue.Push(Control("MSG-STOP-2", mqtt::ControlCommand::kStop)));
 }
 
 void TestEmergencyStopIsAcceptedWhenNormalQueueIsFull() {
     NodeCommandQueue queue(2U);
     assert(queue.Push(Control("MSG-START", mqtt::ControlCommand::kStart)));
     assert(queue.Push(Control("MSG-STOP", mqtt::ControlCommand::kStop)));
-    assert(queue.Push(EmergencyStop()));
-    assert(queue.Size() == 3U);
+    std::deque<mqtt::MqttMessage> preempted;
+    assert(queue.Push(EmergencyStop(), &preempted));
+    assert(preempted.size() == 2U);
+    assert(queue.Size() == 1U);
     assert(queue.TryPopEmergency().has_value());
 }
 

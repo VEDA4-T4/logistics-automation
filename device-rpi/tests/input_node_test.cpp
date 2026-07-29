@@ -273,6 +273,21 @@ void TestEmergencyStopDoesNotWaitForReply() {
     assert(response->result == mqtt::CommandResult::kProcessing);
 }
 
+void TestPendingSafetyCommandCannotBeOverwritten() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t&) { return std::vector<uart_frame_t>{}; };
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop(std::string(kDeviceId))).Succeeded());
+
+    const auto recovery =
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, std::string(kDeviceId)));
+    const auto duplicate_estop = fixture.node->HandleMqttCommand(MakeEmergencyStop(std::string(kDeviceId)));
+
+    assert(recovery.status == InputCommandStatus::kRejected);
+    assert(duplicate_estop.status == InputCommandStatus::kRejected);
+    assert(fixture.backend->write_calls == 1);
+    assert(fixture.node->HasPendingSafetyCommand());
+}
+
 void TestSafetyCommandsCompleteWithOriginalRequestId() {
     Fixture fixture;
     fixture.backend->responder = [](const uart_frame_t&) { return std::vector<uart_frame_t>{}; };
@@ -639,6 +654,7 @@ int main() {
     TestRestartMapsToStart();
     TestEmergencyStop();
     TestEmergencyStopDoesNotWaitForReply();
+    TestPendingSafetyCommandCannotBeOverwritten();
     TestSafetyCommandsCompleteWithOriginalRequestId();
     TestSafetyAndHeartbeatTimeoutsAreReported();
     TestInvalidTarget();

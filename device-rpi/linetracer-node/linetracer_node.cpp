@@ -108,7 +108,7 @@ namespace mqtt = contracts::mqtt;
 }
 
 [[nodiscard]] mqtt::ConnectionState StateConnection(std::uint8_t state) noexcept {
-    if (state == UART_LINETRACER_STATE_FAULT || state == UART_LINETRACER_STATE_EMERGENCY_STOP) {
+    if (state == UART_LINETRACER_STATE_FAULT) {
         return mqtt::ConnectionState::kUartError;
     }
     return mqtt::ConnectionState::kOnline;
@@ -226,6 +226,10 @@ bool LineTracerNode::HasActiveJob() const noexcept {
     return active_uart_job_id_ != UART_LINETRACER_JOB_ID_NONE;
 }
 
+bool LineTracerNode::HasPendingSafetyCommand() const noexcept {
+    return pending_safety_.active;
+}
+
 std::string_view LineTracerNode::ActiveWorkId() const noexcept {
     return active_work_id_;
 }
@@ -302,12 +306,18 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
         return result;
     }
 
+    const DeviceControlAction action = ResolveDeviceControlAction(command.command, command.component_id);
+    if (pending_safety_.active && action != DeviceControlAction::kStatusRequest) {
+        result.status = LineTracerCommandStatus::kSafetyCommandPending;
+        return result;
+    }
+
     std::uint8_t uart_command = UART_CMD_NONE;
     PendingEffect effect = PendingEffect::kNone;
     std::array<std::uint8_t, UART_LINETRACER_STOP_PAYLOAD_SIZE> payload{};
     std::size_t payload_length = 0U;
 
-    switch (ResolveDeviceControlAction(command.command, command.component_id)) {
+    switch (action) {
         case DeviceControlAction::kStop:
             if (!HasActiveJob()) {
                 result.status = LineTracerCommandStatus::kNoActiveJob;
@@ -360,6 +370,10 @@ LineTracerCommandResult LineTracerNode::HandleEmergencyStop(const mqtt::Emergenc
     };
     if (!IsTargetedToThisNode(command.target_device_id)) {
         result.status = LineTracerCommandStatus::kInvalidTarget;
+        return result;
+    }
+    if (pending_safety_.active) {
+        result.status = LineTracerCommandStatus::kSafetyCommandPending;
         return result;
     }
     if (pending_.active) {
@@ -453,23 +467,10 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
             .message_type = mqtt::MessageType::kDeviceStatus,
             .data =
                 mqtt::DeviceStatusPayload{
-                    .status = mqtt::ConnectionState::kUartError,
+                    .status = mqtt::ConnectionState::kOnline,
                     .current_state = "EMERGENCY_STOP",
                     .job_id = active_job,
-                    .error_code = std::string("ERR-EMERGENCY-STOP"),
-                },
-        });
-        EmitReport({
-            .channel = LineTracerReportChannel::kError,
-            .message_type = mqtt::MessageType::kErrorOccurred,
-            .data =
-                mqtt::ErrorOccurredPayload{
-                    .job_id = active_job,
-                    .error_code = "ERR-EMERGENCY-STOP",
-                    .error_level = "CRITICAL",
-                    .current_state = "EMERGENCY_STOP",
-                    .message = "line tracer controller reported an emergency stop",
-                    .distance = std::nullopt,
+                    .error_code = std::nullopt,
                 },
         });
         return;
@@ -482,9 +483,6 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
 
     if (event_id == UART_LINETRACER_EVENT_STATE_CHANGED) {
         last_uart_state_ = frame.payload[UART_LINETRACER_STATE_EVENT_STATE_INDEX];
-        const std::optional<std::string> error_code = last_uart_state_ == UART_LINETRACER_STATE_EMERGENCY_STOP
-                                                          ? std::optional<std::string>{ "ERR-EMERGENCY-STOP" }
-                                                          : std::nullopt;
         EmitReport({
             .channel = LineTracerReportChannel::kStatus,
             .message_type = mqtt::MessageType::kDeviceStatus,
@@ -493,7 +491,7 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
                     .status = StateConnection(last_uart_state_),
                     .current_state = UartStateName(last_uart_state_, route_id),
                     .job_id = active_job,
-                    .error_code = error_code,
+                    .error_code = std::nullopt,
                 },
         });
         return;

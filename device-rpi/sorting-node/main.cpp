@@ -172,6 +172,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case SortingCommandStatus::kNoActiveCycle:
         case SortingCommandStatus::kUnsupportedMessage:
         case SortingCommandStatus::kUnsupportedCommand:
+        case SortingCommandStatus::kSafetyCommandPending:
         case SortingCommandStatus::kUartBusy:
             return mqtt::CommandResult::kRejected;
         case SortingCommandStatus::kInvalidMessage:
@@ -207,6 +208,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case SortingCommandStatus::kUnsupportedMessage:
         case SortingCommandStatus::kUnsupportedCommand:
             return "ERR-UNSUPPORTED-COMMAND";
+        case SortingCommandStatus::kSafetyCommandPending:
+            return "ERR-SAFETY-COMMAND-PENDING";
         case SortingCommandStatus::kUartNotOpen:
             return "ERR-UART-DISCONNECTED";
         case SortingCommandStatus::kUartBusy:
@@ -227,6 +230,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
             return "sorting command target does not match this node";
         case SortingCommandStatus::kUartBusy:
             return "sorting UART is busy with another command";
+        case SortingCommandStatus::kSafetyCommandPending:
+            return "sorting safety command is waiting for controller confirmation";
         case SortingCommandStatus::kUnsupportedMessage:
         case SortingCommandStatus::kUnsupportedCommand:
             return "sorting command is not supported";
@@ -326,7 +331,8 @@ int RunSortingDaemon(int argc, char* argv[]) {
         }
     });
     mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
-        if (!command_inbox.Push(message)) {
+        std::deque<mqtt::MqttMessage> preempted;
+        if (!command_inbox.Push(message, &preempted)) {
             std::cerr << "[sorting][mqtt][ERROR] command queue full; command rejected: " << message.message_id << '\n';
             const auto response = MakeTerminalCommandResponse(
                 message, device_id, message.message_id + "-QUEUE-FULL", CurrentIso8601Timestamp(),
@@ -335,6 +341,16 @@ int RunSortingDaemon(int argc, char* argv[]) {
             if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
                 std::cerr << "[sorting][mqtt][ERROR] unable to publish command queue full response: "
                           << message.message_id << '\n';
+            }
+        }
+        for (const auto& command : preempted) {
+            const auto response = MakeTerminalCommandResponse(
+                command, device_id, command.message_id + "-ESTOP-PREEMPTED", CurrentIso8601Timestamp(),
+                mqtt::CommandResult::kRejected, std::string("ERR-EMERGENCY-STOP-PREEMPTED"),
+                "sorting command was preempted by an emergency stop");
+            if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                std::cerr << "[sorting][mqtt][ERROR] unable to publish emergency preemption response: "
+                          << command.message_id << '\n';
             }
         }
     });
@@ -420,8 +436,8 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
-        if (!emergency_processed && !uart_failure_pending && uart_session.IsOpen() &&
-            !uart_session.HasPendingCommand() && uart_resync_pending) {
+        if (!emergency_processed && !sorting_node.HasPendingSafetyCommand() && !uart_failure_pending &&
+            uart_session.IsOpen() && !uart_session.HasPendingCommand() && uart_resync_pending) {
             const SortingCommandResult status_result = sorting_node.RequestControllerStatus();
             if (status_result.Succeeded()) {
                 uart_resync_pending = false;
@@ -430,8 +446,8 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
-        if (!emergency_processed && !uart_failure_pending && uart_session.IsOpen() &&
-            !uart_session.HasPendingCommand() && !uart_resync_pending) {
+        if (!emergency_processed && !sorting_node.HasPendingSafetyCommand() && !uart_failure_pending &&
+            uart_session.IsOpen() && !uart_session.HasPendingCommand() && !uart_resync_pending) {
             if (auto command = command_inbox.TryPop(); command.has_value()) {
                 const SortingCommandResult result = sorting_node.HandleMqttCommand(*command);
                 if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
@@ -440,8 +456,8 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
-        if (!uart_failure_pending && uart_session.IsOpen() && !uart_session.HasPendingCommand() &&
-            !uart_resync_pending && now >= next_uart_keepalive) {
+        if (!sorting_node.HasPendingSafetyCommand() && !uart_failure_pending && uart_session.IsOpen() &&
+            !uart_session.HasPendingCommand() && !uart_resync_pending && now >= next_uart_keepalive) {
             const UartSessionSendResult keepalive = uart_session.SendCommand(UART_CMD_SORTING_GET_STATUS);
             next_uart_keepalive = now + kUartKeepAliveInterval;
             if (!keepalive.Succeeded() && keepalive.status != UartSessionSendStatus::kBusy) {

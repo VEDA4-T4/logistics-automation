@@ -327,14 +327,27 @@ void TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault() {
 
     fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_EMERGENCY_STOP);
 
-    assert(fixture.reports.size() == 4U);
+    assert(fixture.reports.size() == 3U);
     const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports[1]);
     assert(response.request_id == "REQ-ESTOP-01");
     assert(response.result == mqtt::CommandResult::kSuccess);
     const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[2]);
     assert(status.current_state == "EMERGENCY_STOP");
-    const auto& error = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports[3]);
-    assert(error.error_level == "CRITICAL");
+    assert(status.status == mqtt::ConnectionState::kOnline);
+    assert(!status.error_code.has_value());
+}
+
+void TestPendingSafetyCommandCannotBeOverwritten() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+
+    const auto recovery = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const auto duplicate_estop = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+
+    assert(recovery.status == LineTracerCommandStatus::kSafetyCommandPending);
+    assert(duplicate_estop.status == LineTracerCommandStatus::kSafetyCommandPending);
+    assert(fixture.backend->writes.size() == 1U);
+    assert(fixture.node->HasPendingSafetyCommand());
 }
 
 void TestEmergencyStopConfirmationTimesOut() {
@@ -538,6 +551,7 @@ int main() {
     TestInitializeMapsToResetAndClearsActiveJob();
     TestRecoveryUsesCommonDeviceResetAndClearsActiveJob();
     TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault();
+    TestPendingSafetyCommandCannotBeOverwritten();
     TestEmergencyStopConfirmationTimesOut();
     TestEmergencyStopFailsImmediatelyWhenUartDisconnects();
     TestInvalidDestinationIsRejectedWithoutUartWrite();

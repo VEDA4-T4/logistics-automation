@@ -23,6 +23,7 @@ enum class LineTracerCommandStatus {
     kNoActiveJob,
     kUnsupportedMessage,
     kUnsupportedCommand,
+    kSafetyCommandPending,
     kUartNotOpen,
     kUartBusy,
     kUartError,
@@ -72,6 +73,7 @@ public:
     void Tick(std::chrono::milliseconds elapsed) noexcept;
 
     [[nodiscard]] bool HasActiveJob() const noexcept;
+    [[nodiscard]] bool HasPendingSafetyCommand() const noexcept;
     [[nodiscard]] std::string_view ActiveWorkId() const noexcept;
     [[nodiscard]] std::uint16_t ActiveUartJobId() const noexcept;
     [[nodiscard]] std::uint8_t ActiveRouteId() const noexcept;

@@ -27,6 +27,7 @@ enum class SortingCommandStatus {
     kNoActiveCycle,
     kUnsupportedMessage,
     kUnsupportedCommand,
+    kSafetyCommandPending,
     kUartNotOpen,
     kUartBusy,
     kUartError,
@@ -78,6 +79,7 @@ public:
     void ResetControllerHeartbeatMonitor() noexcept;
 
     [[nodiscard]] bool HasActiveCycle() const noexcept;
+    [[nodiscard]] bool HasPendingSafetyCommand() const noexcept;
     [[nodiscard]] std::string_view ActiveWorkId() const noexcept;
     [[nodiscard]] std::uint16_t ActiveCycleId() const noexcept;
     [[nodiscard]] std::uint8_t ActiveDestination() const noexcept;

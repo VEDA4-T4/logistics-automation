@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -21,7 +22,8 @@ public:
         }
     }
 
-    [[nodiscard]] bool Push(const contracts::mqtt::MqttMessage& message) {
+    [[nodiscard]] bool Push(const contracts::mqtt::MqttMessage& message,
+                            std::deque<contracts::mqtt::MqttMessage>* preempted_messages = nullptr) {
         std::lock_guard lock(mutex_);
         if (IsEmergencyStop(message)) {
             // Safety commands have their own bounded capacity so a normal-command
@@ -29,6 +31,11 @@ public:
             if (emergency_messages_.size() >= capacity_) {
                 return false;
             }
+            if (preempted_messages != nullptr) {
+                preempted_messages->insert(preempted_messages->end(), std::make_move_iterator(messages_.begin()),
+                                           std::make_move_iterator(messages_.end()));
+            }
+            messages_.clear();
             emergency_messages_.push_back(message);
             return true;
         }

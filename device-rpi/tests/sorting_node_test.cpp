@@ -451,6 +451,19 @@ void TestSafetyRecoveryUsesOneWayDeviceReset() {
     assert(!fixture.session->HasPendingCommand());
 }
 
+void TestPendingSafetyCommandCannotBeOverwritten() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+
+    const auto recovery = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const auto duplicate_estop = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+
+    assert(recovery.status == SortingCommandStatus::kSafetyCommandPending);
+    assert(duplicate_estop.status == SortingCommandStatus::kSafetyCommandPending);
+    assert(fixture.backend->writes.size() == 1U);
+    assert(fixture.node->HasPendingSafetyCommand());
+}
+
 void TestSystemTargetUsesSafetyRecovery() {
     Fixture fixture;
 
@@ -689,6 +702,7 @@ int main() {
     TestStartConfiguresSpeedBeforeStartingConveyor();
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
     TestSafetyRecoveryUsesOneWayDeviceReset();
+    TestPendingSafetyCommandCannotBeOverwritten();
     TestSystemTargetUsesSafetyRecovery();
     TestSafetyCommandsCompleteWithOriginalRequestId();
     TestSafetyAndHeartbeatTimeoutsAreReported();
