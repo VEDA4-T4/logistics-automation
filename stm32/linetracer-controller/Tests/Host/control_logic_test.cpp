@@ -181,9 +181,49 @@ void TestRouteStopAndResume() {
 
     const auto resume = MakeCommand(APP_CONTROL_COMMAND_RESUME_DRIVE, 60U, 5U);
     const auto resume_result = ControlLogic_HandleCommand(&context, &resume, 60U);
-    assert(resume_result.accepted != 0U);
+    assert(resume_result.accepted == 0U);
+    assert(resume_result.error_code == UART_ERROR_BUSY);
+    assert(context.state == LINETRACER_CONTROL_STOPPED);
+
+    app_control_safety_event_t recovery{};
+    recovery.type = APP_CONTROL_SAFETY_RECOVERY_APPROVED;
+    assert(ControlLogic_ApplySafetyEvent(&context, &recovery, 60U) != 0U);
     assert(context.state == LINETRACER_CONTROL_TURNING_FROM_DEST);
     assert(context.resume_valid == 0U);
+    assert(context.state_entered_at_ms == 60U);
+    assert(context.marker_wait_started_at_ms == 60U);
+}
+
+void TestLineLossAutoRecoveryPreservesRouteAndRestartsTimeouts() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_C, 55U, 0U);
+    assert(ControlLogic_CompleteTurn(&context, 10U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION);
+
+    app_control_safety_event_t line_lost{};
+    line_lost.type = APP_CONTROL_SAFETY_LATCHED;
+    line_lost.reason = LINETRACER_STOP_REASON_LINE_LOST;
+    line_lost.error_code = UART_ERROR_SENSOR;
+    assert(ControlLogic_ApplySafetyEvent(&context, &line_lost, 1000U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_ERROR);
+    assert(context.resume_state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION);
+    assert(context.resume_valid != 0U);
+    assert(context.active_job_id == 55U);
+    assert(context.active_route == UART_LINETRACER_ROUTE_C);
+
+    app_control_safety_event_t recovered{};
+    recovered.type = APP_CONTROL_SAFETY_AUTO_RECOVERY_APPROVED;
+    recovered.reason = LINETRACER_STOP_REASON_LINE_LOST;
+    assert(ControlLogic_ApplySafetyEvent(&context, &recovered, 5000U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION);
+    assert(context.active_job_id == 55U);
+    assert(context.active_route == UART_LINETRACER_ROUTE_C);
+    assert(context.safety_latched == 0U);
+    assert(context.stop_reason == LINETRACER_STOP_REASON_NONE);
+    assert(context.state_entered_at_ms == 5000U);
+    assert(context.marker_wait_started_at_ms == 5000U);
+    assert(ControlLogic_CheckRouteTimeout(&context, 5000U + CONTROL_MARKER_TIMEOUT_MS - 1U) ==
+           LINETRACER_STOP_REASON_NONE);
 }
 
 void TestInvalidStateStatusAndTimeout() {
@@ -543,6 +583,25 @@ void TestTelemetrySnapshotAndLifecycleEvents() {
     assert(snapshot.state == UART_LINETRACER_STATE_EMERGENCY_STOP);
     assert(snapshot.error_code == UART_ERROR_EMERGENCY_STOP);
     assert(snapshot.safety_latched != 0U);
+
+    auto status = MakeCommand(APP_CONTROL_COMMAND_STATUS_REQUEST, 31U, 0x5AU);
+    status.original_payload_crc = 0x1234U;
+    const auto status_result = ControlLogic_HandleCommand(&context, &status, 31U);
+    assert(status_result.accepted != 0U);
+    assert(status_result.error_code == UART_ERROR_NONE);
+    assert(ControlLogic_BuildStatusEvent(&context, &status, &status_result, UART_LINETRACER_LOAD_PRESENT, 31U,
+                                         &tx_event) != 0U);
+    assert(tx_event.type == APP_TX_EVENT_STATUS);
+    assert(tx_event.created_at_ms == 31U);
+    assert(tx_event.request_sequence == 0x5AU);
+    assert(tx_event.original_command == UART_CMD_LINETRACER_STATUS_REQUEST);
+    assert(tx_event.original_payload_crc == 0x1234U);
+    assert(tx_event.status == UART_STATUS_ACK);
+    assert(tx_event.state == UART_LINETRACER_STATE_EMERGENCY_STOP);
+    assert(tx_event.error_code == UART_ERROR_EMERGENCY_STOP);
+    assert(tx_event.job_id == 77U);
+    assert(tx_event.route_id == UART_LINETRACER_ROUTE_C);
+    assert(tx_event.load_state == UART_LINETRACER_LOAD_PRESENT);
 }
 
 }  // namespace
@@ -553,6 +612,7 @@ int main() {
     TestSafetyLatchRejectsDriveUntilApprovedReset();
     TestObstacleSafetyState();
     TestRouteStopAndResume();
+    TestLineLossAutoRecoveryPreservesRouteAndRestartsTimeouts();
     TestInvalidStateStatusAndTimeout();
     TestResetSafetyAndCommandMapping();
     TestRouteTransitionRules();

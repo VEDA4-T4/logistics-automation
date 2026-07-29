@@ -115,8 +115,7 @@ uint8_t CommRxLogic_LinkSetMonitoringRequired(comm_rx_link_monitor_t* monitor, u
 }
 
 uint8_t CommRxLogic_LinkCheckTimeout(comm_rx_link_monitor_t* monitor, uint32_t now_ms, uint32_t timeout_ms) {
-    if (monitor == NULL || monitor->monitoring_required == 0U || monitor->timeout_reported != 0U ||
-        timeout_ms == 0U) {
+    if (monitor == NULL || monitor->monitoring_required == 0U || monitor->timeout_reported != 0U || timeout_ms == 0U) {
         return 0U;
     }
 
@@ -187,6 +186,15 @@ static comm_rx_decode_result_t CommRxLogic_DecodeLineTracerCommand(const uart_fr
         return COMM_RX_DECODE_ACCEPTED;
     }
 
+    if (frame->command == UART_CMD_LINETRACER_RESUME_DRIVE) {
+        decoded->destination = COMM_RX_DESTINATION_SAFETY;
+        decoded->safety_event.type = APP_SAFETY_EVENT_RECOVERY_REQUEST;
+        decoded->safety_event.reason = LINETRACER_STOP_REASON_NONE;
+        decoded->safety_event.active = 0U;
+        CommRxLogic_SetSafetyMetadata(&decoded->safety_event, frame, now_ms);
+        return COMM_RX_DECODE_ACCEPTED;
+    }
+
     decoded->destination = COMM_RX_DESTINATION_CONTROL;
     CommRxLogic_SetControlMetadata(command, frame, now_ms);
 
@@ -209,10 +217,6 @@ static comm_rx_decode_result_t CommRxLogic_DecodeLineTracerCommand(const uart_fr
         case UART_CMD_LINETRACER_SET_CURRENT_POSITION:
             command->type = APP_CONTROL_COMMAND_SET_CURRENT_POSITION;
             command->position = (uart_linetracer_position_t)frame->payload[UART_LINETRACER_SET_POSITION_ID_INDEX];
-            break;
-
-        case UART_CMD_LINETRACER_RESUME_DRIVE:
-            command->type = APP_CONTROL_COMMAND_RESUME_DRIVE;
             break;
 
         case UART_CMD_LINETRACER_MANUAL_UNLOAD:

@@ -75,6 +75,9 @@ void ControlLogic_MakeSnapshot(const control_context_t* context, uart_linetracer
 uint8_t ControlLogic_BuildStartedEvent(const control_context_t* context, const app_control_command_t* command,
                                        const control_command_result_t* result, uart_linetracer_load_state_t load_state,
                                        uint32_t now_ms, app_tx_event_t* event);
+uint8_t ControlLogic_BuildStatusEvent(const control_context_t* context, const app_control_command_t* command,
+                                      const control_command_result_t* result, uart_linetracer_load_state_t load_state,
+                                      uint32_t now_ms, app_tx_event_t* event);
 uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
                                            const app_control_safety_event_t* safety_event,
                                            uart_linetracer_load_state_t load_state, uint32_t now_ms,

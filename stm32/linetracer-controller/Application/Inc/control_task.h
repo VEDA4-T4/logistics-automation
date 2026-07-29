@@ -13,6 +13,7 @@ extern "C" {
 
 void StartControlTask(void* argument);
 bool ControlTask_GetLatest(app_control_snapshot_t* snapshot);
+uint8_t ControlTask_NotifyUrgentStop(void);
 
 #ifdef __cplusplus
 }

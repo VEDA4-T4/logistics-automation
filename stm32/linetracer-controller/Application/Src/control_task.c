@@ -14,6 +14,7 @@ static uart_linetracer_load_state_t controlTaskLoadState = UART_LINETRACER_LOAD_
 static linetracer_line_state_t controlTaskLineState = LINETRACER_LINE_UNKNOWN;
 static uint8_t controlTaskMotorReady;
 static volatile uint8_t controlTaskInitialized;
+static osThreadId_t controlTaskId;
 
 typedef struct {
     app_tx_event_t event;
@@ -22,6 +23,7 @@ typedef struct {
 } control_pending_response_t;
 
 static control_pending_response_t controlPendingResponses[CONTROL_TASK_PENDING_RESPONSE_CAPACITY];
+static void ControlTask_PublishStateChanged(uint32_t now_ms);
 
 static uint32_t ControlTask_EnterShortCriticalSection(void) {
     uint32_t primask = __get_PRIMASK();
@@ -54,6 +56,17 @@ bool ControlTask_GetLatest(app_control_snapshot_t* snapshot) {
     ControlLogic_MakeSnapshot(&controlTaskContext, controlTaskLoadState, now_ms, snapshot);
     ControlTask_ExitShortCriticalSection(primask);
     return true;
+}
+
+uint8_t ControlTask_NotifyUrgentStop(void) {
+    uint32_t result;
+
+    if (controlTaskId == NULL) {
+        return 0U;
+    }
+
+    result = osThreadFlagsSet(controlTaskId, APP_CONTROL_NOTIFY_URGENT_STOP);
+    return ((result & osFlagsError) == 0U) ? 1U : 0U;
 }
 
 static void ControlTask_PublishHealthEvent(app_health_event_type_t type, uint32_t detail, uint32_t now_ms) {
@@ -146,13 +159,23 @@ static app_tx_event_t ControlTask_MakeTxEvent(app_tx_event_type_t type, const ap
     return event;
 }
 
-static void ControlTask_PublishSafetyResetResult(const app_control_safety_event_t* safety_event, uint32_t now_ms) {
+static void ControlTask_PublishSafetyCommandResult(const app_control_safety_event_t* safety_event, uint32_t now_ms) {
     app_tx_event_t event = { 0 };
+    uint8_t approved;
+    uint8_t reset_command;
 
-    if (safety_event->type != APP_CONTROL_SAFETY_RESET_APPROVED &&
-        safety_event->type != APP_CONTROL_SAFETY_RESET_REJECTED) {
+    reset_command = (safety_event->type == APP_CONTROL_SAFETY_RESET_APPROVED ||
+                     safety_event->type == APP_CONTROL_SAFETY_RESET_REJECTED)
+                        ? 1U
+                        : 0U;
+    if (reset_command == 0U && safety_event->type != APP_CONTROL_SAFETY_RECOVERY_APPROVED &&
+        safety_event->type != APP_CONTROL_SAFETY_RECOVERY_REJECTED) {
         return;
     }
+    approved = (safety_event->type == APP_CONTROL_SAFETY_RESET_APPROVED ||
+                safety_event->type == APP_CONTROL_SAFETY_RECOVERY_APPROVED)
+                   ? 1U
+                   : 0U;
 
     event.type = APP_TX_EVENT_COMMAND_ACK;
     event.created_at_ms = now_ms;
@@ -164,13 +187,13 @@ static void ControlTask_PublishSafetyResetResult(const app_control_safety_event_
     event.request_sequence = safety_event->request_sequence;
     event.original_command = safety_event->original_command;
     if (event.original_command == UART_CMD_NONE) {
-        event.original_command = UART_CMD_LINETRACER_RESET_SYSTEM;
+        event.original_command =
+            (reset_command != 0U) ? UART_CMD_LINETRACER_RESET_SYSTEM : UART_CMD_LINETRACER_RESUME_DRIVE;
     }
     event.original_payload_length = safety_event->original_payload_length;
-    event.status = (safety_event->type == APP_CONTROL_SAFETY_RESET_APPROVED) ? UART_STATUS_ACK : UART_STATUS_NACK;
-    event.error_code =
-        (safety_event->type == APP_CONTROL_SAFETY_RESET_APPROVED) ? UART_ERROR_NONE : safety_event->error_code;
-    if (safety_event->type == APP_CONTROL_SAFETY_RESET_REJECTED && event.error_code == UART_ERROR_NONE) {
+    event.status = (approved != 0U) ? UART_STATUS_ACK : UART_STATUS_NACK;
+    event.error_code = (approved != 0U) ? UART_ERROR_NONE : safety_event->error_code;
+    if (approved == 0U && event.error_code == UART_ERROR_NONE) {
         event.error_code = (controlTaskContext.safety_error_code != UART_ERROR_NONE)
                                ? controlTaskContext.safety_error_code
                                : UART_ERROR_BUSY;
@@ -183,6 +206,10 @@ static void ControlTask_ProcessSafetyEvents(void) {
     app_control_safety_event_t event;
     uint32_t processed = 0U;
 
+    if (controlSafetyQueue == NULL) {
+        return;
+    }
+
     while (processed < APP_CONTROL_SAFETY_QUEUE_DEPTH &&
            osMessageQueueGet(controlSafetyQueue, &event, NULL, 0U) == osOK) {
         uint32_t now_ms = osKernelGetTickCount();
@@ -190,12 +217,24 @@ static void ControlTask_ProcessSafetyEvents(void) {
         MotorControl_ForceStop();
         if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
             app_tx_event_t fault_event;
+            uint8_t recovery_approved = (event.type == APP_CONTROL_SAFETY_RESET_APPROVED ||
+                                         event.type == APP_CONTROL_SAFETY_RECOVERY_APPROVED ||
+                                         event.type == APP_CONTROL_SAFETY_AUTO_RECOVERY_APPROVED)
+                                            ? 1U
+                                            : 0U;
+
+            if (recovery_approved != 0U) {
+                (void)MotorControl_ReleaseSafetyInhibit(event.inhibit_generation);
+            }
 
             if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
                                                    &fault_event) != 0U) {
                 ControlTask_PublishTxEvent(&fault_event, now_ms);
             }
-            ControlTask_PublishSafetyResetResult(&event, now_ms);
+            ControlTask_PublishSafetyCommandResult(&event, now_ms);
+            if (recovery_approved != 0U) {
+                ControlTask_PublishStateChanged(now_ms);
+            }
         }
         ++processed;
     }
@@ -444,6 +483,7 @@ static void ControlTask_PublishCommandResult(const app_control_command_t* comman
                                              const control_command_result_t* result, uint32_t now_ms) {
     app_tx_event_t event = ControlTask_MakeTxEvent(APP_TX_EVENT_COMMAND_ACK, command, result, now_ms);
     app_tx_event_t started_event;
+    app_tx_event_t status_event;
 
     ControlTask_PublishTxEvent(&event, now_ms);
 
@@ -452,9 +492,9 @@ static void ControlTask_PublishCommandResult(const app_control_command_t* comman
         ControlTask_PublishTxEvent(&started_event, now_ms);
     }
 
-    if (result->status_requested != 0U && result->accepted != 0U) {
-        event.type = APP_TX_EVENT_STATUS;
-        ControlTask_PublishTxEvent(&event, now_ms);
+    if (ControlLogic_BuildStatusEvent(&controlTaskContext, command, result, controlTaskLoadState, now_ms,
+                                      &status_event) != 0U) {
+        ControlTask_PublishTxEvent(&status_event, now_ms);
     }
 
     if (result->state_changed != 0U && uart_linetracer_job_id_is_valid(controlTaskContext.active_job_id) != 0U &&
@@ -482,6 +522,36 @@ static void ControlTask_PublishUnloadCommand(const control_command_result_t* res
     }
 }
 
+static void ControlTask_ProcessOneCommand(const app_control_command_t* command, uint32_t now_ms) {
+    control_command_result_t result;
+
+    if (command == NULL) {
+        return;
+    }
+
+    result = ControlLogic_HandleCommand(&controlTaskContext, command, now_ms);
+    if (command->type == APP_CONTROL_COMMAND_STOP_DRIVE && result.accepted != 0U) {
+        MotorControl_ForceStop();
+    }
+    ControlTask_PublishCommandResult(command, &result, now_ms);
+    ControlTask_PublishUnloadCommand(&result, now_ms);
+}
+
+static void ControlTask_ProcessUrgentStops(void) {
+    app_control_command_t command;
+    uint32_t processed = 0U;
+
+    if (controlStopQueue == NULL) {
+        return;
+    }
+
+    while (processed < APP_CONTROL_STOP_QUEUE_DEPTH &&
+           osMessageQueueGet(controlStopQueue, &command, NULL, 0U) == osOK) {
+        ControlTask_ProcessOneCommand(&command, osKernelGetTickCount());
+        ++processed;
+    }
+}
+
 static void ControlTask_ProcessCommands(void) {
     app_control_command_t command;
     uint32_t processed_commands = 0U;
@@ -489,10 +559,8 @@ static void ControlTask_ProcessCommands(void) {
     while (processed_commands < CONTROL_TASK_MAX_COMMANDS_PER_CYCLE &&
            osMessageQueueGet(controlCommandQueue, &command, NULL, 0U) == osOK) {
         uint32_t now_ms = osKernelGetTickCount();
-        control_command_result_t result = ControlLogic_HandleCommand(&controlTaskContext, &command, now_ms);
 
-        ControlTask_PublishCommandResult(&command, &result, now_ms);
-        ControlTask_PublishUnloadCommand(&result, now_ms);
+        ControlTask_ProcessOneCommand(&command, now_ms);
         processed_commands++;
     }
 }
@@ -503,6 +571,8 @@ void StartControlTask(void* argument) {
 
     (void)argument;
     controlTaskInitialized = 0U;
+    controlTaskId = osThreadGetId();
+    (void)osThreadFlagsClear(APP_CONTROL_NOTIFY_URGENT_STOP);
     next_wake_tick = osKernelGetTickCount();
     last_alive_tick = next_wake_tick;
     ControlLogic_Init(&controlTaskContext, next_wake_tick);
@@ -524,8 +594,15 @@ void StartControlTask(void* argument) {
 
     for (;;) {
         uint32_t now_ms;
+        uint32_t flags;
+
+        now_ms = osKernelGetTickCount();
+        while (ControlTask_TimeReached(now_ms, next_wake_tick) != 0U) {
+            next_wake_tick += APP_TIMING_CONTROL_PERIOD_MS;
+        }
 
         ControlTask_ProcessSafetyEvents();
+        ControlTask_ProcessUrgentStops();
         now_ms = osKernelGetTickCount();
         ControlTask_ProcessPendingResponses(now_ms);
         ControlTask_ProcessSensorSnapshots();
@@ -539,9 +616,15 @@ void StartControlTask(void* argument) {
             last_alive_tick = now_ms;
         }
 
-        next_wake_tick += APP_TIMING_CONTROL_PERIOD_MS;
-        if (osDelayUntil(next_wake_tick) != osOK) {
-            next_wake_tick = osKernelGetTickCount();
+        now_ms = osKernelGetTickCount();
+        if (ControlTask_TimeReached(now_ms, next_wake_tick) != 0U) {
+            continue;
+        }
+
+        flags = osThreadFlagsWait(APP_CONTROL_NOTIFY_URGENT_STOP, osFlagsWaitAny, next_wake_tick - now_ms);
+        if ((flags & osFlagsError) != 0U && flags != osFlagsErrorTimeout) {
+            ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR,
+                                           CONTROL_HEALTH_FLAG_WAIT_FAILED | (flags & 0x0000FFFFUL), now_ms);
         }
     }
 }

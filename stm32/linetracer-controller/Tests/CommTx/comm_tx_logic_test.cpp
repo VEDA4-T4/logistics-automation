@@ -271,6 +271,28 @@ void TestObservedFaultPersistsUntilSuccessfulReset() {
     assert(heartbeat.error_code == UART_ERROR_NONE);
 }
 
+void TestRecoveryEventsClearObservedFault() {
+    comm_tx_observed_state_t state{};
+    app_tx_event_t event{};
+
+    CommTxLogic_InitObservedState(&state);
+    state.error_code = UART_ERROR_SENSOR;
+    event.type = APP_TX_EVENT_COMMAND_ACK;
+    event.original_command = UART_CMD_LINETRACER_RESET_SYSTEM;
+    event.status = UART_STATUS_ACK;
+    event.state = UART_LINETRACER_STATE_STOPPED;
+    event.load_state = UART_LINETRACER_LOAD_EMPTY;
+    CommTxLogic_ObserveEvent(&state, &event);
+    assert(state.error_code == UART_ERROR_NONE);
+
+    state.error_code = UART_ERROR_SENSOR;
+    event.type = APP_TX_EVENT_STATE_CHANGED;
+    event.status = UART_STATUS_SUCCESS;
+    event.state = UART_LINETRACER_STATE_FOLLOWING_LINE;
+    CommTxLogic_ObserveEvent(&state, &event);
+    assert(state.error_code == UART_ERROR_NONE);
+}
+
 void TestUnloadCompletionClearsObservedActiveRoute() {
     comm_tx_observed_state_t state{};
     auto event = MakeJobEvent(APP_TX_EVENT_COMMAND_ACK);
@@ -302,6 +324,7 @@ int main() {
     TestControlSnapshotOverridesBestEffortObservedState();
     TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags();
     TestObservedFaultPersistsUntilSuccessfulReset();
+    TestRecoveryEventsClearObservedFault();
     TestUnloadCompletionClearsObservedActiveRoute();
     return 0;
 }

@@ -175,8 +175,12 @@ void TestAllLineTracerCommandMappings() {
     assert(decoded.control_command.type == APP_CONTROL_COMMAND_SET_CURRENT_POSITION);
     assert(decoded.control_command.position == UART_LINETRACER_POSITION_DEST_C);
 
-    ExpectDecode(history, MakeEmptyCommand(0x15U, UART_CMD_LINETRACER_RESUME_DRIVE), COMM_RX_DESTINATION_CONTROL,
-                 APP_CONTROL_COMMAND_RESUME_DRIVE);
+    const auto resume = MakeEmptyCommand(0x15U, UART_CMD_LINETRACER_RESUME_DRIVE);
+    assert(CommRxLogic_DecodeFrame(&history, &resume, 105U, &decoded) == COMM_RX_DECODE_ACCEPTED);
+    assert(decoded.destination == COMM_RX_DESTINATION_SAFETY);
+    assert(decoded.safety_event.type == APP_SAFETY_EVENT_RECOVERY_REQUEST);
+    assert(decoded.safety_event.request_sequence == resume.sequence);
+    assert(decoded.safety_event.original_command == resume.command);
     ExpectDecode(history, MakeEmptyCommand(0x16U, UART_CMD_LINETRACER_MANUAL_UNLOAD), COMM_RX_DESTINATION_CONTROL,
                  APP_CONTROL_COMMAND_MANUAL_UNLOAD);
 }

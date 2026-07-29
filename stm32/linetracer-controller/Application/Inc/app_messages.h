@@ -109,6 +109,7 @@ typedef enum {
     APP_SAFETY_EVENT_MARKER_SEQUENCE,
     APP_SAFETY_EVENT_COMM_TIMEOUT,
     APP_SAFETY_EVENT_RESET_REQUEST,
+    APP_SAFETY_EVENT_RECOVERY_REQUEST,
     APP_SAFETY_EVENT_SENSOR_FAULT,
     APP_SAFETY_EVENT_HEALTH_FAULT
 } app_safety_event_type_t;
@@ -131,12 +132,17 @@ typedef enum {
     APP_CONTROL_SAFETY_NONE = 0,
     APP_CONTROL_SAFETY_LATCHED,
     APP_CONTROL_SAFETY_RESET_APPROVED,
-    APP_CONTROL_SAFETY_RESET_REJECTED
+    APP_CONTROL_SAFETY_RESET_REJECTED,
+    APP_CONTROL_SAFETY_RECOVERY_APPROVED,
+    APP_CONTROL_SAFETY_RECOVERY_REJECTED,
+    APP_CONTROL_SAFETY_AUTO_RECOVERY_APPROVED,
+    APP_CONTROL_SAFETY_AUTO_RECOVERY_FAILED
 } app_control_safety_event_type_t;
 
 typedef struct {
     app_control_safety_event_type_t type;
     uint32_t occurred_at_ms;
+    uint32_t inhibit_generation;
     linetracer_stop_reason_t reason;
     uint16_t original_payload_crc;
     uint8_t error_code;
@@ -251,6 +257,7 @@ typedef struct {
 #define APP_COMM_RX_NOTIFY_DATA_READY (1UL << 0U)
 #define APP_COMM_RX_NOTIFY_UART_ERROR (1UL << 1U)
 #define APP_SAFETY_NOTIFY_EMERGENCY_STOP (1UL << 0U)
+#define APP_CONTROL_NOTIFY_URGENT_STOP (1UL << 0U)
 #define APP_COMM_TX_NOTIFY_QUEUE_READY (1UL << 0U)
 #define APP_COMM_TX_NOTIFY_TX_COMPLETE (1UL << 1U)
 #define APP_COMM_TX_NOTIFY_ABORT_COMPLETE (1UL << 2U)

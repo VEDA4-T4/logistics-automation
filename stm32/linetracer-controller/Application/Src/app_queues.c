@@ -5,6 +5,7 @@
 #include "comm_tx_task.h"
 
 osMessageQueueId_t controlCommandQueue;
+osMessageQueueId_t controlStopQueue;
 osMessageQueueId_t sensorSnapshotQueue;
 osMessageQueueId_t safetyEventQueue;
 osMessageQueueId_t controlSafetyQueue;
@@ -17,6 +18,10 @@ static volatile uint32_t healthEventDropCounts[APP_TASK_COUNT];
 
 static const osMessageQueueAttr_t controlCommandQueueAttributes = {
     .name = "controlCommandQueue",
+};
+
+static const osMessageQueueAttr_t controlStopQueueAttributes = {
+    .name = "controlStopQueue",
 };
 
 static const osMessageQueueAttr_t sensorSnapshotQueueAttributes = {
@@ -52,10 +57,9 @@ static const osMessageQueueAttr_t healthEventQueueAttributes = {
 };
 
 uint8_t AppQueues_AreReady(void) {
-    return (controlCommandQueue != NULL && sensorSnapshotQueue != NULL && safetyEventQueue != NULL &&
-            controlSafetyQueue != NULL && unloadCommandQueue != NULL && txSafetyQueue != NULL &&
-            txResponseQueue != NULL &&
-            txEventQueue != NULL && healthEventQueue != NULL)
+    return (controlCommandQueue != NULL && controlStopQueue != NULL && sensorSnapshotQueue != NULL &&
+            safetyEventQueue != NULL && controlSafetyQueue != NULL && unloadCommandQueue != NULL &&
+            txSafetyQueue != NULL && txResponseQueue != NULL && txEventQueue != NULL && healthEventQueue != NULL)
                ? 1U
                : 0U;
 }
@@ -68,6 +72,8 @@ uint8_t AppQueues_Init(void) {
     (void)memset((void*)healthEventDropCounts, 0, sizeof(healthEventDropCounts));
     controlCommandQueue = osMessageQueueNew(APP_CONTROL_COMMAND_QUEUE_DEPTH, sizeof(app_control_command_t),
                                             &controlCommandQueueAttributes);
+    controlStopQueue =
+        osMessageQueueNew(APP_CONTROL_STOP_QUEUE_DEPTH, sizeof(app_control_command_t), &controlStopQueueAttributes);
     sensorSnapshotQueue = osMessageQueueNew(APP_SENSOR_SNAPSHOT_QUEUE_DEPTH, sizeof(app_sensor_snapshot_t),
                                             &sensorSnapshotQueueAttributes);
     safetyEventQueue =

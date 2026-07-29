@@ -47,10 +47,30 @@ void TestOnlyQueuedCommRxEstopIsMomentary() {
     assert(SafetyPolicy_IsMomentaryRemoteEstop(&event) == 0U);
 }
 
+void TestRecoveryRequiresFreshCenteredLineAndStoppedRoute() {
+    app_sensor_snapshot_t sensor{};
+    auto control = MakeControlSnapshot(UART_LINETRACER_STATE_STOPPED);
+
+    sensor.sampled_at_ms = 1000U;
+    sensor.line_state = LINETRACER_LINE_CENTERED;
+    assert(SafetyPolicy_SensorSupportsRecovery(&sensor, 1000U + SAFETY_SENSOR_SNAPSHOT_MAX_AGE_MS) == 1U);
+    assert(SafetyPolicy_SensorSupportsRecovery(&sensor, 1001U + SAFETY_SENSOR_SNAPSHOT_MAX_AGE_MS) == 0U);
+    sensor.line_state = LINETRACER_LINE_LEFT_ONLY;
+    assert(SafetyPolicy_SensorSupportsRecovery(&sensor, 1000U) == 0U);
+
+    assert(SafetyPolicy_ControlSupportsRecovery(&control) == 1U);
+    control.safety_latched = 1U;
+    assert(SafetyPolicy_ControlSupportsRecovery(&control) == 0U);
+    control.safety_latched = 0U;
+    control.state = UART_LINETRACER_STATE_FAULT;
+    assert(SafetyPolicy_ControlSupportsRecovery(&control) == 0U);
+}
+
 }  // namespace
 
 int main() {
     TestLineLossOnlyAppliesWhileFollowingOrCorrecting();
     TestOnlyQueuedCommRxEstopIsMomentary();
+    TestRecoveryRequiresFreshCenteredLineAndStoppedRoute();
     return 0;
 }

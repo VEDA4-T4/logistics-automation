@@ -11,8 +11,20 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(LOGISTICS_BUILD_CONTROL_CENTER "Build the Qt control center" OFF)
 option(LOGISTICS_BUILD_CENTRAL_SERVER "Build the central Raspberry Pi server" ON)
 option(LOGISTICS_BUILD_DEVICE_NODES "Build Raspberry Pi device nodes" ON)
+option(LOGISTICS_BUILD_LINETRACER_UART_TEST "Build the Raspberry Pi line-tracer UART test tool" OFF)
 
 add_subdirectory(shared)
+
+if(LOGISTICS_BUILD_LINETRACER_UART_TEST)
+    add_executable(
+        logistics_linetracer_uart_test
+        device-rpi/tools/linetracer-uart-test/main.cpp
+    )
+    target_link_libraries(logistics_linetracer_uart_test PRIVATE logistics::uart)
+
+    include(cmake/ProjectWarnings.cmake)
+    logistics_enable_warnings(logistics_linetracer_uart_test)
+endif()
 
 if(BUILD_TESTING)
     add_subdirectory(stm32/linetracer-controller/Tests/CommRx)

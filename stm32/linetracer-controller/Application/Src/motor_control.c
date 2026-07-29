@@ -14,7 +14,22 @@
 #define MOTOR_GPIO_PORT GPIOC
 
 static uint8_t motorControlInitialized;
+static volatile uint8_t motorControlSafetyInhibit;
+static volatile uint32_t motorControlSafetyInhibitGeneration;
 static motor_output_t motorControlLastOutput;
+
+static uint32_t MotorControl_EnterCriticalSection(void) {
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+    return primask;
+}
+
+static void MotorControl_ExitCriticalSection(uint32_t primask) {
+    if (primask == 0U) {
+        __enable_irq();
+    }
+}
 
 static motor_direction_t MotorControl_PhysicalDirection(motor_direction_t direction, uint8_t reversed) {
     if (reversed == 0U || direction == MOTOR_DIRECTION_COAST) {
@@ -65,6 +80,47 @@ void MotorControl_ForceStop(void) {
     MotorControlLogic_MakeSafeStop(&motorControlLastOutput);
 }
 
+void MotorControl_SetSafetyInhibit(uint8_t inhibited) {
+    uint32_t primask = MotorControl_EnterCriticalSection();
+
+    if (inhibited != 0U) {
+        ++motorControlSafetyInhibitGeneration;
+        motorControlSafetyInhibit = 1U;
+    } else {
+        motorControlSafetyInhibit = 0U;
+    }
+    MotorControl_ExitCriticalSection(primask);
+
+    if (inhibited != 0U) {
+        MotorControl_ForceStop();
+    }
+}
+
+uint8_t MotorControl_IsSafetyInhibited(void) {
+    return motorControlSafetyInhibit;
+}
+
+uint32_t MotorControl_GetSafetyInhibitGeneration(void) {
+    uint32_t generation;
+    uint32_t primask = MotorControl_EnterCriticalSection();
+
+    generation = motorControlSafetyInhibitGeneration;
+    MotorControl_ExitCriticalSection(primask);
+    return generation;
+}
+
+uint8_t MotorControl_ReleaseSafetyInhibit(uint32_t expected_generation) {
+    uint8_t released = 0U;
+    uint32_t primask = MotorControl_EnterCriticalSection();
+
+    if (motorControlSafetyInhibitGeneration == expected_generation) {
+        motorControlSafetyInhibit = 0U;
+        released = 1U;
+    }
+    MotorControl_ExitCriticalSection(primask);
+    return released;
+}
+
 uint8_t MotorControl_Init(void) {
     motorControlInitialized = 0U;
     MotorControl_ForceStop();
@@ -87,10 +143,16 @@ uint8_t MotorControl_Init(void) {
 uint8_t MotorControl_Apply(const motor_output_t* output) {
     motor_direction_t left_direction;
     motor_direction_t right_direction;
+    uint32_t primask;
 
     if (motorControlInitialized == 0U || MotorControl_OutputIsValid(output) == 0U) {
         MotorControl_ForceStop();
         return 0U;
+    }
+
+    if (motorControlSafetyInhibit != 0U) {
+        MotorControl_ForceStop();
+        return 1U;
     }
 
     if (output->standby == 0U || (output->left_pwm == 0U && output->right_pwm == 0U)) {
@@ -100,6 +162,18 @@ uint8_t MotorControl_Apply(const motor_output_t* output) {
 
     left_direction = MotorControl_PhysicalDirection(output->left_direction, MOTOR_CONTROL_LEFT_REVERSED);
     right_direction = MotorControl_PhysicalDirection(output->right_direction, MOTOR_CONTROL_RIGHT_REVERSED);
+
+    /*
+     * Keep the final inhibit check and all motor-enable writes atomic with
+     * respect to SafetyTask preemption. SafetyTask can then force-stop as
+     * soon as this very short hardware update completes.
+     */
+    primask = MotorControl_EnterCriticalSection();
+    if (motorControlSafetyInhibit != 0U) {
+        MotorControl_ExitCriticalSection(primask);
+        MotorControl_ForceStop();
+        return 1U;
+    }
 
     if (MotorControl_DirectionChanged(output) != 0U) {
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
@@ -113,6 +187,7 @@ uint8_t MotorControl_Apply(const motor_output_t* output) {
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, output->right_pwm);
     HAL_GPIO_WritePin(MOTOR_GPIO_PORT, MOTOR_STBY_PIN, GPIO_PIN_SET);
     motorControlLastOutput = *output;
+    MotorControl_ExitCriticalSection(primask);
     return 1U;
 }
 

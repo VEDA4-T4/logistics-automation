@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 #define APP_CONTROL_COMMAND_QUEUE_DEPTH 8U
+#define APP_CONTROL_STOP_QUEUE_DEPTH 2U
 #define APP_SENSOR_SNAPSHOT_QUEUE_DEPTH 4U
 #define APP_SAFETY_EVENT_QUEUE_DEPTH 8U
 #define APP_CONTROL_SAFETY_QUEUE_DEPTH 4U
@@ -25,6 +26,8 @@ extern "C" {
 #define APP_TX_RESPONSE_RETRY_DELAY_MS 10U
 
 extern osMessageQueueId_t controlCommandQueue;
+/* STOP commands bypass normal command backlog and wake ControlTask immediately. */
+extern osMessageQueueId_t controlStopQueue;
 extern osMessageQueueId_t sensorSnapshotQueue;
 /* SensorTask, CommRxTask and ControlTask produce; SafetyTask consumes. */
 extern osMessageQueueId_t safetyEventQueue;

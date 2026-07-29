@@ -83,8 +83,22 @@ static uint8_t CommRxTask_LinkMonitoringRequired(void) {
 }
 
 static uint8_t CommRxTask_PutControl(void* context, const app_control_command_t* command) {
+    osMessageQueueId_t destination;
+
     (void)context;
-    return (controlCommandQueue != NULL && osMessageQueuePut(controlCommandQueue, command, 0U, 0U) == osOK) ? 1U : 0U;
+    if (command == NULL) {
+        return 0U;
+    }
+
+    destination = (command->type == APP_CONTROL_COMMAND_STOP_DRIVE) ? controlStopQueue : controlCommandQueue;
+    if (destination == NULL || osMessageQueuePut(destination, command, 0U, 0U) != osOK) {
+        return 0U;
+    }
+
+    if (command->type == APP_CONTROL_COMMAND_STOP_DRIVE) {
+        (void)ControlTask_NotifyUrgentStop();
+    }
+    return 1U;
 }
 
 static uint8_t CommRxTask_PutSafety(void* context, const app_safety_event_t* event, uint8_t priority) {

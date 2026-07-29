@@ -95,10 +95,18 @@ void TestControlToCommTxLifecycleAndPersistentFault() {
     ControlLogic_MakeSnapshot(&control, UART_LINETRACER_LOAD_EMPTY, 40U, &control_snapshot);
     CommTxLogic_ObserveControl(&observed, &control_snapshot);
     CommTxLogic_MakeHeartbeat(&observed, 4000U, UART_ERROR_NONE, &heartbeat);
-    assert(heartbeat.state == UART_LINETRACER_STATE_IDLE);
-    assert(heartbeat.job_id == UART_LINETRACER_JOB_ID_NONE);
-    assert(heartbeat.route_id == UART_LINETRACER_ROUTE_NONE);
+    assert(heartbeat.state == UART_LINETRACER_STATE_STOPPED);
+    assert(heartbeat.job_id == 77U);
+    assert(heartbeat.route_id == UART_LINETRACER_ROUTE_C);
     assert(heartbeat.error_code == UART_ERROR_NONE);
+
+    app_control_safety_event_t recovery{};
+    recovery.type = APP_CONTROL_SAFETY_RECOVERY_APPROVED;
+    assert(ControlLogic_ApplySafetyEvent(&control, &recovery, 50U) != 0U);
+    ControlLogic_MakeSnapshot(&control, UART_LINETRACER_LOAD_EMPTY, 50U, &control_snapshot);
+    assert(control_snapshot.state == UART_LINETRACER_STATE_CORRECTING);
+    assert(control_snapshot.job_id == 77U);
+    assert(control_snapshot.route_id == UART_LINETRACER_ROUTE_C);
 }
 
 }  // namespace

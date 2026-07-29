@@ -9,7 +9,9 @@
 #include "cmsis_os2.h"
 #include "control_task.h"
 #include "main.h"
+#include "motor_control.h"
 #include "safety_policy.h"
+#include "sensor_task.h"
 
 extern osThreadId_t SafetyTaskHandle;
 
@@ -48,6 +50,10 @@ static volatile uint32_t s_invalid_event_count;
 static volatile uint32_t s_emergency_stop_interrupt_count;
 static uint8_t s_emergency_stop_input_reported;
 static uint8_t s_line_lost_sensor_active;
+static uint8_t s_centered_stable_valid;
+static uint8_t s_line_auto_recovery_failed;
+static uint32_t s_centered_since_ms;
+static uint32_t s_line_recovery_started_at_ms;
 
 static void SafetyTask_ProcessEvent(const app_safety_event_t* event);
 
@@ -95,6 +101,7 @@ static uint32_t SafetyTask_EventToHazardMask(app_safety_event_type_t type) {
 
         case APP_SAFETY_EVENT_NONE:
         case APP_SAFETY_EVENT_RESET_REQUEST:
+        case APP_SAFETY_EVENT_RECOVERY_REQUEST:
         default:
             return 0U;
     }
@@ -134,6 +141,7 @@ static linetracer_stop_reason_t SafetyTask_EventToReason(app_safety_event_type_t
 
         case APP_SAFETY_EVENT_NONE:
         case APP_SAFETY_EVENT_RESET_REQUEST:
+        case APP_SAFETY_EVENT_RECOVERY_REQUEST:
         default:
             return LINETRACER_STOP_REASON_NONE;
     }
@@ -255,18 +263,22 @@ static void SafetyTask_StoreLatestControlEvent(const app_control_safety_event_t*
 }
 
 static uint8_t SafetyTask_PublishControlEvent(const app_control_safety_event_t* event) {
+    app_control_safety_event_t queued_event;
+
     if ((event == NULL) || (controlSafetyQueue == NULL)) {
         ++s_control_event_drop_count;
         return 0U;
     }
 
-    if (osMessageQueuePut(controlSafetyQueue, event, 0U, 0U) != osOK) {
+    queued_event = *event;
+    queued_event.inhibit_generation = MotorControl_GetSafetyInhibitGeneration();
+    if (osMessageQueuePut(controlSafetyQueue, &queued_event, 0U, 0U) != osOK) {
         ++s_control_event_drop_count;
         SafetyTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)event->type, event->occurred_at_ms);
         return 0U;
     }
 
-    SafetyTask_StoreLatestControlEvent(event);
+    SafetyTask_StoreLatestControlEvent(&queued_event);
     return 1U;
 }
 
@@ -313,6 +325,35 @@ static uint8_t SafetyTask_PublishResetResult(const app_safety_event_t* request, 
     return SafetyTask_PublishControlEvent(&event);
 }
 
+static uint8_t SafetyTask_PublishRecoveryResult(const app_safety_event_t* request, uint8_t approved,
+                                                uint8_t error_code) {
+    app_control_safety_event_t event = { 0 };
+
+    if (request == NULL) {
+        return 0U;
+    }
+
+    event.type = (approved != 0U) ? APP_CONTROL_SAFETY_RECOVERY_APPROVED : APP_CONTROL_SAFETY_RECOVERY_REJECTED;
+    event.occurred_at_ms = request->occurred_at_ms;
+    event.reason = (approved != 0U) ? LINETRACER_STOP_REASON_NONE : s_safety_context.latched_reason;
+    event.error_code = (approved != 0U) ? (uint8_t)UART_ERROR_NONE : error_code;
+    if ((approved == 0U) && (event.error_code == (uint8_t)UART_ERROR_NONE)) {
+        event.error_code = (uint8_t)UART_ERROR_BUSY;
+    }
+    SafetyTask_CopyRequestMetadata(&event, request);
+    return SafetyTask_PublishControlEvent(&event);
+}
+
+static uint8_t SafetyTask_PublishAutoRecoveryResult(uint8_t approved, uint32_t now_ms) {
+    app_control_safety_event_t event = { 0 };
+
+    event.type = (approved != 0U) ? APP_CONTROL_SAFETY_AUTO_RECOVERY_APPROVED : APP_CONTROL_SAFETY_AUTO_RECOVERY_FAILED;
+    event.occurred_at_ms = now_ms;
+    event.reason = LINETRACER_STOP_REASON_LINE_LOST;
+    event.error_code = (approved != 0U) ? (uint8_t)UART_ERROR_NONE : (uint8_t)UART_ERROR_SENSOR;
+    return SafetyTask_PublishControlEvent(&event);
+}
+
 static void SafetyTask_ClearLatch(void) {
     (void)memset(&s_safety_context, 0, sizeof(s_safety_context));
     s_safety_context.latched_reason = LINETRACER_STOP_REASON_NONE;
@@ -336,6 +377,14 @@ static void SafetyTask_ActivateHazard(const app_safety_event_t* event) {
         ++s_invalid_event_count;
         return;
     }
+
+    /*
+     * This high-priority task owns the safety gate. The inhibit is asserted
+     * before an event is queued so
+     * motor shutdown does not depend on
+     * ControlTask scheduling or queue availability.
+     */
+    MotorControl_SetSafetyInhibit(1U);
 
     if ((s_safety_context.active_hazard_mask & hazard_mask) != 0U) {
         if ((reason == LINETRACER_STOP_REASON_HEALTH_FAULT) &&
@@ -405,6 +454,52 @@ static void SafetyTask_HandleReset(const app_safety_event_t* request) {
     }
 }
 
+static uint8_t SafetyTask_CenteredIsStable(uint32_t now_ms) {
+    return (s_centered_stable_valid != 0U && (uint32_t)(now_ms - s_centered_since_ms) >= SAFETY_LINE_RECOVERY_STABLE_MS)
+               ? 1U
+               : 0U;
+}
+
+static void SafetyTask_UpdateCenteredStability(uint32_t now_ms) {
+    app_sensor_snapshot_t snapshot;
+
+    if (!SensorTask_GetLatest(&snapshot) || SafetyPolicy_SensorSupportsRecovery(&snapshot, now_ms) == 0U) {
+        s_centered_stable_valid = 0U;
+        return;
+    }
+
+    if (s_centered_stable_valid == 0U) {
+        s_centered_since_ms = snapshot.sampled_at_ms;
+        s_centered_stable_valid = 1U;
+    }
+}
+
+static void SafetyTask_HandleRecovery(const app_safety_event_t* request, uint32_t now_ms) {
+    app_control_snapshot_t control_snapshot;
+    app_sensor_snapshot_t sensor_snapshot;
+    uint8_t error_code = (uint8_t)UART_ERROR_BUSY;
+    uint8_t approved = 0U;
+
+    if (request == NULL) {
+        return;
+    }
+
+    if (s_safety_context.active_hazard_mask == 0U && s_safety_context.latched == 0U &&
+        ControlTask_GetLatest(&control_snapshot) && SafetyPolicy_ControlSupportsRecovery(&control_snapshot) != 0U &&
+        SensorTask_GetLatest(&sensor_snapshot) && SafetyPolicy_SensorSupportsRecovery(&sensor_snapshot, now_ms) != 0U &&
+        SafetyTask_CenteredIsStable(now_ms) != 0U) {
+        approved = 1U;
+        error_code = (uint8_t)UART_ERROR_NONE;
+    } else if (s_safety_context.error_code != (uint8_t)UART_ERROR_NONE) {
+        error_code = s_safety_context.error_code;
+    } else if (SensorTask_GetLatest(&sensor_snapshot) &&
+               SafetyPolicy_SensorSupportsRecovery(&sensor_snapshot, now_ms) == 0U) {
+        error_code = (uint8_t)UART_ERROR_SENSOR;
+    }
+
+    (void)SafetyTask_PublishRecoveryResult(request, approved, error_code);
+}
+
 static uint8_t SafetyTask_LineLossApplies(void) {
     app_control_snapshot_t snapshot;
 
@@ -427,6 +522,11 @@ static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
         return;
     }
 
+    if (event->type == APP_SAFETY_EVENT_RECOVERY_REQUEST) {
+        SafetyTask_HandleRecovery(event, event->occurred_at_ms);
+        return;
+    }
+
     if (event->type == APP_SAFETY_EVENT_LINE_LOST) {
         s_line_lost_sensor_active = (event->active != 0U) ? 1U : 0U;
         if (event->active != 0U && SafetyTask_LineLossApplies() == 0U) {
@@ -434,6 +534,21 @@ static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
         }
         if (event->active == 0U && (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) == 0U) {
             return;
+        }
+        if (event->active == 0U) {
+            /*
+             * SensorLogic clears its raw line-loss condition as soon as any
+             * line is seen.
+             * Keep the safety hazard active until SafetyTask
+             * confirms CENTERED continuously for the
+             * recovery interval.
+             */
+            return;
+        }
+        if ((s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) == 0U) {
+            s_line_recovery_started_at_ms = event->occurred_at_ms;
+            s_line_auto_recovery_failed = 0U;
+            s_centered_stable_valid = 0U;
         }
     }
 
@@ -449,11 +564,51 @@ static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
     }
 }
 
+static void SafetyTask_MonitorLineRecovery(uint32_t now_ms) {
+    uint32_t recovery_elapsed_ms;
+    uint8_t centered_stable;
+
+    if ((s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) == 0U) {
+        return;
+    }
+
+    recovery_elapsed_ms = now_ms - s_line_recovery_started_at_ms;
+    centered_stable = (s_line_lost_sensor_active == 0U && SafetyTask_CenteredIsStable(now_ms) != 0U) ? 1U : 0U;
+
+    if (centered_stable != 0U) {
+        uint32_t hazards_without_line = s_safety_context.active_hazard_mask & ~SAFETY_HAZARD_LINE_LOST;
+        uint32_t latches_without_line = s_safety_context.latched_hazard_mask & ~SAFETY_HAZARD_LINE_LOST;
+
+        if (s_line_auto_recovery_failed == 0U && recovery_elapsed_ms <= SAFETY_LINE_AUTO_RECOVERY_WINDOW_MS &&
+            hazards_without_line == 0U && latches_without_line == 0U) {
+            if (SafetyTask_PublishAutoRecoveryResult(1U, now_ms) != 0U) {
+                SafetyTask_ClearLatch();
+                s_line_recovery_started_at_ms = 0U;
+                s_centered_stable_valid = 0U;
+            }
+            return;
+        }
+
+        if (s_line_auto_recovery_failed == 0U) {
+            if (SafetyTask_PublishAutoRecoveryResult(0U, now_ms) == 0U) {
+                return;
+            }
+            s_line_auto_recovery_failed = 1U;
+        }
+        s_safety_context.active_hazard_mask &= ~SAFETY_HAZARD_LINE_LOST;
+        return;
+    }
+
+    if (s_line_auto_recovery_failed == 0U && recovery_elapsed_ms > SAFETY_LINE_AUTO_RECOVERY_WINDOW_MS &&
+        SafetyTask_PublishAutoRecoveryResult(0U, now_ms) != 0U) {
+        s_line_auto_recovery_failed = 1U;
+    }
+}
+
 static void SafetyTask_ReconcileLineLoss(uint32_t now_ms) {
     app_safety_event_t event = { 0 };
 
-    if (s_line_lost_sensor_active == 0U ||
-        (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) != 0U ||
+    if (s_line_lost_sensor_active == 0U || (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) != 0U ||
         SafetyTask_LineLossApplies() == 0U) {
         return;
     }
@@ -464,6 +619,9 @@ static void SafetyTask_ReconcileLineLoss(uint32_t now_ms) {
     event.source_task = APP_TASK_SENSOR;
     event.error_code = (uint8_t)UART_ERROR_SENSOR;
     event.active = 1U;
+    s_line_recovery_started_at_ms = now_ms;
+    s_line_auto_recovery_failed = 0U;
+    s_centered_stable_valid = 0U;
     SafetyTask_ActivateHazard(&event);
 }
 
@@ -534,6 +692,11 @@ static void SafetyTask_Initialize(void) {
     s_emergency_stop_interrupt_count = 0U;
     s_emergency_stop_input_reported = 0U;
     s_line_lost_sensor_active = 0U;
+    s_centered_stable_valid = 0U;
+    s_line_auto_recovery_failed = 0U;
+    s_centered_since_ms = 0U;
+    s_line_recovery_started_at_ms = 0U;
+    MotorControl_SetSafetyInhibit(0U);
     (void)osThreadFlagsClear(APP_SAFETY_NOTIFY_EMERGENCY_STOP);
 }
 
@@ -552,8 +715,10 @@ void StartSafetyTask(void* argument) {
     for (;;) {
         now_ms = osKernelGetTickCount();
         SafetyTask_ProcessEmergencyStopInput(now_ms);
+        SafetyTask_UpdateCenteredStability(now_ms);
         SafetyTask_ProcessQueue();
         SafetyTask_ReconcileLineLoss(now_ms);
+        SafetyTask_MonitorLineRecovery(now_ms);
 
         if ((uint32_t)(now_ms - last_alive_ms) >= APP_TIMING_HEALTH_PERIOD_MS) {
             SafetyTask_PublishHealthEvent(APP_HEALTH_EVENT_TASK_ALIVE, s_safety_context.latched_hazard_mask, now_ms);

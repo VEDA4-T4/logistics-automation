@@ -4,14 +4,12 @@
 
 #include "sensor_config.h"
 
-static uint8_t CommTxLogic_JobRoutePairIsValid(uint16_t job_id, uart_linetracer_route_t route_id,
-                                               uint8_t allow_none) {
+static uint8_t CommTxLogic_JobRoutePairIsValid(uint16_t job_id, uart_linetracer_route_t route_id, uint8_t allow_none) {
     if (allow_none != 0U && job_id == UART_LINETRACER_JOB_ID_NONE && route_id == UART_LINETRACER_ROUTE_NONE) {
         return 1U;
     }
 
-    return (uart_linetracer_job_id_is_valid(job_id) != 0U && uart_linetracer_route_is_valid(route_id) != 0U) ? 1U
-                                                                                                               : 0U;
+    return (uart_linetracer_job_id_is_valid(job_id) != 0U && uart_linetracer_route_is_valid(route_id) != 0U) ? 1U : 0U;
 }
 
 static void CommTxLogic_WriteUint16(uint8_t* payload, uint32_t low_index, uint16_t value) {
@@ -33,9 +31,8 @@ static void CommTxLogic_InitFrame(uart_frame_t* frame, uint8_t sequence, uint8_t
     frame->command = command;
 }
 
-static uart_codec_result_t CommTxLogic_EncodeAsyncFrame(comm_tx_logic_t* context, uart_frame_t* frame,
-                                                        uint8_t* output, size_t output_capacity,
-                                                        size_t* output_length) {
+static uart_codec_result_t CommTxLogic_EncodeAsyncFrame(comm_tx_logic_t* context, uart_frame_t* frame, uint8_t* output,
+                                                        size_t output_capacity, size_t* output_length) {
     uart_codec_result_t result;
 
     frame->sequence = context->next_sequence;
@@ -149,14 +146,12 @@ void CommTxLogic_ObserveEvent(comm_tx_observed_state_t* state, const app_tx_even
         state->load_state = event->load_state;
     }
 
-    job_route_valid = (uart_linetracer_job_id_is_valid(event->job_id) != 0U &&
-                       uart_linetracer_route_is_valid(event->route_id) != 0U)
-                          ? 1U
-                          : 0U;
-    job_route_none = (event->job_id == UART_LINETRACER_JOB_ID_NONE &&
-                      event->route_id == UART_LINETRACER_ROUTE_NONE)
-                         ? 1U
-                         : 0U;
+    job_route_valid =
+        (uart_linetracer_job_id_is_valid(event->job_id) != 0U && uart_linetracer_route_is_valid(event->route_id) != 0U)
+            ? 1U
+            : 0U;
+    job_route_none =
+        (event->job_id == UART_LINETRACER_JOB_ID_NONE && event->route_id == UART_LINETRACER_ROUTE_NONE) ? 1U : 0U;
 
     if (event->type == APP_TX_EVENT_UNLOAD_COMPLETE) {
         state->job_id = UART_LINETRACER_JOB_ID_NONE;
@@ -174,9 +169,13 @@ void CommTxLogic_ObserveEvent(comm_tx_observed_state_t* state, const app_tx_even
 
     if (event->type == APP_TX_EVENT_FAULT && uart_linetracer_fault_error_is_valid(event->error_code) != 0U) {
         state->error_code = event->error_code;
-    } else if (event->type == APP_TX_EVENT_COMMAND_ACK &&
-               event->original_command == UART_CMD_LINETRACER_RESET_SYSTEM && event->status == UART_STATUS_ACK &&
-               event->state == UART_LINETRACER_STATE_IDLE) {
+    } else if (event->type == APP_TX_EVENT_COMMAND_ACK && event->status == UART_STATUS_ACK &&
+               ((event->original_command == UART_CMD_LINETRACER_RESET_SYSTEM &&
+                 (event->state == UART_LINETRACER_STATE_IDLE || event->state == UART_LINETRACER_STATE_STOPPED)) ||
+                event->original_command == UART_CMD_LINETRACER_RESUME_DRIVE)) {
+        state->error_code = UART_ERROR_NONE;
+    } else if (event->type == APP_TX_EVENT_STATE_CHANGED && event->status == UART_STATUS_SUCCESS &&
+               event->state != UART_LINETRACER_STATE_FAULT && event->state != UART_LINETRACER_STATE_EMERGENCY_STOP) {
         state->error_code = UART_ERROR_NONE;
     }
 }
@@ -186,10 +185,10 @@ static uint8_t CommTxLogic_DistanceIsValid(uint16_t distance_mm) {
 }
 
 void CommTxLogic_ObserveSensor(comm_tx_observed_state_t* state, const app_sensor_snapshot_t* snapshot) {
-    const uint16_t distances[] = {snapshot != NULL ? snapshot->ultrasonic_front_mm : 0U,
-                                  snapshot != NULL ? snapshot->ultrasonic_rear_mm : 0U,
-                                  snapshot != NULL ? snapshot->ultrasonic_left_mm : 0U,
-                                  snapshot != NULL ? snapshot->ultrasonic_right_mm : 0U};
+    const uint16_t distances[] = { snapshot != NULL ? snapshot->ultrasonic_front_mm : 0U,
+                                   snapshot != NULL ? snapshot->ultrasonic_rear_mm : 0U,
+                                   snapshot != NULL ? snapshot->ultrasonic_left_mm : 0U,
+                                   snapshot != NULL ? snapshot->ultrasonic_right_mm : 0U };
     uint8_t valid_count = 0U;
     uint8_t obstacle_detected = 0U;
     uint8_t all_clear = 1U;
@@ -262,10 +261,8 @@ void CommTxLogic_ObserveControl(comm_tx_observed_state_t* state, const app_contr
                        uart_linetracer_route_is_valid(snapshot->route_id) != 0U)
                           ? 1U
                           : 0U;
-    job_route_none = (snapshot->job_id == UART_LINETRACER_JOB_ID_NONE &&
-                      snapshot->route_id == UART_LINETRACER_ROUTE_NONE)
-                         ? 1U
-                         : 0U;
+    job_route_none =
+        (snapshot->job_id == UART_LINETRACER_JOB_ID_NONE && snapshot->route_id == UART_LINETRACER_ROUTE_NONE) ? 1U : 0U;
     if (job_route_valid != 0U || job_route_none != 0U) {
         state->job_id = snapshot->job_id;
         state->route_id = snapshot->route_id;
@@ -277,8 +274,7 @@ void CommTxLogic_ObserveControl(comm_tx_observed_state_t* state, const app_contr
     }
 
     if (snapshot->error_code == UART_ERROR_NONE) {
-        state->error_code =
-            (snapshot->safety_latched != 0U) ? UART_ERROR_INTERNAL : UART_ERROR_NONE;
+        state->error_code = (snapshot->safety_latched != 0U) ? UART_ERROR_INTERNAL : UART_ERROR_NONE;
     } else if (uart_linetracer_fault_error_is_valid(snapshot->error_code) != 0U) {
         state->error_code = snapshot->error_code;
     } else {
@@ -286,8 +282,8 @@ void CommTxLogic_ObserveControl(comm_tx_observed_state_t* state, const app_contr
     }
 }
 
-void CommTxLogic_MakeHeartbeat(const comm_tx_observed_state_t* state, uint32_t uptime_ms,
-                               uint8_t local_error_code, comm_tx_heartbeat_t* heartbeat) {
+void CommTxLogic_MakeHeartbeat(const comm_tx_observed_state_t* state, uint32_t uptime_ms, uint8_t local_error_code,
+                               comm_tx_heartbeat_t* heartbeat) {
     if (state == NULL || heartbeat == NULL) {
         return;
     }
@@ -301,14 +297,13 @@ void CommTxLogic_MakeHeartbeat(const comm_tx_observed_state_t* state, uint32_t u
     heartbeat->sensor_flags = state->sensor_flags;
     heartbeat->error_code = (local_error_code != UART_ERROR_NONE) ? local_error_code : state->error_code;
 
-    if (heartbeat->error_code != UART_ERROR_NONE &&
-        uart_linetracer_fault_error_is_valid(heartbeat->error_code) == 0U) {
+    if (heartbeat->error_code != UART_ERROR_NONE && uart_linetracer_fault_error_is_valid(heartbeat->error_code) == 0U) {
         heartbeat->error_code = UART_ERROR_INTERNAL;
     }
 }
 
-uart_codec_result_t CommTxLogic_EncodeEvent(comm_tx_logic_t* context, const app_tx_event_t* event,
-                                            uint8_t* output, size_t output_capacity, size_t* output_length) {
+uart_codec_result_t CommTxLogic_EncodeEvent(comm_tx_logic_t* context, const app_tx_event_t* event, uint8_t* output,
+                                            size_t output_capacity, size_t* output_length) {
     uart_frame_t frame;
     uart_codec_result_t result;
     uint8_t asynchronous = 1U;
