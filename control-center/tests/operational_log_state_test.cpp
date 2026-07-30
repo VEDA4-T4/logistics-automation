@@ -68,6 +68,29 @@ int main() {
     assert(result.handled && !result.applied && result.error.isEmpty());
 
     result = state.applyEnvelope(
+        QStringLiteral("qt/control-center/error"),
+        Envelope(QStringLiteral("STALE-ERROR"), QStringLiteral("ERROR_OCCURRED"), QStringLiteral("PI-SORTING-01"),
+                 { { QStringLiteral("errorCode"), QStringLiteral("ERR-HEALTH-SENSOR-STALE") },
+                   { QStringLiteral("errorLevel"), QStringLiteral("ERROR") },
+                   { QStringLiteral("currentState"), QStringLiteral("CONTROLLER_HEALTH") },
+                   { QStringLiteral("message"), QStringLiteral("sensor stale") } }));
+    assert(result.applied);
+    assert(state.entries().front().severity == OperationalLogSeverity::Warning);
+    assert(state.entries().front().category == QStringLiteral("센서 경고"));
+    assert(state.activeAlertCount() == 2);
+
+    result = state.applyEnvelope(
+        QStringLiteral("qt/control-center/status"),
+        Envelope(QStringLiteral("STALE-STATUS"), QStringLiteral("DEVICE_STATUS"), QStringLiteral("PI-SORTING-01"),
+                 { { QStringLiteral("status"), QStringLiteral("UART_ERROR") },
+                   { QStringLiteral("currentState"), QStringLiteral("CONTROLLER_HEALTH") },
+                   { QStringLiteral("errorCode"), QStringLiteral("ERR_HEALTH_SENSOR_STALE") } }));
+    assert(result.applied);
+    assert(state.entries().front().severity == OperationalLogSeverity::Warning);
+    assert(state.entries().front().category == QStringLiteral("센서 경고"));
+    assert(state.activeAlertCount() == 2);
+
+    result = state.applyEnvelope(
         QStringLiteral("qt/control-center/event"),
         Envelope(QStringLiteral("BARCODE-1"), QStringLiteral("BARCODE_DETECTED"), QStringLiteral("PI-VISION-01"),
                  { { QStringLiteral("recognitionStatus"), QStringLiteral("FAILED") },

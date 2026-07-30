@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/control_center/operations_dashboard_state.hpp"
 
 namespace logistics::control_center {
 namespace {
@@ -151,12 +152,17 @@ OperationalLogUpdateResult OperationalLogState::applyEnvelope(const QString& top
         case mqtt::MessageType::kErrorOccurred: {
             bool severity_is_valid = false;
             entry.severity = SeverityFromText(StringValue(data, "errorLevel"), severity_is_valid);
-            entry.category = QStringLiteral("장치 오류");
             entry.code = StringValue(data, "errorCode");
             entry.message = StringValue(data, "message");
             if (!severity_is_valid || entry.code.isEmpty() || entry.message.isEmpty()) {
                 result.error = QStringLiteral("오류 로그의 심각도, 코드 또는 내용이 올바르지 않습니다.");
                 return result;
+            }
+            if (IsSensorStaleErrorCode(entry.code)) {
+                entry.severity = OperationalLogSeverity::Warning;
+                entry.category = QStringLiteral("센서 경고");
+            } else {
+                entry.category = QStringLiteral("장치 오류");
             }
             break;
         }
@@ -171,21 +177,28 @@ OperationalLogUpdateResult OperationalLogState::applyEnvelope(const QString& top
             const auto state = mqtt::ConnectionStateFromString(status_text.toStdString());
             const auto current_state = StringValue(data, "currentState").toUpper();
             const auto error_code = StringValue(data, "errorCode");
-            const bool process_error = current_state == QStringLiteral("ERROR") ||
-                                       current_state.endsWith(QStringLiteral("_ERROR")) || !error_code.isEmpty();
+            const bool sensor_stale = IsSensorStaleErrorCode(error_code);
+            const bool process_error =
+                !sensor_stale && (current_state == QStringLiteral("ERROR") ||
+                                  current_state.endsWith(QStringLiteral("_ERROR")) || !error_code.isEmpty());
             if (state == mqtt::ConnectionState::kUnknown) {
                 result.error = QStringLiteral("장치 상태 로그의 status가 올바르지 않습니다.");
                 return result;
             }
-            if (state == mqtt::ConnectionState::kOnline && !process_error) {
+            if (state == mqtt::ConnectionState::kOnline && !process_error && !sensor_stale) {
                 should_append = false;
                 break;
             }
-            entry.severity = process_error ? OperationalLogSeverity::Error : DeviceStatusSeverity(state);
-            entry.category = process_error ? QStringLiteral("공정 경고") : QStringLiteral("통신 장애");
+            entry.severity = sensor_stale
+                                 ? OperationalLogSeverity::Warning
+                                 : (process_error ? OperationalLogSeverity::Error : DeviceStatusSeverity(state));
+            entry.category = sensor_stale ? QStringLiteral("센서 경고")
+                                          : (process_error ? QStringLiteral("공정 경고") : QStringLiteral("통신 장애"));
             entry.code = !error_code.isEmpty() ? error_code : status_text;
-            entry.message = process_error ? QStringLiteral("장치가 오류 상태를 보고했습니다: %1").arg(current_state)
-                                          : DeviceStatusMessage(state);
+            entry.message =
+                sensor_stale ? QStringLiteral("센서 유효 표본이 설정 시간 동안 갱신되지 않았습니다.")
+                             : (process_error ? QStringLiteral("장치가 오류 상태를 보고했습니다: %1").arg(current_state)
+                                              : DeviceStatusMessage(state));
             break;
         }
         case mqtt::MessageType::kWorkCreated:

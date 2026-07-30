@@ -7,7 +7,8 @@ password=
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
-clean_session=true
+# Keep the broker session so QoS 1 messages can be delivered after a server restart.
+clean_session=false
 
 [device_registry]
 # Relative paths are resolved from this server.ini file.
@@ -20,7 +21,6 @@ busy_timeout_ms=5000
 
 [storage]
 image_root=/var/lib/logistics/images
-log_root=/var/log/logistics
 cleanup_interval_hours=24
 mqtt_retention_days=30
 device_status_retention_days=30
@@ -50,3 +50,25 @@ vision_device_id=PI-VISION-01
 gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
+# Physical parking position used when initializing the line tracer.
+# Allowed values: A, B, C
+line_tracer_initial_position=A
+
+[homography]
+# Keep disabled until pixel_to_conveyor is replaced with a matrix measured for the installed camera.
+enabled=false
+# Row-major 3x3 matrix: [u, v, 1] camera pixels -> [x, y, w] conveyor millimetres.
+pixel_to_conveyor=1,0,0,0,1,0,0,0,1
+# Conveyor top plane and gripper base origin, all in the same installation coordinate system.
+conveyor_plane_z_mm=850
+robot_base_x_mm=1250
+robot_base_y_mm=430
+robot_base_z_mm=0
+# Counter-clockwise rotation from the conveyor X axis to the gripper-base X axis.
+robot_base_yaw_deg=90
+coordinate_frame=PI-GRIPPER-01_BASE
+# Physical box dimensions used for the top-centre grasp target.
+box_length_mm=400
+box_width_mm=300
+box_height_mm=250
+calibration_version=1

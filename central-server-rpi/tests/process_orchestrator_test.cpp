@@ -45,10 +45,48 @@ void TestEventFlowCreatesCommandsForEachNode() {
         .gripper_device_id = "PI-GRIPPER-01",
         .sorting_device_id = "PI-SORTING-01",
         .line_tracer_device_id = "PI-LT-01",
+        .line_tracer_initial_position = {},
+        .homography =
+            {
+                .enabled = true,
+                .pixel_to_conveyor = { 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 },
+                .conveyor_plane_z_mm = 800.0,
+                .robot_base_x_mm = 50.0,
+                .robot_base_y_mm = 25.0,
+                .robot_base_z_mm = 0.0,
+                .robot_base_yaw_deg = 0.0,
+                .box_length_mm = 400.0,
+                .box_width_mm = 200.0,
+                .box_height_mm = 150.0,
+                .coordinate_frame = "PI-GRIPPER-01_BASE",
+                .calibration_version = 3,
+            },
     });
     assert(orchestrator.BeginWork("MSG-BOX", kWorkId, "PI-INPUT-01").Applied());
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
     assert(orchestrator.ConfirmVisionAssignment("MSG-BOX", kWorkId).Applied());
+
+    const auto position = Message("MSG-POSITION", mqtt::MessageType::kPositionDetected, "PI-VISION-01",
+                                  mqtt::PositionDetectedPayload{
+                                      .work_id = kWorkId,
+                                      .box_x = 100,
+                                      .box_y = 50,
+                                      .box_width = 200,
+                                      .box_height = 100,
+                                      .center_x = 200,
+                                      .center_y = 100,
+                                      .offset_x = 0,
+                                      .offset_y = 0,
+                                      .position_status = "DETECTED",
+                                      .box_corners =
+                                          std::array{
+                                              mqtt::PixelPoint{ .x = 100.0, .y = 50.0 },
+                                              mqtt::PixelPoint{ .x = 300.0, .y = 50.0 },
+                                              mqtt::PixelPoint{ .x = 300.0, .y = 150.0 },
+                                              mqtt::PixelPoint{ .x = 100.0, .y = 150.0 },
+                                          },
+                                  });
+    assert(orchestrator.Handle(position).transition.Applied());
 
     const auto barcode = Message("MSG-BARCODE", mqtt::MessageType::kBarcodeDetected, "PI-VISION-01",
                                  mqtt::BarcodeDetectedPayload{
@@ -59,7 +97,7 @@ void TestEventFlowCreatesCommandsForEachNode() {
                                      .message = std::nullopt,
                                  });
     assert(orchestrator.Preview(barcode).transition.Applied());
-    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kVisionAssigned);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kVisionProcessing);
     assert(orchestrator.Handle(barcode).transition.Applied());
 
     const auto product = Message("MSG-PRODUCT", mqtt::MessageType::kProductInfo, "central-server",
@@ -81,6 +119,14 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(gripper_payload != nullptr);
     assert(gripper_payload->target_device_id == "PI-GRIPPER-01");
     assert(gripper_payload->params.at("workId") == kWorkId);
+    assert(gripper_payload->params.at("action") == "PICK");
+    assert(gripper_payload->params.at("coordinateFrame") == "PI-GRIPPER-01_BASE");
+    assert(gripper_payload->params.at("unit") == "mm");
+    assert(gripper_payload->params.at("targetPose").at("x") == 150.0);
+    assert(gripper_payload->params.at("targetPose").at("y") == 75.0);
+    assert(gripper_payload->params.at("targetPose").at("z") == 950.0);
+    assert(gripper_payload->params.at("targetPose").at("yawDeg") == 0.0);
+    assert(gripper_payload->params.at("calibrationVersion") == 3);
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-GRIPPER-01"), gripper.message).IsSuccess());
     assert(orchestrator.ConfirmDispatch(gripper).Applied());
 

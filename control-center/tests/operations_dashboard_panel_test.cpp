@@ -4,6 +4,7 @@
 #include <QFrame>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMouseEvent>
 #include <cassert>
 
 namespace {
@@ -25,6 +26,24 @@ QJsonObject DeviceEnvelope(const QString& message_id, const QString& source_id, 
         { QStringLiteral("timestamp"),
           QStringLiteral("2026-07-23T01:00:%1.000Z").arg(second, 2, 10, QLatin1Char('0')) },
         { QStringLiteral("data"), data },
+    };
+}
+
+QJsonObject SensorEnvelope(const QString& message_id, const QString& source_id, int sensor_id,
+                           const QString& measurement_status, int distance_cm, int second) {
+    return {
+        { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+        { QStringLiteral("messageId"), message_id },
+        { QStringLiteral("messageType"), QStringLiteral("SENSOR_STATUS") },
+        { QStringLiteral("sourceId"), source_id },
+        { QStringLiteral("timestamp"),
+          QStringLiteral("2026-07-23T01:00:%1.500Z").arg(second, 2, 10, QLatin1Char('0')) },
+        { QStringLiteral("data"),
+          QJsonObject{
+              { QStringLiteral("sensorId"), sensor_id },
+              { QStringLiteral("measurementStatus"), measurement_status },
+              { QStringLiteral("distanceCm"), distance_cm },
+          } },
     };
 }
 
@@ -51,6 +70,20 @@ int main(int argc, char* argv[]) {
     assert(panel.minimumHeight() == 112);
     assert(panel.maximumHeight() == 112);
     assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
+    assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
+    assert(panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator")).size() == 4);
+    QLabel* sorting_sensor_2 = nullptr;
+    for (auto* indicator : panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator"))) {
+        if (indicator->property("sensorId").toInt() == 2) {
+            sorting_sensor_2 = indicator;
+            break;
+        }
+    }
+    assert(sorting_sensor_2 != nullptr);
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("UNKNOWN"));
+    assert(sorting_sensor_2->property("distanceCm").toInt() == -1);
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 대기"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
     bool has_gripper_title = false;
     bool has_transfer_state = false;
     for (const auto* label : panel.findChildren<QLabel*>()) {
@@ -59,5 +92,143 @@ int main(int argc, char* argv[]) {
     }
     assert(has_gripper_title);
     assert(has_transfer_state);
+
+    assert(
+        state
+            .applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-CLEAR", "PI-SORTING-01", 2, QStringLiteral("CLEAR"), 42, 4))
+            .applied);
+    panel.setState(state);
+    application.processEvents();
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("CLEAR"));
+    assert(sorting_sensor_2->property("distanceCm").toInt() == 42);
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 없음 · 42 cm"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#89d185")));
+
+    assert(state
+               .applyEnvelope({
+                   { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+                   { QStringLiteral("messageId"), QStringLiteral("SORTING-SENSOR-STALE") },
+                   { QStringLiteral("messageType"), QStringLiteral("ERROR_OCCURRED") },
+                   { QStringLiteral("sourceId"), QStringLiteral("PI-SORTING-01") },
+                   { QStringLiteral("timestamp"), QStringLiteral("2026-07-23T01:00:04.500Z") },
+                   { QStringLiteral("data"),
+                     QJsonObject{
+                         { QStringLiteral("errorCode"), QStringLiteral("ERR-HEALTH-SENSOR-STALE") },
+                         { QStringLiteral("errorLevel"), QStringLiteral("WARNING") },
+                         { QStringLiteral("currentState"), QStringLiteral("CONTROLLER_HEALTH") },
+                         { QStringLiteral("message"), QStringLiteral("sensor stale") },
+                     } },
+               })
+               .applied);
+    panel.setState(state);
+    application.processEvents();
+    bool has_sensor_warning = false;
+    bool has_sensor_warning_detail = false;
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        has_sensor_warning = has_sensor_warning || label->text() == QStringLiteral("센서 경고");
+        has_sensor_warning_detail =
+            has_sensor_warning_detail || label->text() == QStringLiteral("경고 · 센서 응답 지연");
+    }
+    assert(has_sensor_warning);
+    assert(has_sensor_warning_detail);
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("UNKNOWN"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 대기"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
+
+    assert(
+        state.applyEnvelope(SensorEnvelope("SORTING-SENSOR-2", "PI-SORTING-01", 2, QStringLiteral("DETECTED"), 11, 5))
+            .applied);
+    panel.setState(state);
+    application.processEvents();
+    bool has_detected_sensor = false;
+    for (const auto* indicator : panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator"))) {
+        if (indicator->property("sensorId").toInt() == 2 &&
+            indicator->property("measurementStatus").toString() == QStringLiteral("DETECTED")) {
+            has_detected_sensor = indicator->text() == QStringLiteral("● S2 감지 · 11 cm");
+            assert(indicator->property("distanceCm").toInt() == 11);
+            assert(indicator->toolTip().contains(QStringLiteral("11 cm")));
+        }
+    }
+    assert(has_detected_sensor);
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#75beff")));
+
+    assert(
+        state.applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-FAULT", "PI-SORTING-01", 2, QStringLiteral("FAULT"), 0, 6))
+            .applied);
+    panel.setState(state);
+    application.processEvents();
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("FAULT"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 오류 · 0 cm"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#f14c4c")));
+
+    assert(state
+               .applyEnvelope(
+                   SensorEnvelope("SORTING-SENSOR-2-RECOVERED", "PI-SORTING-01", 2, QStringLiteral("CLEAR"), 40, 7))
+               .applied);
+    panel.setState(state);
+    application.processEvents();
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("CLEAR"));
+    assert(sorting_sensor_2->text() == QStringLiteral("● S2 없음 · 40 cm"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#89d185")));
+
+    assert(state.applyEnvelope(DeviceEnvelope("VISION-WAITING", "PI-VISION-01", "WAITING_FOR_PRODUCT", "", 5)).applied);
+    panel.setState(state);
+    application.processEvents();
+    bool has_product_waiting_state = false;
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        has_product_waiting_state = has_product_waiting_state || label->text() == QStringLiteral("상품 감지 대기");
+    }
+    assert(has_product_waiting_state);
+
+    QString selected_target;
+    QObject::connect(
+        &panel, &logistics::control_center::OperationsDashboardPanel::controlTargetSelected,
+        [&selected_target](const QString& target_device_id, const QString&) { selected_target = target_device_id; });
+    QFrame* vision_card = nullptr;
+    for (auto* card : panel.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
+        if (card->property("controlTargetDeviceId").toString() == QStringLiteral("PI-VISION-01")) {
+            vision_card = card;
+            break;
+        }
+    }
+    assert(vision_card != nullptr);
+    QMouseEvent select_vision(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(vision_card, &select_vision);
+    assert(selected_target == QStringLiteral("PI-VISION-01"));
+    assert(vision_card->property("selectedControlTarget").toBool());
+
+    QFrame* input_card = nullptr;
+    for (auto* card : panel.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
+        if (card->property("controlTargetDeviceId").toString() == QStringLiteral("PI-INPUT-01")) {
+            input_card = card;
+            break;
+        }
+    }
+    assert(input_card != nullptr);
+    QMouseEvent select_input(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
+                             Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(input_card, &select_input);
+    assert(selected_target == QStringLiteral("PI-INPUT-01"));
+    assert(input_card->property("selectedControlTarget").toBool());
+
+    state.markMqttDisconnected(QDateTime::currentDateTimeUtc());
+    panel.setState(state);
+    panel.setMqttConnected(false);
+    application.processEvents();
+
+    const auto* live_status = panel.findChild<QLabel*>(QStringLiteral("dashboardLiveStatus"));
+    assert(live_status != nullptr);
+    assert(live_status->text() == QStringLiteral("● MQTT 연결 끊김"));
+    assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("UNKNOWN"));
+    assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
+    int waiting_count = 0;
+    int disconnected_count = 0;
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        waiting_count += label->text() == QStringLiteral("수신 대기") ? 1 : 0;
+        disconnected_count += label->text() == QStringLiteral("연결 끊김") ? 1 : 0;
+    }
+    assert(waiting_count == 5);
+    assert(disconnected_count == 5);
     return 0;
 }

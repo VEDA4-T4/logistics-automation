@@ -58,11 +58,11 @@ CommandResponse ParseCommandResponse(const QJsonObject& envelope) {
 
     const auto error_code = data.value(QStringLiteral("errorCode"));
     const auto message = data.value(QStringLiteral("message"));
-    if (!error_code.isUndefined() && !error_code.isString()) {
-        return Invalid(QStringLiteral("COMMAND_RESPONSE errorCode는 문자열이어야 합니다."));
+    if (!error_code.isUndefined() && !error_code.isNull() && !error_code.isString()) {
+        return Invalid(QStringLiteral("COMMAND_RESPONSE errorCode는 문자열 또는 null이어야 합니다."));
     }
-    if (!message.isUndefined() && !message.isString()) {
-        return Invalid(QStringLiteral("COMMAND_RESPONSE message는 문자열이어야 합니다."));
+    if (!message.isUndefined() && !message.isNull() && !message.isString()) {
+        return Invalid(QStringLiteral("COMMAND_RESPONSE message는 문자열 또는 null이어야 합니다."));
     }
 
     return { .is_valid = true,
@@ -70,8 +70,8 @@ CommandResponse ParseCommandResponse(const QJsonObject& envelope) {
              .request_id = request_id.toString(),
              .command = parsed_command,
              .result = parsed_result,
-             .error_code = error_code.toString(),
-             .message = message.toString() };
+             .error_code = error_code.isString() ? error_code.toString() : QString{},
+             .message = message.isString() ? message.toString() : QString{} };
 }
 
 }  // namespace logistics::control_center

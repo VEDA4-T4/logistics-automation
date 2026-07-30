@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QQueue>
+#include <QSet>
 #include <QString>
 #include <QUrl>
 #include <cstddef>
@@ -44,8 +46,9 @@ private:
     void updatePlaybackState(std::size_t channel);
     void setChannelState(std::size_t channel, ChannelState state, const QString& detail = {});
     void reconnectChannel(std::size_t channel);
-    void sendControlCommand(logistics::contracts::mqtt::ControlCommand command);
+    void sendControlCommand(logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id);
     void handleMqttMessage(const QString& topic, const QJsonObject& envelope);
+    void completePendingRecoveryFromDeviceState();
     void handleCommandTimeout();
     void clearPendingCommand();
     void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,
@@ -74,8 +77,12 @@ private:
     ProductResultPanel* product_result_panel_{ nullptr };
     ProcessControlPanel* process_control_panel_{ nullptr };
     QTimer* command_response_timer_{ nullptr };
+    QTimer* node_status_timer_{ nullptr };
     QString control_target_device_id_{ "SYSTEM" };
+    QString pending_target_device_id_;
     QString pending_request_id_;
+    QSet<QString> individual_command_request_ids_;
+    QQueue<QString> individual_command_request_order_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
     CurrentProductState current_product_state_;
     OperationalLogState operational_log_state_;

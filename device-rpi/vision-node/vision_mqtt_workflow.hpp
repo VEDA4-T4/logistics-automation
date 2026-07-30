@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <mutex>
 #include <optional>
@@ -17,6 +18,7 @@ struct VisionObservation final {
     std::int32_t box_height{};
     std::int32_t frame_width{};
     std::int32_t frame_height{};
+    std::array<contracts::mqtt::PixelPoint, 4> box_corners{};
     std::optional<std::string> barcode;
 };
 
@@ -37,6 +39,7 @@ public:
     [[nodiscard]] std::optional<AssignedVisionWork> TakeAssignedWork();
     void CancelPendingWork();
     void CompleteWork();
+    void Reset();
 
 private:
     enum class Phase { kIdle, kAwaitingWork, kAssigned, kProcessing, kAwaitingClear };

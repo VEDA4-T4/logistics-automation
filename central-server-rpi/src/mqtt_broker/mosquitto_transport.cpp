@@ -132,7 +132,7 @@ public:
 
         static_cast<void>(mosquitto_disconnect(client_));
         if (loop_started_) {
-            static_cast<void>(mosquitto_loop_stop(client_, true));
+            static_cast<void>(mosquitto_loop_stop(client_, false));
             loop_started_ = false;
         }
         mosquitto_destroy(client_);

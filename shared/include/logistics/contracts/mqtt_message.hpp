@@ -135,7 +135,19 @@ inline constexpr auto kHeartbeatDelayedAfter = std::chrono::seconds{ 10 };
 inline constexpr auto kHeartbeatOfflineAfter = std::chrono::seconds{ 15 };
 inline constexpr auto kMqttResponseTimeout = std::chrono::seconds{ 3 };
 inline constexpr auto kEmergencyStopConfirmationTimeout = std::chrono::seconds{ 1 };
+inline constexpr auto kRecoveryCompletionTimeout = std::chrono::seconds{ 30 };
 inline constexpr std::uint8_t kMqttMaximumRetries = 3;
+
+[[nodiscard]] constexpr std::chrono::seconds CommandResponseTimeout(const ControlCommand command) noexcept {
+    switch (command) {
+        case ControlCommand::kEmergencyStop:
+            return kEmergencyStopConfirmationTimeout;
+        case ControlCommand::kRecovery:
+            return kRecoveryCompletionTimeout;
+        default:
+            return kMqttResponseTimeout;
+    }
+}
 
 [[nodiscard]] constexpr std::string_view ToString(MessageType type) noexcept {
     switch (type) {

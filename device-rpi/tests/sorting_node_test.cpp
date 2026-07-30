@@ -253,7 +253,7 @@ mqtt::MqttMessage MakeDestination(std::string destination = "2", std::string tar
 }
 
 mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string component = {},
-                              mqtt::Json params = mqtt::Json::object()) {
+                              mqtt::Json params = mqtt::Json::object(), std::string target = "PI-SORT-01") {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = "MSG-CONTROL-01",
@@ -264,7 +264,7 @@ mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string componen
             mqtt::ControlCommandPayload{
                 .request_id = "REQ-CONTROL-01",
                 .command = command,
-                .target_device_id = "PI-SORT-01",
+                .target_device_id = std::move(target),
                 .component_id = std::move(component),
                 .params = std::move(params),
             },
@@ -391,9 +391,14 @@ void TestControllerErrorsDistinguishRejectionFromFailure() {
 
 void TestStartConfiguresSpeedBeforeStartingConveyor() {
     Fixture fixture;
-    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart)).status ==
-           SortingCommandStatus::kInvalidSpeed);
-    assert(fixture.backend->writes.empty());
+    const auto default_speed_result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart));
+    assert(default_speed_result.Succeeded());
+    assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
+    assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
+    fixture.PushOperationResult();
+    assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_START);
+    fixture.PushOperationResult();
+    fixture.reports.clear();
 
     mqtt::Json params = mqtt::Json::object();
     params["speed"] = 50;
@@ -439,11 +444,34 @@ void TestEmergencyStopPreemptsPendingCommandAndIsNotRetried() {
 void TestSafetyRecoveryUsesOneWayDeviceReset() {
     Fixture fixture;
 
-    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery, "SAFETY"));
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
 
     assert(result.status == SortingCommandStatus::kSentNoReply);
     assert(fixture.LastCommand().command == UART_CMD_RESET_DEVICE);
     assert(!fixture.session->HasPendingCommand());
+}
+
+void TestPendingSafetyCommandCannotBeOverwritten() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+
+    const auto recovery = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const auto duplicate_estop = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+
+    assert(recovery.status == SortingCommandStatus::kSafetyCommandPending);
+    assert(duplicate_estop.status == SortingCommandStatus::kSafetyCommandPending);
+    assert(fixture.backend->writes.size() == 1U);
+    assert(fixture.node->HasPendingSafetyCommand());
+}
+
+void TestSystemTargetUsesSafetyRecovery() {
+    Fixture fixture;
+
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kRecovery, {}, mqtt::Json::object(), "SYSTEM"));
+
+    assert(result.status == SortingCommandStatus::kSentNoReply);
+    assert(fixture.LastCommand().command == UART_CMD_RESET_DEVICE);
 }
 
 void TestSafetyCommandsCompleteWithOriginalRequestId() {
@@ -456,18 +484,17 @@ void TestSafetyCommandsCompleteWithOriginalRequestId() {
     assert(estop.result == mqtt::CommandResult::kSuccess);
 
     Fixture recoveryFixture;
-    const auto recoveryResult =
-        recoveryFixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery, "SAFETY"));
+    const auto recoveryResult = recoveryFixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
     assert(recoveryResult.status == SortingCommandStatus::kSentNoReply);
     recoveryFixture.PushControllerEvent(0x03U, 2U, 0U);
     assert(recoveryFixture.reports.size() == 2U);
     const auto& recovery = ReportPayload<mqtt::CommandResponsePayload>(recoveryFixture.reports.front());
     assert(recovery.request_id == "REQ-CONTROL-01");
     assert(recovery.result == mqtt::CommandResult::kSuccess);
-    const auto& ready = ReportPayload<mqtt::DeviceStatusPayload>(recoveryFixture.reports.back());
-    assert(ready.current_state == "READY");
+    const auto& stopped = ReportPayload<mqtt::DeviceStatusPayload>(recoveryFixture.reports.back());
+    assert(stopped.current_state == "STOPPED");
 
-    recoveryFixture.PushHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE);
+    recoveryFixture.PushHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE);
     assert(recoveryFixture.reports.size() == 2U);
 }
 
@@ -487,12 +514,24 @@ void TestSafetyAndHeartbeatTimeoutsAreReported() {
     assert(recovered.current_state == "RUNNING");
 }
 
+void TestEmergencyHeartbeatIsSafetyStateNotError() {
+    Fixture fixture;
+
+    fixture.PushHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP);
+
+    assert(fixture.reports.size() == 1U);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
+    assert(status.current_state == "EMERGENCY_STOP");
+    assert(status.status == mqtt::ConnectionState::kOnline);
+    assert(!status.error_code.has_value());
+}
+
 void TestReturnHomeAndCycleCompletePublishCompletion() {
     Fixture fixture;
     ActivateCycle(fixture);
     const std::uint16_t cycle_id = fixture.node->ActiveCycleId();
 
-    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery, "GATE"));
     const uart_frame_t frame = fixture.LastCommand();
     assert(result.Succeeded());
     assert(frame.command == UART_CMD_SORTING_RETURN_HOME);
@@ -575,9 +614,13 @@ void TestSafetyAndHealthEventsAreDecodedAndDeduplicated() {
 
     fixture.PushControllerEvent(0x03U, 1U, 2U);
     fixture.PushControllerEvent(0x03U, 1U, 2U);
-    assert(fixture.reports.size() == 2U);
-    const auto& safety = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.back());
-    assert(safety.error_code == "ERR-EMERGENCY-STOP");
+    assert(fixture.reports.size() == 1U);
+    const auto& safety = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.back());
+    assert(safety.current_state == "EMERGENCY_STOP");
+    assert(safety.status == mqtt::ConnectionState::kOnline);
+    assert(!safety.error_code.has_value());
+    fixture.PushHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE);
+    assert(fixture.reports.size() == 1U);
 
     fixture.reports.clear();
     fixture.PushControllerEvent(0x04U, 2U, 3U);
@@ -589,6 +632,14 @@ void TestSafetyAndHealthEventsAreDecodedAndDeduplicated() {
     fixture.PushHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE);
     fixture.PushControllerEvent(0x04U, 2U, 3U);
     assert(fixture.reports.size() == 3U);
+}
+
+void TestOppositeUartChannelTimeoutIsIgnored() {
+    Fixture fixture;
+
+    fixture.PushControllerEvent(0x04U, 1U, 0U);
+
+    assert(fixture.reports.empty());
 }
 
 void TestHealthSensorStaleIncludesSensorId() {
@@ -651,14 +702,18 @@ int main() {
     TestStartConfiguresSpeedBeforeStartingConveyor();
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
     TestSafetyRecoveryUsesOneWayDeviceReset();
+    TestPendingSafetyCommandCannotBeOverwritten();
+    TestSystemTargetUsesSafetyRecovery();
     TestSafetyCommandsCompleteWithOriginalRequestId();
     TestSafetyAndHeartbeatTimeoutsAreReported();
+    TestEmergencyHeartbeatIsSafetyStateNotError();
     TestReturnHomeAndCycleCompletePublishCompletion();
     TestReconnectStatusQueryPublishesControllerState();
     TestReconnectStatusRejectsDestinationMappingMismatch();
     TestConveyorStatusUsesHeartbeatStateNames();
     TestSensorStatusPublishesEveryDistanceMeasurement();
     TestSafetyAndHealthEventsAreDecodedAndDeduplicated();
+    TestOppositeUartChannelTimeoutIsIgnored();
     TestHealthSensorStaleIncludesSensorId();
     TestCommandTimeoutReportsTimeout();
     return 0;

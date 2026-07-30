@@ -20,6 +20,8 @@ User=logistics
 Group=logistics
 WorkingDirectory=/opt/logistics-automation
 ExecStart=/opt/logistics-automation/build-central/central-server-rpi/logistics_central_server --config /etc/logistics/server.ini
+KillSignal=SIGTERM
+TimeoutStopSec=20
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
@@ -80,3 +82,16 @@ sudo systemctl restart logistics-central-server
 
 비밀번호, 토큰과 개인키를 unit의 `Environment=`에 직접 넣지 말고 권한이 제한된 `/etc/logistics/*.ini` 또는 별도
 credentials 파일을 사용합니다.
+
+저장소의 unit 파일은 다음과 같이 설치합니다.
+
+```sh
+sudo install -m 0644 deploy/systemd/logistics-central-server.service \
+  /etc/systemd/system/logistics-central-server.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now logistics-central-server
+```
+
+중앙 서버는 `SIGTERM`을 받으면 MQTT와 HTTP 수신을 중지하고 공정 상태 저장 및 SQLite WAL
+체크포인트를 수행합니다. 재시작 후 진행 중이던 공정은 장비를 자동 구동하지 않고 `STOPPED`
+상태로 복원되므로 현장 상태를 확인한 뒤 시작해야 합니다.

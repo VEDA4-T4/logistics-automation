@@ -14,6 +14,10 @@
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_validation.hpp"
 
+#ifndef LOGISTICS_TEST_MIGRATION_DIR
+#define LOGISTICS_TEST_MIGRATION_DIR "central-server-rpi/db/migrations"
+#endif
+
 namespace {
 
 namespace central_server = logistics::central_server;
@@ -123,6 +127,23 @@ void TestUnsupportedVersionAndMissingFieldsAreRejected() {
     assert(logs[1].level == central_server::MqttHandlerLogLevel::kError);
     assert(logs[1].message.find("MISSING_FIELD") != std::string::npos);
     assert(logs[1].message.find("field=data") != std::string::npos);
+}
+
+void TestUnknownMessageTypeLogIncludesReceivedTypeAndTopic() {
+    central_server::DeviceManager device_manager;
+    std::vector<LogEntry> logs;
+    central_server::MqttHandler handler(
+        device_manager, [&logs](const central_server::MqttHandlerLogLevel level, const std::string_view message) {
+            logs.push_back({ level, std::string(message) });
+        });
+
+    auto unknown_type = mqtt::Json::parse(Encode(MakeRegistration()));
+    unknown_type[std::string(mqtt::kMessageTypeField)] = "SENSOR_READING";
+    assert(!handler.Handle("device/PI-01/event", unknown_type.dump()));
+    assert(logs.size() == 1);
+    assert(logs[0].message.find("UNKNOWN_MESSAGE_TYPE") != std::string::npos);
+    assert(logs[0].message.find("receivedMessageType=SENSOR_READING") != std::string::npos);
+    assert(logs[0].message.find("topic=device/PI-01/event") != std::string::npos);
 }
 
 void TestBarcodeIsEnrichedFromProductCatalog() {
@@ -246,6 +267,55 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         assert(status->current_state == "PICKING");
         assert(status->job_id == std::optional<std::string>("WORK-103"));
         assert(mqtt::ValidateTopicMessage(mqtt::QtStatusTopic("control-center"), qt_statuses[0]).IsSuccess());
+    }
+    std::filesystem::remove_all(root);
+}
+
+void TestSensorStatusIsAcceptedAndForwardedToQt() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto root = std::filesystem::temp_directory_path() / ("logistics-sensor-status-test-" + unique);
+    std::filesystem::create_directories(root);
+    {
+        central_server::Database database;
+        const central_server::DatabaseConfig database_config{
+            .path = root / "test.db",
+            .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+            .busy_timeout_ms = 100,
+        };
+        assert(database.Open(database_config).ok());
+        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
+
+        central_server::StorageConfig storage;
+        storage.image_root = root / "images";
+        central_server::PersistenceService persistence(database, storage);
+        central_server::DeviceManager device_manager;
+        central_server::MqttHandler handler(device_manager, {}, &persistence);
+        std::vector<mqtt::MqttMessage> qt_events;
+        handler.SetQtEventHandler([&qt_events](const mqtt::MqttMessage& message) {
+            qt_events.push_back(message);
+            return true;
+        });
+
+        const mqtt::MqttMessage sensor_status{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-SENSOR-STATUS-01",
+            .message_type = mqtt::MessageType::kSensorStatus,
+            .source_id = "PI-INPUT-01",
+            .timestamp = "2026-07-27T02:00:00Z",
+            .data =
+                mqtt::SensorStatusPayload{
+                    .sensor_id = 1,
+                    .measurement_status = "DETECTED",
+                    .distance_cm = 14,
+                },
+        };
+        assert(handler.Handle(mqtt::DeviceEventTopic("PI-INPUT-01"), Encode(sensor_status)));
+        assert(qt_events.size() == 1);
+        const auto* forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.front());
+        assert(forwarded != nullptr);
+        assert(forwarded->sensor_id == 1);
+        assert(forwarded->measurement_status == "DETECTED");
+        assert(forwarded->distance_cm == 14);
     }
     std::filesystem::remove_all(root);
 }
@@ -427,8 +497,10 @@ int main() {
     TestMalformedJsonIsRejected();
     TestTopicMessageMismatchIsRejected();
     TestUnsupportedVersionAndMissingFieldsAreRejected();
+    TestUnknownMessageTypeLogIncludesReceivedTypeAndTopic();
     TestBarcodeIsEnrichedFromProductCatalog();
     TestHeartbeatIsForwardedToQtAsDeviceStatus();
+    TestSensorStatusIsAcceptedAndForwardedToQt();
     TestHeartbeatTimeoutChangesAreForwardedToQt();
     TestMessageTypesUseDedicatedRouteHandlers();
     return 0;

@@ -114,6 +114,13 @@ void TestAllMqttMessageRoundTrips() {
                                                                    .offset_x = 5,
                                                                    .offset_y = -3,
                                                                    .position_status = "OK",
+                                                                   .box_corners =
+                                                                       std::array{
+                                                                           mqtt::PixelPoint{ 120.0, 80.0 },
+                                                                           mqtt::PixelPoint{ 500.0, 80.0 },
+                                                                           mqtt::PixelPoint{ 500.0, 340.0 },
+                                                                           mqtt::PixelPoint{ 120.0, 340.0 },
+                                                                       },
                                                                }));
 
     AssertRoundTrip<mqtt::BarcodeDetectedPayload>(MakeMessage("MSG-0005", mqtt::MessageType::kBarcodeDetected,
@@ -530,6 +537,7 @@ void TestMqttTopicMessageValidation() {
                                                .distance_cm = 42,
                                            });
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", sensor_status).IsSuccess());
+    assert(mqtt::ValidateTopicMessage("qt/QT-01/event", sensor_status).IsSuccess());
 
     const auto work_created = MakeMessage("MSG-TOPIC-05", mqtt::MessageType::kWorkCreated,
                                           mqtt::WorkCreatedPayload{ .work_id = std::string(kTestWorkId) }, "SERVER-01");

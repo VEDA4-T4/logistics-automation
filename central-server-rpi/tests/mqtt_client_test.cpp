@@ -156,6 +156,21 @@ client_id=central-server
     std::filesystem::remove(path, error);
 }
 
+void TestPersistentSessionIsDefault() {
+    const auto path = MakeTemporaryConfigPath("persistent-default");
+    WriteText(path, R"ini(
+[mqtt]
+host=127.0.0.1
+client_id=central-server
+)ini");
+
+    const auto config = central_server::LoadMqttConfig(path);
+    assert(!config.clean_session);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 [[nodiscard]] central_server::MqttConfig MakeConfig() {
     return {
         .host = "127.0.0.1",
@@ -332,6 +347,7 @@ void TestConnectionRejectionIsLogged() {
 int main() {
     TestConfigLoading();
     TestInvalidConfigIsRejected();
+    TestPersistentSessionIsDefault();
     TestConnectReconnectAndPublish();
     TestMessagesAreForwarded();
     TestTypedMessagePublishing();

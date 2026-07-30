@@ -259,7 +259,7 @@ static void test_estop_latches_before_notifying_controls(void) {
     /* 장치 상태가 EMERGENCY_STOP으로 게시된다. */
     assert(setDeviceStatusCalls == 1U);
     assert(lastDeviceState == UART_DEVICE_EMERGENCY_STOP);
-    assert(lastDeviceError == UART_ERROR_EMERGENCY_STOP);
+    assert(lastDeviceError == UART_ERROR_NONE);
 
     /* 양쪽 채널에 안전 EVENT가 보고된다. */
     assert(txRecordCount == 2U);
@@ -329,17 +329,17 @@ static void test_input_reset_releases_only_input(void) {
     assert(inputSync == (int)INPUT_CONTROL_SAFETY_RELEASE_REQUESTED);
     assert(sortingSync == SORTING_CONTROL_SAFETY_STOP_REQUESTED);
 
-    /* Input RELEASED 확인 후 Input 채널만 READY가 된다. */
+    /* Input RELEASED 확인 후 Input 채널만 STOPPED가 된다. */
     inputSync = (int)INPUT_CONTROL_SAFETY_RELEASED;
     SafetyTask_ServicePending();
     assert(releaseLatchCalls == 1U);
     assert(SafetyTask_IsReleasing() == 0U);
     assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 1U);
     assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 0U);
-    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_READY);
+    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_STOPPED);
     assert(channelDeviceErrors[COMM_TX_CH_INPUT] == UART_ERROR_NONE);
     assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_EMERGENCY_STOP);
-    assert(channelDeviceErrors[COMM_TX_CH_SORTING] == UART_ERROR_EMERGENCY_STOP);
+    assert(channelDeviceErrors[COMM_TX_CH_SORTING] == UART_ERROR_NONE);
 
     /* E-Stop broadcast 2개 뒤 Reset 완료는 요청한 Input 채널에만 보고한다. */
     assert(txRecordCount == 3U);
@@ -367,7 +367,7 @@ static void test_sorting_reset_releases_only_sorting(void) {
     assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 0U);
     assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 1U);
     assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_EMERGENCY_STOP);
-    assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_READY);
+    assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_STOPPED);
     assert(txRecords[txRecordCount - 1U].channel == COMM_TX_CH_SORTING);
 }
 
@@ -439,15 +439,23 @@ static void test_estop_during_release_relatches(void) {
     assert(releaseLatchCalls == 0U);
 }
 
-static void test_reset_without_estop_is_ignored(void) {
+static void test_reset_without_estop_is_idempotent(void) {
     safety_task_stats_t stats;
+    const tx_urgent_record_t* event;
 
     reset_all();
     drive_reset(APP_UART_CHANNEL_1);
 
     assert(latchDisableCalls == 0U);
     assert(releaseLatchCalls == 0U);
-    assert(txRecordCount == 0U);
+    assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 1U);
+    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_STOPPED);
+    assert(channelDeviceErrors[COMM_TX_CH_INPUT] == UART_ERROR_NONE);
+    assert(txRecordCount == 1U);
+    event = find_event(COMM_TX_CH_INPUT);
+    assert(event != NULL);
+    assert(event->payload[APP_SAFETY_EVENT_KIND_INDEX] == SAFETY_EVENT_RESET_COMPLETE);
+    assert(event->payload[APP_SAFETY_EVENT_RESULT_INDEX] == SAFETY_RESET_OK);
 
     Safety_GetStats(&stats);
     assert(stats.resetIgnored == 1U);
@@ -482,7 +490,7 @@ int main(void) {
     test_both_scoped_resets_can_progress_independently();
     test_reset_times_out_and_keeps_latched();
     test_estop_during_release_relatches();
-    test_reset_without_estop_is_ignored();
+    test_reset_without_estop_is_idempotent();
     test_fatal_trigger_enters_estop();
     return 0;
 }

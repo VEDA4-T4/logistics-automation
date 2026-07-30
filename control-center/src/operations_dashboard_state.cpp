@@ -43,6 +43,7 @@ bool IsDashboardMessage(mqtt::MessageType type) {
         case mqtt::MessageType::kErrorOccurred:
         case mqtt::MessageType::kEmergencyStop:
         case mqtt::MessageType::kCommandResponse:
+        case mqtt::MessageType::kSensorStatus:
             return true;
         default:
             return false;
@@ -114,17 +115,23 @@ bool IsIdleState(const QString& current_state) {
            state == QStringLiteral("COMPLETED") || current_state == QStringLiteral("배송 완료");
 }
 
+bool IsOperationalWaitingState(const QString& current_state) {
+    return current_state.trimmed().compare(QStringLiteral("WAITING_FOR_PRODUCT"), Qt::CaseInsensitive) == 0;
+}
+
 bool IsEmergencyState(const QString& current_state) {
     const auto state = current_state.trimmed().toUpper();
     return state == QStringLiteral("ESTOP") || state == QStringLiteral("EMERGENCY_STOP");
 }
 
 bool IsRecoveryState(const QString& current_state) {
-    return current_state.trimmed().compare(QStringLiteral("RECOVERY"), Qt::CaseInsensitive) == 0;
+    const auto state = current_state.trimmed().toUpper();
+    return state == QStringLiteral("RECOVERY");
 }
 
 bool IsStoppedState(const QString& current_state) {
-    return current_state.trimmed().compare(QStringLiteral("STOPPED"), Qt::CaseInsensitive) == 0;
+    const auto state = current_state.trimmed().toUpper();
+    return state == QStringLiteral("STOPPED") || state == QStringLiteral("RECOVERY_READY");
 }
 
 bool IsProcessErrorState(const QString& current_state) {
@@ -132,12 +139,85 @@ bool IsProcessErrorState(const QString& current_state) {
     return state == QStringLiteral("ERROR") || state.endsWith(QStringLiteral("_ERROR"));
 }
 
+QString SensorMeasurementForCurrentState(const QString& current_state) {
+    const auto state = current_state.trimmed().toUpper();
+    if (!state.startsWith(QStringLiteral("SENSOR_"))) {
+        return {};
+    }
+    if (state.endsWith(QStringLiteral("_CLEAR"))) {
+        return QStringLiteral("CLEAR");
+    }
+    if (state.endsWith(QStringLiteral("_DETECTED"))) {
+        return QStringLiteral("DETECTED");
+    }
+    if (state.endsWith(QStringLiteral("_FAULT"))) {
+        return QStringLiteral("FAULT");
+    }
+    return {};
+}
+
+std::optional<int> SensorIdForCurrentState(const QString& current_state) {
+    const auto state = current_state.trimmed().toUpper();
+    if (!state.startsWith(QStringLiteral("SENSOR_"))) {
+        return std::nullopt;
+    }
+    const auto separator = state.indexOf(QLatin1Char('_'), 7);
+    if (separator < 0) {
+        return std::nullopt;
+    }
+    bool valid = false;
+    const auto sensor_id = state.mid(7, separator - 7).toInt(&valid);
+    return valid && sensor_id > 0 ? std::optional<int>{ sensor_id } : std::nullopt;
+}
+
+bool HasFaultedSensor(const ProcessUnitStatus& process) {
+    return std::any_of(process.sensors.cbegin(), process.sensors.cend(), [](const SensorUnitStatus& sensor) {
+        return sensor.measurement_status.compare(QStringLiteral("FAULT"), Qt::CaseInsensitive) == 0;
+    });
+}
+
+void ResetSensors(ProcessUnitStatus& process) {
+    for (auto& sensor : process.sensors) {
+        sensor.measurement_status = QStringLiteral("UNKNOWN");
+        sensor.distance_cm = -1;
+        sensor.updated_at = {};
+    }
+}
+
+void UpdateSensor(ProcessUnitStatus& process, int sensor_id, const QString& measurement_status, int distance_cm,
+                  const QDateTime& timestamp) {
+    auto sensor = std::find_if(process.sensors.begin(), process.sensors.end(),
+                               [sensor_id](const SensorUnitStatus& item) { return item.sensor_id == sensor_id; });
+    if (sensor == process.sensors.end()) {
+        process.sensors.append({
+            .sensor_id = sensor_id,
+            .display_name = QStringLiteral("S%1").arg(sensor_id),
+            .measurement_status = QStringLiteral("UNKNOWN"),
+            .distance_cm = -1,
+            .updated_at = {},
+        });
+        sensor = std::prev(process.sensors.end());
+        std::sort(process.sensors.begin(), process.sensors.end(),
+                  [](const SensorUnitStatus& left, const SensorUnitStatus& right) {
+                      return left.sensor_id < right.sensor_id;
+                  });
+        sensor = std::find_if(process.sensors.begin(), process.sensors.end(),
+                              [sensor_id](const SensorUnitStatus& item) { return item.sensor_id == sensor_id; });
+    }
+    sensor->measurement_status = measurement_status;
+    if (distance_cm >= 0) {
+        sensor->distance_cm = distance_cm == 0xffff ? -1 : distance_cm;
+    }
+    sensor->updated_at = timestamp;
+}
+
 bool IsBusy(const ProcessUnitStatus& process) {
     if (process.current_state == QStringLiteral("배송 완료") ||
         process.current_state.compare(QStringLiteral("COMPLETED"), Qt::CaseInsensitive) == 0) {
         return false;
     }
-    return !process.work_id.isEmpty() || !IsIdleState(process.current_state);
+    return !process.work_id.isEmpty() ||
+           (!IsIdleState(process.current_state) && !IsOperationalWaitingState(process.current_state));
 }
 
 QString CommandStage(const QString& command) {
@@ -185,6 +265,25 @@ void OperationsDashboardState::configureProcesses(const QList<ProcessDefinition>
         runtime.status.key = definition.key;
         runtime.status.display_name = definition.display_name;
         runtime.status.device_id = definition.device_id;
+        if (definition.key == QString::fromLatin1(kInputProcessKey)) {
+            runtime.status.sensors.append({
+                .sensor_id = 1,
+                .display_name = QStringLiteral("S1"),
+                .measurement_status = QStringLiteral("UNKNOWN"),
+                .distance_cm = -1,
+                .updated_at = {},
+            });
+        } else if (definition.key == QString::fromLatin1(kSortingProcessKey)) {
+            for (int sensor_id = 1; sensor_id <= 3; ++sensor_id) {
+                runtime.status.sensors.append({
+                    .sensor_id = sensor_id,
+                    .display_name = QStringLiteral("S%1").arg(sensor_id),
+                    .measurement_status = QStringLiteral("UNKNOWN"),
+                    .distance_cm = -1,
+                    .updated_at = {},
+                });
+            }
+        }
         const auto index = process_runtime_.size();
         process_runtime_.append(runtime);
         process_index_by_device_.insert(definition.device_id, index);
@@ -201,7 +300,54 @@ void OperationsDashboardState::configureProcesses(const QList<ProcessDefinition>
     publishProcessSnapshots();
 }
 
-DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject& envelope) {
+void OperationsDashboardState::markMqttConnectedAwaitingStatus(const QDateTime& timestamp) {
+    resetForMqttTransition(QStringLiteral("상태 수신 대기"), QStringLiteral("MQTT 연결됨 · 노드 상태 수신 대기"),
+                           timestamp);
+}
+
+void OperationsDashboardState::markMqttDisconnected(const QDateTime& timestamp) {
+    resetForMqttTransition(QStringLiteral("DISCONNECTED"), QStringLiteral("MQTT 연결 끊김"), timestamp);
+}
+
+bool OperationsDashboardState::expireStaleProcesses(const QDateTime& timestamp) {
+    if (!timestamp.isValid()) {
+        return false;
+    }
+
+    const auto stale_after =
+        std::chrono::duration_cast<std::chrono::milliseconds>(mqtt::kHeartbeatOfflineAfter).count();
+    bool changed = false;
+    for (auto& runtime : process_runtime_) {
+        auto& process = runtime.status;
+        if (!runtime.last_received_at.isValid() ||
+            (process.connection_state != mqtt::ConnectionState::kOnline &&
+             process.connection_state != mqtt::ConnectionState::kDelayed &&
+             process.connection_state != mqtt::ConnectionState::kReconnecting) ||
+            runtime.last_received_at.msecsTo(timestamp) < stale_after) {
+            continue;
+        }
+
+        process.connection_state = mqtt::ConnectionState::kOffline;
+        process.current_state = QStringLiteral("DISCONNECTED");
+        process.work_id.clear();
+        process.error_code = QStringLiteral("ERR-HEARTBEAT-TIMEOUT");
+        process.updated_at = timestamp;
+        process.has_error = true;
+        process.has_warning = false;
+        ResetSensors(process);
+        changed = true;
+    }
+    if (!changed) {
+        return false;
+    }
+
+    updateOverall(timestamp);
+    publishProcessSnapshots();
+    return true;
+}
+
+DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject& envelope, const QDateTime& received_at,
+                                                              const bool apply_command_to_overall) {
     const auto type_text = envelope.value(QString::fromLatin1(mqtt::kMessageTypeField)).toString();
     const auto type = mqtt::MessageTypeFromString(type_text.toStdString());
     if (!IsDashboardMessage(type)) {
@@ -213,6 +359,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
     const auto source_id = envelope.value(QString::fromLatin1(mqtt::kSourceIdField)).toString().trimmed();
     const auto data_value = envelope.value(QString::fromLatin1(mqtt::kDataField));
     const auto timestamp = ParseTimestamp(envelope);
+    const auto effective_received_at = received_at.isValid() ? received_at.toUTC() : timestamp;
     const auto protocol_version = envelope.value(QString::fromLatin1(mqtt::kProtocolVersionField)).toString().trimmed();
     if (protocol_version != QString::fromLatin1(mqtt::kCurrentProtocolVersion) ||
         !mqtt::IsValidTopicLevel(message_id.toStdString()) || !mqtt::IsValidTopicLevel(source_id.toStdString()) ||
@@ -225,6 +372,44 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
     }
 
     const auto data = data_value.toObject();
+    if (type == mqtt::MessageType::kSensorStatus) {
+        const auto process_index = processIndexForDevice(source_id);
+        if (process_index < 0) {
+            return result;
+        }
+        const auto sensor_id_value = data.value(QStringLiteral("sensorId"));
+        const auto distance_value = data.value(QStringLiteral("distanceCm"));
+        const auto measurement_status = StringValue(data, "measurementStatus").toUpper();
+        const auto sensor_id = sensor_id_value.toInt();
+        const auto distance_cm = distance_value.toInt();
+        if (!sensor_id_value.isDouble() || sensor_id_value.toDouble() != sensor_id || sensor_id <= 0 ||
+            !distance_value.isDouble() || distance_value.toDouble() != distance_cm || distance_cm < 0 ||
+            (measurement_status != QStringLiteral("CLEAR") && measurement_status != QStringLiteral("DETECTED") &&
+             measurement_status != QStringLiteral("FAULT"))) {
+            result.error =
+                QStringLiteral("센서 상태 메시지의 sensorId, measurementStatus 또는 distanceCm이 올바르지 않습니다.");
+            return result;
+        }
+
+        auto& process = process_runtime_[process_index];
+        UpdateSensor(process.status, sensor_id, measurement_status, distance_cm, timestamp);
+        process.last_received_at = effective_received_at;
+        if (measurement_status == QStringLiteral("FAULT")) {
+            process.status.error_code = QStringLiteral("ERR-SENSOR");
+            process.status.has_error = true;
+            process.status.has_warning = false;
+        } else if (process.status.error_code.compare(QStringLiteral("ERR-SENSOR"), Qt::CaseInsensitive) == 0 &&
+                   !HasFaultedSensor(process.status)) {
+            process.status.error_code.clear();
+            process.status.has_error = false;
+        }
+        updateOverall(timestamp);
+        publishProcessSnapshots();
+        rememberMessage(message_id);
+        result.applied = true;
+        return result;
+    }
+
     if (IsDeviceMessage(type)) {
         const auto process_index = processIndexForDevice(source_id);
         if (process_index < 0) {
@@ -232,10 +417,6 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         }
 
         auto& process = process_runtime_[process_index];
-        if (process.status.updated_at.isValid() && timestamp < process.status.updated_at) {
-            return result;
-        }
-
         const auto current_state = StringValue(data, "currentState");
         if (current_state.isEmpty()) {
             result.error = QStringLiteral("장치 상태에 currentState가 필요합니다.");
@@ -249,12 +430,18 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 return result;
             }
             const auto work_id = StringValue(data, "jobId");
-            if (!work_id.isEmpty() && !updateProcessWork(process, work_id, timestamp)) {
+            if (!work_id.isEmpty() && !updateProcessWork(process, work_id)) {
                 return result;
             }
-            process.status.current_state = current_state;
             process.status.error_code = error_code;
-            process.status.has_error = true;
+            process.status.has_warning = IsSensorStaleErrorCode(error_code);
+            process.status.has_error = !process.status.has_warning;
+            if (process.status.has_warning) {
+                ResetSensors(process.status);
+            }
+            if (!process.status.has_warning && SensorMeasurementForCurrentState(current_state).isEmpty()) {
+                process.status.current_state = current_state;
+            }
             process.status.updated_at = timestamp;
         } else {
             const auto state_text = StringValue(data, "status");
@@ -264,16 +451,38 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 return result;
             }
             const auto work_id = StringValue(data, "jobId");
-            if (!updateProcessWork(process, work_id, timestamp)) {
+            if (!updateProcessWork(process, work_id)) {
                 return result;
             }
-            process.status.connection_state = connection_state;
-            process.status.current_state = current_state;
-            process.status.error_code = StringValue(data, "errorCode");
-            process.status.has_error = IsConnectionError(connection_state) || !process.status.error_code.isEmpty() ||
-                                       IsProcessErrorState(current_state);
+            const auto error_code = StringValue(data, "errorCode");
+            const bool sensor_stale = IsSensorStaleErrorCode(error_code);
+            const auto sensor_measurement = SensorMeasurementForCurrentState(current_state);
+            const auto sensor_id = SensorIdForCurrentState(current_state);
+            const bool sensor_telemetry = !sensor_measurement.isEmpty();
+            if (sensor_telemetry && sensor_id.has_value()) {
+                UpdateSensor(process.status, *sensor_id, sensor_measurement, -1, timestamp);
+            }
+            if (sensor_stale) {
+                ResetSensors(process.status);
+            }
+            process.status.connection_state =
+                (sensor_stale || sensor_telemetry) && connection_state == mqtt::ConnectionState::kUartError
+                    ? (process.status.connection_state == mqtt::ConnectionState::kUnknown
+                           ? mqtt::ConnectionState::kOnline
+                           : process.status.connection_state)
+                    : connection_state;
+            if ((!sensor_stale && !sensor_telemetry) || !process.status.updated_at.isValid()) {
+                process.status.current_state = current_state;
+            }
+            process.status.error_code =
+                error_code.isEmpty() && HasFaultedSensor(process.status) ? QStringLiteral("ERR-SENSOR") : error_code;
+            process.status.has_warning = sensor_stale;
+            process.status.has_error =
+                !sensor_stale && (IsConnectionError(connection_state) || !process.status.error_code.isEmpty() ||
+                                  (!sensor_telemetry && IsProcessErrorState(current_state)));
             process.status.updated_at = timestamp;
         }
+        process.last_received_at = effective_received_at;
 
         updateOverall(timestamp);
         publishProcessSnapshots();
@@ -283,6 +492,10 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
     }
 
     if (type == mqtt::MessageType::kCommandResponse) {
+        if (!apply_command_to_overall) {
+            rememberMessage(message_id);
+            return result;
+        }
         if (overall_.updated_at.isValid() && timestamp < overall_.updated_at) {
             return result;
         }
@@ -325,10 +538,10 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
     const auto process_index = processIndexForEvent(type);
     if (process_index >= 0) {
         auto& process = process_runtime_[process_index];
-        if (process.status.updated_at.isValid() && timestamp < process.status.updated_at) {
+        if (process.last_event_at.isValid() && timestamp < process.last_event_at) {
             return result;
         }
-        const bool work_updated = work_id.isEmpty() || updateProcessWork(process, work_id, timestamp);
+        const bool work_updated = work_id.isEmpty() || updateProcessWork(process, work_id);
         if (!work_updated && type != mqtt::MessageType::kWorkCompleted) {
             return result;
         }
@@ -338,8 +551,10 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             if (type == mqtt::MessageType::kWorkCompleted &&
                 StringValue(data, "result").toUpper() == QStringLiteral("FAILED")) {
                 process.status.has_error = true;
+                process.status.has_warning = false;
                 process.status.error_code = QStringLiteral("WORK_FAILED");
             }
+            process.last_event_at = timestamp;
         }
     }
 
@@ -376,6 +591,7 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
     int active_processes = 0;
     int error_processes = 0;
     int received_processes = 0;
+    int operational_waiting_processes = 0;
     bool emergency_stop = false;
     bool recovery = false;
     bool stopped = false;
@@ -391,6 +607,9 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
         emergency_stop = emergency_stop || IsEmergencyState(process.current_state);
         recovery = recovery || IsRecoveryState(process.current_state);
         stopped = stopped || IsStoppedState(process.current_state);
+        if (IsOperationalWaitingState(process.current_state)) {
+            ++operational_waiting_processes;
+        }
         if (process.has_error || IsConnectionError(process.connection_state)) {
             ++error_processes;
             if (first_error.isEmpty()) {
@@ -437,6 +656,9 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
         overall_.stage = QStringLiteral("가동 %1 · 대기 %2")
                              .arg(active_processes)
                              .arg(std::max(0, static_cast<int>(process_runtime_.size()) - active_processes));
+    } else if (operational_waiting_processes > 0) {
+        overall_.state = OverallProcessState::Running;
+        overall_.stage = QStringLiteral("가동 준비 완료 · 상품 대기 %1").arg(operational_waiting_processes);
     } else if (stopped) {
         overall_.state = OverallProcessState::Stopped;
         overall_.stage = QStringLiteral("공정 정지");
@@ -471,6 +693,12 @@ void OperationsDashboardState::updateOverallForCommand(const QJsonObject& data, 
         return;
     }
     if (command_result != QStringLiteral("SUCCESS")) {
+        if (command == QStringLiteral("RECOVERY")) {
+            command_override_ = OverallProcessState::Recovery;
+            command_override_stage_ = stage;
+            command_override_detail_ = overall_.detail;
+            overall_.state = OverallProcessState::Recovery;
+        }
         return;
     }
 
@@ -484,23 +712,17 @@ void OperationsDashboardState::updateOverallForCommand(const QJsonObject& data, 
         command_override_stage_ = stage;
         command_override_detail_ = overall_.detail;
         overall_.state = OverallProcessState::Stopped;
-    } else if (command == QStringLiteral("INITIALIZE")) {
-        command_override_.reset();
-        command_override_stage_.clear();
-        command_override_detail_.clear();
-        overall_.state = OverallProcessState::Idle;
-        last_completion_at_ = {};
-        last_completion_detail_.clear();
     } else if (command == QStringLiteral("EMERGENCY_STOP")) {
         command_override_ = OverallProcessState::EmergencyStop;
         command_override_stage_ = stage;
         command_override_detail_ = overall_.detail;
         overall_.state = OverallProcessState::EmergencyStop;
     } else if (command == QStringLiteral("RECOVERY")) {
-        command_override_ = OverallProcessState::Recovery;
-        command_override_stage_ = stage;
+        command_override_ = OverallProcessState::Stopped;
+        command_override_stage_ = QStringLiteral("복구 완료 · 시작 대기");
         command_override_detail_ = overall_.detail;
-        overall_.state = OverallProcessState::Recovery;
+        overall_.state = OverallProcessState::Stopped;
+        overall_.stage = command_override_stage_;
     }
 }
 
@@ -535,11 +757,7 @@ int OperationsDashboardState::processIndexForEvent(mqtt::MessageType type) const
     return iterator == process_index_by_key_.cend() ? -1 : iterator.value();
 }
 
-bool OperationsDashboardState::updateProcessWork(ProcessRuntime& process, const QString& work_id,
-                                                 const QDateTime& timestamp) {
-    if (process.status.updated_at.isValid() && timestamp < process.status.updated_at) {
-        return false;
-    }
+bool OperationsDashboardState::updateProcessWork(ProcessRuntime& process, const QString& work_id) {
     if (work_id.isEmpty()) {
         retireProcessWork(process, process.status.work_id);
         process.status.work_id.clear();
@@ -572,6 +790,35 @@ void OperationsDashboardState::publishProcessSnapshots() {
     for (const auto& runtime : process_runtime_) {
         process_snapshots_.append(runtime.status);
     }
+}
+
+void OperationsDashboardState::resetForMqttTransition(const QString& current_state, const QString& detail,
+                                                      const QDateTime& timestamp) {
+    for (auto& process : process_runtime_) {
+        process.status.connection_state = mqtt::ConnectionState::kUnknown;
+        process.status.current_state = current_state;
+        process.status.work_id.clear();
+        process.status.error_code.clear();
+        process.status.has_error = false;
+        process.status.has_warning = false;
+        process.status.updated_at = timestamp;
+        ResetSensors(process.status);
+        process.last_received_at = {};
+        process.last_event_at = {};
+    }
+
+    overall_.state = OverallProcessState::Idle;
+    overall_.stage = QStringLiteral("공정 상태 수신 대기");
+    overall_.detail = detail;
+    overall_.updated_at = timestamp;
+    overall_.active_unit_count = 0;
+    overall_.active_work_count = 0;
+    last_completion_at_ = {};
+    last_completion_detail_.clear();
+    command_override_.reset();
+    command_override_stage_.clear();
+    command_override_detail_.clear();
+    publishProcessSnapshots();
 }
 
 }  // namespace logistics::control_center

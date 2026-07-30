@@ -10,7 +10,6 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,6 +24,7 @@
 #include "logistics/device/mqtt_node_client.hpp"
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
+#include "logistics/device/node_command_queue.hpp"
 #include "logistics/device/uart_session.hpp"
 #include "logistics/device/uart_transport.hpp"
 
@@ -67,29 +67,6 @@ void HandleSignal(int) {
     }
     return std::string(UartTransport::kDefaultDevicePath);
 }
-
-class CommandInbox final {
-public:
-    [[nodiscard]] bool Push(const mqtt::MqttMessage& message) {
-        std::lock_guard lock(mutex_);
-        if (messages_.size() >= kCommandQueueCapacity) {
-            return false;
-        }
-        messages_.push_back(message);
-        return true;
-    }
-
-    [[nodiscard]] std::deque<mqtt::MqttMessage> TakeAll() {
-        std::deque<mqtt::MqttMessage> messages;
-        std::lock_guard lock(mutex_);
-        messages.swap(messages_);
-        return messages;
-    }
-
-private:
-    std::mutex mutex_;
-    std::deque<mqtt::MqttMessage> messages_;
-};
 
 struct OutboundMessage {
     LineTracerReportChannel channel{ LineTracerReportChannel::kStatus };
@@ -137,10 +114,14 @@ void UpdateDeviceStatus(const LineTracerReport& report, const std::shared_ptr<De
             return queued.channel == LineTracerReportChannel::kStatus;
         });
         if (stale_status == outbox.end()) {
-            std::cerr << "[linetracer][mqtt][ERROR] outbound queue full; preserving queued responses and events\n";
-            return false;
+            if (report.channel != LineTracerReportChannel::kResponse) {
+                std::cerr << "[linetracer][mqtt][ERROR] outbound queue full; preserving queued command responses\n";
+                return false;
+            }
+            std::cerr << "[linetracer][mqtt][WARN] outbound queue capacity exceeded to preserve a command response\n";
+        } else {
+            outbox.erase(stale_status);
         }
-        outbox.erase(stale_status);
     }
     outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
     return true;
@@ -173,9 +154,12 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     switch (status) {
         case LineTracerCommandStatus::kInvalidTarget:
         case LineTracerCommandStatus::kInvalidDestination:
+        case LineTracerCommandStatus::kInvalidPosition:
+        case LineTracerCommandStatus::kCurrentPositionUnknown:
         case LineTracerCommandStatus::kNoActiveJob:
         case LineTracerCommandStatus::kUnsupportedMessage:
         case LineTracerCommandStatus::kUnsupportedCommand:
+        case LineTracerCommandStatus::kSafetyCommandPending:
         case LineTracerCommandStatus::kUartBusy:
             return mqtt::CommandResult::kRejected;
         case LineTracerCommandStatus::kInvalidMessage:
@@ -183,6 +167,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case LineTracerCommandStatus::kUartError:
             return mqtt::CommandResult::kFailed;
         case LineTracerCommandStatus::kSent:
+        case LineTracerCommandStatus::kSentNoReply:
             return mqtt::CommandResult::kProcessing;
     }
     return mqtt::CommandResult::kFailed;
@@ -196,11 +181,17 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
             return "ERR-MQTT-INVALID-TARGET";
         case LineTracerCommandStatus::kInvalidDestination:
             return "ERR-MQTT-INVALID-DESTINATION";
+        case LineTracerCommandStatus::kInvalidPosition:
+            return "ERR-MQTT-INVALID-POSITION";
+        case LineTracerCommandStatus::kCurrentPositionUnknown:
+            return "ERR-CURRENT-POSITION-UNKNOWN";
         case LineTracerCommandStatus::kNoActiveJob:
             return "ERR-NO-ACTIVE-JOB";
         case LineTracerCommandStatus::kUnsupportedMessage:
         case LineTracerCommandStatus::kUnsupportedCommand:
             return "ERR-UNSUPPORTED-COMMAND";
+        case LineTracerCommandStatus::kSafetyCommandPending:
+            return "ERR-SAFETY-COMMAND-PENDING";
         case LineTracerCommandStatus::kUartNotOpen:
             return "ERR-UART-DISCONNECTED";
         case LineTracerCommandStatus::kUartBusy:
@@ -208,6 +199,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case LineTracerCommandStatus::kUartError:
             return "ERR-UART-IO";
         case LineTracerCommandStatus::kSent:
+        case LineTracerCommandStatus::kSentNoReply:
             return {};
     }
     return "ERR-INTERNAL";
@@ -277,7 +269,7 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
     MqttNodeClient mqtt_client(std::move(config), std::string(contracts::ToString(contracts::DeviceRole::kLineTracer)),
                                device_status);
 
-    CommandInbox command_inbox;
+    NodeCommandQueue command_inbox(kCommandQueueCapacity);
     std::deque<OutboundMessage> outbox;
     const std::string message_session_id = GenerateMessageSessionId();
     std::uint64_t message_sequence = 1U;
@@ -296,10 +288,29 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
             uart_failure_pending = true;
         }
     });
-    mqtt_client.SetCommandHandler([&command_inbox](const mqtt::MqttMessage& message) {
-        if (!command_inbox.Push(message)) {
+    mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
+        std::deque<mqtt::MqttMessage> preempted;
+        if (!command_inbox.Push(message, &preempted)) {
             std::cerr << "[linetracer][mqtt][ERROR] command queue full; command rejected: " << message.message_id
                       << '\n';
+            const auto response = MakeTerminalCommandResponse(
+                message, device_id, message.message_id + "-QUEUE-FULL", CurrentIso8601Timestamp(),
+                mqtt::CommandResult::kRejected, std::string("ERR-COMMAND-QUEUE-FULL"),
+                "line tracer command rejected because the local command queue is full");
+            if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                std::cerr << "[linetracer][mqtt][ERROR] unable to publish command queue full response: "
+                          << message.message_id << '\n';
+            }
+        }
+        for (const auto& command : preempted) {
+            const auto response = MakeTerminalCommandResponse(
+                command, device_id, command.message_id + "-ESTOP-PREEMPTED", CurrentIso8601Timestamp(),
+                mqtt::CommandResult::kRejected, std::string("ERR-EMERGENCY-STOP-PREEMPTED"),
+                "line tracer command was preempted by an emergency stop");
+            if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                std::cerr << "[linetracer][mqtt][ERROR] unable to publish emergency preemption response: "
+                          << command.message_id << '\n';
+            }
         }
     });
 
@@ -318,10 +329,12 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
     std::clog << "[linetracer][INFO] daemon started: id=" << device_id << "; uart=" << uart_path << '\n';
 
     while (stop_requested == 0) {
+        bool emergency_processed = false;
         const auto now = Clock::now();
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick);
         last_tick = now;
         uart_session.Tick(elapsed);
+        line_tracer.Tick(elapsed);
 
         if (!uart_session.IsOpen() && now >= next_uart_reconnect) {
             if (uart_session.Open(uart_path)) {
@@ -345,10 +358,41 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
             }
         }
 
-        for (const mqtt::MqttMessage& command : command_inbox.TakeAll()) {
-            const LineTracerCommandResult result = line_tracer.HandleMqttCommand(command);
-            if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
-                queue_report(*response);
+        if (!uart_session.IsOpen()) {
+            const auto reject_disconnected = [&](const mqtt::MqttMessage& command) {
+                const auto response = MakeTerminalCommandResponse(
+                    command, device_id, command.message_id + "-UART-DISCONNECTED", CurrentIso8601Timestamp(),
+                    mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
+                    "line tracer command failed because the STM32 UART is disconnected");
+                if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                    std::cerr << "[linetracer][mqtt][ERROR] unable to publish UART disconnected response: "
+                              << command.message_id << '\n';
+                }
+            };
+            while (auto command = command_inbox.TryPopEmergency()) {
+                reject_disconnected(*command);
+            }
+            while (auto command = command_inbox.TryPop()) {
+                reject_disconnected(*command);
+            }
+        }
+
+        if (!uart_failure_pending && uart_session.IsOpen()) {
+            if (auto command = command_inbox.TryPopEmergency(); command.has_value()) {
+                const LineTracerCommandResult result = line_tracer.HandleMqttCommand(*command);
+                if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
+                    queue_report(*response);
+                }
+                emergency_processed = true;
+            }
+        }
+        if (!emergency_processed && !line_tracer.HasPendingSafetyCommand() && !uart_failure_pending &&
+            uart_session.IsOpen() && !uart_session.HasPendingCommand()) {
+            if (auto command = command_inbox.TryPop(); command.has_value()) {
+                const LineTracerCommandResult result = line_tracer.HandleMqttCommand(*command);
+                if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
+                    queue_report(*response);
+                }
             }
         }
 

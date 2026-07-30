@@ -97,6 +97,15 @@ void AssignMqttValue(MqttNodeConfig& config, const std::filesystem::path& path, 
     }
 }
 
+void AssignSortingValue(MqttNodeConfig& config, const std::filesystem::path& path, std::size_t line_number,
+                        std::string_view key, std::string_view value) {
+    if (key == "default_speed") {
+        config.sorting_default_speed = ParseInteger<std::uint8_t>(path, line_number, key, value, 1, 100);
+        return;
+    }
+    ThrowLineError(path, line_number, "unknown [sorting] setting: " + std::string(key));
+}
+
 void AssignLogUploadValue(MqttNodeConfig& config, const std::filesystem::path& path, std::size_t line_number,
                           std::string_view key, std::string_view value) {
     auto& upload = config.log_upload;
@@ -179,7 +188,8 @@ bool MqttNodeConfig::IsValid() const noexcept {
     return contracts::mqtt::IsValidTopicLevel(device_id) && !node_name.empty() && !ip_address.empty() &&
            !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
            reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
-           (password.empty() || !username.empty()) && valid_log_upload && valid_image_upload;
+           sorting_default_speed > 0 && sorting_default_speed <= 100 && (password.empty() || !username.empty()) &&
+           valid_log_upload && valid_image_upload;
 }
 
 MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
@@ -212,7 +222,8 @@ MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
             found_mqtt_section = found_mqtt_section || section == "mqtt";
             continue;
         }
-        if (section != "device" && section != "mqtt" && section != "log_upload" && section != "image_upload") {
+        if (section != "device" && section != "mqtt" && section != "sorting" && section != "log_upload" &&
+            section != "image_upload") {
             continue;
         }
 
@@ -231,6 +242,8 @@ MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
             AssignDeviceValue(config, path, line_number, key, value);
         } else if (section == "mqtt") {
             AssignMqttValue(config, path, line_number, key, value);
+        } else if (section == "sorting") {
+            AssignSortingValue(config, path, line_number, key, value);
         } else if (section == "log_upload") {
             AssignLogUploadValue(config, path, line_number, key, value);
         } else {

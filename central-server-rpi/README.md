@@ -59,3 +59,17 @@ Input → Vision → Gripper → Sorting → Line Tracer → Completed
 - [DB migration](db/migrations/README.md)
 - [Mosquitto 보안 및 TLS](../deploy/mosquitto/README.md)
 - [systemd 운영](../deploy/systemd/README.md)
+
+## 설정 검증과 재시작 복구
+
+서버는 시작할 때 알 수 없는 섹션·키, 중복 키, 범위를 벗어난 숫자, 잘못된 장치 ID와
+HTTP 인증/TLS 조합을 거부합니다. 상대 경로는 `server.ini`가 있는 디렉터리를 기준으로
+해석됩니다.
+
+고정된 `client_id`와 `clean_session=false`를 사용하면 서버가 중단된 동안 브로커에 보관된
+QoS 1 메시지를 다시 받을 수 있습니다. Mosquitto 브로커도 persistence가 활성화되어 있어야
+합니다.
+
+공정 진행 상태와 내부 명령 시퀀스는 SQLite에 저장됩니다. 서버 재시작 후 진행 중이던 공정은
+장비를 임의로 다시 움직이지 않도록 `STOPPED`로 복원됩니다. 비상 정지와 오류 상태는 유지되며,
+운영자가 현장 상태를 확인한 뒤 복구 또는 시작 명령을 내려야 합니다.

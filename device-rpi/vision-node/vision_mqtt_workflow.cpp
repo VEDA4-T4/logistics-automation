@@ -113,6 +113,16 @@ void VisionMqttWorkflow::CompleteWork() {
     }
 }
 
+void VisionMqttWorkflow::Reset() {
+    std::lock_guard lock(mutex_);
+    phase_ = Phase::kIdle;
+    detected_frames_ = 0;
+    clear_frames_ = 0;
+    assigned_frames_ = 0;
+    observation_.reset();
+    work_id_.reset();
+}
+
 mqtt::MqttMessage MakePositionDetectedMessage(std::string_view device_id, const AssignedVisionWork& work,
                                               std::string message_id, std::string timestamp) {
     const auto& observation = work.observation;
@@ -136,6 +146,7 @@ mqtt::MqttMessage MakePositionDetectedMessage(std::string_view device_id, const 
                 .offset_x = center_x - observation.frame_width / 2,
                 .offset_y = center_y - observation.frame_height / 2,
                 .position_status = "DETECTED",
+                .box_corners = observation.box_corners,
             },
     };
 }

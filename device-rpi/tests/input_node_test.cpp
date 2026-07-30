@@ -149,6 +149,22 @@ void TestStatusRequest() {
     assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_GET_STATUS);
 }
 
+void TestControllerStatusKeepAliveHasNoCommandResponse() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t& request) {
+        return std::vector<uart_frame_t>{ MakeStatusResponse(request.sequence, UART_INPUT_CONVEYOR_STOPPED, 50U) };
+    };
+
+    const InputCommandResult result = fixture.node->RequestControllerStatus();
+
+    assert(result.Succeeded());
+    assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_GET_STATUS);
+    assert(fixture.LastResponse() == nullptr);
+    assert(fixture.reports.size() == 1U);
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(status != nullptr && status->current_state == "STOPPED");
+}
+
 void TestReset() {
     Fixture fixture;
     fixture.backend->responder = AlwaysSucceed();
@@ -211,18 +227,19 @@ void TestControllerPolicyRejection() {
     assert(response->error_code.has_value() && *response->error_code == "ERR-EMERGENCY-STOP");
 }
 
-void TestUnsupportedCommand() {
+void TestRestartMapsToStart() {
     Fixture fixture;
     fixture.backend->responder = AlwaysSucceed();
 
     const InputCommandResult result =
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRestart, std::string(kDeviceId)));
 
-    assert(result.status == InputCommandStatus::kUnsupportedCommand);
-    assert(fixture.backend->write_calls == 0);
+    assert(result.status == InputCommandStatus::kSuccess);
+    assert(fixture.backend->write_calls == 1);
+    assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_START);
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
-    assert(response->result == mqtt::CommandResult::kRejected);
+    assert(response->result == mqtt::CommandResult::kSuccess);
 }
 
 void TestEmergencyStop() {
@@ -254,6 +271,21 @@ void TestEmergencyStopDoesNotWaitForReply() {
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
     assert(response->result == mqtt::CommandResult::kProcessing);
+}
+
+void TestPendingSafetyCommandCannotBeOverwritten() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t&) { return std::vector<uart_frame_t>{}; };
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop(std::string(kDeviceId))).Succeeded());
+
+    const auto recovery =
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, std::string(kDeviceId)));
+    const auto duplicate_estop = fixture.node->HandleMqttCommand(MakeEmergencyStop(std::string(kDeviceId)));
+
+    assert(recovery.status == InputCommandStatus::kRejected);
+    assert(duplicate_estop.status == InputCommandStatus::kRejected);
+    assert(fixture.backend->write_calls == 1);
+    assert(fixture.node->HasPendingSafetyCommand());
 }
 
 void TestSafetyCommandsCompleteWithOriginalRequestId() {
@@ -494,6 +526,15 @@ void TestHealthEventIsDecoded() {
     assert(error->error_code == "ERR-HEALTH-SENSOR-STALE");
 }
 
+void TestOppositeUartChannelTimeoutIsIgnored() {
+    Fixture fixture;
+    // The input Pi can only receive a timeout report for the opposite sorting
+    // channel because the timed-out channel itself is not writable.
+    fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 1U, 1U));
+
+    assert(fixture.reports.empty());
+}
+
 void TestHealthEventIncludesSensorId() {
     Fixture fixture;
     // APP_EVENT_HEALTH=0x04, kind=3 (SENSOR_STALE), cause=0 (input channel), sensorId=1.
@@ -524,10 +565,15 @@ void TestSafetyEventIsDecoded() {
     fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 1U, 0U));
 
     assert(fixture.reports.size() == 1);
-    const auto* error = std::get_if<mqtt::ErrorOccurredPayload>(&fixture.reports.front().data);
-    assert(error != nullptr);
-    assert(error->error_code == "ERR-SAFETY-ESTOP-LATCHED");
-    assert(error->error_level == "ERROR");
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(status != nullptr);
+    assert(status->current_state == "EMERGENCY_STOP");
+    assert(status->status == mqtt::ConnectionState::kOnline);
+    assert(!status->error_code.has_value());
+
+    fixture.node->HandleUartFrame(
+        input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+    assert(fixture.reports.size() == 1);
 }
 
 void TestSafetyResetCompleteIsReportedAsStatus() {
@@ -540,7 +586,7 @@ void TestSafetyResetCompleteIsReportedAsStatus() {
     assert(fixture.reports.front().channel == InputReportChannel::kStatus);
     const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
     assert(status != nullptr);
-    assert(status->current_state == "READY");
+    assert(status->current_state == "STOPPED");
     assert(status->status == mqtt::ConnectionState::kOnline);
     assert(!status->error_code.has_value());
 }
@@ -563,14 +609,19 @@ void TestSafetyResetCompleteSuppressesFollowingHeartbeatDuplicate() {
     fixture.node->HandleUartFrame(
         input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP, UART_SENSOR_CLEAR));
     assert(fixture.reports.size() == 1);
+    const auto* emergency = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
+    assert(emergency != nullptr);
+    assert(emergency->current_state == "EMERGENCY_STOP");
+    assert(emergency->status == mqtt::ConnectionState::kOnline);
+    assert(!emergency->error_code.has_value());
 
     // SAFETY RESET_COMPLETE reports the recovery.
     fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 2U, 0U));
     assert(fixture.reports.size() == 2);
 
-    // The next heartbeat carries the same READY/NONE state; it must not re-report.
+    // The next heartbeat carries the same STOPPED/NONE state; it must not re-report.
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR));
     assert(fixture.reports.size() == 2);
 }
 
@@ -582,9 +633,10 @@ void TestRepeatedControllerEventIsDeduplicated() {
     fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 3U, 0U));
     assert(fixture.reports.size() == 1);
 
-    // A different condition (kind or cause changes) is a new report.
+    // A timeout for the opposite UART is intentionally ignored; it describes
+    // another Pi and must not change this node's state.
     fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x04U, 1U, 1U));
-    assert(fixture.reports.size() == 2);
+    assert(fixture.reports.size() == 1);
 }
 
 }  // namespace
@@ -594,13 +646,15 @@ int main() {
     TestStartWithSpeed();
     TestStop();
     TestStatusRequest();
+    TestControllerStatusKeepAliveHasNoCommandResponse();
     TestReset();
     TestRecoveryReleasesLatchFireAndForget();
     TestControllerFailure();
     TestControllerPolicyRejection();
-    TestUnsupportedCommand();
+    TestRestartMapsToStart();
     TestEmergencyStop();
     TestEmergencyStopDoesNotWaitForReply();
+    TestPendingSafetyCommandCannotBeOverwritten();
     TestSafetyCommandsCompleteWithOriginalRequestId();
     TestSafetyAndHeartbeatTimeoutsAreReported();
     TestInvalidTarget();
@@ -617,6 +671,7 @@ int main() {
     TestHeartbeatReportsOnlyOnChange();
     TestHeartbeatDoesNotDuplicateSensorTransition();
     TestHealthEventIsDecoded();
+    TestOppositeUartChannelTimeoutIsIgnored();
     TestHealthEventIncludesSensorId();
     TestSafetyEventIsDecoded();
     TestSafetyResetCompleteIsReportedAsStatus();

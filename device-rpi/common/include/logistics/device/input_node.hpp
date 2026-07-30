@@ -71,6 +71,8 @@ public:
     void SetReportHandler(InputReportHandler handler);
 
     [[nodiscard]] InputCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
+    [[nodiscard]] InputCommandResult RequestControllerStatus();
+    [[nodiscard]] bool HasPendingSafetyCommand() const noexcept;
     void HandleUartFrame(const uart_frame_t& frame);
     void Tick(std::chrono::milliseconds elapsed);
     void ResetControllerHeartbeatMonitor() noexcept;

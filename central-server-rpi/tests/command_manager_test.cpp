@@ -120,6 +120,28 @@ void TestCommandTargetsAreResolvedByDeviceAndRole() {
     assert(sorting_target.target_device_ids == std::vector<std::string>{ "PI-SORTING-01" });
 }
 
+void TestLineTracerInitializeIncludesConfiguredPosition() {
+    const auto initialize = MakeCommand("REQ-INIT", "SYSTEM", mqtt::ControlCommand::kInitialize);
+
+    const auto line_tracer = central_server::PrepareCommandForDevice(initialize, "PI-LT-01", "PI-LT-01", "A");
+    const auto* line_tracer_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(line_tracer);
+    assert(line_tracer.message_id == "MSG-COMMAND-REQ-INIT-PI-LT-01");
+    assert(line_tracer_payload != nullptr);
+    assert(line_tracer_payload->target_device_id == "PI-LT-01");
+    assert(line_tracer_payload->params.at("currentPosition") == "A");
+
+    const auto sorting = central_server::PrepareCommandForDevice(initialize, "PI-SORTING-01", "PI-LT-01", "A");
+    const auto* sorting_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(sorting);
+    assert(sorting_payload != nullptr);
+    assert(sorting_payload->target_device_id == "PI-SORTING-01");
+    assert(!sorting_payload->params.contains("currentPosition"));
+
+    const auto* original_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(initialize);
+    assert(original_payload != nullptr);
+    assert(original_payload->target_device_id == "SYSTEM");
+    assert(!original_payload->params.contains("currentPosition"));
+}
+
 void TestResponsesAreAggregatedAndDuplicatesIgnored() {
     central_server::CommandManager::Clock::time_point now{};
     central_server::CommandManager manager([&now] { return now; });
@@ -223,14 +245,33 @@ void TestEmergencyStopUsesShortConfirmationTimeout() {
     assert(timeout->result == mqtt::CommandResult::kTimeout);
 }
 
+void TestRecoveryUsesExtendedCompletionTimeout() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    assert(manager.TrackCommand(MakeCommand("REQ-RECOVERY", "PI-01", mqtt::ControlCommand::kRecovery), { "PI-01" }));
+
+    now += mqtt::kMqttResponseTimeout;
+    assert(manager.CheckTimeouts("2026-07-25T01:00:03Z").empty());
+
+    now += mqtt::kRecoveryCompletionTimeout - mqtt::kMqttResponseTimeout;
+    const auto timed_out = manager.CheckTimeouts("2026-07-25T01:00:30Z");
+    assert(timed_out.size() == 1);
+    const auto* timeout = mqtt::GetPayload<mqtt::CommandResponsePayload>(timed_out[0]);
+    assert(timeout != nullptr);
+    assert(timeout->command == mqtt::ControlCommand::kRecovery);
+    assert(timeout->result == mqtt::CommandResult::kTimeout);
+}
+
 }  // namespace
 
 int main() {
     TestCommandTargetsAreResolvedByDeviceAndRole();
+    TestLineTracerInitializeIncludesConfiguredPosition();
     TestResponsesAreAggregatedAndDuplicatesIgnored();
     TestPartialDispatchFailureIsIncludedInFinalResult();
     TestNoTargetProducesImmediateRejection();
     TestWrongDeviceIsRejectedAndTimeoutIsGenerated();
     TestEmergencyStopUsesShortConfirmationTimeout();
+    TestRecoveryUsesExtendedCompletionTimeout();
     return 0;
 }
