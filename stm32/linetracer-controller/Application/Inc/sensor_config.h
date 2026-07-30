@@ -10,6 +10,18 @@
 #define SENSOR_LINE_ACTIVE_LOW 0U
 
 /*
+ * TCRT5000 analog calibration measured on the current white track and black
+ * line. Values outside the calibrated interval are saturated.
+ */
+#define SENSOR_LINE_LEFT_WHITE_RAW 200U
+#define SENSOR_LINE_LEFT_BLACK_RAW 2000U
+#define SENSOR_LINE_RIGHT_WHITE_RAW 200U
+#define SENSOR_LINE_RIGHT_BLACK_RAW 2000U
+#define SENSOR_LINE_NORMALIZED_MAX 1000U
+#define SENSOR_LINE_FILTER_PREVIOUS_WEIGHT 3U
+#define SENSOR_LINE_FILTER_DIVISOR 4U
+
+/*
  * A physical marker is one to four short white stripes separated by centered
  * black line. The group is complete
  * when no next stripe arrives before the
@@ -45,6 +57,18 @@
 
 #if (SENSOR_FSR_FILTER_SAMPLES == 0U)
 #error "FSR filter must contain at least one sample"
+#endif
+
+#if (SENSOR_LINE_LEFT_WHITE_RAW >= SENSOR_LINE_LEFT_BLACK_RAW)
+#error "Left line sensor white calibration must be lower than black calibration"
+#endif
+
+#if (SENSOR_LINE_RIGHT_WHITE_RAW >= SENSOR_LINE_RIGHT_BLACK_RAW)
+#error "Right line sensor white calibration must be lower than black calibration"
+#endif
+
+#if ((SENSOR_LINE_FILTER_PREVIOUS_WEIGHT + 1U) != SENSOR_LINE_FILTER_DIVISOR)
+#error "Line sensor filter divisor must include previous and current weights"
 #endif
 
 #if (SENSOR_MARKER_MIN_GAP_MS >= SENSOR_MARKER_MAX_GAP_MS)

@@ -71,6 +71,34 @@ static linetracer_line_state_t SensorLogic_CalculateLineState(uint8_t left,
     return LINETRACER_LINE_WHITE_GAP;
 }
 
+static uint16_t SensorLogic_NormalizeLineRaw(uint16_t raw_value,
+                                             uint16_t white_raw,
+                                             uint16_t black_raw)
+{
+    uint32_t normalized;
+
+    if (raw_value <= white_raw) {
+        return 0U;
+    }
+    if (raw_value >= black_raw) {
+        return (uint16_t)SENSOR_LINE_NORMALIZED_MAX;
+    }
+
+    normalized = ((uint32_t)(raw_value - white_raw) *
+                  SENSOR_LINE_NORMALIZED_MAX) /
+                 (uint32_t)(black_raw - white_raw);
+    return (uint16_t)normalized;
+}
+
+static uint16_t SensorLogic_FilterLineNormalized(uint16_t previous,
+                                                 uint16_t current)
+{
+    return (uint16_t)((((uint32_t)previous *
+                        SENSOR_LINE_FILTER_PREVIOUS_WEIGHT) +
+                       current) /
+                      SENSOR_LINE_FILTER_DIVISOR);
+}
+
 static void SensorLogic_SetErrorFlags(sensor_logic_context_t *context,
                                       uint32_t error_flags,
                                       uint32_t now_ms)
@@ -389,6 +417,54 @@ void SensorLogic_UpdateLine(sensor_logic_context_t *context,
         update->event_flags |= APP_SENSOR_EVENT_LINE_LOST;
         update->safety_activated_flags |= SENSOR_LOGIC_SAFETY_LINE_LOST;
     }
+}
+
+void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t *context,
+                                     uint16_t line_left_raw,
+                                     uint16_t line_right_raw)
+{
+    uint16_t line_left_normalized;
+    uint16_t line_right_normalized;
+    int32_t line_error;
+
+    if (context == NULL) {
+        return;
+    }
+
+    context->snapshot.line_left_raw = line_left_raw;
+    context->snapshot.line_right_raw = line_right_raw;
+
+    line_left_normalized =
+        SensorLogic_NormalizeLineRaw(line_left_raw,
+                                     SENSOR_LINE_LEFT_WHITE_RAW,
+                                     SENSOR_LINE_LEFT_BLACK_RAW);
+    line_right_normalized =
+        SensorLogic_NormalizeLineRaw(line_right_raw,
+                                     SENSOR_LINE_RIGHT_WHITE_RAW,
+                                     SENSOR_LINE_RIGHT_BLACK_RAW);
+
+    if (context->line_analog_initialized == 0U) {
+        context->line_left_filtered = line_left_normalized;
+        context->line_right_filtered = line_right_normalized;
+        context->line_analog_initialized = 1U;
+    } else {
+        context->line_left_filtered =
+            SensorLogic_FilterLineNormalized(context->line_left_filtered,
+                                             line_left_normalized);
+        context->line_right_filtered =
+            SensorLogic_FilterLineNormalized(context->line_right_filtered,
+                                             line_right_normalized);
+    }
+
+    line_error = (int32_t)context->line_left_filtered -
+                 (int32_t)context->line_right_filtered;
+    if (line_error > (int32_t)SENSOR_LINE_NORMALIZED_MAX) {
+        line_error = (int32_t)SENSOR_LINE_NORMALIZED_MAX;
+    } else if (line_error < -(int32_t)SENSOR_LINE_NORMALIZED_MAX) {
+        line_error = -(int32_t)SENSOR_LINE_NORMALIZED_MAX;
+    }
+
+    context->snapshot.line_error = (int16_t)line_error;
 }
 
 void SensorLogic_UpdateFsr(sensor_logic_context_t *context,

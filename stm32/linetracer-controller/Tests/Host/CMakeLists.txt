@@ -9,7 +9,7 @@ target_include_directories(sensor_logic_test PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(sensor_logic_test PRIVATE /W4 /WX)
+    target_compile_options(sensor_logic_test PRIVATE /utf-8 /W4 /WX /wd4310)
 else()
     target_compile_options(sensor_logic_test PRIVATE
         -Wall
@@ -20,6 +20,32 @@ else()
 endif()
 
 add_test(NAME sensor_logic_test COMMAND sensor_logic_test)
+
+add_executable(
+    line_follow_pid_test
+    line_follow_pid_test.cpp
+    ../../Application/Src/line_follow_pid.c
+)
+
+target_include_directories(
+    line_follow_pid_test
+    PRIVATE
+        ../../Application/Inc
+        ../../../../shared/include
+)
+
+if(MSVC)
+    target_compile_options(line_follow_pid_test PRIVATE /utf-8 /W4 /WX /wd4310)
+else()
+    target_compile_options(line_follow_pid_test PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+    )
+endif()
+
+add_test(NAME line_follow_pid_test COMMAND line_follow_pid_test)
 
 add_executable(
     linetracer_control_logic_test

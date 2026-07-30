@@ -45,6 +45,17 @@ void MotorControlLogic_MakeSafeStop(motor_output_t* output) {
     output->standby = 0U;
 }
 
+uint8_t MotorControlLogic_ComputeDifferentialForward(uint16_t base_pwm, int16_t correction,
+                                                     motor_output_t* output) {
+    if (output == NULL) {
+        return 0U;
+    }
+
+    MotorControlLogic_MakeForward((int32_t)base_pwm - (int32_t)correction,
+                                  (int32_t)base_pwm + (int32_t)correction, output);
+    return 1U;
+}
+
 uint8_t MotorControlLogic_ComputeLineFollow(linetracer_line_state_t line_state, motor_output_t* output) {
     if (output == NULL) {
         return 0U;

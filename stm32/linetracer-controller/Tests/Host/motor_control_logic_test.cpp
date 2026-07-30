@@ -58,6 +58,18 @@ void TestLineFollow() {
         MotorControlLogic_ClampPwm(MOTOR_CONTROL_BASE_PWM - MOTOR_CONTROL_CORRECTION_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 }
 
+void TestDifferentialForward() {
+    motor_output_t output{};
+
+    assert(MotorControlLogic_ComputeDifferentialForward(300U, 100, &output) != 0U);
+    AssertForward(output, MotorControlLogic_ClampPwm(200 + MOTOR_CONTROL_LEFT_TRIM),
+                  MotorControlLogic_ClampPwm(400 + MOTOR_CONTROL_RIGHT_TRIM));
+
+    assert(MotorControlLogic_ComputeDifferentialForward(300U, -100, &output) != 0U);
+    AssertForward(output, MotorControlLogic_ClampPwm(400 + MOTOR_CONTROL_LEFT_TRIM),
+                  MotorControlLogic_ClampPwm(200 + MOTOR_CONTROL_RIGHT_TRIM));
+}
+
 void TestWhiteGapKeepsPreviousOutput() {
     motor_output_t output{};
 
@@ -166,6 +178,7 @@ void RunMotorControlLogicTests() {
     TestClamp();
     TestSafeStop();
     TestLineFollow();
+    TestDifferentialForward();
     TestWhiteGapKeepsPreviousOutput();
     TestRouteActions();
     TestStopActions();

@@ -116,6 +116,8 @@ typedef struct {
     sensor_debounce_filter_t line_left_filter;
     sensor_debounce_filter_t line_right_filter;
     sensor_fsr_filter_t fsr_filter;
+    uint16_t line_left_filtered;
+    uint16_t line_right_filtered;
     app_sensor_snapshot_t snapshot;
     sensor_logic_diagnostics_t diagnostics;
     sensor_marker_event_t latest_marker_event;
@@ -138,6 +140,7 @@ typedef struct {
     uint8_t marker_group_active;
     uint8_t fsr_candidate_loaded;
     uint8_t overload_candidate_active;
+    uint8_t line_analog_initialized;
 } sensor_logic_context_t;
 
 void SensorLogic_Init(sensor_logic_context_t *context, uint32_t now_ms);
@@ -146,6 +149,9 @@ void SensorLogic_UpdateLine(sensor_logic_context_t *context,
                             uint8_t line_right,
                             uint32_t now_ms,
                             sensor_logic_update_t *update);
+void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t *context,
+                                     uint16_t line_left_raw,
+                                     uint16_t line_right_raw);
 void SensorLogic_UpdateFsr(sensor_logic_context_t *context,
                            uint16_t raw_value,
                            uint32_t now_ms,

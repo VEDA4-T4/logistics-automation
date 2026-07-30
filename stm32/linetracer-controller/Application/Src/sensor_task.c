@@ -15,6 +15,19 @@
 typedef enum { SENSOR_ADC_IDLE = 0, SENSOR_ADC_BUSY, SENSOR_ADC_READY, SENSOR_ADC_ERROR } sensor_adc_state_t;
 
 typedef enum {
+    SENSOR_ADC_FSR_INDEX = 0,
+    SENSOR_ADC_LINE_LEFT_INDEX,
+    SENSOR_ADC_LINE_RIGHT_INDEX,
+    SENSOR_ADC_CHANNEL_COUNT
+} sensor_adc_channel_index_t;
+
+typedef struct {
+    uint16_t fsr_raw;
+    uint16_t line_left_raw;
+    uint16_t line_right_raw;
+} sensor_adc_sample_t;
+
+typedef enum {
     ULTRASONIC_CAPTURE_IDLE = 0,
     ULTRASONIC_CAPTURE_WAIT_RISING,
     ULTRASONIC_CAPTURE_WAIT_FALLING,
@@ -71,8 +84,8 @@ static const ultrasonic_sensor_descriptor_t s_ultrasonic_sensors[SENSOR_LOGIC_UL
 };
 
 static volatile sensor_adc_state_t s_adc_state = SENSOR_ADC_IDLE;
-static volatile uint16_t s_adc_value;
 static volatile uint32_t s_adc_started_at_ms;
+static uint16_t s_adc_dma_values[SENSOR_ADC_CHANNEL_COUNT];
 
 static volatile ultrasonic_capture_state_t s_ultrasonic_capture_state = ULTRASONIC_CAPTURE_IDLE;
 static volatile uint8_t s_ultrasonic_active_index;
@@ -275,14 +288,14 @@ static uint8_t NormalizeLineInput(GPIO_PinState pin_state) {
 #endif
 }
 
-static uint8_t StartFsrConversion(uint32_t now_ms) {
+static uint8_t StartSensorAdcScan(uint32_t now_ms) {
     if (s_adc_state != SENSOR_ADC_IDLE) {
         return 0U;
     }
 
     s_adc_started_at_ms = now_ms;
     s_adc_state = SENSOR_ADC_BUSY;
-    if (HAL_ADC_Start_IT(&hadc1) != HAL_OK) {
+    if (HAL_ADC_Start_DMA(&hadc1, (uint32_t*)s_adc_dma_values, (uint32_t)SENSOR_ADC_CHANNEL_COUNT) != HAL_OK) {
         s_adc_state = SENSOR_ADC_ERROR;
         return 0U;
     }
@@ -290,21 +303,25 @@ static uint8_t StartFsrConversion(uint32_t now_ms) {
     return 1U;
 }
 
-static sensor_adc_state_t PollFsrConversion(uint32_t now_ms, uint16_t* value) {
+static sensor_adc_state_t PollSensorAdcScan(uint32_t now_ms, sensor_adc_sample_t* sample) {
     sensor_adc_state_t state = s_adc_state;
 
     if ((state == SENSOR_ADC_BUSY) && (TimeElapsed(now_ms, s_adc_started_at_ms, SENSOR_FSR_ADC_TIMEOUT_MS) != 0U)) {
-        (void)HAL_ADC_Stop_IT(&hadc1);
+        (void)HAL_ADC_Stop_DMA(&hadc1);
         s_adc_state = SENSOR_ADC_ERROR;
         state = SENSOR_ADC_ERROR;
     }
 
     if (state == SENSOR_ADC_READY) {
-        if (value != NULL) {
-            *value = s_adc_value;
+        (void)HAL_ADC_Stop_DMA(&hadc1);
+        if (sample != NULL) {
+            sample->fsr_raw = s_adc_dma_values[SENSOR_ADC_FSR_INDEX];
+            sample->line_left_raw = s_adc_dma_values[SENSOR_ADC_LINE_LEFT_INDEX];
+            sample->line_right_raw = s_adc_dma_values[SENSOR_ADC_LINE_RIGHT_INDEX];
         }
         s_adc_state = SENSOR_ADC_IDLE;
     } else if (state == SENSOR_ADC_ERROR) {
+        (void)HAL_ADC_Stop_DMA(&hadc1);
         s_adc_state = SENSOR_ADC_IDLE;
     }
 
@@ -468,6 +485,7 @@ static uint8_t InitializeSensorHardware(void) {
     HAL_NVIC_EnableIRQ(ADC_IRQn);
 
     s_adc_state = SENSOR_ADC_IDLE;
+    (void)memset(s_adc_dma_values, 0, sizeof(s_adc_dma_values));
     s_ultrasonic_capture_state = ULTRASONIC_CAPTURE_IDLE;
     s_ultrasonic_trigger_pulse_active = 0U;
     s_ultrasonic_timer_ready = ConfigureUltrasonicTimer();
@@ -497,11 +515,11 @@ void StartSensorTask(void* argument) {
     sensor_task_context_t context;
     sensor_logic_update_t update;
     ultrasonic_result_t ultrasonic_result;
+    sensor_adc_sample_t adc_sample;
     sensor_adc_state_t adc_state;
     uint32_t next_wake;
     uint32_t last_alive_ms;
     uint32_t now_ms;
-    uint16_t fsr_value = 0U;
     uint8_t ultrasonic_timer_ready;
 
     (void)argument;
@@ -512,7 +530,8 @@ void StartSensorTask(void* argument) {
     if (ultrasonic_timer_ready == 0U) {
         SensorLogic_MarkAllUltrasonicUnavailable(&context.logic, now_ms);
     }
-    (void)StartFsrConversion(now_ms);
+    (void)memset(&adc_sample, 0, sizeof(adc_sample));
+    (void)StartSensorAdcScan(now_ms);
 
     next_wake = osKernelGetTickCount();
     last_alive_ms = now_ms;
@@ -524,15 +543,16 @@ void StartSensorTask(void* argument) {
         SensorLogic_UpdateLine(&context.logic, NormalizeLineInput(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4)),
                                NormalizeLineInput(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5)), now_ms, &update);
 
-        adc_state = PollFsrConversion(now_ms, &fsr_value);
+        adc_state = PollSensorAdcScan(now_ms, &adc_sample);
         if (adc_state == SENSOR_ADC_READY) {
-            SensorLogic_UpdateFsr(&context.logic, fsr_value, now_ms, &update);
-            (void)StartFsrConversion(now_ms);
+            SensorLogic_UpdateFsr(&context.logic, adc_sample.fsr_raw, now_ms, &update);
+            SensorLogic_UpdateLineAnalogRaw(&context.logic, adc_sample.line_left_raw, adc_sample.line_right_raw);
+            (void)StartSensorAdcScan(now_ms);
         } else if (adc_state == SENSOR_ADC_ERROR) {
             SensorLogic_MarkFsrError(&context.logic, SENSOR_LOGIC_ERROR_FSR_ADC, now_ms);
-            (void)StartFsrConversion(now_ms);
+            (void)StartSensorAdcScan(now_ms);
         } else if (adc_state == SENSOR_ADC_IDLE) {
-            (void)StartFsrConversion(now_ms);
+            (void)StartSensorAdcScan(now_ms);
         }
 
         CheckUltrasonicCaptureTimeout(now_ms);
@@ -594,8 +614,6 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
         return;
     }
 
-    s_adc_value = (uint16_t)HAL_ADC_GetValue(hadc);
-    (void)HAL_ADC_Stop_IT(hadc);
     s_adc_state = SENSOR_ADC_READY;
 }
 
@@ -604,7 +622,6 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef* hadc) {
         return;
     }
 
-    (void)HAL_ADC_Stop_IT(hadc);
     s_adc_state = SENSOR_ADC_ERROR;
 }
 

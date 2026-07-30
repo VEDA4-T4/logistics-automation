@@ -86,6 +86,9 @@ typedef struct {
     uint32_t event_flags;
     uint32_t marker_detected_at_ms;
     uint16_t fsr_raw;
+    uint16_t line_left_raw;
+    uint16_t line_right_raw;
+    int16_t line_error;
     uint16_t ultrasonic_front_mm;
     uint16_t ultrasonic_rear_mm;
     uint16_t ultrasonic_left_mm;

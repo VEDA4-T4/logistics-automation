@@ -124,6 +124,36 @@ void TestLineNormalizationAndDebounce() {
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
 }
 
+void TestAnalogLineSamples() {
+    sensor_logic_context_t context{};
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, 1100U, 2000U);
+
+    CHECK_TRUE(context.snapshot.line_left_raw == 1100U);
+    CHECK_TRUE(context.snapshot.line_right_raw == 2000U);
+    CHECK_TRUE(context.line_left_filtered == 500U);
+    CHECK_TRUE(context.line_right_filtered == 1000U);
+    CHECK_TRUE(context.snapshot.line_error == -500);
+
+    SensorLogic_UpdateLineAnalogRaw(&context, 2000U, 200U);
+    CHECK_TRUE(context.line_left_filtered == 625U);
+    CHECK_TRUE(context.line_right_filtered == 750U);
+    CHECK_TRUE(context.snapshot.line_error == -125);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, 0U, 4095U);
+    CHECK_TRUE(context.line_left_filtered == 0U);
+    CHECK_TRUE(context.line_right_filtered == SENSOR_LINE_NORMALIZED_MAX);
+    CHECK_TRUE(context.snapshot.line_error == -1000);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, 4095U, 0U);
+    CHECK_TRUE(context.line_left_filtered == SENSOR_LINE_NORMALIZED_MAX);
+    CHECK_TRUE(context.line_right_filtered == 0U);
+    CHECK_TRUE(context.snapshot.line_error == 1000);
+}
+
 void TestMarkerGroupClassification() {
     struct MarkerCase {
         std::uint8_t count;
@@ -345,6 +375,7 @@ void TestSensorErrorsAndStaleness() {
 int main() {
     TestMarkerMessageContract();
     TestLineNormalizationAndDebounce();
+    TestAnalogLineSamples();
     TestMarkerGroupClassification();
     TestInvalidMarkerEntryAndLineLost();
     TestFsrStabilityAndHysteresis();
