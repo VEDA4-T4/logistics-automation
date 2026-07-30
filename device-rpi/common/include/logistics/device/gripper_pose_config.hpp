@@ -60,7 +60,7 @@ struct GripperPoseConfig {
      * Zero (the default) disables the correction entirely, which is the correct
      * behaviour until the arm and camera are calibrated together.
      *
-     * Only used by the taught-pose path. A command carrying a full pickPose goes
+     * Only used by the taught-pose path. A command carrying a full targetPose goes
      * through inverse kinematics instead and ignores this.
      */
     double base_deci_deg_per_pixel{ 0.0 };

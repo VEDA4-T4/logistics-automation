@@ -146,7 +146,7 @@ constexpr std::string_view kOtherWorkId = "3f2504e0-4f89-11d3-9a0c-0305e82c3302"
         mqtt::ControlCommand::kStart, std::move(request_id), "gripper",
         mqtt::Json{ { "workId", work_id },
                     { "destination", "1" },
-                    { "pickPose", mqtt::Json{ { "x", x_mm }, { "y", y_mm }, { "z", z_mm } } } });
+                    { "targetPose", mqtt::Json{ { "x", x_mm }, { "y", y_mm }, { "z", z_mm } } } });
 }
 
 [[nodiscard]] mqtt::MqttMessage MakeEmergencyStop() {
@@ -675,7 +675,7 @@ void test_cartesian_pick_pose_drives_the_arm_through_kinematics() {
     const GripperPoseConfig defaults{};
     const logistics::device::JointAngles approach = ArmAnglesOf(fixture.backend->last_written);
 
-    // The taught waypoint is what would have been sent without a pickPose, so a
+    // The taught waypoint is what would have been sent without a targetPose, so a
     // match here would mean the coordinates were silently ignored.
     assert(approach.base_deci_deg != defaults.pick_approach.base_deci_deg ||
            approach.shoulder_deci_deg != defaults.pick_approach.shoulder_deci_deg ||
@@ -749,12 +749,12 @@ void test_malformed_pick_pose_is_rejected_rather_than_ignored() {
     Fixture fixture;
     fixture.Home();
 
-    // A pickPose missing z must not silently fall back to the taught waypoints:
+    // A targetPose missing z must not silently fall back to the taught waypoints:
     // that would move the arm somewhere the server did not ask for.
     const GripperCommandResult missing = fixture.node->HandleMqttCommand(MakeControlCommand(
         mqtt::ControlCommand::kStart, "req-bad", "gripper",
         mqtt::Json{ { "workId", kWorkId },
-                    { "pickPose", mqtt::Json{ { "x", kReachableX }, { "y", 0.0 } } } }));
+                    { "targetPose", mqtt::Json{ { "x", kReachableX }, { "y", 0.0 } } } }));
     assert(missing.status == GripperCommandStatus::kUnreachablePose);
     assert(fixture.backend->written_commands.empty());
 
@@ -767,7 +767,7 @@ void test_malformed_pick_pose_is_rejected_rather_than_ignored() {
     const GripperCommandResult wrong_units = fixture.node->HandleMqttCommand(MakeControlCommand(
         mqtt::ControlCommand::kStart, "req-units", "gripper",
         mqtt::Json{ { "workId", kWorkId },
-                    { "pickPose", mqtt::Json{ { "x", 0.352 }, { "y", 0.0 }, { "z", 99999.0 } } } }));
+                    { "targetPose", mqtt::Json{ { "x", 0.352 }, { "y", 0.0 }, { "z", 99999.0 } } } }));
     assert(wrong_units.status == GripperCommandStatus::kUnreachablePose);
 }
 
@@ -785,6 +785,40 @@ void test_a_command_without_a_pick_pose_still_uses_the_taught_waypoints() {
     assert(sent.base_deci_deg == defaults.pick_approach.base_deci_deg);
     assert(sent.shoulder_deci_deg == defaults.pick_approach.shoulder_deci_deg);
     assert(sent.elbow_deci_deg == defaults.pick_approach.elbow_deci_deg);
+}
+
+/*
+ * Regression: this mirrors ProcessOrchestrator::MakeGripperCommand's real output
+ * byte-for-byte (see central-server-rpi/src/process_manager/process_orchestrator.cpp)
+ * rather than the trimmed-down params the other tests use. The server's homography
+ * transform sends x/y/z alongside rollDeg/pitchDeg/yawDeg and a handful of other
+ * fields this node has no use for; the params key contract test coverage above
+ * would not have caught a mismatch against the server's actual field names
+ * (targetPose vs. an earlier assumption of pickPose) because it only ever
+ * constructed its own params from scratch.
+ */
+void test_full_server_target_pose_payload_is_accepted() {
+    Fixture fixture;
+    fixture.Home();
+
+    const mqtt::MqttMessage command = MakeControlCommand(
+        mqtt::ControlCommand::kStart, "req-1", "gripper",
+        mqtt::Json{
+            { "workId", kWorkId },
+            { "destination", "1" },
+            { "action", "PICK" },
+            { "coordinateFrame", "PI-GRIPPER-01_BASE" },
+            { "unit", "mm" },
+            { "targetPose",
+              mqtt::Json{ { "x", kReachableX }, { "y", 0.0 }, { "z", kReachableZ }, { "rollDeg", 180.0 },
+                         { "pitchDeg", 0.0 }, { "yawDeg", 37.5 } } },
+            { "box", mqtt::Json{ { "length", 200.0 }, { "width", 150.0 }, { "height", 90.0 } } },
+            { "calibrationVersion", 1 },
+        });
+
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(command);
+    assert(result.status == GripperCommandStatus::kAccepted);
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_SET_GRIPPER);
 }
 
 // ---------------------------------------------------------------------------
@@ -937,6 +971,7 @@ int main() {
     test_target_below_the_plate_is_rejected();
     test_malformed_pick_pose_is_rejected_rather_than_ignored();
     test_a_command_without_a_pick_pose_still_uses_the_taught_waypoints();
+    test_full_server_target_pose_payload_is_accepted();
     test_motion_duration_follows_the_controller_speed_limits();
     test_an_aborted_cycle_widens_the_next_motion_budget();
     test_status_request_reanchors_the_motion_budget();

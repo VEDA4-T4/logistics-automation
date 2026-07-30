@@ -97,17 +97,21 @@ max_base_correction_deci_deg=150
 # ---------------------------------------------------------------------------
 # Arm geometry, for Cartesian targets.
 #
-# When a control command carries params.pickPose the node solves the arm's
+# When a control command carries params.targetPose the node solves the arm's
 # inverse kinematics instead of using the taught poses above, and everything in
-# this block feeds that calculation.
+# this block feeds that calculation. Only targetPose.x/y/z is read; the central
+# server's homography transform also sends rollDeg/pitchDeg/yawDeg alongside it,
+# and none of those three are used (see the next paragraph).
 #
 # Coordinates are millimetres in the arm's own frame: the origin is the base
 # rotation axis at baseplate height, +Z is up, and +X is the direction the arm
-# points when the base servo sits at base_zero_deci_deg.
+# points when the base servo sits at base_zero_deci_deg. The server's homography
+# transform already rotates and translates pixel coordinates into this frame, so
+# nothing further is done to targetPose.x/y/z here.
 #
 # Box orientation is deliberately not part of this. The arm has three joints and
 # no wrist roll, so the claw's grasp axis is rigidly tied to the base angle,
-# which the target's (x, y) already determines. A yaw in params.pickPose is
+# which the target's (x, y) already determines. A yaw in params.targetPose is
 # ignored rather than approximated.
 # ---------------------------------------------------------------------------
 

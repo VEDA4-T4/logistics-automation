@@ -32,7 +32,7 @@ enum class GripperCommandStatus {
     kInvalidParameters,
     kUartNotOpen,
     kUartError,
-    // params.pickPose was present but could not be turned into a joint target.
+    // params.targetPose was present but could not be turned into a joint target.
     kUnreachablePose,
 };
 
@@ -207,7 +207,7 @@ private:
     /*
      * Turns params into the two pick waypoints.
      *
-     * Prefers params.pickPose (Cartesian, solved through inverse kinematics) and
+     * Prefers params.targetPose (Cartesian, solved through inverse kinematics) and
      * falls back to the taught waypoints plus the legacy pixel offset when the
      * server has not started sending coordinates.
      */

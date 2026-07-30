@@ -29,11 +29,11 @@ nano device-rpi/config/gripper-node.ini
 STM32는 **계산된 관절 각도만** 받는다. 영상 좌표, 상자 치수, 카메라 캘리브레이션, 역기구학은 전부 Raspberry
 Pi 몫이라고 UART 계약에 명시돼 있다.
 
-경로는 두 가지고, `params.pickPose`가 있는지로 갈린다.
+경로는 두 가지고, `params.targetPose`가 있는지로 갈린다.
 
 | 입력 | 처리 |
 |---|---|
-| `params.pickPose` 있음 | 역기구학으로 관절 각도 계산 |
+| `params.targetPose` 있음 | 역기구학으로 관절 각도 계산 |
 | 없음 | INI에 **티칭한 고정 포즈** 사용 (`params.offsetX`가 있으면 base 관절만 픽셀 보정) |
 
 링크 길이는 실기기를 자로 측정한 값(2026-07-30)이다: shoulder-elbow 85mm, elbow-클로 파지중심 175mm(전완
@@ -41,7 +41,9 @@ Pi 몫이라고 UART 계약에 명시돼 있다.
 하나의 링크로 합쳐진다. shoulder-offset(베이스축에서 shoulder 피벗까지의 수평 거리)은 아직 측정하지 못해 0으로
 가정했다.
 
-### pickPose 계약
+### targetPose 계약
+
+중앙서버 `ProcessOrchestrator::MakeGripperCommand()`(homography 활성화 시, `central-server-rpi/src/process_manager/process_orchestrator.cpp`)가 실제로 보내는 형태 그대로다.
 
 ```json
 {
@@ -52,22 +54,34 @@ Pi 몫이라고 UART 계약에 명시돼 있다.
   "params": {
     "workId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
     "destination": "1",
-    "pickPose": { "x": 352.0, "y": 0.0, "z": 45.0 }
+    "action": "PICK",
+    "coordinateFrame": "PI-GRIPPER-01_BASE",
+    "unit": "mm",
+    "targetPose": { "x": 220.0, "y": 0.0, "z": 20.0, "rollDeg": 180.0, "pitchDeg": 0.0, "yawDeg": 37.5 },
+    "box": { "length": 200.0, "width": 150.0, "height": 90.0 },
+    "calibrationVersion": 1
   }
 }
 ```
 
-좌표계는 **밑판의 베이스 회전축이 원점**, `+Z`는 위, `+X`는 base 서보가 `base_zero_deci_deg`일 때 팔이 향하는
-방향, 단위는 mm다.
+이 노드가 읽는 건 **`targetPose.x/y/z`뿐**이다. `action`, `coordinateFrame`, `unit`, `box`, `calibrationVersion`,
+그리고 `targetPose.rollDeg`/`pitchDeg`/`yawDeg`는 전부 무시한다. `unit`은 항상 `"mm"`으로 고정 발행되고
+`coordinateFrame`은 항상 이 노드 자신의 기준(`PI-GRIPPER-01_BASE`)이라, 지금은 검증할 다른 값이 없다 —
+그리퍼가 여러 대가 되어 좌표계가 갈리면 그때 검사를 추가한다.
 
-**상자 방향(yaw)은 받지 않는다.** 팔이 base·shoulder·elbow 3자유도뿐이고 손목 회전 관절이 없어서, 클로의 파지
-축이 base 각에 고정으로 종속된다. 그런데 base 각은 목표의 `(x, y)`가 이미 결정한다. 즉 위치와 파지 방향을
-독립적으로 정할 자유도가 애초에 없다. 서버가 `상자 방향 계산`을 하더라도 이 노드는 그 값을 쓰지 않는다.
-근사해서 쓰는 대신 아예 무시하는 쪽을 택한 건, 못 맞추는 걸 맞춘 척하면 파지 실패 원인이 보이지 않기 때문이다.
+좌표계는 **밑판의 베이스 회전축이 원점**, `+Z`는 위, `+X`는 base 서보가 `base_zero_deci_deg`일 때 팔이 향하는
+방향, 단위는 mm다. 서버의 homography 변환(`HomographyTransformer::Transform()`)이 픽셀 좌표를 이미 이
+기준으로 회전·평행이동해서 내보내므로, 노드 쪽에서 추가 변환은 없다.
+
+**상자 방향(`yawDeg`)은 받아도 쓰지 않는다.** 팔이 base·shoulder·elbow 3자유도뿐이고 손목 회전 관절이 없어서,
+클로의 파지축이 base 각에 고정으로 종속된다. 그런데 base 각은 목표의 `(x, y)`가 이미 결정한다. 즉 위치와 파지
+방향을 독립적으로 정할 자유도가 애초에 없다. 근사해서 쓰는 대신 아예 무시하는 쪽을 택한 건, 못 맞추는 걸 맞춘
+척하면 파지 실패 원인이 보이지 않기 때문이다. `rollDeg`/`pitchDeg`도 이 팔에 대응하는 관절이 없어 마찬가지로
+무시한다.
 
 ### 검증에서 거부되는 것들
 
-`pickPose`가 있으면 **집기 자세와 그 위 접근 자세를 둘 다 먼저 풀고**, 하나라도 실패하면 사이클을 시작하지
+`targetPose`가 있으면 **집기 자세와 그 위 접근 자세를 둘 다 먼저 풀고**, 하나라도 실패하면 사이클을 시작하지
 않는다. 접근만 풀고 출발하면 상자 위까지 올라간 다음에 하강이 불가능하다는 걸 알게 되고, 그 시점의 중단은 팔이
 컨베이어 위에 걸린 상태로 끝난다.
 
@@ -125,7 +139,7 @@ PLACE_RETREAT  MOVE_ARM(place_approach)   ┘
 RETURN_HOME    HOME                        → HOMING → COMPLETED
 ```
 
-`pickPose`로 시작한 사이클은 `PICK_APPROACH`/`PICK_DESCEND`/`PICK_RETREAT`가 계산된 자세를 쓴다. 놓기 구간
+`targetPose`로 시작한 사이클은 `PICK_APPROACH`/`PICK_DESCEND`/`PICK_RETREAT`가 계산된 자세를 쓴다. 놓기 구간
 (`place_approach`, `place`)은 서버가 좌표를 주지 않으므로 여전히 교시 포즈다.
 
 ## duration을 노드가 계산해야 하는 이유
@@ -222,8 +236,11 @@ E-Stop이 걸리면 컨트롤러의 `homed` 기준이 사라진다. 그래서 �
 
 `device_gripper_node_test`는 가짜 UART backend로 명령 변환, 10단계 사이클 진행, 중복·충돌 처리, 모션 fault,
 지연된 완료 이벤트 무시, E-Stop 복구 순서, 모션 타임아웃, 포즈 보정과 INI 파싱을 검증한다. 여기에 더해
-`pickPose` 경로(계산된 각도가 실제로 요청 좌표로 정기구학 역산되는지), 도달 불가·형식 오류·밑판 아래 목표의
+`targetPose` 경로(계산된 각도가 실제로 요청 좌표로 정기구학 역산되는지), 도달 불가·형식 오류·밑판 아래 목표의
 거부, 좌표 없는 명령의 교시 경로 유지, 그리고 속도한계 기반 duration과 추적 상실 시 최악값 예산을 다룬다.
+서버의 실제 페이로드 형태(`rollDeg`/`pitchDeg`/`yawDeg`/`box`/`coordinateFrame`/`unit`/`calibrationVersion`을
+`targetPose`와 함께 보내는 것)를 그대로 재현한 회귀 테스트도 포함한다 — 계약 키 이름이 어긋나는 걸 이런
+테스트 없이는 못 잡는다(`pickPose`로 잘못 가정했던 최초 구현이 그 사례).
 
 `device_gripper_kinematics_test`는 역기구학을 따로 검증한다. 손으로 계산 가능한 정삼각형·완전신장 케이스, 도달
 경계에서 부동소수 잡음으로 실패하지 않는지, 관절 한계가 어느 관절 때문인지 이름을 붙이는지, 정기구학 왕복,
@@ -237,4 +254,4 @@ E-Stop이 걸리면 컨트롤러의 `homed` 기준이 사라진다. 그래서 �
 2. 관절 방향(`*_direction`)과 기준각(`*_zero_deci_deg`)을 실기기로 확인한다. 부호가 틀리면 팔이 반대로 간다.
 3. 컨베이어와 밑판의 상대 높이를 재서 `min_target_z_mm`을 정한다(음수일 가능성이 높다 — 전완쪽 링크가
    상완보다 길어서 밑판 높이에서 집으려면 팔이 거의 완전히 펴져야 한다).
-4. `STATUS_REQUEST`로 읽은 각도와 `pickPose`로 지시한 좌표를 정기구학으로 대조해 캘리브레이션을 마무리한다.
+4. `STATUS_REQUEST`로 읽은 각도와 `targetPose`로 지시한 좌표를 정기구학으로 대조해 캘리브레이션을 마무리한다.

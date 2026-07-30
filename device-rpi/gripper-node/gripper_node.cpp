@@ -113,7 +113,7 @@ void WriteU16(std::uint8_t* payload, std::size_t low_index, std::uint16_t value)
 }
 
 /*
- * Reads one coordinate of params.pickPose.
+ * Reads one coordinate of params.targetPose.
  *
  * Integers are accepted alongside reals because a target that lands on a whole
  * millimetre serialises as an integer in most JSON writers, and rejecting it
@@ -378,7 +378,13 @@ GripperCommandResult GripperNode::HandleEmergencyStop(const mqtt::EmergencyStopP
 // ---------------------------------------------------------------------------
 
 GripperNode::PoseResolution GripperNode::ResolvePickPoses(const mqtt::Json& params) const {
-    const auto pose_field = params.find("pickPose");
+    // The central server's homography transform names this targetPose and adds
+    // rollDeg/pitchDeg/yawDeg plus box/coordinateFrame/unit/calibrationVersion
+    // metadata alongside it. Only x/y/z is read: yaw is ignored because the arm
+    // has no wrist joint to express it independently of position (see
+    // gripper_kinematics.hpp), and roll/pitch don't correspond to anything this
+    // arm can do either.
+    const auto pose_field = params.find("targetPose");
     if (pose_field == params.end()) {
         // No coordinates: keep working from the waypoints taught against the
         // assembled arm. This is still the accurate path until the link lengths
@@ -394,7 +400,7 @@ GripperNode::PoseResolution GripperNode::ResolvePickPoses(const mqtt::Json& para
     if (!pose_field->is_object()) {
         return PoseResolution{ .ok = false,
                                .error_code = "ERR-GRIPPER-POSE-MALFORMED",
-                               .message = "params.pickPose must be an object with x, y and z in millimetres" };
+                               .message = "params.targetPose must be an object with x, y and z in millimetres" };
     }
 
     const auto x_mm = ReadCoordinate(*pose_field, "x");
@@ -403,7 +409,7 @@ GripperNode::PoseResolution GripperNode::ResolvePickPoses(const mqtt::Json& para
     if (!x_mm.has_value() || !y_mm.has_value() || !z_mm.has_value()) {
         return PoseResolution{ .ok = false,
                                .error_code = "ERR-GRIPPER-POSE-MALFORMED",
-                               .message = "params.pickPose needs finite x, y and z in millimetres" };
+                               .message = "params.targetPose needs finite x, y and z in millimetres" };
     }
 
     const PickPose target{ .x_mm = *x_mm, .y_mm = *y_mm, .z_mm = *z_mm };
@@ -415,7 +421,7 @@ GripperNode::PoseResolution GripperNode::ResolvePickPoses(const mqtt::Json& para
     if (target.z_mm < poses_.min_target_z_mm) {
         return PoseResolution{ .ok = false,
                                .error_code = "ERR-GRIPPER-POSE-BELOW-PLATE",
-                               .message = "params.pickPose.z is below the configured floor" };
+                               .message = "params.targetPose.z is below the configured floor" };
     }
 
     /*
