@@ -129,6 +129,39 @@ void TestSpontaneousFrameDuringWait() {
     assert(fixture.session->Diagnostics().spontaneous_frames == 1);
 }
 
+/*
+ * Regression: this reproduces a live-hardware bug found debugging the gripper
+ * controller. When our response and the controller's next unrelated frame (its
+ * periodic health-task heartbeat, in the field case) arrive in the same
+ * Read() -- which is exactly why kReceiveBufferSize is sized for two frames --
+ * WaitForResponse used to return the instant it matched our response, leaving
+ * the trailing bytes already pulled out of receive_buffer un-fed to the
+ * parser. They were not deferred to the next Read(): they were gone, and the
+ * frame they belonged to could never complete.
+ */
+void TestTrailingFrameInSameReadIsNotDropped() {
+    Fixture fixture;
+    int spontaneous = 0;
+    std::uint8_t spontaneous_command = 0U;
+    fixture.session->SetSpontaneousFrameHandler([&](const uart_frame_t& frame) {
+        ++spontaneous;
+        spontaneous_command = frame.command;
+    });
+    // No responder is set, so Write() queues nothing on its own; the reply
+    // comes entirely from the combined chunk queued below, ahead of time.
+    fixture.backend->PreloadCombinedIncoming(
+        { MakeOperationResult(1U, UART_STATUS_SUCCESS, UART_ERROR_NONE), MakeSensorStatus(UART_SENSOR_DETECTED, 7U) });
+
+    const InputTransactResult result = fixture.session->Transact(UART_CMD_INPUT_CONVEYOR_START);
+
+    assert(result.Succeeded());
+    // Before the fix, this stayed 0: the sensor frame's bytes were already
+    // consumed from the fake Read() but never reached the parser.
+    assert(spontaneous == 1);
+    assert(spontaneous_command == UART_CMD_SENSOR_STATUS);
+    assert(fixture.session->Diagnostics().spontaneous_frames == 1);
+}
+
 void TestPollSpontaneous() {
     Fixture fixture;
     int spontaneous = 0;
@@ -201,6 +234,7 @@ int main() {
     TestTransactTimeoutRetries();
     TestTransactRetryThenSuccess();
     TestSpontaneousFrameDuringWait();
+    TestTrailingFrameInSameReadIsNotDropped();
     TestPollSpontaneous();
     TestTransactNotOpen();
     TestTransactInvalidArgument();

@@ -133,19 +133,40 @@ InputUartSession::WaitOutcome InputUartSession::WaitForResponse(std::uint8_t seq
             return WaitOutcome::kTransportError;
         }
 
+        /*
+         * kReceiveBufferSize is two frames wide precisely because one Read() can
+         * return our response back-to-back with an unrelated frame the
+         * controller queued right behind it -- most commonly its periodic
+         * health-task heartbeat, which keeps running independently of command
+         * traffic. Returning the moment the match is found, before the loop
+         * reaches those trailing bytes, throws them away: they were already
+         * pulled out of the kernel's receive queue into receive_buffer, so once
+         * this call returns they are gone, not merely deferred to the next
+         * Read(). The frame they belonged to then never completes, and the
+         * spontaneous handler never sees it.
+         *
+         * So every byte already in hand this call is fed to the parser
+         * regardless of whether the match already happened; only the return
+         * itself waits until the buffer is drained.
+         */
+        bool matched = false;
         for (std::size_t index = 0; index < io.bytes_transferred; ++index) {
             uart_frame_t frame{};
             const uart_parser_result_t parser_result = uart_parser_feed(&parser_, receive_buffer[index], &frame);
             if (parser_result == UART_PARSER_FRAME_READY) {
-                if (IsResponseFrame(frame, sequence)) {
+                if (!matched && IsResponseFrame(frame, sequence)) {
                     ++diagnostics_.responses_matched;
                     Classify(frame, result);
-                    return WaitOutcome::kMatched;
+                    matched = true;
+                } else {
+                    RouteSpontaneous(frame);
                 }
-                RouteSpontaneous(frame);
             } else {
                 HandleParserResult(parser_result);
             }
+        }
+        if (matched) {
+            return WaitOutcome::kMatched;
         }
     }
 }
