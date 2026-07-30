@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 namespace logistics::device {
@@ -992,6 +993,24 @@ GripperCommandResult GripperNode::Execute(GripperCommandResult result, std::uint
             result.status = GripperCommandStatus::kUartError;
             break;
     }
+
+    // TEMPORARY diagnostic for the real-device HOME/first-motion rejection
+    // investigation. Remove once the root cause is confirmed.
+    if (result.status != GripperCommandStatus::kSuccess) {
+        const auto& tx = result.uart_result;
+        std::fprintf(stderr,
+                     "[gripper][DIAG] cmd=0x%02X transact_status=%d seq=%u retries=%u "
+                     "response_command=0x%02X response_status=0x%02X response_error=0x%02X "
+                     "frame_command=0x%02X frame_length=%u frame_seq=%u payload=[",
+                     command, static_cast<int>(tx.status), tx.sequence, tx.retries, tx.response_command,
+                     tx.response_status, tx.response_error, tx.response_frame.command, tx.response_frame.length,
+                     tx.response_frame.sequence);
+        for (std::uint32_t index = 0; index < tx.response_frame.length && index < UART_MAX_PAYLOAD_SIZE; ++index) {
+            std::fprintf(stderr, "%s%02X", index == 0 ? "" : " ", tx.response_frame.payload[index]);
+        }
+        std::fprintf(stderr, "]\n");
+    }
+
     return result;
 }
 
