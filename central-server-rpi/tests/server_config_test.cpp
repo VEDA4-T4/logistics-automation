@@ -69,7 +69,7 @@ line_tracer_initial_position=A
 [homography]
 enabled=true
 pixel_to_conveyor=2,0,10,0,2,20,0,0,1
-conveyor_plane_z_mm=850
+conveyor_plane_z_mm=8.5e2
 robot_base_x_mm=1250
 robot_base_y_mm=430
 robot_base_z_mm=0
@@ -94,6 +94,7 @@ calibration_version=4
     assert(config.process.homography.enabled);
     assert(config.process.homography.pixel_to_conveyor[0] == 2.0);
     assert(config.process.homography.pixel_to_conveyor[2] == 10.0);
+    assert(config.process.homography.conveyor_plane_z_mm == 850.0);
     assert(config.process.homography.box_height_mm == 250.0);
     assert(config.process.homography.calibration_version == 4);
     Remove(path);
@@ -126,6 +127,7 @@ void TestInvalidSettingsAreRejected() {
                    "tls_certificate=missing.crt\ntls_private_key=missing.key\n");
     ExpectRejected("line-tracer-position", "[process]\nline_tracer_initial_position=D\n");
     ExpectRejected("homography-matrix", "[homography]\nenabled=true\npixel_to_conveyor=1,0,0\n");
+    ExpectRejected("homography-number", "[homography]\nconveyor_plane_z_mm=850mm\n");
     ExpectRejected("homography-singular",
                    "[homography]\nenabled=true\npixel_to_conveyor=1,0,0,0,0,0,0,0,1\n"
                    "box_length_mm=400\nbox_width_mm=300\nbox_height_mm=250\n");

@@ -5,6 +5,8 @@
 #include <charconv>
 #include <cmath>
 #include <fstream>
+#include <locale>
+#include <sstream>
 #include <string_view>
 #include <system_error>
 #include <unordered_set>
@@ -44,8 +46,10 @@ namespace {
 [[nodiscard]] double ParseDouble(const std::filesystem::path& path, std::size_t line_number, std::string_view key,
                                  std::string_view value) {
     double parsed{};
-    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
-    if (error != std::errc{} || end != value.data() + value.size() || !std::isfinite(parsed)) {
+    std::istringstream input{ std::string(value) };
+    input.imbue(std::locale::classic());
+    input >> std::noskipws >> parsed;
+    if (!input || input.peek() != std::char_traits<char>::eof() || !std::isfinite(parsed)) {
         ThrowLineError(path, line_number, std::string(key) + " must be a finite number");
     }
     return parsed;
