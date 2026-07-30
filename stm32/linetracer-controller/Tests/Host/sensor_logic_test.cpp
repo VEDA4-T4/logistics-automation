@@ -318,18 +318,44 @@ void TestSensorErrorsAndStaleness() {
 
     SensorLogic_Init(&context, 0U);
     SensorLogic_MarkUltrasonicStarted(&context, 0U, 0U);
-    SensorLogic_CheckStaleness(&context, SENSOR_ULTRASONIC_STALE_MS - 1U);
-    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
-    SensorLogic_CheckStaleness(&context, SENSOR_ULTRASONIC_STALE_MS);
-    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
-
-    SensorLogic_UpdateUltrasonic(&context, 0U, 500U, 1U, SENSOR_ULTRASONIC_STALE_MS + 10U, &update);
-    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 500U, 1U, 10U, &update);
+    CHECK_TRUE((context.diagnostics.valid_flags & SENSOR_LOGIC_VALID_ULTRASONIC_FRONT) != 0U);
 
     update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 800U, &update);
-    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 810U, &update);
-    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 820U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 20U, &update);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
+    CHECK_TRUE((context.diagnostics.valid_flags & SENSOR_LOGIC_VALID_ULTRASONIC_FRONT) != 0U);
+
+    SensorLogic_CheckStaleness(&context, 10U + SENSOR_ULTRASONIC_STALE_MS - 1U);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
+    SensorLogic_CheckStaleness(&context, 10U + SENSOR_ULTRASONIC_STALE_MS);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
+    CHECK_TRUE((context.diagnostics.valid_flags & SENSOR_LOGIC_VALID_ULTRASONIC_FRONT) == 0U);
+
+    update = {};
+    SensorLogic_UpdateUltrasonic(
+        &context, 0U, 500U, 1U, SENSOR_ULTRASONIC_STALE_MS + 20U, &update);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
+    SensorLogic_UpdateUltrasonic(
+        &context, 0U, 0U, 0U, SENSOR_ULTRASONIC_STALE_MS + 30U, &update);
+    SensorLogic_UpdateUltrasonic(
+        &context, 0U, 500U, 1U, SENSOR_ULTRASONIC_STALE_MS + 40U, &update);
+    SensorLogic_UpdateUltrasonic(
+        &context, 0U, 500U, 1U, SENSOR_ULTRASONIC_STALE_MS + 50U, &update);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
+    SensorLogic_UpdateUltrasonic(
+        &context, 0U, 500U, 1U, SENSOR_ULTRASONIC_STALE_MS + 60U, &update);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
+    CHECK_TRUE((context.diagnostics.valid_flags & SENSOR_LOGIC_VALID_ULTRASONIC_FRONT) != 0U);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_MarkUltrasonicStarted(&context, 0U, 0U);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 500U, 1U, 10U, &update);
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 20U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 30U, &update);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 40U, &update);
     CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
 
     SensorLogic_Init(&context, 0U);
