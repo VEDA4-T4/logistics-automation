@@ -634,6 +634,18 @@ control_command_result_t ControlLogic_HandleCommand(control_context_t* context, 
     return result;
 }
 
+app_tx_event_type_t ControlLogic_CommandResponseEventType(const control_command_result_t* result) {
+    if (result == NULL) {
+        return APP_TX_EVENT_NONE;
+    }
+
+    if (result->accepted != 0U && result->status_requested != 0U) {
+        return APP_TX_EVENT_STATUS;
+    }
+
+    return APP_TX_EVENT_COMMAND_ACK;
+}
+
 uint8_t ControlLogic_CompleteTurn(control_context_t* context, uint32_t now_ms) {
     linetracer_control_state_t next_state;
 

@@ -203,11 +203,14 @@ void TestInvalidStateStatusAndTimeout() {
     assert(status_result.accepted != 0U);
     assert(status_result.status_requested != 0U);
     assert(status_result.state_changed == 0U);
+    assert(ControlLogic_CommandResponseEventType(&status_result) == APP_TX_EVENT_STATUS);
 
     const auto stale_status = MakeCommand(APP_CONTROL_COMMAND_STATUS_REQUEST, 0U, 3U);
     const auto stale_result = ControlLogic_HandleCommand(&context, &stale_status, UART_COMMAND_TIMEOUT_MS + 1U);
     assert(stale_result.accepted == 0U);
     assert(stale_result.error_code == UART_ERROR_TIMEOUT);
+    assert(ControlLogic_CommandResponseEventType(&stale_result) == APP_TX_EVENT_COMMAND_ACK);
+    assert(ControlLogic_CommandResponseEventType(nullptr) == APP_TX_EVENT_NONE);
 
     const auto manual_unload = MakeCommand(APP_CONTROL_COMMAND_MANUAL_UNLOAD, 30U, 4U);
     const auto manual_result = ControlLogic_HandleCommand(&context, &manual_unload, 30U);

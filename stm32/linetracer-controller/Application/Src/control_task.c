@@ -482,19 +482,19 @@ static void ControlTask_CheckRouteTimeout(uint32_t now_ms) {
 
 static void ControlTask_PublishCommandResult(const app_control_command_t* command,
                                              const control_command_result_t* result, uint32_t now_ms) {
-    app_tx_event_t event = ControlTask_MakeTxEvent(APP_TX_EVENT_COMMAND_ACK, command, result, now_ms);
+    app_tx_event_type_t response_type = ControlLogic_CommandResponseEventType(result);
+    app_tx_event_t event = ControlTask_MakeTxEvent(response_type, command, result, now_ms);
     app_tx_event_t started_event;
 
     ControlTask_PublishTxEvent(&event, now_ms);
 
+    if (response_type == APP_TX_EVENT_STATUS) {
+        return;
+    }
+
     if (ControlLogic_BuildStartedEvent(&controlTaskContext, command, result, controlTaskLoadState, now_ms,
                                        &started_event) != 0U) {
         ControlTask_PublishTxEvent(&started_event, now_ms);
-    }
-
-    if (result->status_requested != 0U && result->accepted != 0U) {
-        event.type = APP_TX_EVENT_STATUS;
-        ControlTask_PublishTxEvent(&event, now_ms);
     }
 
     if (result->state_changed != 0U && uart_linetracer_job_id_is_valid(controlTaskContext.active_job_id) != 0U &&

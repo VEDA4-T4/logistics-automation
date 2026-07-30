@@ -70,6 +70,7 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
                                       uint32_t now_ms);
 control_command_result_t ControlLogic_HandleCommand(control_context_t* context, const app_control_command_t* command,
                                                     uint32_t now_ms);
+app_tx_event_type_t ControlLogic_CommandResponseEventType(const control_command_result_t* result);
 void ControlLogic_MakeSnapshot(const control_context_t* context, uart_linetracer_load_state_t load_state,
                                uint32_t now_ms, app_control_snapshot_t* snapshot);
 uint8_t ControlLogic_BuildStartedEvent(const control_context_t* context, const app_control_command_t* command,
