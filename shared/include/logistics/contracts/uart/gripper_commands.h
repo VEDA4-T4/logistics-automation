@@ -35,7 +35,10 @@ typedef enum {
 #define UART_GRIPPER_ANGLE_DECI_DEG_MIN 0U
 #define UART_GRIPPER_ANGLE_DECI_DEG_MAX 1800U
 
-/* The controller interpolates each requested motion over this duration. */
+/*
+ * Requested interpolation duration. The controller may extend it to satisfy
+ * its configured per-joint maximum speeds.
+ */
 #define UART_GRIPPER_DURATION_MS_MIN 100U
 #define UART_GRIPPER_DURATION_MS_MAX 10000U
 
