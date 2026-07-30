@@ -30,6 +30,38 @@ MQTT topic, payload, QoS, retain, Last Will 규칙을 중앙에서 관리하는 
 `BOX_DETECTED`를 저장하면 중앙 서버는 UUID형 `workId`를 발급해 `WORK_CREATED`로 응답합니다. 이후의
 위치, 이미지, 바코드, 상품 정보, 목적지 및 `WORK_COMPLETED` payload는 같은 `workId`를 포함해야 합니다.
 
+### 그리퍼 `CONTROL_COMMAND`의 `params.pickPose`
+
+`params`는 자유 형식 object이므로 codec 변경 없이 확장됩니다. 그리퍼 노드는 `START`/`RESTART`의 `params`에서
+아래를 읽습니다.
+
+| 키 | 형 | 필수 | 의미 |
+|---|---|---|---|
+| `workId` | string | 예 (`componentId=home` 제외) | 작업 식별자 |
+| `destination` | string | 아니오 | 분류 목적지 |
+| `pickPose` | object | 아니오 | 집기 목표 좌표. 없으면 노드가 교시 포즈를 사용 |
+| `pickPose.x/y/z` | number | `pickPose`가 있으면 예 | mm 단위 좌표 |
+
+```json
+"params": {
+  "workId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+  "destination": "1",
+  "pickPose": { "x": 352.0, "y": 0.0, "z": 45.0 }
+}
+```
+
+좌표계는 **그리퍼 팔 기준**입니다. 원점은 밑판 높이의 base 회전축, `+Z`는 위, `+X`는 base 서보 기준각에서 팔이
+향하는 방향입니다. 카메라 픽셀 좌표를 이 좌표계로 변환하는 것은 중앙 서버 몫입니다.
+
+**상자 방향(yaw)은 이 계약에 없습니다.** 팔이 3자유도(base·shoulder·elbow)뿐이고 손목 회전이 없어서 클로의 파지
+축이 base 각에 종속되며, base 각은 `(x, y)`가 이미 결정합니다. 위치와 파지 방향을 독립적으로 지정할 자유도가
+존재하지 않으므로, yaw를 보내도 노드는 사용하지 않습니다.
+
+거부 사유는 `COMMAND_RESPONSE`의 `errorCode`로 돌아옵니다: `ERR-GRIPPER-POSE-MALFORMED`,
+`ERR-GRIPPER-POSE-BELOW-PLATE`, `ERR-GRIPPER-UNREACHABLE-FAR`, `ERR-GRIPPER-UNREACHABLE-NEAR`,
+`ERR-GRIPPER-JOINT-LIMIT`. 도달 가능 영역은 노드 INI의 기구 파라미터에 따라 달라지므로
+`device-rpi/gripper-node/README.md`를 참고하십시오.
+
 ### Qt 현재 상품 화면 payload
 
 중앙 서버는 현재 상품 변경을 `qt/{clientId}/event`로 전달합니다. `WORK_CREATED`가 새 `workId`로

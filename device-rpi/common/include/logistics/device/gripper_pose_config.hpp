@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "logistics/contracts/uart/gripper_commands.h"
+#include "logistics/device/gripper_kinematics.hpp"
 
 namespace logistics::device {
 
@@ -58,11 +59,34 @@ struct GripperPoseConfig {
      * Base-joint correction applied per pixel of vision offset, in deci-degrees.
      * Zero (the default) disables the correction entirely, which is the correct
      * behaviour until the arm and camera are calibrated together.
+     *
+     * Only used by the taught-pose path. A command carrying a full pickPose goes
+     * through inverse kinematics instead and ignores this.
      */
     double base_deci_deg_per_pixel{ 0.0 };
 
     // Largest correction accepted before the offset is treated as implausible.
     std::uint16_t max_base_correction_deci_deg{ 150U };
+
+    /*
+     * Mechanical description of the arm, used when the server sends Cartesian
+     * coordinates rather than relying on the taught poses above.
+     */
+    GripperGeometry geometry{};
+
+    /*
+     * Vertical clearance between a Cartesian target and the approach pose above
+     * it. The claw descends through this gap, so it has to clear the tallest box
+     * the conveyor presents plus the claw's own fingers.
+     */
+    double approach_height_mm{ 60.0 };
+
+    /*
+     * Lowest Z a Cartesian target may ask for, as a guard against driving the
+     * claw into the baseplate. The joint limits alone do not catch this: a target
+     * below the plate is perfectly reachable as far as the linkage is concerned.
+     */
+    double min_target_z_mm{ 0.0 };
 
     [[nodiscard]] bool IsValid() const noexcept;
 
@@ -71,6 +95,9 @@ struct GripperPoseConfig {
      * configured correction limit and to the contract's angle range.
      */
     [[nodiscard]] GripperPose PickPoseForOffset(std::int32_t offset_x_pixels) const noexcept;
+
+    /* The approach target that belongs directly above a Cartesian target. */
+    [[nodiscard]] PickPose ApproachAbove(const PickPose& target) const noexcept;
 };
 
 class GripperConfigError final : public std::runtime_error {

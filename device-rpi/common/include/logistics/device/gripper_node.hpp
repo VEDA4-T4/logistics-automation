@@ -10,6 +10,7 @@
 
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/uart/gripper_commands.h"
+#include "logistics/device/gripper_kinematics.hpp"
 #include "logistics/device/gripper_pose_config.hpp"
 #include "logistics/device/input_uart_session.hpp"
 
@@ -31,6 +32,8 @@ enum class GripperCommandStatus {
     kInvalidParameters,
     kUartNotOpen,
     kUartError,
+    // params.pickPose was present but could not be turned into a joint target.
+    kUnreachablePose,
 };
 
 struct GripperCommandResult {
@@ -138,10 +141,38 @@ private:
         std::string request_id;
         std::string destination;
         GripperPose pick_pose;
+        /*
+         * Where the claw waits before descending onto the pick target.
+         *
+         * With a Cartesian target this is solved from the coordinates so the claw
+         * descends vertically onto whatever the camera found. Without one it is
+         * the taught pick_approach waypoint, which is why it is held per cycle
+         * rather than read from the config at dispatch time.
+         */
+        GripperPose pick_approach_pose;
+        // True when the poses above came from inverse kinematics rather than from
+        // the taught waypoints. Reported so a cycle can be traced back to which
+        // path produced its angles.
+        bool from_kinematics{};
         std::uint16_t motion_id{ UART_GRIPPER_MOTION_ID_NONE };
         std::uint8_t motion_type{};
         std::chrono::milliseconds waited{};
         std::chrono::milliseconds motion_budget{};
+    };
+
+    /*
+     * Outcome of turning one MQTT command's params into pick waypoints.
+     *
+     * Carries the failure detail as well, because "unreachable" has to reach the
+     * server as a specific, actionable error rather than a generic rejection.
+     */
+    struct PoseResolution {
+        bool ok{};
+        GripperPose pick{};
+        GripperPose approach{};
+        bool from_kinematics{};
+        std::string error_code;
+        std::string message;
     };
 
     enum class PendingSafetyEvent {
@@ -172,6 +203,15 @@ private:
     [[nodiscard]] GripperCommandResult RunInitialize(const contracts::mqtt::ControlCommandPayload& command);
     [[nodiscard]] GripperCommandResult RunRecovery(const contracts::mqtt::ControlCommandPayload& command);
     [[nodiscard]] GripperCommandResult RunStatusRequest(const contracts::mqtt::ControlCommandPayload& command);
+
+    /*
+     * Turns params into the two pick waypoints.
+     *
+     * Prefers params.pickPose (Cartesian, solved through inverse kinematics) and
+     * falls back to the taught waypoints plus the legacy pixel offset when the
+     * server has not started sending coordinates.
+     */
+    [[nodiscard]] PoseResolution ResolvePickPoses(const contracts::mqtt::Json& params) const;
 
     // Sequencer.
     [[nodiscard]] static GripperCycleStep FirstStepOf(GripperPhase phase) noexcept;
@@ -219,6 +259,25 @@ private:
     InputUartSession& uart_session_;
     GripperPoseConfig poses_;
     GripperReportHandler report_handler_;
+
+    /*
+     * Duration arithmetic, mirroring what the controller does with the same
+     * numbers.
+     *
+     * MOVE_ARM carries a duration, but the controller does not reject one that is
+     * too short for its speed limits: it silently runs the motion for
+     * max(requested, its own minimum). So the node has to know where the arm
+     * currently is to predict how long a move will really take, otherwise it
+     * times out on motions that are still running correctly.
+     *
+     * angles_known_ goes false whenever the arm stops somewhere the node cannot
+     * compute -- a fault, an E-Stop, or an operator STOP part-way through an
+     * interpolation. Until a HOME or a GET_STATUS re-anchors it, motion budgets
+     * fall back to the worst case the joint limits allow.
+     */
+    JointAngles commanded_angles_{};
+    std::uint8_t commanded_claw_percent_{};
+    bool angles_known_{ false };
 
     ActiveCycle cycle_;
     PendingSafetyCommand pending_safety_;

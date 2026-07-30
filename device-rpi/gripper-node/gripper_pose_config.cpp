@@ -112,6 +112,63 @@ void AssignGripperValue(GripperPoseConfig& config, std::string_view origin, std:
     } else if (key == "max_base_correction_deci_deg") {
         config.max_base_correction_deci_deg = ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U,
                                                                           UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+    } else if (key == "link_shoulder_to_elbow_mm") {
+        config.geometry.shoulder_to_elbow_mm = ParseScale(origin, line_number, key, value);
+    } else if (key == "link_elbow_to_tcp_mm") {
+        config.geometry.elbow_to_tcp_mm = ParseScale(origin, line_number, key, value);
+    } else if (key == "shoulder_height_mm") {
+        config.geometry.shoulder_height_mm = ParseScale(origin, line_number, key, value);
+    } else if (key == "shoulder_offset_mm") {
+        config.geometry.shoulder_offset_mm = ParseScale(origin, line_number, key, value);
+    } else if (key == "base_zero_deci_deg") {
+        config.geometry.base_zero_deci_deg = ParseScale(origin, line_number, key, value);
+    } else if (key == "shoulder_zero_deci_deg") {
+        config.geometry.shoulder_zero_deci_deg = ParseScale(origin, line_number, key, value);
+    } else if (key == "elbow_zero_deci_deg") {
+        config.geometry.elbow_zero_deci_deg = ParseScale(origin, line_number, key, value);
+    } else if (key == "base_direction") {
+        config.geometry.base_direction = ParseInteger<int>(origin, line_number, key, value, -1, 1);
+    } else if (key == "shoulder_direction") {
+        config.geometry.shoulder_direction = ParseInteger<int>(origin, line_number, key, value, -1, 1);
+    } else if (key == "elbow_direction") {
+        config.geometry.elbow_direction = ParseInteger<int>(origin, line_number, key, value, -1, 1);
+    } else if (key == "base_min_deci_deg") {
+        config.geometry.base_min_deci_deg =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U, UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+    } else if (key == "base_max_deci_deg") {
+        config.geometry.base_max_deci_deg =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U, UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+    } else if (key == "shoulder_min_deci_deg") {
+        config.geometry.shoulder_min_deci_deg =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U, UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+    } else if (key == "shoulder_max_deci_deg") {
+        config.geometry.shoulder_max_deci_deg =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U, UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+    } else if (key == "elbow_min_deci_deg") {
+        config.geometry.elbow_min_deci_deg =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U, UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+    } else if (key == "elbow_max_deci_deg") {
+        config.geometry.elbow_max_deci_deg =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U, UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+    } else if (key == "base_max_speed_deci_deg_per_sec") {
+        config.geometry.base_max_speed_deci_deg_per_sec =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 1U, 18000U);
+    } else if (key == "shoulder_max_speed_deci_deg_per_sec") {
+        config.geometry.shoulder_max_speed_deci_deg_per_sec =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 1U, 18000U);
+    } else if (key == "elbow_max_speed_deci_deg_per_sec") {
+        config.geometry.elbow_max_speed_deci_deg_per_sec =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 1U, 18000U);
+    } else if (key == "claw_max_speed_percent_per_sec") {
+        config.geometry.claw_max_speed_percent_per_sec =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 1U, 1000U);
+    } else if (key == "home_claw_percent") {
+        config.geometry.home_claw_percent =
+            ParseInteger<std::uint8_t>(origin, line_number, key, value, 0U, UART_GRIPPER_POSITION_MAX);
+    } else if (key == "approach_height_mm") {
+        config.approach_height_mm = ParseScale(origin, line_number, key, value);
+    } else if (key == "min_target_z_mm") {
+        config.min_target_z_mm = ParseScale(origin, line_number, key, value);
     } else {
         ThrowLineError(origin, line_number, "unknown [gripper] setting: " + std::string(key));
     }
@@ -126,7 +183,15 @@ bool GripperPoseConfig::IsValid() const noexcept {
            uart_gripper_duration_is_valid(arm_duration_ms) != 0U &&
            uart_gripper_duration_is_valid(claw_duration_ms) != 0U &&
            // A claw that closes no further than it opens would never grip a box.
-           closed_position_percent < open_position_percent && std::isfinite(base_deci_deg_per_pixel);
+           closed_position_percent < open_position_percent && std::isfinite(base_deci_deg_per_pixel) &&
+           geometry.IsValid() &&
+           // A non-positive clearance would make the approach pose the target
+           // itself, so the claw would sweep in sideways instead of descending.
+           std::isfinite(approach_height_mm) && approach_height_mm > 0.0 && std::isfinite(min_target_z_mm);
+}
+
+PickPose GripperPoseConfig::ApproachAbove(const PickPose& target) const noexcept {
+    return PickPose{ .x_mm = target.x_mm, .y_mm = target.y_mm, .z_mm = target.z_mm + approach_height_mm };
 }
 
 GripperPose GripperPoseConfig::PickPoseForOffset(std::int32_t offset_x_pixels) const noexcept {

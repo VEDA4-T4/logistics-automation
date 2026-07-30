@@ -2,7 +2,9 @@
 
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
@@ -133,6 +135,20 @@ constexpr std::string_view kOtherWorkId = "3f2504e0-4f89-11d3-9a0c-0305e82c3302"
                               mqtt::Json{ { "workId", work_id }, { "destination", "1" } });
 }
 
+/*
+ * START carrying a Cartesian target instead of relying on the taught waypoints.
+ * The default reachable band is narrow: the forearm is much longer than the upper
+ * arm, so a usable target sits well out along +X.
+ */
+[[nodiscard]] mqtt::MqttMessage MakePoseStartCommand(std::string request_id, std::string_view work_id, double x_mm,
+                                                    double y_mm, double z_mm) {
+    return MakeControlCommand(
+        mqtt::ControlCommand::kStart, std::move(request_id), "gripper",
+        mqtt::Json{ { "workId", work_id },
+                    { "destination", "1" },
+                    { "pickPose", mqtt::Json{ { "x", x_mm }, { "y", y_mm }, { "z", z_mm } } } });
+}
+
 [[nodiscard]] mqtt::MqttMessage MakeEmergencyStop() {
     return mqtt::MqttMessage{
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
@@ -150,7 +166,7 @@ constexpr std::string_view kOtherWorkId = "3f2504e0-4f89-11d3-9a0c-0305e82c3302"
 }
 
 struct Fixture {
-    Fixture() {
+    explicit Fixture(GripperPoseConfig config = GripperPoseConfig{}) {
         auto owned = std::make_unique<AutoResponderBackend>();
         backend = owned.get();
         backend->responder = [](const uart_frame_t& request) {
@@ -161,7 +177,7 @@ struct Fixture {
         };
         session = std::make_unique<InputUartSession>(std::move(owned));
         assert(session->Open());
-        node = std::make_unique<GripperNode>(std::string(kDeviceId), *session, GripperPoseConfig{});
+        node = std::make_unique<GripperNode>(std::string(kDeviceId), *session, std::move(config));
         node->SetReportHandler([this](const GripperReport& report) { reports.push_back(report); });
     }
 
@@ -620,6 +636,251 @@ void test_vision_offset_shifts_the_pick_pose_within_its_limit() {
     assert(uncalibrated.PickPoseForOffset(500).base_deci_deg == 900U);
 }
 
+// ---------------------------------------------------------------------------
+// Cartesian targets
+// ---------------------------------------------------------------------------
+
+/*
+ * A target well out along +X: reachable with the published link lengths and
+ * inside the firmware's joint window both at the target and at the approach pose
+ * above it.
+ */
+// Reach with the measured link lengths (85 + 175 mm) is 90 to 260 mm; this and
+// its approach pose (60 mm higher, the default approach_height_mm) both stay
+// inside that band and within the firmware's shoulder window.
+constexpr double kReachableX = 220.0;
+constexpr double kReachableZ = 20.0;
+
+[[nodiscard]] logistics::device::JointAngles ArmAnglesOf(const uart_frame_t& frame) {
+    return logistics::device::JointAngles{
+        static_cast<std::uint16_t>(uart_gripper_move_base_angle(frame.payload)),
+        static_cast<std::uint16_t>(uart_gripper_move_shoulder_angle(frame.payload)),
+        static_cast<std::uint16_t>(uart_gripper_move_elbow_angle(frame.payload))
+    };
+}
+
+void test_cartesian_pick_pose_drives_the_arm_through_kinematics() {
+    Fixture fixture;
+    fixture.Home();
+
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(
+        MakePoseStartCommand("req-1", kWorkId, kReachableX, 0.0, kReachableZ));
+    assert(result.status == GripperCommandStatus::kAccepted);
+
+    // Step 1 opens the claw; the arm moves on the step after it.
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_SET_GRIPPER);
+    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_GRIPPER);
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
+
+    const GripperPoseConfig defaults{};
+    const logistics::device::JointAngles approach = ArmAnglesOf(fixture.backend->last_written);
+
+    // The taught waypoint is what would have been sent without a pickPose, so a
+    // match here would mean the coordinates were silently ignored.
+    assert(approach.base_deci_deg != defaults.pick_approach.base_deci_deg ||
+           approach.shoulder_deci_deg != defaults.pick_approach.shoulder_deci_deg ||
+           approach.elbow_deci_deg != defaults.pick_approach.elbow_deci_deg);
+
+    /*
+     * Checking the angles against the requested point rather than against
+     * hard-coded numbers: this stays meaningful if the geometry defaults are
+     * retuned, and it is what actually matters -- that the claw ends up where the
+     * server asked, one approach height above the target.
+     */
+    const auto reached = logistics::device::SolveForwardKinematics(defaults.geometry, approach);
+    assert(reached.has_value());
+    assert(std::fabs(reached->x_mm - kReachableX) < 1.0);
+    assert(std::fabs(reached->y_mm) < 1.0);
+    assert(std::fabs(reached->z_mm - (kReachableZ + defaults.approach_height_mm)) < 1.0);
+
+    // The descent then lands on the target itself.
+    const std::uint16_t approach_motion = uart_gripper_move_motion_id(fixture.backend->last_written.payload);
+    fixture.CompleteCurrentMotion(approach_motion, UART_GRIPPER_MOTION_ARM);
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
+
+    const auto descended =
+        logistics::device::SolveForwardKinematics(defaults.geometry, ArmAnglesOf(fixture.backend->last_written));
+    assert(descended.has_value());
+    assert(std::fabs(descended->z_mm - kReachableZ) < 1.0);
+}
+
+void test_unreachable_pick_pose_is_rejected_without_moving() {
+    Fixture fixture;
+    fixture.Home();
+
+    // Beyond the 380 mm the two links can span.
+    const GripperCommandResult far_result =
+        fixture.node->HandleMqttCommand(MakePoseStartCommand("req-far", kWorkId, 600.0, 0.0, kReachableZ));
+    assert(far_result.status == GripperCommandStatus::kUnreachablePose);
+    assert(!fixture.node->HasActiveCycle());
+    // Nothing may be written: a rejected command must leave the arm where it is.
+    assert(fixture.backend->written_commands.empty());
+
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr);
+    assert(response->result == mqtt::CommandResult::kRejected);
+    assert(response->error_code.has_value());
+    assert(*response->error_code == "ERR-GRIPPER-UNREACHABLE-FAR");
+
+    // Inside the fold radius the links cannot close past.
+    const GripperCommandResult near_result =
+        fixture.node->HandleMqttCommand(MakePoseStartCommand("req-near", kOtherWorkId, 50.0, 0.0, kReachableZ));
+    assert(near_result.status == GripperCommandStatus::kUnreachablePose);
+    const auto* near_response = fixture.LastResponse();
+    assert(near_response != nullptr);
+    assert(*near_response->error_code == "ERR-GRIPPER-UNREACHABLE-NEAR");
+}
+
+void test_target_below_the_plate_is_rejected() {
+    Fixture fixture;
+    fixture.Home();
+
+    const GripperCommandResult result =
+        fixture.node->HandleMqttCommand(MakePoseStartCommand("req-low", kWorkId, kReachableX, 0.0, -20.0));
+    assert(result.status == GripperCommandStatus::kUnreachablePose);
+    assert(!fixture.node->HasActiveCycle());
+
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr);
+    assert(*response->error_code == "ERR-GRIPPER-POSE-BELOW-PLATE");
+}
+
+void test_malformed_pick_pose_is_rejected_rather_than_ignored() {
+    Fixture fixture;
+    fixture.Home();
+
+    // A pickPose missing z must not silently fall back to the taught waypoints:
+    // that would move the arm somewhere the server did not ask for.
+    const GripperCommandResult missing = fixture.node->HandleMqttCommand(MakeControlCommand(
+        mqtt::ControlCommand::kStart, "req-bad", "gripper",
+        mqtt::Json{ { "workId", kWorkId },
+                    { "pickPose", mqtt::Json{ { "x", kReachableX }, { "y", 0.0 } } } }));
+    assert(missing.status == GripperCommandStatus::kUnreachablePose);
+    assert(fixture.backend->written_commands.empty());
+
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr);
+    assert(*response->error_code == "ERR-GRIPPER-POSE-MALFORMED");
+
+    // Coordinates in metres rather than millimetres are caught as malformed too,
+    // instead of being reported as an unreachable 0.35 mm target.
+    const GripperCommandResult wrong_units = fixture.node->HandleMqttCommand(MakeControlCommand(
+        mqtt::ControlCommand::kStart, "req-units", "gripper",
+        mqtt::Json{ { "workId", kWorkId },
+                    { "pickPose", mqtt::Json{ { "x", 0.352 }, { "y", 0.0 }, { "z", 99999.0 } } } }));
+    assert(wrong_units.status == GripperCommandStatus::kUnreachablePose);
+}
+
+void test_a_command_without_a_pick_pose_still_uses_the_taught_waypoints() {
+    Fixture fixture;
+    fixture.Home();
+
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
+    assert(result.status == GripperCommandStatus::kAccepted);
+    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_GRIPPER);
+
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
+    const GripperPoseConfig defaults{};
+    const logistics::device::JointAngles sent = ArmAnglesOf(fixture.backend->last_written);
+    assert(sent.base_deci_deg == defaults.pick_approach.base_deci_deg);
+    assert(sent.shoulder_deci_deg == defaults.pick_approach.shoulder_deci_deg);
+    assert(sent.elbow_deci_deg == defaults.pick_approach.elbow_deci_deg);
+}
+
+// ---------------------------------------------------------------------------
+// Duration
+// ---------------------------------------------------------------------------
+
+/*
+ * Regression: the controller does not reject a duration that is too short for its
+ * speed limits, it runs the motion for max(requested, its own minimum) without
+ * saying so. The node used to send its nominal arm_duration_ms and then time out
+ * at that value plus 2 s of slack, so any move whose real travel time exceeded
+ * the budget was aborted as a lost completion event while the arm was still
+ * moving correctly.
+ *
+ * The default taught waypoints happen to stay under the old budget, which is why
+ * this needs a waypoint with a long shoulder travel to reproduce: 600
+ * deci-degrees at the shoulder's 120 deci-degrees per second is 5 s, well past
+ * the old 3.5 s.
+ */
+void test_motion_duration_follows_the_controller_speed_limits() {
+    GripperPoseConfig config;
+    config.pick_approach = logistics::device::GripperPose{ 900U, 1500U, 900U };
+    Fixture fixture{ config };
+    fixture.Home();
+
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
+    assert(result.status == GripperCommandStatus::kAccepted);
+    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_GRIPPER);
+
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
+    // Homing leaves the shoulder at 900, so this move travels 600 deci-degrees.
+    assert(uart_gripper_move_duration_ms(fixture.backend->last_written.payload) == 5000U);
+
+    // Past the old budget but inside the real travel time: the cycle must survive.
+    fixture.node->Tick(std::chrono::milliseconds{ 4000 });
+    assert(fixture.node->HasActiveCycle());
+    assert(!fixture.AnyErrorEquals("ERR-GRIPPER-MOTION-TIMEOUT"));
+
+    // Past the real travel time plus slack: now it is genuinely a lost event.
+    fixture.node->Tick(std::chrono::milliseconds{ 4000 });
+    assert(!fixture.node->HasActiveCycle());
+    assert(fixture.AnyErrorEquals("ERR-GRIPPER-MOTION-TIMEOUT"));
+}
+
+/*
+ * After an abort the arm sits part-way through an interpolation at a pose neither
+ * side can name, so the next move's travel cannot be predicted. Assuming the last
+ * commanded target would under-predict it and time out a correct motion, so the
+ * node has to fall back to the worst case the joint limits allow.
+ */
+void test_an_aborted_cycle_widens_the_next_motion_budget() {
+    Fixture fixture;
+    fixture.Home();
+
+    const GripperCommandResult first = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
+    assert(first.status == GripperCommandStatus::kAccepted);
+    fixture.node->HandleUartFrame(
+        MakeMotionFault(first.motion_id, UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO));
+    assert(!fixture.node->HasActiveCycle());
+
+    // GET_STATUS is what re-anchors the pose, so without one the next cycle must
+    // budget for the longest motion the limits permit.
+    const GripperCommandResult second = fixture.node->HandleMqttCommand(MakeStartCommand("req-2", kOtherWorkId));
+    assert(second.status == GripperCommandStatus::kAccepted);
+    fixture.node->Tick(std::chrono::milliseconds{ 9000 });
+    assert(fixture.node->HasActiveCycle());
+
+    fixture.node->Tick(std::chrono::milliseconds{ 4000 });
+    assert(!fixture.node->HasActiveCycle());
+}
+
+/*
+ * GET_STATUS is the only frame reporting where the arm actually is, so it is what
+ * restores predictable budgets after a fault.
+ */
+void test_status_request_reanchors_the_motion_budget() {
+    Fixture fixture;
+    fixture.Home();
+    fixture.node->HandleUartFrame(MakeMotionFault(1U, UART_GRIPPER_MOTION_ARM, UART_ERROR_SERVO));
+
+    // The fixture's responder answers GET_STATUS as IDLE with all angles at zero.
+    static_cast<void>(
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStatusRequest, "req-status")));
+    fixture.reports.clear();
+
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
+    assert(result.status == GripperCommandStatus::kAccepted);
+
+    /*
+     * Claw travel is now known: the status reported 0 percent and the cycle opens
+     * to 100, which at 40 percent per second is 2500 ms rather than the worst-case
+     * 10 s the previous test saw.
+     */
+    assert(uart_gripper_set_duration_ms(fixture.backend->last_written.payload) == 2500U);
+}
+
 void test_pose_config_parses_and_rejects_impossible_claw_travel() {
     const GripperPoseConfig parsed = ParseGripperPoseConfig(R"(
 [device]
@@ -671,5 +932,14 @@ int main() {
     test_pick_phase_stops_with_the_box_held();
     test_vision_offset_shifts_the_pick_pose_within_its_limit();
     test_pose_config_parses_and_rejects_impossible_claw_travel();
+    test_cartesian_pick_pose_drives_the_arm_through_kinematics();
+    test_unreachable_pick_pose_is_rejected_without_moving();
+    test_target_below_the_plate_is_rejected();
+    test_malformed_pick_pose_is_rejected_rather_than_ignored();
+    test_a_command_without_a_pick_pose_still_uses_the_taught_waypoints();
+    test_motion_duration_follows_the_controller_speed_limits();
+    test_an_aborted_cycle_widens_the_next_motion_budget();
+    test_status_request_reanchors_the_motion_budget();
+    std::printf("gripper node tests passed\n");
     return 0;
 }

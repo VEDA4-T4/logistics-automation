@@ -47,6 +47,7 @@ logistics_enable_warnings(device_input_node)
 
 add_library(
     device_gripper_node
+    gripper-node/gripper_kinematics.cpp
     gripper-node/gripper_pose_config.cpp
     gripper-node/gripper_node.cpp
 )
@@ -93,6 +94,11 @@ if(BUILD_TESTING)
     target_link_libraries(device_gripper_node_test PRIVATE logistics::device_gripper_node)
     logistics_enable_warnings(device_gripper_node_test)
     add_test(NAME device_gripper_node_test COMMAND device_gripper_node_test)
+
+    add_executable(device_gripper_kinematics_test tests/gripper_kinematics_test.cpp)
+    target_link_libraries(device_gripper_kinematics_test PRIVATE logistics::device_gripper_node)
+    logistics_enable_warnings(device_gripper_kinematics_test)
+    add_test(NAME device_gripper_kinematics_test COMMAND device_gripper_kinematics_test)
 
     add_executable(device_sorting_node_test tests/sorting_node_test.cpp)
     target_link_libraries(device_sorting_node_test PRIVATE logistics::device_sorting_node)

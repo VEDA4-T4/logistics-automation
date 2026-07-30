@@ -1,6 +1,8 @@
 #include "logistics/device/gripper_node.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <utility>
 
 namespace logistics::device {
@@ -110,6 +112,31 @@ void WriteU16(std::uint8_t* payload, std::size_t low_index, std::uint16_t value)
     return value;
 }
 
+/*
+ * Reads one coordinate of params.pickPose.
+ *
+ * Integers are accepted alongside reals because a target that lands on a whole
+ * millimetre serialises as an integer in most JSON writers, and rejecting it
+ * would make the contract depend on the server's formatting.
+ */
+[[nodiscard]] std::optional<double> ReadCoordinate(const mqtt::Json& pose, const char* key) {
+    const auto found = pose.find(key);
+    if (found == pose.end() || !found->is_number()) {
+        return std::nullopt;
+    }
+    const double value = found->get<double>();
+    if (!std::isfinite(value)) {
+        return std::nullopt;
+    }
+    // A coordinate this far out is a unit mix-up (metres for millimetres, or a
+    // raw pixel value) rather than a reachable point, and saying so is more
+    // useful than letting the reach check call it "too far".
+    if (std::fabs(value) > 10000.0) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 [[nodiscard]] std::optional<std::int32_t> ReadIntParam(const mqtt::Json& params, const char* key) {
     const auto found = params.find(key);
     if (found == params.end() || !found->is_number_integer()) {
@@ -122,6 +149,54 @@ void WriteU16(std::uint8_t* payload, std::size_t low_index, std::uint16_t value)
         return std::nullopt;
     }
     return static_cast<std::int32_t>(value);
+}
+
+/*
+ * GripperPose and JointAngles carry the same three deci-degree values but belong
+ * to different layers: one is a taught configuration waypoint, the other is a
+ * kinematics result. Converting at the boundary keeps the config API stable for
+ * the taught-pose path.
+ */
+[[nodiscard]] GripperPose ToGripperPose(const JointAngles& angles) noexcept {
+    return GripperPose{ angles.base_deci_deg, angles.shoulder_deci_deg, angles.elbow_deci_deg };
+}
+
+[[nodiscard]] JointAngles ToJointAngles(const GripperPose& pose) noexcept {
+    return JointAngles{ pose.base_deci_deg, pose.shoulder_deci_deg, pose.elbow_deci_deg };
+}
+
+struct IkFailure {
+    std::string error_code;
+    std::string message;
+};
+
+/*
+ * Maps a solver failure onto an MQTT error the server can act on.
+ *
+ * The distinctions are kept because the operator response differs: too-far
+ * usually means a detection outside the arm's half of the conveyor, too-near
+ * means the target is inside the fold radius the two links cannot close past,
+ * and a joint limit means the point is reachable but only through a posture the
+ * firmware refuses.
+ */
+[[nodiscard]] IkFailure DescribeIkFailure(const IkSolution& solution) {
+    switch (solution.status) {
+        case IkStatus::kUnreachableTooFar:
+            return IkFailure{ "ERR-GRIPPER-UNREACHABLE-FAR", "pick pose is beyond the arm's reach" };
+        case IkStatus::kUnreachableTooClose:
+            return IkFailure{ "ERR-GRIPPER-UNREACHABLE-NEAR",
+                              "pick pose is inside the arm's minimum fold radius" };
+        case IkStatus::kJointLimit:
+            return IkFailure{ "ERR-GRIPPER-JOINT-LIMIT",
+                              "pick pose needs the " + std::string(solution.blocking_joint) +
+                                  " joint outside its mechanical limit" };
+        case IkStatus::kInvalidGeometry:
+            return IkFailure{ "ERR-GRIPPER-GEOMETRY",
+                              "arm geometry configuration cannot solve a Cartesian target" };
+        case IkStatus::kOk:
+            break;
+    }
+    return IkFailure{ "ERR-GRIPPER-POSE-MALFORMED", "pick pose could not be solved" };
 }
 
 }  // namespace
@@ -299,6 +374,83 @@ GripperCommandResult GripperNode::HandleEmergencyStop(const mqtt::EmergencyStopP
 }
 
 // ---------------------------------------------------------------------------
+// Pose resolution
+// ---------------------------------------------------------------------------
+
+GripperNode::PoseResolution GripperNode::ResolvePickPoses(const mqtt::Json& params) const {
+    const auto pose_field = params.find("pickPose");
+    if (pose_field == params.end()) {
+        // No coordinates: keep working from the waypoints taught against the
+        // assembled arm. This is still the accurate path until the link lengths
+        // in [gripper] have been measured.
+        return PoseResolution{ .ok = true,
+                               .pick = poses_.PickPoseForOffset(ReadIntParam(params, "offsetX").value_or(0)),
+                               .approach = poses_.pick_approach,
+                               .from_kinematics = false,
+                               .error_code = {},
+                               .message = {} };
+    }
+
+    if (!pose_field->is_object()) {
+        return PoseResolution{ .ok = false,
+                               .error_code = "ERR-GRIPPER-POSE-MALFORMED",
+                               .message = "params.pickPose must be an object with x, y and z in millimetres" };
+    }
+
+    const auto x_mm = ReadCoordinate(*pose_field, "x");
+    const auto y_mm = ReadCoordinate(*pose_field, "y");
+    const auto z_mm = ReadCoordinate(*pose_field, "z");
+    if (!x_mm.has_value() || !y_mm.has_value() || !z_mm.has_value()) {
+        return PoseResolution{ .ok = false,
+                               .error_code = "ERR-GRIPPER-POSE-MALFORMED",
+                               .message = "params.pickPose needs finite x, y and z in millimetres" };
+    }
+
+    const PickPose target{ .x_mm = *x_mm, .y_mm = *y_mm, .z_mm = *z_mm };
+
+    /*
+     * The claw would reach a target below the plate perfectly happily, so this
+     * has to be checked before the solver rather than left to the joint limits.
+     */
+    if (target.z_mm < poses_.min_target_z_mm) {
+        return PoseResolution{ .ok = false,
+                               .error_code = "ERR-GRIPPER-POSE-BELOW-PLATE",
+                               .message = "params.pickPose.z is below the configured floor" };
+    }
+
+    /*
+     * Both waypoints are solved before either is sent.
+     *
+     * Solving the approach first and the descent later would let a cycle start,
+     * lift the claw over the box, and only then discover that the descent itself
+     * is unreachable -- aborting with the claw parked over the conveyor. Failing
+     * the whole command up front keeps the arm where it is.
+     */
+    const IkSolution approach = SolveInverseKinematics(poses_.geometry, poses_.ApproachAbove(target));
+    if (!approach.Succeeded()) {
+        IkFailure failure = DescribeIkFailure(approach);
+        return PoseResolution{ .ok = false,
+                               .error_code = std::move(failure.error_code),
+                               .message = "approach above pick pose: " + failure.message };
+    }
+
+    const IkSolution pick = SolveInverseKinematics(poses_.geometry, target);
+    if (!pick.Succeeded()) {
+        IkFailure failure = DescribeIkFailure(pick);
+        return PoseResolution{ .ok = false,
+                               .error_code = std::move(failure.error_code),
+                               .message = "pick pose: " + failure.message };
+    }
+
+    return PoseResolution{ .ok = true,
+                           .pick = ToGripperPose(pick.angles),
+                           .approach = ToGripperPose(approach.angles),
+                           .from_kinematics = true,
+                           .error_code = {},
+                           .message = {} };
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
@@ -347,6 +499,19 @@ GripperCommandResult GripperNode::StartCycle(const mqtt::ControlCommandPayload& 
         return result;
     }
 
+    /*
+     * Resolved before the cycle is armed. A pose that cannot be reached is a
+     * rejection of this command, not a cycle that starts and then aborts, so
+     * nothing has moved and no cycle state needs unwinding.
+     */
+    PoseResolution resolved = ResolvePickPoses(command.params);
+    if (!resolved.ok) {
+        result.status = GripperCommandStatus::kUnreachablePose;
+        EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kRejected,
+                            std::optional{ resolved.error_code }, resolved.message);
+        return result;
+    }
+
     cycle_ = ActiveCycle{
         .active = true,
         .phase = phase,
@@ -354,7 +519,9 @@ GripperCommandResult GripperNode::StartCycle(const mqtt::ControlCommandPayload& 
         .work_id = result.work_id,
         .request_id = command.request_id,
         .destination = ReadStringParam(command.params, "destination").value_or(std::string{}),
-        .pick_pose = poses_.PickPoseForOffset(ReadIntParam(command.params, "offsetX").value_or(0)),
+        .pick_pose = resolved.pick,
+        .pick_approach_pose = resolved.approach,
+        .from_kinematics = resolved.from_kinematics,
         .motion_id = UART_GRIPPER_MOTION_ID_NONE,
         .motion_type = 0U,
         .waited = {},
@@ -387,6 +554,9 @@ GripperCommandResult GripperNode::RunStop(const mqtt::ControlCommandPayload& com
 
     result = Execute(std::move(result), UART_CMD_GRIPPER_STOP, {});
     if (result.Succeeded()) {
+        // STOP halts interpolation wherever it is, so the pose stops being known
+        // whether or not a cycle was driving it.
+        angles_known_ = false;
         if (cycle_.active) {
             AbortCycle("ERR-GRIPPER-STOPPED", "cycle stopped by operator command");
         }
@@ -415,6 +585,7 @@ GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayloa
         AbortCycle("ERR-GRIPPER-RESET", "cycle cancelled by initialize");
     }
     homed_ = false;
+    angles_known_ = false;
 
     cycle_ = ActiveCycle{
         .active = true,
@@ -423,7 +594,11 @@ GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayloa
         .work_id = {},
         .request_id = command.request_id,
         .destination = {},
+        // Homing never visits either pick waypoint; the taught values are carried
+        // only so the struct has no half-initialised members.
         .pick_pose = poses_.pick,
+        .pick_approach_pose = poses_.pick_approach,
+        .from_kinematics = false,
         .motion_id = UART_GRIPPER_MOTION_ID_NONE,
         .motion_type = 0U,
         .waited = {},
@@ -482,7 +657,11 @@ GripperCommandResult GripperNode::RunRecovery(const mqtt::ControlCommandPayload&
         .work_id = {},
         .request_id = command.request_id,
         .destination = {},
+        // Homing never visits either pick waypoint; the taught values are carried
+        // only so the struct has no half-initialised members.
         .pick_pose = poses_.pick,
+        .pick_approach_pose = poses_.pick_approach,
+        .from_kinematics = false,
         .motion_id = UART_GRIPPER_MOTION_ID_NONE,
         .motion_type = 0U,
         .waited = {},
@@ -574,30 +753,62 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
     const std::uint16_t motion_id = AllocateMotionId();
     std::uint8_t uart_command{};
     std::uint8_t motion_type{};
-    std::uint16_t duration_ms{};
+    /*
+     * Two durations, and they are not the same number.
+     *
+     * The controller runs the motion for max(what we sent, what its own speed
+     * limits require) without telling us, so the value on the wire is what we
+     * asked for while expected_duration_ms is what will actually happen. Timing
+     * out against the wire value is what made correct motions look like lost
+     * completion events.
+     */
+    std::uint32_t expected_duration_ms{};
 
     const auto send_arm = [&](const GripperPose& pose) {
+        const JointAngles target = ToJointAngles(pose);
+        /*
+         * Without a trustworthy current position the travel cannot be predicted,
+         * so assume the longest motion the joint limits allow. That is the
+         * contract ceiling: the shoulder's 1200 deci-degree span at 120
+         * deci-degrees per second is exactly 10 s.
+         */
+        const std::uint32_t minimum_ms =
+            angles_known_ ? MinimumArmDurationMs(poses_.geometry, commanded_angles_, target)
+                          : static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MAX);
+        expected_duration_ms = std::max<std::uint32_t>(poses_.arm_duration_ms, minimum_ms);
+        const std::uint16_t duration_ms = ClampDurationMs(expected_duration_ms);
+
         std::array<std::uint8_t, UART_GRIPPER_MOVE_ARM_PAYLOAD_SIZE> payload{};
         WriteU16(payload.data(), UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, motion_id);
         WriteU16(payload.data(), UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, pose.base_deci_deg);
         WriteU16(payload.data(), UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, pose.shoulder_deci_deg);
         WriteU16(payload.data(), UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, pose.elbow_deci_deg);
-        WriteU16(payload.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, poses_.arm_duration_ms);
+        WriteU16(payload.data(), UART_GRIPPER_MOVE_DURATION_LOW_INDEX, duration_ms);
         uart_command = UART_CMD_GRIPPER_MOVE_ARM;
         motion_type = UART_GRIPPER_MOTION_ARM;
-        duration_ms = poses_.arm_duration_ms;
         result = Execute(std::move(result), uart_command, payload);
+        if (result.Succeeded()) {
+            commanded_angles_ = target;
+        }
     };
 
     const auto send_claw = [&](std::uint8_t position_percent) {
+        const std::uint32_t minimum_ms =
+            angles_known_ ? MinimumClawDurationMs(poses_.geometry, commanded_claw_percent_, position_percent)
+                          : static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MAX);
+        expected_duration_ms = std::max<std::uint32_t>(poses_.claw_duration_ms, minimum_ms);
+        const std::uint16_t duration_ms = ClampDurationMs(expected_duration_ms);
+
         std::array<std::uint8_t, UART_GRIPPER_SET_GRIPPER_PAYLOAD_SIZE> payload{};
         WriteU16(payload.data(), UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, motion_id);
         payload[UART_GRIPPER_SET_POSITION_INDEX] = position_percent;
-        WriteU16(payload.data(), UART_GRIPPER_SET_DURATION_LOW_INDEX, poses_.claw_duration_ms);
+        WriteU16(payload.data(), UART_GRIPPER_SET_DURATION_LOW_INDEX, duration_ms);
         uart_command = UART_CMD_GRIPPER_SET_GRIPPER;
         motion_type = UART_GRIPPER_MOTION_GRIPPER;
-        duration_ms = poses_.claw_duration_ms;
         result = Execute(std::move(result), uart_command, payload);
+        if (result.Succeeded()) {
+            commanded_claw_percent_ = position_percent;
+        }
     };
 
     switch (cycle_.step) {
@@ -612,7 +823,9 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
 
         case GripperCycleStep::kPickApproach:
         case GripperCycleStep::kPickRetreat:
-            send_arm(poses_.pick_approach);
+            // Retreat goes back to the same point the claw descended from, so a
+            // Cartesian cycle lifts straight up out of the box's footprint.
+            send_arm(cycle_.pick_approach_pose);
             break;
 
         case GripperCycleStep::kPickDescend:
@@ -633,7 +846,14 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
             WriteU16(payload.data(), UART_GRIPPER_HOME_MOTION_ID_LOW_INDEX, motion_id);
             uart_command = UART_CMD_GRIPPER_HOME;
             motion_type = UART_GRIPPER_MOTION_HOME;
-            duration_ms = poses_.arm_duration_ms;
+            /*
+             * HOME carries no duration of its own: the controller picks
+             * GRIPPER_HOME_DURATION_MS and then stretches it for both the arm and
+             * the claw, whose travel we may not know. The full ceiling is the only
+             * budget that cannot cut a legitimate homing short, and homing is rare
+             * enough that waiting longer on a genuinely lost event costs little.
+             */
+            expected_duration_ms = static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MAX);
             result = Execute(std::move(result), uart_command, payload);
             break;
         }
@@ -650,7 +870,7 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
     cycle_.motion_id = motion_id;
     cycle_.motion_type = motion_type;
     cycle_.waited = std::chrono::milliseconds{ 0 };
-    cycle_.motion_budget = std::chrono::milliseconds{ duration_ms } + kMotionTimeoutSlack;
+    cycle_.motion_budget = std::chrono::milliseconds{ expected_duration_ms } + kMotionTimeoutSlack;
     result.motion_id = motion_id;
     return true;
 }
@@ -662,6 +882,11 @@ void GripperNode::AdvanceCycle() {
     if (cycle_.step == GripperCycleStep::kCompleted) {
         if (previous == GripperCycleStep::kReturnHome) {
             homed_ = true;
+            // A completed HOME is the one moment the controller's pose is known
+            // exactly, so it re-anchors the duration arithmetic.
+            commanded_angles_ = poses_.geometry.HomeAngles();
+            commanded_claw_percent_ = poses_.geometry.home_claw_percent;
+            angles_known_ = true;
         }
         FinishCycle();
         return;
@@ -707,6 +932,13 @@ void GripperNode::AbortCycle(std::string error_code, std::string message) {
     if (!cycle_.active) {
         return;
     }
+    /*
+     * Every abort leaves the arm part-way through an interpolation, at a pose
+     * neither side can name. Keeping the last commanded target would make the
+     * next move's predicted duration too short and time it out, so tracking is
+     * dropped until a HOME or GET_STATUS re-establishes it.
+     */
+    angles_known_ = false;
     const std::string work_id = cycle_.work_id;
     const std::string request_id = cycle_.request_id;
     cycle_ = ActiveCycle{};
@@ -833,6 +1065,9 @@ void GripperNode::HandleMotionFault(const uart_frame_t& frame) {
     if (error == UART_ERROR_EMERGENCY_STOP) {
         homed_ = false;
     }
+    // A fault stops the servos part-way regardless of whether the faulted motion
+    // belonged to the current cycle, so AbortCycle below is not enough on its own.
+    angles_known_ = false;
     if (!cycle_.active || motion_id != cycle_.motion_id) {
         EmitError(DescribeUartError(error), "ERROR", "gripper reported a motion fault", std::nullopt);
         return;
@@ -849,6 +1084,7 @@ void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
         // The controller drops the active motion and forgets its home reference,
         // so both must be invalidated here to keep this node's view honest.
         homed_ = false;
+        angles_known_ = false;
         if (cycle_.active) {
             AbortCycle("ERR-EMERGENCY-STOP", "cycle aborted by emergency stop");
         }
@@ -930,6 +1166,21 @@ void GripperNode::EmitControllerStatus(const uart_frame_t& response) {
     homed_ = response.payload[UART_GRIPPER_STATUS_HOMED_INDEX] != 0U;
     estop_latched_ = state == UART_GRIPPER_STATE_EMERGENCY_STOP;
 
+    /*
+     * GET_STATUS is the only frame that reports where the arm actually is, so it
+     * re-anchors the duration arithmetic after a stop or fault dropped it. The
+     * angles are only taken while the arm is still, because mid-interpolation they
+     * describe a pose the arm has already left.
+     */
+    if (state == UART_GRIPPER_STATE_IDLE || state == UART_GRIPPER_STATE_STOPPED) {
+        commanded_angles_ =
+            JointAngles{ ReadU16(response.payload, UART_GRIPPER_STATUS_BASE_ANGLE_LOW_INDEX),
+                         ReadU16(response.payload, UART_GRIPPER_STATUS_SHOULDER_ANGLE_LOW_INDEX),
+                         ReadU16(response.payload, UART_GRIPPER_STATUS_ELBOW_ANGLE_LOW_INDEX) };
+        commanded_claw_percent_ = response.payload[UART_GRIPPER_STATUS_POSITION_INDEX];
+        angles_known_ = true;
+    }
+
     const std::optional<std::string> error_code =
         estop_latched_ ? std::optional{ std::string("ERR-EMERGENCY-STOP") } : std::nullopt;
     EmitDeviceStatus(DescribeGripperState(state), error_code);
@@ -968,9 +1219,11 @@ void GripperNode::ResetControllerHeartbeatMonitor() noexcept {
     since_controller_heartbeat_ = std::chrono::milliseconds{ 0 };
     controller_heartbeat_lost_ = false;
     last_heartbeat_state_.reset();
-    // A reconnect says nothing about the arm's pose, so the home reference is
-    // dropped until GET_STATUS or a completed HOME proves otherwise.
+    // A reconnect says nothing about the arm's pose, so the home reference and the
+    // tracked joint angles are both dropped until GET_STATUS or a completed HOME
+    // proves otherwise.
     homed_ = false;
+    angles_known_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1020,6 +1273,16 @@ void GripperNode::EmitCommandResponse(const GripperCommandResult& result, std::s
         case GripperCommandStatus::kInvalidTarget:
             outcome = mqtt::CommandResult::kRejected;
             error_code = "ERR-INVALID-TARGET";
+            break;
+        case GripperCommandStatus::kUnreachablePose:
+            /*
+             * StartCycle answers an unreachable pose itself so it can name the
+             * joint or the reach boundary that blocked it. Reaching here means
+             * some other path produced the status without that detail, so the
+             * generic code is the honest answer rather than a guess.
+             */
+            outcome = mqtt::CommandResult::kRejected;
+            error_code = "ERR-GRIPPER-UNREACHABLE-POSE";
             break;
         case GripperCommandStatus::kUartNotOpen:
             outcome = mqtt::CommandResult::kFailed;
