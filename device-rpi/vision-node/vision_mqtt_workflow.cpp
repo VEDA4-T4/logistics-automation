@@ -146,6 +146,7 @@ mqtt::MqttMessage MakePositionDetectedMessage(std::string_view device_id, const 
                 .offset_x = center_x - observation.frame_width / 2,
                 .offset_y = center_y - observation.frame_height / 2,
                 .position_status = "DETECTED",
+                .box_corners = observation.box_corners,
             },
     };
 }

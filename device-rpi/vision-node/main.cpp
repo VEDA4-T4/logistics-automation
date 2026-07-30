@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -278,6 +279,15 @@ logistics::vision::VisionObservation MakeObservation(const cv::Mat& frame,
                                                      const logistics::vision::DetectionResult& result,
                                                      std::string image_name) {
     const cv::Rect& box = result.box->roi;
+    std::array<logistics::contracts::mqtt::PixelPoint, kBarcodeCornerCount> box_corners{};
+    cv::Point2f detected_corners[kBarcodeCornerCount];
+    result.box->outline.points(detected_corners);
+    for (std::size_t index = 0; index < box_corners.size(); ++index) {
+        box_corners[index] = {
+            .x = static_cast<double>(detected_corners[index].x),
+            .y = static_cast<double>(detected_corners[index].y),
+        };
+    }
     std::optional<std::string> barcode;
     if (!result.barcodes.empty()) {
         barcode = result.barcodes.front().value;
@@ -290,6 +300,7 @@ logistics::vision::VisionObservation MakeObservation(const cv::Mat& frame,
         .box_height = box.height,
         .frame_width = frame.cols,
         .frame_height = frame.rows,
+        .box_corners = box_corners,
         .barcode = std::move(barcode),
     };
 }

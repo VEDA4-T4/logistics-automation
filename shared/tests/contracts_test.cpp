@@ -114,6 +114,13 @@ void TestAllMqttMessageRoundTrips() {
                                                                    .offset_x = 5,
                                                                    .offset_y = -3,
                                                                    .position_status = "OK",
+                                                                   .box_corners =
+                                                                       std::array{
+                                                                           mqtt::PixelPoint{ 120.0, 80.0 },
+                                                                           mqtt::PixelPoint{ 500.0, 80.0 },
+                                                                           mqtt::PixelPoint{ 500.0, 340.0 },
+                                                                           mqtt::PixelPoint{ 120.0, 340.0 },
+                                                                       },
                                                                }));
 
     AssertRoundTrip<mqtt::BarcodeDetectedPayload>(MakeMessage("MSG-0005", mqtt::MessageType::kBarcodeDetected,

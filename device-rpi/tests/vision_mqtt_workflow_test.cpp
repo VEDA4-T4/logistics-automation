@@ -24,6 +24,13 @@ vision::VisionObservation Observation(std::optional<std::string> barcode = std::
         .box_height = 100,
         .frame_width = 640,
         .frame_height = 480,
+        .box_corners =
+            std::array{
+                mqtt::PixelPoint{ .x = 100.0, .y = 50.0 },
+                mqtt::PixelPoint{ .x = 300.0, .y = 50.0 },
+                mqtt::PixelPoint{ .x = 300.0, .y = 150.0 },
+                mqtt::PixelPoint{ .x = 100.0, .y = 150.0 },
+            },
         .barcode = std::move(barcode),
     };
 }
@@ -110,6 +117,8 @@ void TestDetectionAssignmentAndResultMessages() {
         vision::MakeBarcodeDetectedMessage("PI-VISION-01", *assigned, "MSG-BARCODE-01", "2026-07-21T11:00:02Z");
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), position).IsSuccess());
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), barcode).IsSuccess());
+    const auto* position_payload = mqtt::GetPayload<mqtt::PositionDetectedPayload>(position);
+    assert(position_payload != nullptr && position_payload->box_corners.has_value());
     const auto image = vision::MakeProductImageMessage(
         "PI-VISION-01", kWorkId, "42f8e6f1-1277-4748-9e5e-c41c7bf605f7",
         "/uploads/images/42f8e6f1-1277-4748-9e5e-c41c7bf605f7.jpg",
