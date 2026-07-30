@@ -73,6 +73,7 @@ public:
     [[nodiscard]] LineTracerCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
     void HandleUartEvent(const UartSessionEvent& event) noexcept;
     void Tick(std::chrono::milliseconds elapsed) noexcept;
+    [[nodiscard]] bool TrySendStatusKeepalive() noexcept;
 
     [[nodiscard]] bool HasActiveJob() const noexcept;
     [[nodiscard]] bool HasPendingSafetyCommand() const noexcept;
@@ -127,6 +128,7 @@ private:
     [[nodiscard]] std::uint16_t AllocateJobId() noexcept;
     void RememberPending(PendingEffect effect, const LineTracerCommandResult& result);
     void ClearPending() noexcept;
+    void ResetStatusKeepalive() noexcept;
     void HandleLineTracerFrame(const uart_frame_t& frame) noexcept;
     void EmitPendingResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
                              std::string message) const noexcept;
@@ -143,6 +145,10 @@ private:
     std::uint16_t next_uart_job_id_{ UART_LINETRACER_JOB_ID_MIN };
     PendingContext pending_{};
     PendingSafetyContext pending_safety_{};
+    static constexpr auto kStatusKeepaliveInterval = std::chrono::milliseconds{ 1000 };
+    std::chrono::milliseconds keepalive_elapsed_{};
+    bool keepalive_pending_{};
+    std::uint8_t keepalive_sequence_{};
     std::uint8_t last_uart_state_{ UART_LINETRACER_STATE_IDLE };
     LineTracerReportHandler report_handler_;
 };

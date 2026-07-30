@@ -156,6 +156,7 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
 
     if (event.type == UartSessionEventType::kTransportDisconnected ||
         event.type == UartSessionEventType::kTransportError) {
+        ResetStatusKeepalive();
         if (pending_.active) {
             EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
                                 "UART transport disconnected before acknowledgement");
@@ -167,6 +168,25 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             pending_safety_ = {};
         }
         return;
+    }
+
+    if (keepalive_pending_ && event.pending_sequence == keepalive_sequence_ &&
+        event.pending_command == UART_CMD_LINETRACER_GET_STATUS) {
+        if (event.type == UartSessionEventType::kCommandResponseReceived) {
+            if (event.frame.command == UART_CMD_RESPONSE && event.frame.length == UART_LINETRACER_STATUS_PAYLOAD_SIZE &&
+                event.frame.payload[UART_RESPONSE_COMMAND_INDEX] == UART_CMD_LINETRACER_GET_STATUS &&
+                (event.frame.payload[UART_RESPONSE_STATUS_INDEX] == UART_STATUS_ACK ||
+                 event.frame.payload[UART_RESPONSE_STATUS_INDEX] == UART_STATUS_SUCCESS) &&
+                uart_linetracer_state_is_valid(event.frame.payload[UART_LINETRACER_STATUS_STATE_INDEX]) != 0U) {
+                last_uart_state_ = event.frame.payload[UART_LINETRACER_STATUS_STATE_INDEX];
+            }
+            ResetStatusKeepalive();
+            return;
+        }
+        if (event.type == UartSessionEventType::kAckTimeout) {
+            ResetStatusKeepalive();
+            return;
+        }
     }
 
     if (!pending_.active || event.pending_sequence != pending_.sequence) {
@@ -181,6 +201,7 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             active_uart_job_id_ = UART_LINETRACER_JOB_ID_NONE;
             active_route_id_ = UART_LINETRACER_ROUTE_NONE;
             current_position_ = UART_LINETRACER_POSITION_NONE;
+            ResetStatusKeepalive();
 
             const std::array<std::uint8_t, UART_LINETRACER_SET_POSITION_PAYLOAD_SIZE> payload{
                 pending_.requested_position
@@ -212,11 +233,13 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             active_work_id_ = pending_.work_id;
             active_uart_job_id_ = pending_.uart_job_id;
             active_route_id_ = pending_.route_id;
+            ResetStatusKeepalive();
         } else if (accepted && pending_.effect == PendingEffect::kClearJob) {
             active_work_id_.clear();
             active_uart_job_id_ = UART_LINETRACER_JOB_ID_NONE;
             active_route_id_ = UART_LINETRACER_ROUTE_NONE;
             current_position_ = UART_LINETRACER_POSITION_NONE;
+            ResetStatusKeepalive();
         }
         if (accepted && pending_.stage == PendingStage::kSetPosition) {
             current_position_ = pending_.requested_position;
@@ -247,15 +270,44 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
 }
 
 void LineTracerNode::Tick(const std::chrono::milliseconds elapsed) noexcept {
-    if (!pending_safety_.active || elapsed <= std::chrono::milliseconds::zero()) {
+    if (elapsed <= std::chrono::milliseconds::zero()) {
         return;
     }
-    pending_safety_.elapsed += elapsed;
-    if (pending_safety_.elapsed >= mqtt::kEmergencyStopConfirmationTimeout) {
-        EmitSafetyResponse(mqtt::CommandResult::kTimeout, std::string("ERR-SAFETY-CONFIRMATION-TIMEOUT"),
-                           "line tracer controller did not confirm the emergency stop");
-        pending_safety_ = {};
+
+    if (HasActiveJob() && uart_session_.IsOpen()) {
+        keepalive_elapsed_ += elapsed;
+        if (keepalive_elapsed_ > kStatusKeepaliveInterval) {
+            keepalive_elapsed_ = kStatusKeepaliveInterval;
+        }
+    } else {
+        ResetStatusKeepalive();
     }
+
+    if (pending_safety_.active) {
+        pending_safety_.elapsed += elapsed;
+        if (pending_safety_.elapsed >= mqtt::kEmergencyStopConfirmationTimeout) {
+            EmitSafetyResponse(mqtt::CommandResult::kTimeout, std::string("ERR-SAFETY-CONFIRMATION-TIMEOUT"),
+                               "line tracer controller did not confirm the emergency stop");
+            pending_safety_ = {};
+        }
+    }
+}
+
+bool LineTracerNode::TrySendStatusKeepalive() noexcept {
+    if (!HasActiveJob() || keepalive_elapsed_ < kStatusKeepaliveInterval || keepalive_pending_ || pending_.active ||
+        pending_safety_.active || !uart_session_.IsOpen() || uart_session_.HasPendingCommand()) {
+        return false;
+    }
+
+    const UartSessionSendResult result = uart_session_.SendCommand(UART_CMD_LINETRACER_GET_STATUS);
+    if (!result.Succeeded()) {
+        return false;
+    }
+
+    keepalive_pending_ = true;
+    keepalive_sequence_ = result.sequence;
+    keepalive_elapsed_ = std::chrono::milliseconds::zero();
+    return true;
 }
 
 bool LineTracerNode::HasActiveJob() const noexcept {
@@ -460,6 +512,7 @@ LineTracerCommandResult LineTracerNode::HandleEmergencyStop(const mqtt::Emergenc
         ClearPending();
     }
     static_cast<void>(uart_session_.CancelPendingCommand());
+    ResetStatusKeepalive();
     result = SendOneWay(std::move(result), UART_CMD_EMERGENCY_STOP);
     if (result.Succeeded()) {
         pending_safety_ = {
@@ -520,6 +573,12 @@ void LineTracerNode::RememberPending(PendingEffect effect, const LineTracerComma
 
 void LineTracerNode::ClearPending() noexcept {
     pending_ = {};
+}
+
+void LineTracerNode::ResetStatusKeepalive() noexcept {
+    keepalive_elapsed_ = std::chrono::milliseconds::zero();
+    keepalive_pending_ = false;
+    keepalive_sequence_ = 0U;
 }
 
 void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
@@ -638,6 +697,7 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
         active_route_id_ = UART_LINETRACER_ROUTE_NONE;
         last_uart_state_ = UART_LINETRACER_STATE_IDLE;
         ClearPending();
+        ResetStatusKeepalive();
 
         EmitReport({
             .channel = LineTracerReportChannel::kStatus,

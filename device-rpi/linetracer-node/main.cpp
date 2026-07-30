@@ -284,7 +284,9 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
     uart_session.SetEventHandler([&](const UartSessionEvent& event) {
         line_tracer.HandleUartEvent(event);
         if (event.type == UartSessionEventType::kTransportDisconnected ||
-            event.type == UartSessionEventType::kTransportError) {
+            event.type == UartSessionEventType::kTransportError ||
+            (event.type == UartSessionEventType::kAckTimeout &&
+             event.pending_command == UART_CMD_LINETRACER_GET_STATUS)) {
             uart_failure_pending = true;
         }
     });
@@ -330,6 +332,7 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
 
     while (stop_requested == 0) {
         bool emergency_processed = false;
+        bool mqtt_command_processed = false;
         const auto now = Clock::now();
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick);
         last_tick = now;
@@ -384,6 +387,7 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
                     queue_report(*response);
                 }
                 emergency_processed = true;
+                mqtt_command_processed = true;
             }
         }
         if (!emergency_processed && !line_tracer.HasPendingSafetyCommand() && !uart_failure_pending &&
@@ -393,7 +397,13 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
                 if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
                     queue_report(*response);
                 }
+                mqtt_command_processed = true;
             }
+        }
+
+        if (!mqtt_command_processed && !emergency_processed && !line_tracer.HasPendingSafetyCommand() &&
+            !uart_failure_pending && uart_session.IsOpen() && !uart_session.HasPendingCommand()) {
+            static_cast<void>(line_tracer.TrySendStatusKeepalive());
         }
 
         if (uart_failure_pending && !uart_disconnected_reported) {
