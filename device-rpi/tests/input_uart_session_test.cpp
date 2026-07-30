@@ -108,6 +108,67 @@ void TestTransactRetryThenSuccess() {
     assert(fixture.backend->write_calls == 2);
 }
 
+/*
+ * Regression: found live-debugging the gripper controller. ACK ("명령을
+ * 정상적으로 수신함" -- accepted, completes later via an EVENT) and SUCCESS
+ * ("명령 실행이 정상적으로 완료됨" -- already finished) are both legitimate
+ * positive outcomes, not the same status under two names. Classify() used to
+ * treat anything other than SUCCESS as a rejection, so every asynchronous
+ * gripper motion -- which the controller always acknowledges with ACK, never
+ * SUCCESS -- was rejected before this node ever got to look at it, on real
+ * hardware that was answering correctly.
+ */
+void TestTransactAckIsAcceptedNotRejected() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t& request) {
+        return std::vector<uart_frame_t>{ MakeOperationResult(request.sequence, UART_STATUS_ACK, UART_ERROR_NONE) };
+    };
+
+    const InputTransactResult result = fixture.session->Transact(UART_CMD_INPUT_CONVEYOR_START);
+
+    assert(result.status == InputTransactStatus::kAccepted);
+    assert(result.Succeeded());
+}
+
+// Same status byte (UART_CMD_RESPONSE rather than OPERATION_RESULT), matching
+// exactly what the gripper controller's real HOME response looked like on the
+// wire: status=ACK, original=HOME, error=NONE.
+void TestTransactResponseFrameAckIsAcceptedNotRejected() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t& request) {
+        uart_frame_t frame{};
+        frame.version = UART_PROTOCOL_VERSION;
+        frame.sequence = request.sequence;
+        frame.command = UART_CMD_RESPONSE;
+        frame.length = UART_RESPONSE_HEADER_SIZE;
+        frame.payload[UART_RESPONSE_STATUS_INDEX] = UART_STATUS_ACK;
+        frame.payload[UART_RESPONSE_COMMAND_INDEX] = request.command;
+        frame.payload[UART_RESPONSE_ERROR_INDEX] = UART_ERROR_NONE;
+        return std::vector<uart_frame_t>{ frame };
+    };
+
+    const InputTransactResult result = fixture.session->Transact(UART_CMD_INPUT_CONVEYOR_START);
+
+    assert(result.status == InputTransactStatus::kAccepted);
+    assert(result.Succeeded());
+}
+
+// NACK/BUSY/ERROR must still reject: the fix widens what counts as accepted,
+// it must not also widen what counts as rejected.
+void TestTransactNackBusyErrorStillReject() {
+    for (const std::uint8_t status : { UART_STATUS_NACK, UART_STATUS_BUSY, UART_STATUS_ERROR }) {
+        Fixture fixture;
+        fixture.backend->responder = [status](const uart_frame_t& request) {
+            return std::vector<uart_frame_t>{ MakeOperationResult(request.sequence, status, UART_ERROR_INTERNAL) };
+        };
+
+        const InputTransactResult result = fixture.session->Transact(UART_CMD_INPUT_CONVEYOR_START);
+
+        assert(result.status == InputTransactStatus::kRejected);
+        assert(!result.Succeeded());
+    }
+}
+
 void TestSpontaneousFrameDuringWait() {
     Fixture fixture;
     int spontaneous = 0;
@@ -233,6 +294,9 @@ int main() {
     TestTransactRejected();
     TestTransactTimeoutRetries();
     TestTransactRetryThenSuccess();
+    TestTransactAckIsAcceptedNotRejected();
+    TestTransactResponseFrameAckIsAcceptedNotRejected();
+    TestTransactNackBusyErrorStillReject();
     TestSpontaneousFrameDuringWait();
     TestTrailingFrameInSameReadIsNotDropped();
     TestPollSpontaneous();

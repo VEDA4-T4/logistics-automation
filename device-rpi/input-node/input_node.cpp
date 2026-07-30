@@ -38,6 +38,7 @@ namespace mqtt = contracts::mqtt;
 [[nodiscard]] InputCommandStatus CommandStatusFromTransact(InputTransactStatus status) noexcept {
     switch (status) {
         case InputTransactStatus::kSuccess:
+        case InputTransactStatus::kAccepted:
         case InputTransactStatus::kSent:
             return InputCommandStatus::kSuccess;
         case InputTransactStatus::kRejected:

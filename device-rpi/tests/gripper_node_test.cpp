@@ -173,7 +173,18 @@ struct Fixture {
             if (request.command == UART_CMD_GRIPPER_GET_STATUS) {
                 return std::vector<uart_frame_t>{ MakeStatusResponse(request.sequence, UART_GRIPPER_STATE_IDLE, true) };
             }
-            return std::vector<uart_frame_t>{ MakeGripperResponse(request.sequence, request.command) };
+            // MOVE_ARM/SET_GRIPPER/HOME are asynchronous motions the real
+            // controller acknowledges with ACK, not SUCCESS -- completion
+            // arrives later as a MOTION_COMPLETE event. RESET/STOP take effect
+            // immediately and really do answer SUCCESS. Getting this wrong here
+            // is exactly what let the ACK-treated-as-rejected bug through every
+            // test in this file: real hardware answered correctly and every
+            // motion command was still refused.
+            const bool is_async_motion = request.command == UART_CMD_GRIPPER_MOVE_ARM ||
+                                        request.command == UART_CMD_GRIPPER_SET_GRIPPER ||
+                                        request.command == UART_CMD_GRIPPER_HOME;
+            return std::vector<uart_frame_t>{ MakeGripperResponse(
+                request.sequence, request.command, is_async_motion ? UART_STATUS_ACK : UART_STATUS_SUCCESS) };
         };
         session = std::make_unique<InputUartSession>(std::move(owned));
         assert(session->Open());

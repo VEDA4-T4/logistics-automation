@@ -84,9 +84,23 @@ void InputUartSession::Classify(const uart_frame_t& frame, InputTransactResult& 
         result.response_error = frame.payload[UART_RESPONSE_ERROR_INDEX];
     }
 
-    result.status = (result.response_status == UART_STATUS_SUCCESS && result.response_error == UART_ERROR_NONE)
-                        ? InputTransactStatus::kSuccess
-                        : InputTransactStatus::kRejected;
+    /*
+     * ACK ("명령을 정상적으로 수신함" -- accepted, completes later via an EVENT)
+     * and SUCCESS ("명령 실행이 정상적으로 완료됨" -- already finished) are both
+     * legitimate positive outcomes, not variants of the same one. Collapsing
+     * ACK into "rejected" is exactly the bug this fixes: every asynchronous
+     * gripper motion (HOME/MOVE_ARM/SET_GRIPPER) answers with ACK, so treating
+     * it as a rejection meant no motion command could ever be accepted.
+     */
+    if (result.response_error != UART_ERROR_NONE) {
+        result.status = InputTransactStatus::kRejected;
+    } else if (result.response_status == UART_STATUS_SUCCESS) {
+        result.status = InputTransactStatus::kSuccess;
+    } else if (result.response_status == UART_STATUS_ACK) {
+        result.status = InputTransactStatus::kAccepted;
+    } else {
+        result.status = InputTransactStatus::kRejected;
+    }
 }
 
 void InputUartSession::RouteSpontaneous(const uart_frame_t& frame) {
