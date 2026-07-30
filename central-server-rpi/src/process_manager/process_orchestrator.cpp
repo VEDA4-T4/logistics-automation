@@ -57,9 +57,13 @@ namespace mqtt = contracts::mqtt;
 }  // namespace
 
 bool ProcessOrchestratorConfig::IsValid() const noexcept {
+    const bool initial_position_valid =
+        line_tracer_initial_position.empty() || IsOneOf(line_tracer_initial_position, { "A", "B", "C" });
+
     return mqtt::IsValidTopicLevel(server_id) && mqtt::IsValidTopicLevel(input_device_id) &&
            mqtt::IsValidTopicLevel(vision_device_id) && mqtt::IsValidTopicLevel(gripper_device_id) &&
-           mqtt::IsValidTopicLevel(sorting_device_id) && mqtt::IsValidTopicLevel(line_tracer_device_id);
+           mqtt::IsValidTopicLevel(sorting_device_id) && mqtt::IsValidTopicLevel(line_tracer_device_id) &&
+           initial_position_valid;
 }
 
 ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config) : config_(std::move(config)) {

@@ -120,6 +120,28 @@ void TestCommandTargetsAreResolvedByDeviceAndRole() {
     assert(sorting_target.target_device_ids == std::vector<std::string>{ "PI-SORTING-01" });
 }
 
+void TestLineTracerInitializeIncludesConfiguredPosition() {
+    const auto initialize = MakeCommand("REQ-INIT", "SYSTEM", mqtt::ControlCommand::kInitialize);
+
+    const auto line_tracer = central_server::PrepareCommandForDevice(initialize, "PI-LT-01", "PI-LT-01", "A");
+    const auto* line_tracer_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(line_tracer);
+    assert(line_tracer.message_id == "MSG-COMMAND-REQ-INIT-PI-LT-01");
+    assert(line_tracer_payload != nullptr);
+    assert(line_tracer_payload->target_device_id == "PI-LT-01");
+    assert(line_tracer_payload->params.at("currentPosition") == "A");
+
+    const auto sorting = central_server::PrepareCommandForDevice(initialize, "PI-SORTING-01", "PI-LT-01", "A");
+    const auto* sorting_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(sorting);
+    assert(sorting_payload != nullptr);
+    assert(sorting_payload->target_device_id == "PI-SORTING-01");
+    assert(!sorting_payload->params.contains("currentPosition"));
+
+    const auto* original_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(initialize);
+    assert(original_payload != nullptr);
+    assert(original_payload->target_device_id == "SYSTEM");
+    assert(!original_payload->params.contains("currentPosition"));
+}
+
 void TestResponsesAreAggregatedAndDuplicatesIgnored() {
     central_server::CommandManager::Clock::time_point now{};
     central_server::CommandManager manager([&now] { return now; });
@@ -244,6 +266,7 @@ void TestRecoveryUsesExtendedCompletionTimeout() {
 
 int main() {
     TestCommandTargetsAreResolvedByDeviceAndRole();
+    TestLineTracerInitializeIncludesConfiguredPosition();
     TestResponsesAreAggregatedAndDuplicatesIgnored();
     TestPartialDispatchFailureIsIncludedInFinalResult();
     TestNoTargetProducesImmediateRejection();
