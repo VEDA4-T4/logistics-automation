@@ -147,7 +147,7 @@ static void safety_enter_estop(safety_cause_t cause) {
     safetyStats.estopEvents++;
 
     /* 3) 장치 상태 게시 + 양쪽 채널 EVENT 보고. */
-    CommTx_SetDeviceStatus(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP);
+    CommTx_SetDeviceStatus(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE);
     safety_report_event(SAFETY_DOMAIN_ALL, SAFETY_EVENT_ESTOP_LATCHED, cause, safety.eventTick, 0U);
 }
 
@@ -155,13 +155,25 @@ static void safety_begin_reset(app_uart_channel_t source) {
     safety_domain_t domain = safety_domain_from_source(source);
     comm_tx_channel_t channel = safety_channel_from_domain(domain);
 
-    if ((domain == SAFETY_DOMAIN_NONE) || ((safety.latchedDomains & (uint8_t)domain) == 0U)) {
+    if (domain == SAFETY_DOMAIN_NONE) {
         /* 해당 공정에 걸린 E-Stop이 없으면 reset은 무의미하다. */
         safetyStats.resetIgnored++;
         return;
     }
 
     /* 같은 공정의 중복 reset은 진행 중인 핸드셰이크를 다시 시작하지 않는다. */
+    if ((safety.latchedDomains & (uint8_t)domain) == 0U) {
+        /*
+         * Recovery is idempotent. A repeated request, or a request after this
+         * domain was already
+         * recovered, must still produce a terminal event.
+         */
+        safetyStats.resetIgnored++;
+        CommTx_SetChannelDeviceStatus(channel, UART_DEVICE_STOPPED, UART_ERROR_NONE);
+        safety_report_event(domain, SAFETY_EVENT_RESET_COMPLETE, safety.cause, HAL_GetTick(), (uint8_t)SAFETY_RESET_OK);
+        return;
+    }
+
     if (safety.releasePhases[channel] != SAFETY_RELEASE_IDLE) {
         safetyStats.resetIgnored++;
         return;
@@ -191,7 +203,7 @@ static void safety_complete_reset(safety_domain_t domain) {
 
     /* 핀은 LOW를 유지하며, 해제된 공정의 모터 드라이버만 이후 enable할 수 있다. */
     conveyor_motor_power_release_latch();
-    CommTx_SetChannelDeviceStatus(channel, UART_DEVICE_READY, UART_ERROR_NONE);
+    CommTx_SetChannelDeviceStatus(channel, UART_DEVICE_STOPPED, UART_ERROR_NONE);
     safety_report_event(domain, SAFETY_EVENT_RESET_COMPLETE, safety.cause, HAL_GetTick(), (uint8_t)SAFETY_RESET_OK);
 
     if (safety.latchedDomains == (uint8_t)SAFETY_DOMAIN_NONE) {

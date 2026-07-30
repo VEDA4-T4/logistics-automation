@@ -14,6 +14,31 @@ namespace {
 
 namespace mqtt = logistics::contracts::mqtt;
 
+QString IdleCommandStyle() {
+    return QStringLiteral(
+        "background-color:#1f1f1f;color:#cccccc;border:1px solid #2b2b2b;border-radius:4px;padding:4px;");
+}
+
+QString PendingCommandStyle() {
+    return QStringLiteral(
+        "background-color:#3a3000;color:#cca700;border:1px solid #6b5d00;border-radius:4px;padding:4px;");
+}
+
+QString ProgressCommandStyle() {
+    return QStringLiteral(
+        "background-color:#182c3a;color:#4daafc;border:1px solid #264f78;border-radius:4px;padding:4px;");
+}
+
+QString SuccessCommandStyle() {
+    return QStringLiteral(
+        "background-color:#1f3325;color:#89d185;border:1px solid #385a40;border-radius:4px;padding:4px;");
+}
+
+QString FailureCommandStyle() {
+    return QStringLiteral(
+        "background-color:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;padding:4px;");
+}
+
 QString CommandLabel(mqtt::ControlCommand command) {
     switch (command) {
         case mqtt::ControlCommand::kStart:
@@ -141,8 +166,7 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     command_status_->setMinimumHeight(28);
     command_status_->setAlignment(Qt::AlignCenter);
     command_status_->setWordWrap(true);
-    command_status_->setStyleSheet(
-        "background-color:#1f1f1f;color:#cccccc;border:1px solid #2b2b2b;border-radius:4px;padding:4px;");
+    command_status_->setStyleSheet(IdleCommandStyle());
 
     start_button_ = new QPushButton(QStringLiteral("시작"), this);
     start_button_->setObjectName(QStringLiteral("startButton"));
@@ -190,6 +214,7 @@ void ProcessControlPanel::setControlTarget(const QString& target_device_id, cons
     selected_target_device_id_ = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
     selected_target_display_name_ = display_name.isEmpty() ? selected_target_device_id_ : display_name;
     updateTargetPresentation();
+    updateCommandPresentation();
     applySelectedTargetState();
 }
 
@@ -197,15 +222,16 @@ void ProcessControlPanel::setMqttConnected(bool connected) {
     control_state_.setMqttConnected(connected);
     connection_hint_->setText(connected ? QStringLiteral("중앙 서버 MQTT 연결됨")
                                         : QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."));
-    if (connected && !control_state_.isCommandPending()) {
-        command_status_->setText(QStringLiteral("대기 중"));
-        command_status_->setStyleSheet(
-            "background-color:#1f1f1f;color:#cccccc;border:1px solid #2b2b2b;border-radius:4px;padding:4px;");
+    if (connected) {
+        updateCommandPresentation();
     } else if (!connected) {
+        if (!command_target_device_id_.isEmpty()) {
+            setCommandPresentation(command_target_device_id_, QStringLiteral("MQTT 연결 끊김\n명령 응답 확인 중단"),
+                                   FailureCommandStyle());
+        }
         command_target_device_id_.clear();
         command_status_->setText(QStringLiteral("MQTT 연결 끊김"));
-        command_status_->setStyleSheet(
-            "background-color:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;padding:4px;");
+        command_status_->setStyleSheet(FailureCommandStyle());
     }
     updateButtonStates();
 }
@@ -253,9 +279,9 @@ void ProcessControlPanel::setCommandPending(mqtt::ControlCommand command) {
         command_target_device_id_ = selectedTargetDeviceId();
     }
     control_state_.setCommandPending();
-    command_status_->setText(QStringLiteral("%1 명령 전송됨\n응답 대기 중").arg(CommandLabel(command)));
-    command_status_->setStyleSheet(
-        "background-color:#3a3000;color:#cca700;border:1px solid #6b5d00;border-radius:4px;padding:4px;");
+    setCommandPresentation(command_target_device_id_,
+                           QStringLiteral("%1 명령 전송됨\n응답 대기 중").arg(CommandLabel(command)),
+                           PendingCommandStyle());
     updateButtonStates();
 }
 
@@ -266,9 +292,8 @@ void ProcessControlPanel::setCommandProgress(mqtt::ControlCommand command, mqtt:
     if (!detail.isEmpty()) {
         text.append(QStringLiteral("\n%1").arg(detail));
     }
-    command_status_->setText(text);
-    command_status_->setStyleSheet(
-        "background-color:#182c3a;color:#4daafc;border:1px solid #264f78;border-radius:4px;padding:4px;");
+    const auto target = command_target_device_id_.isEmpty() ? selectedTargetDeviceId() : command_target_device_id_;
+    setCommandPresentation(target, text, ProgressCommandStyle());
     updateButtonStates();
 }
 
@@ -279,9 +304,9 @@ void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt:
     if (!detail.isEmpty()) {
         text.append(QStringLiteral("\n%1").arg(detail));
     }
-    command_status_->setText(text);
-
     const bool succeeded = result == mqtt::CommandResult::kSuccess;
+    const auto target = command_target_device_id_.isEmpty() ? selectedTargetDeviceId() : command_target_device_id_;
+    setCommandPresentation(target, text, succeeded ? SuccessCommandStyle() : FailureCommandStyle());
     const bool applies_to_selected_target =
         command_target_device_id_.isEmpty() || command_target_device_id_ == selectedTargetDeviceId();
     if (succeeded && applies_to_selected_target) {
@@ -309,9 +334,7 @@ void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt:
         applySelectedTargetState();
     }
     command_target_device_id_.clear();
-    command_status_->setStyleSheet(
-        succeeded ? "background-color:#1f3325;color:#89d185;border:1px solid #385a40;border-radius:4px;padding:4px;"
-                  : "background-color:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;padding:4px;");
+    updateCommandPresentation();
     updateButtonStates();
 }
 
@@ -340,6 +363,36 @@ bool ProcessControlPanel::hasBlockingSensorWarning() const {
         process_statuses_.cbegin(), process_statuses_.cend(),
         [&target_device_id](const ProcessUnitStatus& candidate) { return candidate.device_id == target_device_id; });
     return process != process_statuses_.cend() && process->has_warning && IsSensorStaleErrorCode(process->error_code);
+}
+
+void ProcessControlPanel::setCommandPresentation(const QString& target_device_id, const QString& text,
+                                                 const QString& style) {
+    const auto target = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
+    const CommandPresentation presentation{ .text = text, .style = style };
+    if (target == QStringLiteral("SYSTEM") || target == QStringLiteral("ALL")) {
+        command_presentations_.insert(QStringLiteral("SYSTEM"), presentation);
+        command_presentations_.insert(selectedTargetDeviceId(), presentation);
+        for (const auto& process : process_statuses_) {
+            command_presentations_.insert(process.device_id, presentation);
+        }
+    } else {
+        command_presentations_.insert(target, presentation);
+    }
+    updateCommandPresentation();
+}
+
+void ProcessControlPanel::updateCommandPresentation() {
+    if (!control_state_.isMqttConnected()) {
+        return;
+    }
+    const auto presentation = command_presentations_.constFind(selectedTargetDeviceId());
+    if (presentation == command_presentations_.cend()) {
+        command_status_->setText(QStringLiteral("대기 중"));
+        command_status_->setStyleSheet(IdleCommandStyle());
+        return;
+    }
+    command_status_->setText(presentation->text);
+    command_status_->setStyleSheet(presentation->style);
 }
 
 void ProcessControlPanel::updateTargetPresentation() {

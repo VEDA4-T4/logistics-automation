@@ -40,6 +40,9 @@ reconnect_min_delay_seconds=2
 reconnect_max_delay_seconds=20
 clean_session=yes
 
+[sorting]
+default_speed=65
+
 [log_upload]
 enabled=true
 endpoint_url=https://server.example/api/v1/uploads/logs
@@ -78,6 +81,7 @@ allow_insecure_http=false
     assert(config.keep_alive_seconds == 45);
     assert(config.reconnect_min_delay_seconds == 2);
     assert(config.reconnect_max_delay_seconds == 20);
+    assert(config.sorting_default_speed == 65);
     assert(config.clean_session);
     assert(config.log_upload_enabled);
     assert(config.log_upload.device_id == "PI-01");

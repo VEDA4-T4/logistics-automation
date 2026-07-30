@@ -106,7 +106,7 @@ struct Fixture {
         return frame;
     }
 
-    void AcknowledgeLastFrame() {
+    void AcknowledgeLastFrame(bool expect_pending = false) {
         const uart_frame_t command = LastFrame();
         uart_frame_t ack{};
         ack.version = UART_PROTOCOL_VERSION;
@@ -125,7 +125,7 @@ struct Fixture {
         assert(uart_encode_frame(&ack, encoded.data(), encoded.size(), &encoded_length) == UART_CODEC_OK);
         backend->PushRead({ encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(encoded_length) });
         assert(session->PollOnce().Succeeded());
-        assert(!session->HasPendingCommand());
+        assert(session->HasPendingCommand() == expect_pending);
     }
 
     void PushEvent(std::uint8_t event_id, std::uint8_t detail = 0U, std::uint16_t job_id = 0U,
@@ -194,7 +194,8 @@ mqtt::MqttMessage MakeDestination(std::string destination = "DEST-02", std::stri
     };
 }
 
-mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string target = "PI-LT-01") {
+mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string target = "PI-LT-01",
+                              mqtt::Json params = mqtt::Json::object()) {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = "MSG-CONTROL-01",
@@ -207,12 +208,42 @@ mqtt::MqttMessage MakeControl(mqtt::ControlCommand command, std::string target =
                 .command = command,
                 .target_device_id = std::move(target),
                 .component_id = {},
-                .params = mqtt::Json::object(),
+                .params = std::move(params),
             },
     };
 }
 
+mqtt::MqttMessage MakeEmergencyStop(std::string target = "PI-LT-01") {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-ESTOP-01",
+        .message_type = mqtt::MessageType::kEmergencyStop,
+        .source_id = "SERVER-01",
+        .timestamp = "2026-07-22T10:00:02+09:00",
+        .data =
+            mqtt::EmergencyStopPayload{
+                .request_id = "REQ-ESTOP-01",
+                .command = mqtt::ControlCommand::kEmergencyStop,
+                .target_device_id = std::move(target),
+            },
+    };
+}
+
+void InitializePositionAndAcknowledge(Fixture& fixture, std::string position = "A") {
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kInitialize, "PI-LT-01", { { "currentPosition", std::move(position) } }));
+    assert(result.Succeeded());
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_RESET_SYSTEM);
+
+    fixture.AcknowledgeLastFrame(true);
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_SET_CURRENT_POSITION);
+    fixture.AcknowledgeLastFrame();
+    assert(fixture.node->CurrentPosition() != UART_LINETRACER_POSITION_NONE);
+    fixture.reports.clear();
+}
+
 void AssignAndAcknowledge(Fixture& fixture) {
+    InitializePositionAndAcknowledge(fixture);
     const auto result = fixture.node->HandleMqttCommand(MakeDestination());
     assert(result.Succeeded());
     fixture.AcknowledgeLastFrame();
@@ -221,6 +252,7 @@ void AssignAndAcknowledge(Fixture& fixture) {
 
 void TestDestinationMapsToAssignRoute() {
     Fixture fixture;
+    InitializePositionAndAcknowledge(fixture);
 
     const auto result = fixture.node->HandleMqttCommand(MakeDestination());
     const uart_frame_t frame = fixture.LastFrame();
@@ -236,6 +268,54 @@ void TestDestinationMapsToAssignRoute() {
     assert(!fixture.node->HasActiveJob());
     fixture.AcknowledgeLastFrame();
     assert(fixture.node->ActiveWorkId() == kWorkId);
+}
+
+void TestInitializeWithCurrentPositionSendsResetThenPosition() {
+    Fixture fixture;
+
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kInitialize, "PI-LT-01", { { "currentPosition", "B" } }));
+
+    assert(result.Succeeded());
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_RESET_SYSTEM);
+    assert(fixture.reports.empty());
+    assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_NONE);
+
+    fixture.AcknowledgeLastFrame(true);
+    const uart_frame_t position_frame = fixture.LastFrame();
+    assert(position_frame.command == UART_CMD_LINETRACER_SET_CURRENT_POSITION);
+    assert(position_frame.length == UART_LINETRACER_SET_POSITION_PAYLOAD_SIZE);
+    assert(position_frame.payload[UART_LINETRACER_SET_POSITION_ID_INDEX] == UART_LINETRACER_POSITION_DEST_B);
+    assert(fixture.reports.empty());
+    assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_NONE);
+
+    fixture.AcknowledgeLastFrame();
+    assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_B);
+    assert(fixture.reports.size() == 1U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(response.request_id == "REQ-CONTROL-01");
+    assert(response.command == mqtt::ControlCommand::kInitialize);
+    assert(response.result == mqtt::CommandResult::kSuccess);
+}
+
+void TestInvalidCurrentPositionIsRejectedWithoutUartWrite() {
+    Fixture fixture;
+
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kInitialize, "PI-LT-01", { { "currentPosition", "D" } }));
+
+    assert(result.status == LineTracerCommandStatus::kInvalidPosition);
+    assert(fixture.backend->writes.empty());
+    assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_NONE);
+}
+
+void TestDestinationRequiresKnownCurrentPosition() {
+    Fixture fixture;
+
+    const auto result = fixture.node->HandleMqttCommand(MakeDestination());
+
+    assert(result.status == LineTracerCommandStatus::kCurrentPositionUnknown);
+    assert(fixture.backend->writes.empty());
 }
 
 void TestStopUsesActiveJobId() {
@@ -277,6 +357,89 @@ void TestInitializeMapsToResetAndClearsActiveJob() {
     fixture.AcknowledgeLastFrame();
     assert(!fixture.node->HasActiveJob());
     assert(fixture.node->ActiveWorkId().empty());
+    assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_NONE);
+}
+
+void TestRecoveryUsesCommonDeviceResetAndClearsActiveJob() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const uart_frame_t frame = fixture.LastFrame();
+
+    assert(result.Succeeded());
+    assert(frame.command == UART_CMD_RESET_DEVICE);
+    assert(frame.length == 0U);
+    assert(fixture.node->HasActiveJob());
+    fixture.AcknowledgeLastFrame();
+    assert(!fixture.node->HasActiveJob());
+}
+
+void TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault() {
+    Fixture fixture;
+    InitializePositionAndAcknowledge(fixture);
+    assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    assert(fixture.session->HasPendingCommand());
+
+    const auto result = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+
+    assert(result.status == LineTracerCommandStatus::kSentNoReply);
+    assert(fixture.LastFrame().command == UART_CMD_EMERGENCY_STOP);
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.reports.size() == 1U);
+    const auto& preempted = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(preempted.result == mqtt::CommandResult::kFailed);
+    assert(preempted.error_code == "ERR-EMERGENCY-STOP");
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_EMERGENCY_STOP);
+
+    assert(fixture.reports.size() == 3U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports[1]);
+    assert(response.request_id == "REQ-ESTOP-01");
+    assert(response.result == mqtt::CommandResult::kSuccess);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[2]);
+    assert(status.current_state == "EMERGENCY_STOP");
+    assert(status.status == mqtt::ConnectionState::kOnline);
+    assert(!status.error_code.has_value());
+}
+
+void TestPendingSafetyCommandCannotBeOverwritten() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+
+    const auto recovery = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const auto duplicate_estop = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+
+    assert(recovery.status == LineTracerCommandStatus::kSafetyCommandPending);
+    assert(duplicate_estop.status == LineTracerCommandStatus::kSafetyCommandPending);
+    assert(fixture.backend->writes.size() == 1U);
+    assert(fixture.node->HasPendingSafetyCommand());
+}
+
+void TestEmergencyStopConfirmationTimesOut() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+
+    fixture.node->Tick(mqtt::kEmergencyStopConfirmationTimeout);
+
+    assert(fixture.reports.size() == 1U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(response.result == mqtt::CommandResult::kTimeout);
+    assert(response.error_code == "ERR-SAFETY-CONFIRMATION-TIMEOUT");
+}
+
+void TestEmergencyStopFailsImmediatelyWhenUartDisconnects() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+
+    fixture.node->HandleUartEvent({
+        .type = logistics::device::UartSessionEventType::kTransportDisconnected,
+    });
+
+    assert(fixture.reports.size() == 1U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(response.result == mqtt::CommandResult::kFailed);
+    assert(response.error_code == "ERR-UART-DISCONNECTED");
 }
 
 void TestInvalidDestinationIsRejectedWithoutUartWrite() {
@@ -309,17 +472,20 @@ void TestWrongTargetIsRejected() {
 
 void TestPendingUartCommandReportsBusy() {
     Fixture fixture;
+    InitializePositionAndAcknowledge(fixture);
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    const std::size_t writes_before = fixture.backend->writes.size();
 
     const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kInitialize));
 
     assert(result.status == LineTracerCommandStatus::kUartBusy);
-    assert(fixture.backend->writes.size() == 1U);
+    assert(fixture.backend->writes.size() == writes_before);
     assert(!fixture.node->HasActiveJob());
 }
 
 void TestRejectedAssignDoesNotActivateJob() {
     Fixture fixture;
+    InitializePositionAndAcknowledge(fixture);
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
     const uart_frame_t command = fixture.LastFrame();
 
@@ -351,6 +517,7 @@ void TestRejectedAssignDoesNotActivateJob() {
 
 void TestAcceptedAssignReportsSuccessAfterAck() {
     Fixture fixture;
+    InitializePositionAndAcknowledge(fixture);
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
     assert(fixture.reports.empty());
 
@@ -416,6 +583,7 @@ void TestUnloadCompleteReportsCompletionAndClearsMapping() {
     assert(!parked.job_id.has_value());
     assert(!fixture.node->HasActiveJob());
     assert(fixture.node->ActiveWorkId().empty());
+    assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_B);
 }
 
 void TestFaultReportsMappedError() {
@@ -449,9 +617,17 @@ void TestStaleJobEventIsIgnored() {
 
 int main() {
     TestDestinationMapsToAssignRoute();
+    TestInitializeWithCurrentPositionSendsResetThenPosition();
+    TestInvalidCurrentPositionIsRejectedWithoutUartWrite();
+    TestDestinationRequiresKnownCurrentPosition();
     TestStopUsesActiveJobId();
     TestRestartMapsToResume();
     TestInitializeMapsToResetAndClearsActiveJob();
+    TestRecoveryUsesCommonDeviceResetAndClearsActiveJob();
+    TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault();
+    TestPendingSafetyCommandCannotBeOverwritten();
+    TestEmergencyStopConfirmationTimesOut();
+    TestEmergencyStopFailsImmediatelyWhenUartDisconnects();
     TestInvalidDestinationIsRejectedWithoutUartWrite();
     TestStopWithoutActiveJobIsRejected();
     TestWrongTargetIsRejected();

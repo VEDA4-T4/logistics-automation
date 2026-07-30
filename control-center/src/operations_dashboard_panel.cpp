@@ -190,6 +190,14 @@ QString SensorStateColor(const QString& measurement_status) {
     return QStringLiteral("#6e6e6e");
 }
 
+QString SensorIndicatorText(const SensorUnitStatus& sensor) {
+    auto text = QStringLiteral("● %1 %2").arg(sensor.display_name, SensorStateText(sensor.measurement_status));
+    if (sensor.distance_cm >= 0) {
+        text.append(QStringLiteral(" · %1 cm").arg(sensor.distance_cm));
+    }
+    return text;
+}
+
 }  // namespace
 
 OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(parent) {
@@ -391,6 +399,7 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
         indicator->setObjectName(QStringLiteral("sensorStatusIndicator"));
         indicator->setProperty("sensorId", sensor.sensor_id);
         indicator->setProperty("measurementStatus", sensor.measurement_status);
+        indicator->setProperty("distanceCm", sensor.distance_cm);
         indicator->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
         sensor_layout->addWidget(indicator);
         widgets.sensor_indicators.insert(sensor.sensor_id, indicator);
@@ -475,11 +484,11 @@ void OperationsDashboardPanel::refreshProcesses() {
             if (indicator == nullptr) {
                 continue;
             }
-            indicator->setText(
-                QStringLiteral("● %1 %2").arg(sensor.display_name, SensorStateText(sensor.measurement_status)));
+            indicator->setText(SensorIndicatorText(sensor));
             indicator->setStyleSheet(QStringLiteral("color:%1;font-size:8px;font-weight:700;")
                                          .arg(SensorStateColor(sensor.measurement_status)));
             indicator->setProperty("measurementStatus", sensor.measurement_status);
+            indicator->setProperty("distanceCm", sensor.distance_cm);
             const auto distance =
                 sensor.distance_cm >= 0 ? QStringLiteral("%1 cm").arg(sensor.distance_cm) : QStringLiteral("거리 없음");
             const auto updated_at =

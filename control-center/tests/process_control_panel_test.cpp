@@ -17,11 +17,13 @@ int main(int argc, char* argv[]) {
     auto* recovery = panel.findChild<QPushButton*>(QStringLiteral("recoveryButton"));
     auto* emergency_stop = panel.findChild<QPushButton*>(QStringLiteral("emergencyStopButton"));
     auto* target_label = panel.findChild<QLabel*>(QStringLiteral("processControlTarget"));
+    auto* command_status = panel.findChild<QLabel*>(QStringLiteral("commandStatus"));
     assert(start != nullptr);
     assert(stop != nullptr);
     assert(recovery != nullptr);
     assert(emergency_stop != nullptr);
     assert(target_label != nullptr);
+    assert(command_status != nullptr);
     assert(stop->text() == QStringLiteral("정지"));
     assert(recovery->text() == QStringLiteral("전체 복구"));
     assert(panel.findChild<QPushButton*>(QStringLiteral("restartButton")) == nullptr);
@@ -45,6 +47,17 @@ int main(int argc, char* argv[]) {
             .updated_at = QDateTime::currentDateTimeUtc(),
             .has_error = false,
         },
+        {
+            .key = QStringLiteral("sorting"),
+            .display_name = QStringLiteral("분류 컨베이어"),
+            .device_id = QStringLiteral("PI-SORTING-01"),
+            .connection_state = logistics::contracts::mqtt::ConnectionState::kOnline,
+            .current_state = QStringLiteral("STOPPED"),
+            .work_id = {},
+            .error_code = {},
+            .updated_at = QDateTime::currentDateTimeUtc(),
+            .has_error = false,
+        },
     };
     panel.setProcessStates(logistics::control_center::OverallProcessState::Error, processes);
     panel.setControlTarget(QStringLiteral("PI-VISION-01"), QStringLiteral("비전 처리"));
@@ -52,6 +65,21 @@ int main(int argc, char* argv[]) {
     assert(target_label->text() == QStringLiteral("제어 대상 · 비전 처리"));
     assert(start->isEnabled());
     assert(!recovery->isEnabled());
+
+    panel.setCommandPending(logistics::contracts::mqtt::ControlCommand::kStart);
+    panel.setCommandFinished(logistics::contracts::mqtt::ControlCommand::kStart,
+                             logistics::contracts::mqtt::CommandResult::kSuccess, QStringLiteral("비전 시작 완료"));
+    assert(command_status->text().contains(QStringLiteral("비전 시작 완료")));
+
+    panel.setControlTarget(QStringLiteral("PI-SORTING-01"), QStringLiteral("분류 컨베이어"));
+    assert(command_status->text() == QStringLiteral("대기 중"));
+    panel.setCommandPending(logistics::contracts::mqtt::ControlCommand::kStop);
+    panel.setCommandFinished(logistics::contracts::mqtt::ControlCommand::kStop,
+                             logistics::contracts::mqtt::CommandResult::kRejected, QStringLiteral("분류 정지 거부"));
+    assert(command_status->text().contains(QStringLiteral("분류 정지 거부")));
+
+    panel.setControlTarget(QStringLiteral("PI-VISION-01"), QStringLiteral("비전 처리"));
+    assert(command_status->text().contains(QStringLiteral("비전 시작 완료")));
 
     processes[0].current_state = QStringLiteral("WAITING_FOR_PRODUCT");
     panel.setProcessStates(logistics::control_center::OverallProcessState::Running, processes);

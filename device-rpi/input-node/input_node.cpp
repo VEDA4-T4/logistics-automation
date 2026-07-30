@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/device/device_control_policy.hpp"
 
 namespace logistics::device {
 namespace {
@@ -278,7 +279,7 @@ void InputNode::SetReportHandler(InputReportHandler handler) {
 }
 
 bool InputNode::IsTargetedToThisNode(std::string_view target_device_id) const noexcept {
-    return target_device_id == device_id_ || target_device_id == "ALL";
+    return IsControlTargetForDevice(target_device_id, device_id_);
 }
 
 InputCommandResult InputNode::HandleMqttCommand(const mqtt::MqttMessage& message) {
@@ -301,6 +302,22 @@ InputCommandResult InputNode::HandleMqttCommand(const mqtt::MqttMessage& message
     return result;
 }
 
+InputCommandResult InputNode::RequestControllerStatus() {
+    InputCommandResult result{
+        .mqtt_command = mqtt::ControlCommand::kUnknown,
+        .uart_command = UART_CMD_INPUT_CONVEYOR_GET_STATUS,
+    };
+    result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_GET_STATUS, {});
+    if (result.Succeeded()) {
+        EmitConveyorStatus(result.uart_result.response_frame);
+    }
+    return result;
+}
+
+bool InputNode::HasPendingSafetyCommand() const noexcept {
+    return pending_safety_.active;
+}
+
 InputCommandResult InputNode::HandleEmergencyStop(const mqtt::EmergencyStopPayload& command) {
     InputCommandResult result{
         .mqtt_command = command.command,
@@ -310,6 +327,11 @@ InputCommandResult InputNode::HandleEmergencyStop(const mqtt::EmergencyStopPaylo
     if (!IsTargetedToThisNode(command.target_device_id)) {
         result.status = InputCommandStatus::kInvalidTarget;
         EmitCommandResponse(result, "emergency stop was not addressed to this device");
+        return result;
+    }
+    if (pending_safety_.active) {
+        result.status = InputCommandStatus::kRejected;
+        EmitCommandResponse(result, "another safety command is waiting for controller confirmation");
         return result;
     }
 
@@ -340,10 +362,17 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
         return result;
     }
 
+    const DeviceControlAction action = ResolveDeviceControlAction(command.command, command.component_id);
+    if (pending_safety_.active && action != DeviceControlAction::kStatusRequest) {
+        result.status = InputCommandStatus::kRejected;
+        EmitCommandResponse(result, "another safety command is waiting for controller confirmation");
+        return result;
+    }
+
     const std::array<std::uint8_t, UART_INPUT_CONVEYOR_COMMAND_PAYLOAD_SIZE> conveyor_payload{};
 
-    switch (command.command) {
-        case mqtt::ControlCommand::kStart: {
+    switch (action) {
+        case DeviceControlAction::kStart: {
             if (const auto speed = SpeedFromParams(command.params); speed.has_value()) {
                 const std::array<std::uint8_t, UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE> speed_payload{ *speed };
                 InputCommandResult speed_result = Execute(result, UART_CMD_INPUT_CONVEYOR_SET_SPEED, speed_payload);
@@ -359,28 +388,28 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
             }
             return result;
         }
-        case mqtt::ControlCommand::kStop:
+        case DeviceControlAction::kStop:
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_STOP, conveyor_payload);
             EmitCommandResponse(result, "input conveyor stop");
             if (result.Succeeded()) {
                 EmitDeviceStatus("STOPPED");
             }
             return result;
-        case mqtt::ControlCommand::kStatusRequest:
+        case DeviceControlAction::kStatusRequest:
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_GET_STATUS, conveyor_payload);
             if (result.Succeeded()) {
                 EmitConveyorStatus(result.uart_result.response_frame);
             }
             EmitCommandResponse(result, "input conveyor status");
             return result;
-        case mqtt::ControlCommand::kInitialize:
+        case DeviceControlAction::kInitialize:
             // Soft reset: clears control-level errors and stops the conveyor. The
             // controller answers this synchronously and rejects it while an
             // emergency stop is latched (use RECOVERY to clear the latch).
             result = Execute(std::move(result), UART_CMD_INPUT_CONTROL_RESET, {});
             EmitCommandResponse(result, "input controller reset");
             return result;
-        case mqtt::ControlCommand::kRecovery:
+        case DeviceControlAction::kSafetyRecovery:
             // Full device recovery: releases the emergency-stop latch via the
             // controller's SafetyTask. Like EMERGENCY_STOP, RESET_DEVICE is
             // answered with an asynchronous EVENT/DEVICE_STATUS broadcast rather
@@ -399,10 +428,9 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
                 EmitCommandResponse(result, "input controller recovery could not be sent");
             }
             return result;
-        case mqtt::ControlCommand::kRestart:
-        case mqtt::ControlCommand::kDestinationSet:
-        case mqtt::ControlCommand::kEmergencyStop:
-        case mqtt::ControlCommand::kUnknown:
+        case DeviceControlAction::kComponentRecovery:
+        case DeviceControlAction::kEmergencyStop:
+        case DeviceControlAction::kUnsupported:
         default:
             result.status = InputCommandStatus::kUnsupportedCommand;
             EmitCommandResponse(result, "input node does not support this control command");
@@ -602,7 +630,8 @@ void InputNode::HandleDeviceStatus(const uart_frame_t& frame) {
     }
     const std::uint8_t device_state = frame.payload[UART_DEVICE_STATUS_STATE_INDEX];
     const std::uint8_t error_code = frame.payload[UART_DEVICE_STATUS_ERROR_INDEX];
-    const bool has_error = error_code != UART_ERROR_NONE;
+    const bool emergency_stopped = device_state == UART_DEVICE_EMERGENCY_STOP;
+    const bool has_error = error_code != UART_ERROR_NONE && !emergency_stopped;
 
     EmitReport({
         .channel = InputReportChannel::kStatus,
@@ -646,7 +675,8 @@ void InputNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
         return;
     }
 
-    const bool has_error = error_code != UART_ERROR_NONE;
+    const bool emergency_stopped = device_state == UART_DEVICE_EMERGENCY_STOP;
+    const bool has_error = error_code != UART_ERROR_NONE && !emergency_stopped;
     EmitReport({
         .channel = InputReportChannel::kStatus,
         .message_type = mqtt::MessageType::kDeviceStatus,
@@ -674,6 +704,13 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     const bool has_detail = frame.length > kAppEventCauseIndex;
     const std::uint8_t kind = has_detail ? frame.payload[kAppEventKindIndex] : 0U;
     const std::uint8_t cause = has_detail ? frame.payload[kAppEventCauseIndex] : 0U;
+
+    // A timed-out UART cannot receive its own health event, so the STM32 sends
+    // this event over the opposite, still healthy channel. The central server
+    // already determines the affected Pi's availability from MQTT heartbeats.
+    if (event_id == kAppEventHealth && kind == 1U) {
+        return;
+    }
 
     if ((event_id == kAppEventSafety) && pending_safety_.active) {
         const bool estopConfirmed =
@@ -717,18 +754,37 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     }
     last_controller_event_signature_ = signature;
 
-    if (event_id == kAppEventSafety && kind == kSafetyEventResetComplete) {
-        // The emergency-stop latch was released successfully. That is a recovery,
-        // not a fault, so report the resulting state instead of publishing good
-        // news on the error channel. The controller sets DEVICE_READY at the same
-        // moment (safety_task.c), so mirror that state here.
+    if (event_id == kAppEventSafety && kind == kSafetyEventEstopLatched) {
         EmitReport({
             .channel = InputReportChannel::kStatus,
             .message_type = mqtt::MessageType::kDeviceStatus,
             .data =
                 mqtt::DeviceStatusPayload{
                     .status = mqtt::ConnectionState::kOnline,
-                    .current_state = DeviceStateName(UART_DEVICE_READY),
+                    .current_state = DeviceStateName(UART_DEVICE_EMERGENCY_STOP),
+                    .job_id = std::nullopt,
+                    .error_code = std::nullopt,
+                },
+        });
+        if (last_heartbeat_state_.has_value()) {
+            last_heartbeat_state_->device_state = UART_DEVICE_EMERGENCY_STOP;
+            last_heartbeat_state_->error_code = UART_ERROR_NONE;
+        } else {
+            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE, UART_SENSOR_CLEAR };
+        }
+        return;
+    }
+
+    if (event_id == kAppEventSafety && kind == kSafetyEventResetComplete) {
+        // Recovery releases the safety latch but does not start the process.
+        // Report STOPPED so an explicit START is still required.
+        EmitReport({
+            .channel = InputReportChannel::kStatus,
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .data =
+                mqtt::DeviceStatusPayload{
+                    .status = mqtt::ConnectionState::kOnline,
+                    .current_state = DeviceStateName(UART_DEVICE_STOPPED),
                     .job_id = std::nullopt,
                     .error_code = std::nullopt,
                 },
@@ -738,10 +794,10 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
         // second later. The sensor field is left as whatever heartbeat last saw (or
         // CLEAR if none yet) since this event carries no sensor information.
         if (last_heartbeat_state_.has_value()) {
-            last_heartbeat_state_->device_state = UART_DEVICE_READY;
+            last_heartbeat_state_->device_state = UART_DEVICE_STOPPED;
             last_heartbeat_state_->error_code = UART_ERROR_NONE;
         } else {
-            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR };
+            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR };
         }
         return;
     }
