@@ -274,7 +274,7 @@ void LineTracerNode::Tick(const std::chrono::milliseconds elapsed) noexcept {
         return;
     }
 
-    if (HasActiveJob() && uart_session_.IsOpen()) {
+    if (uart_session_.IsOpen()) {
         keepalive_elapsed_ += elapsed;
         if (keepalive_elapsed_ > kStatusKeepaliveInterval) {
             keepalive_elapsed_ = kStatusKeepaliveInterval;
@@ -294,7 +294,7 @@ void LineTracerNode::Tick(const std::chrono::milliseconds elapsed) noexcept {
 }
 
 bool LineTracerNode::TrySendStatusKeepalive() noexcept {
-    if (!HasActiveJob() || keepalive_elapsed_ < kStatusKeepaliveInterval || keepalive_pending_ || pending_.active ||
+    if (keepalive_elapsed_ < kStatusKeepaliveInterval || keepalive_pending_ || pending_.active ||
         pending_safety_.active || !uart_session_.IsOpen() || uart_session_.HasPendingCommand()) {
         return false;
     }

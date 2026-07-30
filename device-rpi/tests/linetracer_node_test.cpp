@@ -641,13 +641,20 @@ void TestStaleJobEventIsIgnored() {
     assert(fixture.node->HasActiveJob());
 }
 
-void TestKeepaliveIsDisabledWithoutActiveJob() {
+void TestKeepaliveRunsWithoutActiveJob() {
     Fixture fixture;
 
-    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
-
+    fixture.node->Tick(std::chrono::milliseconds{ 999 });
     assert(!fixture.node->TrySendStatusKeepalive());
     assert(fixture.backend->writes.empty());
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1 });
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == 1U);
+
+    const uart_frame_t frame = fixture.LastFrame();
+    assert(frame.command == UART_CMD_LINETRACER_GET_STATUS);
+    assert(frame.length == UART_LINETRACER_GET_STATUS_PAYLOAD_SIZE);
 }
 
 void TestKeepaliveWaitsForOneSecondAndSendsStatusRequest() {
@@ -682,7 +689,6 @@ void TestKeepaliveDefersWhileAnotherCommandIsPending() {
 
 void TestKeepaliveResponseClearsPendingWithoutMqttResponse() {
     Fixture fixture;
-    AssignAndAcknowledge(fixture);
     fixture.node->Tick(std::chrono::milliseconds{ 1000 });
     assert(fixture.node->TrySendStatusKeepalive());
     assert(fixture.session->HasPendingCommand());
@@ -696,7 +702,7 @@ void TestKeepaliveResponseClearsPendingWithoutMqttResponse() {
     assert(fixture.node->TrySendStatusKeepalive());
 }
 
-void TestResetStopsKeepalive() {
+void TestResetKeepsConnectionAliveWithoutActiveJob() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
     assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kInitialize)).Succeeded());
@@ -706,11 +712,12 @@ void TestResetStopsKeepalive() {
     fixture.node->Tick(std::chrono::milliseconds{ 1000 });
 
     assert(!fixture.node->HasActiveJob());
-    assert(!fixture.node->TrySendStatusKeepalive());
-    assert(fixture.backend->writes.size() == writes_before);
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before + 1U);
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_GET_STATUS);
 }
 
-void TestUnloadCompleteStopsKeepalive() {
+void TestUnloadCompleteKeepsConnectionAliveWithoutActiveJob() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
     fixture.PushEvent(UART_LINETRACER_EVENT_UNLOAD_COMPLETE);
@@ -718,8 +725,10 @@ void TestUnloadCompleteStopsKeepalive() {
 
     fixture.node->Tick(std::chrono::milliseconds{ 1000 });
 
-    assert(!fixture.node->TrySendStatusKeepalive());
-    assert(fixture.backend->writes.size() == writes_before);
+    assert(!fixture.node->HasActiveJob());
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before + 1U);
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_GET_STATUS);
 }
 
 void TestDisconnectedUartStopsKeepalive() {
@@ -760,12 +769,12 @@ int main() {
     TestUnloadCompleteReportsCompletionAndClearsMapping();
     TestFaultReportsMappedError();
     TestStaleJobEventIsIgnored();
-    TestKeepaliveIsDisabledWithoutActiveJob();
+    TestKeepaliveRunsWithoutActiveJob();
     TestKeepaliveWaitsForOneSecondAndSendsStatusRequest();
     TestKeepaliveDefersWhileAnotherCommandIsPending();
     TestKeepaliveResponseClearsPendingWithoutMqttResponse();
-    TestResetStopsKeepalive();
-    TestUnloadCompleteStopsKeepalive();
+    TestResetKeepsConnectionAliveWithoutActiveJob();
+    TestUnloadCompleteKeepsConnectionAliveWithoutActiveJob();
     TestDisconnectedUartStopsKeepalive();
     return 0;
 }
