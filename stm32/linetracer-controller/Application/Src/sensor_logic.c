@@ -555,12 +555,18 @@ void SensorLogic_UpdateUltrasonic(sensor_logic_context_t *context,
     if ((valid == 0U) || (distance_field == NULL) ||
         (distance_mm < SENSOR_ULTRASONIC_MIN_MM) ||
         (distance_mm > SENSOR_ULTRASONIC_MAX_MM)) {
-        context->diagnostics.valid_flags &= ~s_ultrasonic_valid_flags[sensor_index];
+        context->ultrasonic_recovery_count[sensor_index] = 0U;
         if (context->ultrasonic_failure_count[sensor_index] < UINT8_MAX) {
             context->ultrasonic_failure_count[sensor_index]++;
         }
-        if (context->ultrasonic_failure_count[sensor_index] >=
-            SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES) {
+        if ((context->ultrasonic_failure_count[sensor_index] >=
+             SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES) ||
+            (SensorLogic_TimeElapsed(
+                 now_ms,
+                 context->ultrasonic_last_success_ms[sensor_index],
+                 SENSOR_ULTRASONIC_STALE_MS) != 0U)) {
+            context->diagnostics.valid_flags &=
+                ~s_ultrasonic_valid_flags[sensor_index];
             SensorLogic_SetErrorFlags(
                 context,
                 context->diagnostics.error_flags | s_ultrasonic_error_flags[sensor_index],
@@ -572,9 +578,26 @@ void SensorLogic_UpdateUltrasonic(sensor_logic_context_t *context,
     *distance_field = distance_mm;
     context->ultrasonic_failure_count[sensor_index] = 0U;
     context->ultrasonic_last_success_ms[sensor_index] = now_ms;
-    context->diagnostics.valid_flags |= s_ultrasonic_valid_flags[sensor_index];
-    error_flags = context->diagnostics.error_flags & ~s_ultrasonic_error_flags[sensor_index];
-    SensorLogic_SetErrorFlags(context, error_flags, now_ms);
+    if ((context->diagnostics.error_flags &
+         s_ultrasonic_error_flags[sensor_index]) != 0U) {
+        if (context->ultrasonic_recovery_count[sensor_index] < UINT8_MAX) {
+            context->ultrasonic_recovery_count[sensor_index]++;
+        }
+        if (context->ultrasonic_recovery_count[sensor_index] >=
+            SENSOR_ULTRASONIC_RECOVERY_SUCCESSES) {
+            context->ultrasonic_recovery_count[sensor_index] = 0U;
+            context->diagnostics.valid_flags |=
+                s_ultrasonic_valid_flags[sensor_index];
+            error_flags =
+                context->diagnostics.error_flags &
+                ~s_ultrasonic_error_flags[sensor_index];
+            SensorLogic_SetErrorFlags(context, error_flags, now_ms);
+        }
+    } else {
+        context->ultrasonic_recovery_count[sensor_index] = 0U;
+        context->diagnostics.valid_flags |=
+            s_ultrasonic_valid_flags[sensor_index];
+    }
 
     previous_mask = context->diagnostics.obstacle_mask;
     if (((previous_mask & direction_flag) == 0U) &&
@@ -621,6 +644,9 @@ void SensorLogic_CheckStaleness(sensor_logic_context_t *context,
         if (SensorLogic_TimeElapsed(now_ms,
                                     context->ultrasonic_last_success_ms[index],
                                     SENSOR_ULTRASONIC_STALE_MS) != 0U) {
+            context->ultrasonic_failure_count[index] =
+                SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES;
+            context->ultrasonic_recovery_count[index] = 0U;
             context->diagnostics.valid_flags &= ~s_ultrasonic_valid_flags[index];
             error_flags |= s_ultrasonic_error_flags[index];
         }

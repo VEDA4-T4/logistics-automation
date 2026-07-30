@@ -36,8 +36,9 @@
 #define SENSOR_OBSTACLE_ON_MM 150U
 #define SENSOR_OBSTACLE_OFF_MM 220U
 #define SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES 3U
+#define SENSOR_ULTRASONIC_RECOVERY_SUCCESSES 3U
 #define SENSOR_ULTRASONIC_ECHO_TIMEOUT_MS 30U
-#define SENSOR_ULTRASONIC_STALE_MS 750U
+#define SENSOR_ULTRASONIC_STALE_MS 500U
 
 /* TIM1 is configured at runtime to count one tick per microsecond. */
 #define SENSOR_ULTRASONIC_TIMER_HZ 1000000U
@@ -85,6 +86,14 @@
 
 #if (SENSOR_ULTRASONIC_MIN_MM >= SENSOR_ULTRASONIC_MAX_MM)
 #error "Ultrasonic minimum distance must be shorter than maximum distance"
+#endif
+
+#if (SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES == 0U)
+#error "Ultrasonic failure filter must contain at least one sample"
+#endif
+
+#if (SENSOR_ULTRASONIC_RECOVERY_SUCCESSES == 0U)
+#error "Ultrasonic recovery filter must contain at least one sample"
 #endif
 
 #if (SENSOR_ULTRASONIC_STALE_MS <= (APP_TIMING_ULTRASONIC_PERIOD_MS * 4U))
