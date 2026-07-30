@@ -146,6 +146,7 @@ target_link_libraries(
 
 add_library(
     logistics_central_server_process_orchestrator
+    src/process_manager/homography.cpp
     src/process_manager/process_orchestrator.cpp
 )
 add_library(
@@ -436,6 +437,14 @@ if(BUILD_TESTING)
         NAME central_server_process_orchestrator_test
         COMMAND central_server_process_orchestrator_test
     )
+
+    add_executable(central_server_homography_test tests/homography_test.cpp)
+    target_link_libraries(
+        central_server_homography_test
+        PRIVATE logistics::central_server_process_orchestrator
+    )
+    logistics_enable_warnings(central_server_homography_test)
+    add_test(NAME central_server_homography_test COMMAND central_server_homography_test)
 
     add_executable(
         central_server_mqtt_handler_test

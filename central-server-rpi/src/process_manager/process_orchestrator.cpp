@@ -42,6 +42,20 @@ namespace mqtt = contracts::mqtt;
     };
 }
 
+[[nodiscard]] ProcessOrchestrationResult Rejected(std::string reason) {
+    return {
+        .handled = true,
+        .transition =
+            {
+                .disposition = TransitionDisposition::kRejected,
+                .previous_stage = std::nullopt,
+                .current_stage = std::nullopt,
+                .reason = std::move(reason),
+            },
+        .commands = {},
+    };
+}
+
 [[nodiscard]] ProcessEvent Event(ProcessEventType type, const mqtt::MqttMessage& message, std::string work_id,
                                  std::string reason = {}) {
     return {
@@ -63,10 +77,11 @@ bool ProcessOrchestratorConfig::IsValid() const noexcept {
     return mqtt::IsValidTopicLevel(server_id) && mqtt::IsValidTopicLevel(input_device_id) &&
            mqtt::IsValidTopicLevel(vision_device_id) && mqtt::IsValidTopicLevel(gripper_device_id) &&
            mqtt::IsValidTopicLevel(sorting_device_id) && mqtt::IsValidTopicLevel(line_tracer_device_id) &&
-           initial_position_valid;
+           initial_position_valid && (!homography.enabled || homography.IsValid());
 }
 
-ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config) : config_(std::move(config)) {
+ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config)
+    : config_(std::move(config)), homography_(config_.homography) {
     if (!config_.IsValid()) {
         throw std::invalid_argument("invalid process orchestrator device identifier");
     }
@@ -242,8 +257,15 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                                                            const mqtt::MqttMessage& message, bool create_commands) {
     ProcessEvent event;
     bool mapped = true;
+    std::optional<GripperTarget> position_target;
 
     if (const auto* position = mqtt::GetPayload<mqtt::PositionDetectedPayload>(message)) {
+        if (homography_.Enabled()) {
+            position_target = homography_.Transform(*position);
+            if (!position_target.has_value()) {
+                return Rejected("position detection is missing valid rotated box corners for homography");
+            }
+        }
         event = Event(ProcessEventType::kPositionDetected, message, position->work_id);
     } else if (const auto* barcode = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(message)) {
         const bool succeeded = barcode->recognition_status == "SUCCESS";
@@ -251,6 +273,9 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                       barcode->work_id, barcode->message.value_or("barcode recognition failed"));
     } else if (const auto* product = mqtt::GetPayload<mqtt::ProductInfoPayload>(message)) {
         const bool succeeded = product->recognition_status == "SUCCESS" && !product->destination.empty();
+        if (succeeded && homography_.Enabled() && !gripper_targets_.contains(product->work_id)) {
+            return Rejected("gripper target is unavailable; a valid position detection is required first");
+        }
         event = Event(succeeded ? ProcessEventType::kProductInfoReady : ProcessEventType::kProductInfoFailed, message,
                       product->work_id, product->message.value_or("product information is incomplete"));
         event.destination = product->destination;
@@ -312,6 +337,9 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         .transition = machine.Apply(event),
         .commands = {},
     };
+    if (result.transition.Applied() && position_target.has_value()) {
+        gripper_targets_.insert_or_assign(event.work_id, *position_target);
+    }
     if (!result.transition.Applied() || !create_commands) {
         return result;
     }
@@ -321,7 +349,10 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         return result;
     }
     if (event.type == ProcessEventType::kProductInfoReady) {
-        result.commands.push_back(MakeGripperCommand(work->work_id, work->destination, message.timestamp));
+        const auto target = gripper_targets_.find(work->work_id);
+        result.commands.push_back(MakeGripperCommand(work->work_id, work->destination,
+                                                     target == gripper_targets_.end() ? nullptr : &target->second,
+                                                     message.timestamp));
     } else if (event.type == ProcessEventType::kGripperCompleted) {
         result.commands.push_back(MakeDestinationCommand(work->work_id, work->destination, config_.sorting_device_id,
                                                          ProcessEventType::kSortingCommandDispatched,
@@ -331,12 +362,30 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             MakeDestinationCommand(work->work_id, work->destination, config_.line_tracer_device_id,
                                    ProcessEventType::kTransportCommandDispatched, message.timestamp));
     }
+    if (event.type == ProcessEventType::kWorkCompleted || event.type == ProcessEventType::kWorkFailed) {
+        gripper_targets_.erase(event.work_id);
+    }
     return result;
 }
 
 ProcessCommandIntent ProcessOrchestrator::MakeGripperCommand(std::string_view work_id, std::string_view destination,
-                                                             std::string_view timestamp) {
+                                                             const GripperTarget* target, std::string_view timestamp) {
     const std::string request_id = NextMessageId();
+    mqtt::Json params{ { "workId", work_id }, { "destination", destination }, { "action", "PICK" } };
+    if (target != nullptr) {
+        params["coordinateFrame"] = target->coordinate_frame;
+        params["unit"] = "mm";
+        params["targetPose"] = {
+            { "x", target->x_mm }, { "y", target->y_mm }, { "z", target->z_mm },
+            { "rollDeg", 180.0 },  { "pitchDeg", 0.0 },   { "yawDeg", target->yaw_deg },
+        };
+        params["box"] = {
+            { "length", target->box_length_mm },
+            { "width", target->box_width_mm },
+            { "height", target->box_height_mm },
+        };
+        params["calibrationVersion"] = target->calibration_version;
+    }
     return {
         .message =
             {
@@ -351,7 +400,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeGripperCommand(std::string_view wo
                         .command = mqtt::ControlCommand::kStart,
                         .target_device_id = config_.gripper_device_id,
                         .component_id = "gripper",
-                        .params = mqtt::Json{ { "workId", work_id }, { "destination", destination } },
+                        .params = std::move(params),
                     },
             },
         .dispatched_event = ProcessEventType::kGripperCommandDispatched,
