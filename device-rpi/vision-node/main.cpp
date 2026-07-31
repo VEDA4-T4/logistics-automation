@@ -618,7 +618,7 @@ int main(const int argc, char* argv[]) {
                 }
             }
         }
-        pending_capture.Observe(frame, detection_result.box.has_value(), detection_result.barcode.has_value(),
+        pending_capture.Observe(frame, detection_result.box.has_value(), !detection_result.barcodes.empty(),
                                 mqtt_workflow.HasPendingBarcode() || mqtt_workflow.NeedsBarcodeFallback());
 
         if (auto work = mqtt_workflow.TakeAssignedWork(); work.has_value() && control_state.IsOperational()) {
