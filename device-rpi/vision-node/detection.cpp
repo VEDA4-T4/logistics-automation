@@ -80,10 +80,12 @@ DetectionResult DetectionModule::Process(const cv::Mat& frame, const bool allow_
 
     const cv::Mat box_roi = frame(result.box->roi);
     std::vector<cv::Point2f> detected_corners;
+    const std::size_t next_consecutive_barcode_failures = consecutive_barcode_failures_ + 1;
     const bool reached_failure_threshold =
-        ++consecutive_barcode_failures_ >= static_cast<std::size_t>(config_.failure_frames_before_super_resolution);
+        next_consecutive_barcode_failures >= static_cast<std::size_t>(config_.failure_frames_before_super_resolution);
     const bool detected = DetectBarcodeRegionsWithFallback(box_roi, allow_expensive_fallback, reached_failure_threshold,
                                                            detected_corners, result.diagnostics);
+    ++consecutive_barcode_failures_;
 
     result.diagnostics.barcode_region_detected = detected;
     if (!detected) {
