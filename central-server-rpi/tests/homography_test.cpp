@@ -92,7 +92,7 @@ void TestCornersAreRequiredWhenEnabled() {
 void TestEquivalentScaledMatrixRemainsValid() {
     central_server::HomographyConfig config = Config();
     for (double& coefficient : config.pixel_to_conveyor) {
-        coefficient *= 1.0e-4;
+        coefficient *= 1.0e-12;
     }
 
     assert(config.IsValid());

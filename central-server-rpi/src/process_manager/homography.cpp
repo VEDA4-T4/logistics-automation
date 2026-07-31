@@ -43,11 +43,16 @@ constexpr double kPi = 3.14159265358979323846;
     return x * x + y * y;
 }
 
-[[nodiscard]] bool IsScaleIndependentInvertible(const std::array<double, 9>& matrix) noexcept {
-    double coefficient_scale{};
+[[nodiscard]] double CoefficientScale(const std::array<double, 9>& matrix) noexcept {
+    double scale{};
     for (const double value : matrix) {
-        coefficient_scale = std::max(coefficient_scale, std::abs(value));
+        scale = std::max(scale, std::abs(value));
     }
+    return scale;
+}
+
+[[nodiscard]] bool IsScaleIndependentInvertible(const std::array<double, 9>& matrix) noexcept {
+    const double coefficient_scale = CoefficientScale(matrix);
     if (coefficient_scale == 0.0) {
         return false;
     }
@@ -76,6 +81,12 @@ bool HomographyConfig::IsValid() const noexcept {
 HomographyTransformer::HomographyTransformer(HomographyConfig config) : config_(std::move(config)) {
     if (config_.enabled && !config_.IsValid()) {
         throw std::invalid_argument("invalid homography configuration");
+    }
+    if (config_.enabled) {
+        const double coefficient_scale = CoefficientScale(config_.pixel_to_conveyor);
+        for (double& coefficient : config_.pixel_to_conveyor) {
+            coefficient /= coefficient_scale;
+        }
     }
 }
 
