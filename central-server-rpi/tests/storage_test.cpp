@@ -57,7 +57,7 @@ int main() {
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(database.IntegrityCheck().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 4);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 6);
     assert(Scalar(database,
                   "SELECT count(*) FROM product_catalog WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
                   "product_name='VEDA107 기본 상품' AND destination='1' AND active=1") == 1);

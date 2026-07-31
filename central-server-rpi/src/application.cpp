@@ -179,9 +179,9 @@ int Application::Run(int argc, char* argv[]) {
         return 5;
     }
     if (stored_process_state.has_value() &&
-        !process_orchestrator.RestoreAfterServerRestart(stored_process_state->system_state,
-                                                        std::move(stored_process_state->works),
-                                                        stored_process_state->message_sequence)) {
+        !process_orchestrator.RestoreAfterServerRestart(
+            stored_process_state->system_state, std::move(stored_process_state->works),
+            std::move(stored_process_state->gripper_targets), stored_process_state->message_sequence)) {
         std::cerr << "[server][ERROR] stored process state is invalid\n";
         return 5;
     }
@@ -189,9 +189,10 @@ int Application::Run(int argc, char* argv[]) {
     const auto persist_process_state = [&process_orchestrator, &process_state_store]() {
         DatabaseStatus status;
         for (int attempt = 0; attempt < 3; ++attempt) {
-            status = process_state_store.Save(
-                process_orchestrator.StateMachine().SystemState(), process_orchestrator.MessageSequence(),
-                process_orchestrator.StateMachine().ActiveWorks(), CurrentUnixTimeMilliseconds());
+            status = process_state_store.Save(process_orchestrator.StateMachine().SystemState(),
+                                              process_orchestrator.MessageSequence(),
+                                              process_orchestrator.StateMachine().ActiveWorks(),
+                                              process_orchestrator.GripperTargets(), CurrentUnixTimeMilliseconds());
             if (status.ok()) {
                 return true;
             }

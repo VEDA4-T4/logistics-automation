@@ -236,13 +236,26 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
 
 bool ProcessOrchestrator::RestoreAfterServerRestart(ProcessSystemState stored_state,
                                                     std::vector<WorkProcessSnapshot> works,
+                                                    std::unordered_map<std::string, GripperTarget> gripper_targets,
                                                     std::uint64_t message_sequence) {
     if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
         return false;
     }
+    for (auto iterator = gripper_targets.begin(); iterator != gripper_targets.end();) {
+        if (!state_machine_.FindWork(iterator->first).has_value()) {
+            iterator = gripper_targets.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
+    gripper_targets_ = std::move(gripper_targets);
     message_sequence_ = message_sequence;
     ++revision_;
     return true;
+}
+
+const std::unordered_map<std::string, GripperTarget>& ProcessOrchestrator::GripperTargets() const noexcept {
+    return gripper_targets_;
 }
 
 std::uint64_t ProcessOrchestrator::MessageSequence() const noexcept {

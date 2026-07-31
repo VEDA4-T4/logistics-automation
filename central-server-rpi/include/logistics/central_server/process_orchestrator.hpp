@@ -56,7 +56,9 @@ public:
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
     [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
                                                  std::vector<WorkProcessSnapshot> works,
+                                                 std::unordered_map<std::string, GripperTarget> gripper_targets,
                                                  std::uint64_t message_sequence);
+    [[nodiscard]] const std::unordered_map<std::string, GripperTarget>& GripperTargets() const noexcept;
     [[nodiscard]] std::uint64_t MessageSequence() const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
 

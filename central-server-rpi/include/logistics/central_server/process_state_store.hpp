@@ -2,9 +2,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "logistics/central_server/database.hpp"
+#include "logistics/central_server/homography.hpp"
 #include "logistics/central_server/process_state_machine.hpp"
 
 namespace logistics::central_server {
@@ -13,6 +15,7 @@ struct StoredProcessState final {
     ProcessSystemState system_state{ ProcessSystemState::kIdle };
     std::uint64_t message_sequence{};
     std::vector<WorkProcessSnapshot> works;
+    std::unordered_map<std::string, GripperTarget> gripper_targets;
 };
 
 class ProcessStateStore final {
@@ -21,7 +24,9 @@ public:
 
     [[nodiscard]] DatabaseStatus Load(std::optional<StoredProcessState>& output);
     [[nodiscard]] DatabaseStatus Save(ProcessSystemState system_state, std::uint64_t message_sequence,
-                                      const std::vector<WorkProcessSnapshot>& works, std::int64_t updated_at_ms);
+                                      const std::vector<WorkProcessSnapshot>& works,
+                                      const std::unordered_map<std::string, GripperTarget>& gripper_targets,
+                                      std::int64_t updated_at_ms);
 
 private:
     Database& database_;

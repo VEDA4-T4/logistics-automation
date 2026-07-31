@@ -38,7 +38,21 @@ void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
                 .failure_reason = {},
             },
         };
-        assert(store.Save(central_server::ProcessSystemState::kRunning, 42, works, 1000).ok());
+        const std::unordered_map<std::string, central_server::GripperTarget> targets{
+            { kWorkId,
+              {
+                  .x_mm = 125.5,
+                  .y_mm = -42.25,
+                  .z_mm = 950.0,
+                  .yaw_deg = 17.5,
+                  .box_length_mm = 400.0,
+                  .box_width_mm = 200.0,
+                  .box_height_mm = 150.0,
+                  .coordinate_frame = "PI-GRIPPER-01_BASE",
+                  .calibration_version = 3,
+              } },
+        };
+        assert(store.Save(central_server::ProcessSystemState::kRunning, 42, works, targets, 1000).ok());
     }
 
     {
@@ -51,6 +65,14 @@ void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
         assert(stored.has_value());
         assert(stored->message_sequence == 42);
         assert(stored->works.size() == 1);
+        assert(stored->gripper_targets.size() == 1);
+        const auto& target = stored->gripper_targets.at(kWorkId);
+        assert(target.x_mm == 125.5);
+        assert(target.y_mm == -42.25);
+        assert(target.z_mm == 950.0);
+        assert(target.yaw_deg == 17.5);
+        assert(target.coordinate_frame == "PI-GRIPPER-01_BASE");
+        assert(target.calibration_version == 3);
 
         central_server::ProcessStateMachine machine;
         assert(machine.RestoreAfterServerRestart(stored->system_state, stored->works));
