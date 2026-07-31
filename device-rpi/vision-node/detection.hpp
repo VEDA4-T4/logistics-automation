@@ -45,6 +45,8 @@ struct DetectionResult {
     DetectionDiagnostics diagnostics;
 };
 
+[[nodiscard]] bool IsRotatedRectangleInsideFrame(const cv::RotatedRect& rectangle, cv::Size frame_size) noexcept;
+
 class DetectionModule final {
 public:
     explicit DetectionModule(VisionProcessingConfig config = {});

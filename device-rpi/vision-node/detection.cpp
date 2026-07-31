@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <opencv2/imgproc.hpp>
 #include <stdexcept>
@@ -42,6 +43,18 @@ double PointDistance(const cv::Point2f& first, const cv::Point2f& second) {
 }
 
 }  // namespace
+
+bool IsRotatedRectangleInsideFrame(const cv::RotatedRect& rectangle, const cv::Size frame_size) noexcept {
+    if (frame_size.width <= 0 || frame_size.height <= 0) {
+        return false;
+    }
+    std::array<cv::Point2f, 4> corners{};
+    rectangle.points(corners.data());
+    return std::ranges::all_of(corners, [frame_size](const cv::Point2f& corner) {
+        return std::isfinite(corner.x) && std::isfinite(corner.y) && corner.x >= 0.0F && corner.y >= 0.0F &&
+               corner.x < static_cast<float>(frame_size.width) && corner.y < static_cast<float>(frame_size.height);
+    });
+}
 
 DetectionModule::DetectionModule(VisionProcessingConfig config) : config_(std::move(config)) {
     if (!config_.IsValid()) {
@@ -347,7 +360,7 @@ std::optional<DetectedBox> DetectionModule::DetectStyrofoamBox(const cv::Mat& fr
         const cv::RotatedRect outline = cv::minAreaRect(contour);
         const double width = static_cast<double>(outline.size.width);
         const double height = static_cast<double>(outline.size.height);
-        if (width <= 0.0 || height <= 0.0) {
+        if (width <= 0.0 || height <= 0.0 || !IsRotatedRectangleInsideFrame(outline, frame.size())) {
             continue;
         }
 

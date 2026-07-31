@@ -334,6 +334,12 @@ if(BUILD_TESTING)
         target_link_libraries(vision_processing_config_test PRIVATE logistics::vision_processing_config)
         logistics_enable_warnings(vision_processing_config_test)
         add_test(NAME vision_processing_config_test COMMAND vision_processing_config_test)
+
+        add_executable(vision_detection_test tests/vision_detection_test.cpp)
+        target_link_libraries(vision_detection_test PRIVATE logistics::vision_detection)
+        logistics_enable_warnings(vision_detection_test)
+        add_test(NAME vision_detection_test COMMAND vision_detection_test)
+
     endif()
 
     add_executable(device_image_uploader_test tests/image_uploader_test.cpp)
