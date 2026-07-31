@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "logistics/central_server/database.hpp"
+#include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_message.hpp"
 
 namespace logistics::central_server {
@@ -149,8 +150,7 @@ public:
     [[nodiscard]] PersistenceResult PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                           const EventPayload& payload,
                                                           const TransportMetadata& metadata);
-    [[nodiscard]] DatabaseStatus InvalidateWork(std::string_view work_id, std::string_view error_code,
-                                                std::string_view message, std::int64_t occurred_at_ms);
+    [[nodiscard]] DatabaseStatus RecordWorkInvalidation(const WorkInvalidation& invalidation);
     [[nodiscard]] DatabaseStatus FindActiveProductByBarcode(std::string_view barcode,
                                                             std::optional<CatalogProduct>& output);
 

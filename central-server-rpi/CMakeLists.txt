@@ -16,6 +16,7 @@ add_library(
     src/http_upload/upload_service.cpp
     src/db_manager/persistence.cpp
     src/db_manager/process_state_store.cpp
+    src/process_manager/work_invalidation.cpp
 )
 add_library(logistics::central_storage ALIAS logistics_central_storage)
 

@@ -29,6 +29,7 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 #include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/server_config.hpp"
+#include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
 namespace logistics::central_server {
@@ -189,13 +190,24 @@ int Application::Run(int argc, char* argv[]) {
         }
         invalidated_restored_works = std::move(restore.invalidated_works);
     }
-    for (const auto& invalidated : invalidated_restored_works) {
+    std::vector<WorkInvalidation> work_invalidations;
+    work_invalidations.reserve(invalidated_restored_works.size());
+    for (const auto& restored : invalidated_restored_works) {
+        work_invalidations.push_back({
+            .work_id = restored.work_id,
+            .message_id = "RECALIBRATION-" + restored.work_id,
+            .error_code = "ERR-PROCESS-RECALIBRATION-REQUIRED",
+            .reason = restored.reason,
+            .cause = "CALIBRATION_CHANGED",
+            .occurred_at_ms = CurrentUnixTimeMilliseconds(),
+        });
+    }
+    for (const auto& invalidation : work_invalidations) {
         std::cerr << "[server][ERROR] restored work requires detection with the current calibration; work_id="
-                  << invalidated.work_id << "; error=ERR-PROCESS-RECALIBRATION-REQUIRED\n";
-        database_status = persistence.InvalidateWork(invalidated.work_id, "ERR-PROCESS-RECALIBRATION-REQUIRED",
-                                                     invalidated.reason, CurrentUnixTimeMilliseconds());
+                  << invalidation.work_id << "; error=ERR-PROCESS-RECALIBRATION-REQUIRED\n";
+        database_status = persistence.RecordWorkInvalidation(invalidation);
         if (!database_status.ok()) {
-            std::cerr << "[server][ERROR] invalidated work persistence failed; work_id=" << invalidated.work_id
+            std::cerr << "[server][ERROR] invalidated work persistence failed; work_id=" << invalidation.work_id
                       << "; message=" << database_status.message << '\n';
         }
     }
@@ -475,35 +487,20 @@ int Application::Run(int argc, char* argv[]) {
         std::cerr << "[server][ERROR] MQTT client startup failed\n";
         return 6;
     }
-    const auto publish_recalibration_notifications = [&invalidated_restored_works, &mqtt_client, &server_config]() {
+    const auto publish_recalibration_notifications = [&work_invalidations, &mqtt_client, &server_config]() {
         bool published = true;
-        for (const auto& invalidated : invalidated_restored_works) {
-            const contracts::mqtt::MqttMessage error{
-                .protocol_version = std::string(contracts::mqtt::kCurrentProtocolVersion),
-                .message_id = "RECALIBRATION-" + invalidated.work_id,
-                .message_type = contracts::mqtt::MessageType::kErrorOccurred,
-                .source_id = "central-server",
-                .timestamp = CurrentIso8601Timestamp(),
-                .data =
-                    contracts::mqtt::ErrorOccurredPayload{
-                        .job_id = invalidated.work_id,
-                        .error_code = "ERR-PROCESS-RECALIBRATION-REQUIRED",
-                        .error_level = "ERROR",
-                        .current_state = "RECALIBRATION_REQUIRED",
-                        .message = invalidated.reason,
-                        .distance = std::nullopt,
-                    },
-            };
+        for (const auto& invalidation : work_invalidations) {
+            const auto error = MakeWorkInvalidationError("central-server", invalidation, CurrentIso8601Timestamp());
             if (!mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(server_config.qt_client_id), error,
                                             contracts::mqtt::Qos::kAtLeastOnce)) {
                 std::cerr << "[server][ERROR] recalibration notification publish failed; work_id="
-                          << invalidated.work_id << '\n';
+                          << invalidation.work_id << '\n';
                 published = false;
             }
         }
         return published;
     };
-    bool recalibration_notifications_pending = !invalidated_restored_works.empty();
+    bool recalibration_notifications_pending = !work_invalidations.empty();
 
     HttpUploadServer upload_server(database, server_config.http);
     database_status = upload_server.Start();

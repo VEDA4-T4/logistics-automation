@@ -655,33 +655,32 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
     return { PersistenceStatus::kStored, "message stored", work_id };
 }
 
-DatabaseStatus PersistenceService::InvalidateWork(std::string_view work_id, std::string_view error_code,
-                                                  std::string_view message, std::int64_t occurred_at_ms) {
-    if (!IsUuid(work_id) || error_code.empty() || message.empty() || occurred_at_ms < 0) {
+DatabaseStatus PersistenceService::RecordWorkInvalidation(const WorkInvalidation& invalidation) {
+    if (!IsUuid(invalidation.work_id) || invalidation.message_id.empty() || invalidation.error_code.empty() ||
+        invalidation.reason.empty() || invalidation.cause.empty() || invalidation.occurred_at_ms < 0) {
         return { DatabaseStatusCode::kInvalidArgument, "invalid work invalidation metadata" };
     }
 
-    const std::string message_id = "RECALIBRATION-" + std::string(work_id);
     const EventPayload payload{
-        .work_id = std::string(work_id),
+        .work_id = invalidation.work_id,
         .process_state = "ERROR",
-        .error_code = std::string(error_code),
+        .error_code = invalidation.error_code,
         .severity = "ERROR",
-        .error_message = std::string(message),
-        .details_json = R"({"cause":"CALIBRATION_CHANGED"})",
+        .error_message = invalidation.reason,
+        .details_json = contracts::mqtt::Json{ { "cause", invalidation.cause } }.dump(),
     };
     Transaction transaction(database_);
     if (!transaction.status().ok()) {
         return transaction.status();
     }
     ProductRepository products(database_);
-    auto status = products.MarkError(work_id, occurred_at_ms);
+    auto status = products.MarkError(invalidation.work_id, invalidation.occurred_at_ms);
     if (!status.ok()) {
         return status;
     }
     Statement existing;
     status = database_.Prepare("SELECT 1 FROM error_log WHERE message_id=?", existing);
-    if (!status.ok() || !(status = existing.Bind(1, message_id)).ok()) {
+    if (!status.ok() || !(status = existing.Bind(1, invalidation.message_id)).ok()) {
         return status;
     }
     bool already_recorded = false;
@@ -691,13 +690,14 @@ DatabaseStatus PersistenceService::InvalidateWork(std::string_view work_id, std:
     if (already_recorded) {
         return transaction.Commit();
     }
-    status = products.AppendHistory(work_id, message_id, contracts::mqtt::MessageType::kErrorOccurred, "central-server",
-                                    payload, occurred_at_ms);
+    status = products.AppendHistory(invalidation.work_id, invalidation.message_id,
+                                    contracts::mqtt::MessageType::kErrorOccurred, "central-server", payload,
+                                    invalidation.occurred_at_ms);
     if (!status.ok()) {
         return status;
     }
     LogRepository logs(database_);
-    status = logs.AppendError(message_id, "central-server", payload, occurred_at_ms);
+    status = logs.AppendError(invalidation.message_id, "central-server", payload, invalidation.occurred_at_ms);
     if (!status.ok()) {
         return status;
     }
