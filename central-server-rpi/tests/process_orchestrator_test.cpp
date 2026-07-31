@@ -377,6 +377,78 @@ void TestDisabledHomographyDiscardsRestoredTarget() {
     assert(!command->params.contains("targetPose"));
 }
 
+void TestChangedCalibrationDiscardsRestoredTarget() {
+    central_server::ProcessOrchestrator orchestrator({
+        .enabled = true,
+        .server_id = "central-server",
+        .input_device_id = "PI-INPUT-01",
+        .vision_device_id = "PI-VISION-01",
+        .gripper_device_id = "PI-GRIPPER-01",
+        .sorting_device_id = "PI-SORTING-01",
+        .line_tracer_device_id = "PI-LT-01",
+        .line_tracer_initial_position = {},
+        .homography =
+            {
+                .enabled = true,
+                .pixel_to_conveyor = { 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 },
+                .conveyor_plane_z_mm = 800.0,
+                .robot_base_x_mm = 50.0,
+                .robot_base_y_mm = 25.0,
+                .robot_base_z_mm = 0.0,
+                .robot_base_yaw_deg = 0.0,
+                .box_length_mm = 400.0,
+                .box_width_mm = 200.0,
+                .box_height_mm = 150.0,
+                .coordinate_frame = "PI-GRIPPER-01_BASE",
+                .calibration_version = 4,
+            },
+    });
+    std::vector works{
+        central_server::WorkProcessSnapshot{
+            .work_id = kWorkId,
+            .stage = central_server::WorkStage::kBarcodeRecognized,
+            .suspended_stage = std::nullopt,
+            .destination = {},
+            .last_source_id = "PI-VISION-01",
+            .failure_reason = {},
+        },
+    };
+    std::unordered_map<std::string, central_server::GripperTarget> targets{
+        { kWorkId,
+          {
+              .x_mm = 150.0,
+              .y_mm = 75.0,
+              .z_mm = 950.0,
+              .yaw_deg = 10.0,
+              .box_length_mm = 400.0,
+              .box_width_mm = 200.0,
+              .box_height_mm = 150.0,
+              .coordinate_frame = "PI-GRIPPER-01_BASE",
+              .calibration_version = 3,
+          } },
+    };
+    assert(orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, std::move(works),
+                                                  std::move(targets), 12));
+    assert(orchestrator.GripperTargets().empty());
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
+
+    const auto product = Message("MSG-PRODUCT-STALE-CALIBRATION", mqtt::MessageType::kProductInfo, "central-server",
+                                 mqtt::ProductInfoPayload{
+                                     .work_id = kWorkId,
+                                     .recognition_status = "SUCCESS",
+                                     .barcode = "5901234123457",
+                                     .product_id = "VEDA107",
+                                     .product_name = "VEDA107",
+                                     .destination = "1",
+                                     .image = nullptr,
+                                     .confidence = 0.99,
+                                     .message = std::nullopt,
+                                 });
+    const auto result = orchestrator.Handle(product);
+    assert(result.transition.disposition == central_server::TransitionDisposition::kRejected);
+    assert(result.commands.empty());
+}
+
 }  // namespace
 
 int main() {
@@ -386,5 +458,6 @@ int main() {
     TestInputOfflineStatusStopsTheProcess();
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();
+    TestChangedCalibrationDiscardsRestoredTarget();
     return 0;
 }

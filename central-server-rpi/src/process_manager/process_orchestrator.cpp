@@ -245,7 +245,10 @@ bool ProcessOrchestrator::RestoreAfterServerRestart(ProcessSystemState stored_st
         gripper_targets.clear();
     } else {
         for (auto iterator = gripper_targets.begin(); iterator != gripper_targets.end();) {
-            if (!state_machine_.FindWork(iterator->first).has_value()) {
+            const GripperTarget& target = iterator->second;
+            const bool current_calibration = target.calibration_version == config_.homography.calibration_version &&
+                                             target.coordinate_frame == config_.homography.coordinate_frame;
+            if (!state_machine_.FindWork(iterator->first).has_value() || !current_calibration) {
                 iterator = gripper_targets.erase(iterator);
             } else {
                 ++iterator;
