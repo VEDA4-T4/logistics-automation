@@ -142,6 +142,8 @@ DetectionResult DetectionModule::Process(const cv::Mat& frame, const bool allow_
             decode_roi = RectifyBarcode(box_roi, detected_corners, barcode_index);
             result.diagnostics.perspective_rectification_ms += ToMilliseconds(Clock::now() - rectify_started);
             result.diagnostics.used_perspective_rectification = !decode_roi.empty();
+        } else {
+            decode_roi = CropBarcode(box_roi, detected_corners, barcode_index);
         }
         if (decode_roi.empty()) {
             continue;
@@ -246,6 +248,27 @@ cv::Mat DetectionModule::RectifyBarcode(const cv::Mat& image, const std::vector<
     cv::warpPerspective(image, rectified, transform, cv::Size(output_width, output_height), cv::INTER_CUBIC,
                         cv::BORDER_CONSTANT, cv::Scalar::all(255));
     return rectified;
+}
+
+cv::Mat DetectionModule::CropBarcode(const cv::Mat& image, const std::vector<cv::Point2f>& corners,
+                                     const std::size_t barcode_index) const {
+    const std::size_t first_corner = barcode_index * kBarcodeCornerCount;
+    if (corners.size() < first_corner + kBarcodeCornerCount) {
+        return {};
+    }
+
+    const auto first = corners.begin() + static_cast<std::ptrdiff_t>(first_corner);
+    const std::vector<cv::Point2f> selected(first, first + static_cast<std::ptrdiff_t>(kBarcodeCornerCount));
+    cv::Rect bounds = cv::boundingRect(selected);
+    if (bounds.width < kMinimumRectifiedBarcodeDimension || bounds.height < kMinimumRectifiedBarcodeDimension) {
+        return {};
+    }
+    bounds.x -= kBarcodeQuietZonePixels;
+    bounds.y -= kBarcodeQuietZonePixels;
+    bounds.width += kBarcodeQuietZonePixels * 2;
+    bounds.height += kBarcodeQuietZonePixels * 2;
+    bounds &= cv::Rect{ 0, 0, image.cols, image.rows };
+    return bounds.empty() ? cv::Mat{} : image(bounds).clone();
 }
 
 cv::Mat DetectionModule::EnhanceContrast(const cv::Mat& image) const {

@@ -60,6 +60,8 @@ private:
     void DecodeBarcodeRegions(const cv::Mat& image, const std::vector<cv::Point2f>& corners);
     [[nodiscard]] cv::Mat RectifyBarcode(const cv::Mat& image, const std::vector<cv::Point2f>& corners,
                                          std::size_t barcode_index) const;
+    [[nodiscard]] cv::Mat CropBarcode(const cv::Mat& image, const std::vector<cv::Point2f>& corners,
+                                      std::size_t barcode_index) const;
     [[nodiscard]] cv::Mat EnhanceContrast(const cv::Mat& image) const;
     [[nodiscard]] cv::Mat SuperResolve(const cv::Mat& image);
     [[nodiscard]] std::optional<cv::Mat> TrySuperResolve(const cv::Mat& image,
