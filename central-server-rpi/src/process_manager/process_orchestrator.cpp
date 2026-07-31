@@ -375,7 +375,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             MakeDestinationCommand(work->work_id, work->destination, config_.line_tracer_device_id,
                                    ProcessEventType::kTransportCommandDispatched, message.timestamp));
     }
-    if (event.type == ProcessEventType::kWorkCompleted || event.type == ProcessEventType::kWorkFailed) {
+    if (event.type == ProcessEventType::kWorkCompleted) {
         gripper_targets_.erase(event.work_id);
     }
     return result;
