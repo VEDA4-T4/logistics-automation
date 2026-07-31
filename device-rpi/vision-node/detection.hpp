@@ -59,6 +59,7 @@ private:
     [[nodiscard]] bool DetectBarcodeRegions(const cv::Mat& image, std::vector<cv::Point2f>& corners);
     [[nodiscard]] bool DetectBarcodeRegionsWithFallback(const cv::Mat& box_roi, bool allow_expensive_fallback,
                                                         bool reached_failure_threshold,
+                                                        std::size_t& consecutive_barcode_failures,
                                                         std::vector<cv::Point2f>& corners,
                                                         DetectionDiagnostics& diagnostics);
     void DecodeBarcodeRegions(const cv::Mat& image, const std::vector<cv::Point2f>& corners);

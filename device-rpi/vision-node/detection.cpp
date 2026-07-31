@@ -83,9 +83,9 @@ DetectionResult DetectionModule::Process(const cv::Mat& frame, const bool allow_
     const std::size_t next_consecutive_barcode_failures = consecutive_barcode_failures_ + 1;
     const bool reached_failure_threshold =
         next_consecutive_barcode_failures >= static_cast<std::size_t>(config_.failure_frames_before_super_resolution);
-    const bool detected = DetectBarcodeRegionsWithFallback(box_roi, allow_expensive_fallback, reached_failure_threshold,
-                                                           detected_corners, result.diagnostics);
-    ++consecutive_barcode_failures_;
+    const bool detected =
+        DetectBarcodeRegionsWithFallback(box_roi, allow_expensive_fallback, reached_failure_threshold,
+                                         consecutive_barcode_failures_, detected_corners, result.diagnostics);
 
     result.diagnostics.barcode_region_detected = detected;
     if (!detected) {
@@ -145,11 +145,13 @@ bool DetectionModule::DetectBarcodeRegions(const cv::Mat& image, std::vector<cv:
 
 bool DetectionModule::DetectBarcodeRegionsWithFallback(const cv::Mat& box_roi, const bool allow_expensive_fallback,
                                                        const bool reached_failure_threshold,
+                                                       std::size_t& consecutive_barcode_failures,
                                                        std::vector<cv::Point2f>& corners,
                                                        DetectionDiagnostics& diagnostics) {
     const auto detection_started = Clock::now();
     bool detected = DetectBarcodeRegions(box_roi, corners);
     diagnostics.barcode_detection_ms = ToMilliseconds(Clock::now() - detection_started);
+    ++consecutive_barcode_failures;
 
     if (!detected && allow_expensive_fallback && reached_failure_threshold && config_.super_resolution_enabled &&
         config_.barcode_detection_fallback && IsSuperResolutionAllowed(box_roi)) {
