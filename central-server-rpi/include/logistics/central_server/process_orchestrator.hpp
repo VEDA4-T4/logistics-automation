@@ -42,6 +42,11 @@ struct InvalidatedRestoredWork final {
     std::string reason;
 };
 
+struct ProcessRestoreResult final {
+    bool restored{ false };
+    std::vector<InvalidatedRestoredWork> invalidated_works;
+};
+
 class ProcessOrchestrator final {
 public:
     explicit ProcessOrchestrator(ProcessOrchestratorConfig config = {});
@@ -59,12 +64,10 @@ public:
     [[nodiscard]] ProcessTransition PreviewSystemCommand(contracts::mqtt::ControlCommand command) const;
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
-    [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                 std::vector<WorkProcessSnapshot> works,
-                                                 std::unordered_map<std::string, GripperTarget> gripper_targets,
-                                                 std::uint64_t message_sequence);
+    [[nodiscard]] ProcessRestoreResult RestoreAfterServerRestart(
+        ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
+        std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence);
     [[nodiscard]] const std::unordered_map<std::string, GripperTarget>& GripperTargets() const noexcept;
-    [[nodiscard]] const std::vector<InvalidatedRestoredWork>& InvalidatedRestoredWorks() const noexcept;
     [[nodiscard]] std::uint64_t MessageSequence() const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
 
@@ -83,7 +86,6 @@ private:
     ProcessOrchestratorConfig config_;
     HomographyTransformer homography_;
     std::unordered_map<std::string, GripperTarget> gripper_targets_;
-    std::vector<InvalidatedRestoredWork> invalidated_restored_works_;
     ProcessStateMachine state_machine_;
     std::uint64_t message_sequence_{};
     std::uint64_t revision_{};

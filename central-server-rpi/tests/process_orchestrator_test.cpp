@@ -277,8 +277,10 @@ void TestRestoredHomographyTargetCreatesGripperCommand() {
               .calibration_version = 3,
           } },
     };
-    assert(orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, std::move(works),
-                                                  std::move(targets), 12));
+    const auto restore = orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning,
+                                                                std::move(works), std::move(targets), 12);
+    assert(restore.restored);
+    assert(restore.invalidated_works.empty());
     assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
 
     const auto failure = Message("MSG-RECOVERABLE-FAILURE", mqtt::MessageType::kErrorOccurred, "PI-VISION-01",
@@ -353,8 +355,10 @@ void TestDisabledHomographyDiscardsRestoredTarget() {
               .calibration_version = 3,
           } },
     };
-    assert(orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, std::move(works),
-                                                  std::move(targets), 12));
+    const auto restore = orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning,
+                                                                std::move(works), std::move(targets), 12);
+    assert(restore.restored);
+    assert(restore.invalidated_works.empty());
     assert(orchestrator.GripperTargets().empty());
     assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
 
@@ -428,11 +432,12 @@ void TestChangedCalibrationDiscardsRestoredTarget() {
               .calibration_version = 3,
           } },
     };
-    assert(orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, std::move(works),
-                                                  std::move(targets), 12));
+    const auto restore = orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning,
+                                                                std::move(works), std::move(targets), 12);
+    assert(restore.restored);
+    assert(restore.invalidated_works.size() == 1);
+    assert(restore.invalidated_works.front().work_id == kWorkId);
     assert(orchestrator.GripperTargets().empty());
-    assert(orchestrator.InvalidatedRestoredWorks().size() == 1);
-    assert(orchestrator.InvalidatedRestoredWorks().front().work_id == kWorkId);
     assert(!orchestrator.StateMachine().FindWork(kWorkId).has_value());
     assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
 

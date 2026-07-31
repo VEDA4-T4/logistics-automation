@@ -234,10 +234,9 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
     return transition;
 }
 
-bool ProcessOrchestrator::RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                    std::vector<WorkProcessSnapshot> works,
-                                                    std::unordered_map<std::string, GripperTarget> gripper_targets,
-                                                    std::uint64_t message_sequence) {
+ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
+    ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
+    std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence) {
     std::vector<InvalidatedRestoredWork> invalidated_works;
     if (!homography_.Enabled()) {
         gripper_targets.clear();
@@ -262,21 +261,19 @@ bool ProcessOrchestrator::RestoreAfterServerRestart(ProcessSystemState stored_st
         }
     }
     if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
-        return false;
+        return {};
     }
     gripper_targets_ = std::move(gripper_targets);
-    invalidated_restored_works_ = std::move(invalidated_works);
     message_sequence_ = message_sequence;
     ++revision_;
-    return true;
+    return {
+        .restored = true,
+        .invalidated_works = std::move(invalidated_works),
+    };
 }
 
 const std::unordered_map<std::string, GripperTarget>& ProcessOrchestrator::GripperTargets() const noexcept {
     return gripper_targets_;
-}
-
-const std::vector<InvalidatedRestoredWork>& ProcessOrchestrator::InvalidatedRestoredWorks() const noexcept {
-    return invalidated_restored_works_;
 }
 
 std::uint64_t ProcessOrchestrator::MessageSequence() const noexcept {

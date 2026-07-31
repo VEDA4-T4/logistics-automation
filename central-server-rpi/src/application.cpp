@@ -173,19 +173,23 @@ int Application::Run(int argc, char* argv[]) {
     ProcessStateStore process_state_store(database);
 
     std::optional<StoredProcessState> stored_process_state;
+    std::vector<InvalidatedRestoredWork> invalidated_restored_works;
     database_status = process_state_store.Load(stored_process_state);
     if (!database_status.ok()) {
         std::cerr << "[server][ERROR] process state load failed: " << database_status.message << '\n';
         return 5;
     }
-    if (stored_process_state.has_value() &&
-        !process_orchestrator.RestoreAfterServerRestart(
+    if (stored_process_state.has_value()) {
+        auto restore = process_orchestrator.RestoreAfterServerRestart(
             stored_process_state->system_state, std::move(stored_process_state->works),
-            std::move(stored_process_state->gripper_targets), stored_process_state->message_sequence)) {
-        std::cerr << "[server][ERROR] stored process state is invalid\n";
-        return 5;
+            std::move(stored_process_state->gripper_targets), stored_process_state->message_sequence);
+        if (!restore.restored) {
+            std::cerr << "[server][ERROR] stored process state is invalid\n";
+            return 5;
+        }
+        invalidated_restored_works = std::move(restore.invalidated_works);
     }
-    for (const auto& invalidated : process_orchestrator.InvalidatedRestoredWorks()) {
+    for (const auto& invalidated : invalidated_restored_works) {
         std::cerr << "[server][ERROR] restored work requires detection with the current calibration; work_id="
                   << invalidated.work_id << "; error=ERR-PROCESS-RECALIBRATION-REQUIRED\n";
         database_status = persistence.InvalidateWork(invalidated.work_id, "ERR-PROCESS-RECALIBRATION-REQUIRED",
@@ -471,9 +475,9 @@ int Application::Run(int argc, char* argv[]) {
         std::cerr << "[server][ERROR] MQTT client startup failed\n";
         return 6;
     }
-    const auto publish_recalibration_notifications = [&mqtt_client, &process_orchestrator, &server_config]() {
+    const auto publish_recalibration_notifications = [&invalidated_restored_works, &mqtt_client, &server_config]() {
         bool published = true;
-        for (const auto& invalidated : process_orchestrator.InvalidatedRestoredWorks()) {
+        for (const auto& invalidated : invalidated_restored_works) {
             const contracts::mqtt::MqttMessage error{
                 .protocol_version = std::string(contracts::mqtt::kCurrentProtocolVersion),
                 .message_id = "RECALIBRATION-" + invalidated.work_id,
@@ -499,7 +503,7 @@ int Application::Run(int argc, char* argv[]) {
         }
         return published;
     };
-    bool recalibration_notifications_pending = !process_orchestrator.InvalidatedRestoredWorks().empty();
+    bool recalibration_notifications_pending = !invalidated_restored_works.empty();
 
     HttpUploadServer upload_server(database, server_config.http);
     database_status = upload_server.Start();
