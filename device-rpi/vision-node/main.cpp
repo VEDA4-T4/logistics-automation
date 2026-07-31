@@ -22,6 +22,7 @@
 
 #include "detection.hpp"
 #include "vision_mqtt_workflow.hpp"
+#include "vision_processing_config.hpp"
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
 #include "logistics/contracts/mqtt_codec.hpp"
@@ -345,6 +346,13 @@ int main(const int argc, char* argv[]) {
         settings.headless = true;
         std::clog << "No graphical display detected; running in headless mode.\n";
     }
+    logistics::vision::VisionProcessingConfig vision_processing_config;
+    try {
+        vision_processing_config = logistics::vision::LoadVisionProcessingConfig(settings.config_path);
+    } catch (const logistics::vision::VisionProcessingConfigError& error) {
+        std::cerr << "[vision][ERROR] " << error.what() << '\n';
+        return 2;
+    }
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
     logistics::device::MqttNodeConfig mqtt_config;
@@ -429,12 +437,22 @@ int main(const int argc, char* argv[]) {
     }
 
     cv::VideoCapture camera;
-    logistics::vision::DetectionModule detection_module;
+    std::unique_ptr<logistics::vision::DetectionModule> detection_module;
+    try {
+        detection_module = std::make_unique<logistics::vision::DetectionModule>(std::move(vision_processing_config));
+    } catch (const std::exception& error) {
+        std::cerr << "[vision][ERROR] failed to initialize vision processing: " << error.what() << '\n';
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+        mqtt_client.Stop();
+#endif
+        return 2;
+    }
     LatencyTracker latency_tracker;
     std::unordered_set<std::string> reported_barcodes;
     cv::Mat frame;
     int consecutive_frame_errors = 0;
     int exit_code = 0;
+    bool super_resolution_error_reported = false;
     auto last_latency_log = Clock::now();
 
     std::cout << "Camera settings: " << settings.width << 'x' << settings.height << " @ " << settings.fps << " FPS\n";
@@ -548,7 +566,19 @@ int main(const int argc, char* argv[]) {
         }
 #endif
 
-        const logistics::vision::DetectionResult detection_result = detection_module.Process(frame);
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+        const bool allow_expensive_fallback = mqtt_workflow.NeedsBarcodeFallback();
+#else
+        constexpr bool allow_expensive_fallback = true;
+#endif
+        const logistics::vision::DetectionResult detection_result =
+            detection_module->Process(frame, allow_expensive_fallback);
+        if (detection_result.diagnostics.super_resolution_failed && !super_resolution_error_reported) {
+            std::cerr << "[vision][WARN] super-resolution fallback failed; original-frame processing remains active\n";
+            super_resolution_error_reported = true;
+        } else if (!detection_result.diagnostics.super_resolution_failed) {
+            super_resolution_error_reported = false;
+        }
         const auto processing_finished = Clock::now();
 
         const LatencyMetrics current_latency{

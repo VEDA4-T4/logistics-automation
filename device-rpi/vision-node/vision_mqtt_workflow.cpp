@@ -81,6 +81,12 @@ bool VisionMqttWorkflow::HasPendingBarcode() const {
            observation_->barcode.has_value();
 }
 
+bool VisionMqttWorkflow::NeedsBarcodeFallback() const {
+    std::lock_guard lock(mutex_);
+    return (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && observation_.has_value() &&
+           !observation_->barcode.has_value();
+}
+
 std::optional<AssignedVisionWork> VisionMqttWorkflow::TakeAssignedWork() {
     std::lock_guard lock(mutex_);
     if (phase_ != Phase::kAssigned || !work_id_.has_value() || !observation_.has_value()) {

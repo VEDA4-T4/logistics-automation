@@ -103,10 +103,13 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), *box).IsSuccess());
 
     assert(!workflow.HasPendingBarcode());
+    assert(workflow.NeedsBarcodeFallback());
     assert(workflow.AssignWork(WorkCreated()));
     assert(!workflow.HasPendingBarcode());
+    assert(workflow.NeedsBarcodeFallback());
     assert(!workflow.Observe(Observation(std::string("8801234567893")), "IGNORED", "2026-07-21T11:00:01Z").has_value());
     assert(workflow.HasPendingBarcode());
+    assert(!workflow.NeedsBarcodeFallback());
     const auto assigned = workflow.TakeAssignedWork();
     assert(assigned.has_value());
     assert(assigned->observation.barcode == "8801234567893");
