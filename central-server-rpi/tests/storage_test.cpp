@@ -184,6 +184,23 @@ int main() {
     assert(result.status == server::PersistenceStatus::kStored);
     assert(Scalar(database, "SELECT count(*) FROM product WHERE lifecycle_state='COMPLETED'") == 1);
 
+    const std::string invalidated_work_id = "97c42b78-9299-4a3b-85aa-0f959954ea73";
+    assert(server::ProductRepository(database).Create(invalidated_work_id, base_time + 6).ok());
+    assert(persistence
+               .InvalidateWork(invalidated_work_id, "ERR-PROCESS-RECALIBRATION-REQUIRED",
+                               "stored gripper target uses stale homography calibration", base_time + 7)
+               .ok());
+    assert(persistence
+               .InvalidateWork(invalidated_work_id, "ERR-PROCESS-RECALIBRATION-REQUIRED",
+                               "stored gripper target uses stale homography calibration", base_time + 8)
+               .ok());
+    assert(Scalar(database, "SELECT count(*) FROM product WHERE work_id='" + invalidated_work_id +
+                                "' AND lifecycle_state='ERROR'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM error_log WHERE work_id='" + invalidated_work_id +
+                                "' AND error_code='ERR-PROCESS-RECALIBRATION-REQUIRED'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM work_history WHERE work_id='" + invalidated_work_id +
+                                "' AND event_type='ERROR_OCCURRED' AND process_state='ERROR'") == 1);
+
     server::EventPayload device_error;
     device_error.work_id = work_id;
     device_error.error_code = "ERR-BARCODE-CAMERA";

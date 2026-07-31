@@ -109,6 +109,7 @@ class ProductRepository final {
 public:
     explicit ProductRepository(Database& database) : database_(database) {}
     [[nodiscard]] DatabaseStatus Create(std::string_view work_id, std::int64_t now_ms);
+    [[nodiscard]] DatabaseStatus MarkError(std::string_view work_id, std::int64_t now_ms);
     [[nodiscard]] DatabaseStatus ApplyEvent(std::string_view work_id, contracts::mqtt::MessageType type,
                                             const EventPayload& payload, std::int64_t now_ms);
     [[nodiscard]] DatabaseStatus AppendHistory(std::string_view work_id, std::string_view message_id,
@@ -148,6 +149,8 @@ public:
     [[nodiscard]] PersistenceResult PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                           const EventPayload& payload,
                                                           const TransportMetadata& metadata);
+    [[nodiscard]] DatabaseStatus InvalidateWork(std::string_view work_id, std::string_view error_code,
+                                                std::string_view message, std::int64_t occurred_at_ms);
     [[nodiscard]] DatabaseStatus FindActiveProductByBarcode(std::string_view barcode,
                                                             std::optional<CatalogProduct>& output);
 

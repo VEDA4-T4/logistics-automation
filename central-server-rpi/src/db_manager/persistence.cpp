@@ -303,6 +303,26 @@ DatabaseStatus ProductRepository::Create(std::string_view work_id, std::int64_t 
     return statement.Step(row);
 }
 
+DatabaseStatus ProductRepository::MarkError(std::string_view work_id, std::int64_t now_ms) {
+    Statement statement;
+    auto status =
+        database_.Prepare("UPDATE product SET lifecycle_state='ERROR',updated_at_ms=? WHERE work_id=?", statement);
+    if (!status.ok() || !(status = statement.Bind(1, now_ms)).ok() || !(status = statement.Bind(2, work_id)).ok()) {
+        return status;
+    }
+    bool row = false;
+    if (!(status = statement.Step(row)).ok()) {
+        return status;
+    }
+    Statement changes;
+    status = database_.Prepare("SELECT changes()", changes);
+    if (!status.ok() || !(status = changes.Step(row)).ok()) {
+        return status;
+    }
+    return changes.ColumnInt(0) == 0 ? DatabaseStatus{ DatabaseStatusCode::kNotFound, "work_id not found" }
+                                     : DatabaseStatus::Ok();
+}
+
 DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts::mqtt::MessageType type,
                                              const EventPayload& payload, std::int64_t now_ms) {
     std::string sql;
@@ -633,6 +653,55 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
         return Failure(status);
     }
     return { PersistenceStatus::kStored, "message stored", work_id };
+}
+
+DatabaseStatus PersistenceService::InvalidateWork(std::string_view work_id, std::string_view error_code,
+                                                  std::string_view message, std::int64_t occurred_at_ms) {
+    if (!IsUuid(work_id) || error_code.empty() || message.empty() || occurred_at_ms < 0) {
+        return { DatabaseStatusCode::kInvalidArgument, "invalid work invalidation metadata" };
+    }
+
+    const std::string message_id = "RECALIBRATION-" + std::string(work_id);
+    const EventPayload payload{
+        .work_id = std::string(work_id),
+        .process_state = "ERROR",
+        .error_code = std::string(error_code),
+        .severity = "ERROR",
+        .error_message = std::string(message),
+        .details_json = R"({"cause":"CALIBRATION_CHANGED"})",
+    };
+    Transaction transaction(database_);
+    if (!transaction.status().ok()) {
+        return transaction.status();
+    }
+    ProductRepository products(database_);
+    auto status = products.MarkError(work_id, occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    Statement existing;
+    status = database_.Prepare("SELECT 1 FROM error_log WHERE message_id=?", existing);
+    if (!status.ok() || !(status = existing.Bind(1, message_id)).ok()) {
+        return status;
+    }
+    bool already_recorded = false;
+    if (!(status = existing.Step(already_recorded)).ok()) {
+        return status;
+    }
+    if (already_recorded) {
+        return transaction.Commit();
+    }
+    status = products.AppendHistory(work_id, message_id, contracts::mqtt::MessageType::kErrorOccurred, "central-server",
+                                    payload, occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    LogRepository logs(database_);
+    status = logs.AppendError(message_id, "central-server", payload, occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    return transaction.Commit();
 }
 
 RetentionService::RetentionService(Database& database, StorageConfig config)

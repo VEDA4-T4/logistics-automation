@@ -13,6 +13,7 @@ namespace central_server = logistics::central_server;
 namespace mqtt = logistics::contracts::mqtt;
 
 constexpr auto kWorkId = "d8e9b2be-bfc0-471c-9000-590123412345";
+constexpr auto kReplacementWorkId = "97c42b78-9299-4a3b-85aa-0f959954ea73";
 constexpr auto kTimestamp = "2026-07-25T01:00:00Z";
 
 mqtt::MqttMessage Message(std::string message_id, mqtt::MessageType type, std::string source_id,
@@ -430,6 +431,9 @@ void TestChangedCalibrationDiscardsRestoredTarget() {
     assert(orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, std::move(works),
                                                   std::move(targets), 12));
     assert(orchestrator.GripperTargets().empty());
+    assert(orchestrator.InvalidatedRestoredWorks().size() == 1);
+    assert(orchestrator.InvalidatedRestoredWorks().front().work_id == kWorkId);
+    assert(!orchestrator.StateMachine().FindWork(kWorkId).has_value());
     assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
 
     const auto product = Message("MSG-PRODUCT-STALE-CALIBRATION", mqtt::MessageType::kProductInfo, "central-server",
@@ -447,6 +451,32 @@ void TestChangedCalibrationDiscardsRestoredTarget() {
     const auto result = orchestrator.Handle(product);
     assert(result.transition.disposition == central_server::TransitionDisposition::kRejected);
     assert(result.commands.empty());
+
+    assert(orchestrator.BeginWork("MSG-REPLACEMENT-BOX", kReplacementWorkId, "PI-INPUT-01").Applied());
+    assert(orchestrator.ConfirmVisionAssignment("MSG-REPLACEMENT-BOX", kReplacementWorkId).Applied());
+    const auto replacement_position =
+        Message("MSG-REPLACEMENT-POSITION", mqtt::MessageType::kPositionDetected, "PI-VISION-01",
+                mqtt::PositionDetectedPayload{
+                    .work_id = kReplacementWorkId,
+                    .box_x = 100,
+                    .box_y = 50,
+                    .box_width = 200,
+                    .box_height = 100,
+                    .center_x = 200,
+                    .center_y = 100,
+                    .offset_x = 0,
+                    .offset_y = 0,
+                    .position_status = "DETECTED",
+                    .box_corners =
+                        std::array{
+                            mqtt::PixelPoint{ .x = 100.0, .y = 50.0 },
+                            mqtt::PixelPoint{ .x = 300.0, .y = 50.0 },
+                            mqtt::PixelPoint{ .x = 300.0, .y = 150.0 },
+                            mqtt::PixelPoint{ .x = 100.0, .y = 150.0 },
+                        },
+                });
+    assert(orchestrator.Handle(replacement_position).transition.Applied());
+    assert(orchestrator.GripperTargets().contains(kReplacementWorkId));
 }
 
 }  // namespace
