@@ -24,6 +24,24 @@ namespace {
 
 }  // namespace
 
+void PendingWorkFrame::Observe(const cv::Mat& frame, const bool box_detected, const bool work_pending) {
+    if (box_detected && work_pending && !frame.empty()) {
+        frame_ = frame.clone();
+    }
+}
+
+void PendingWorkFrame::Reset() noexcept {
+    frame_.release();
+}
+
+bool PendingWorkFrame::Empty() const noexcept {
+    return frame_.empty();
+}
+
+const cv::Mat& PendingWorkFrame::Frame() const noexcept {
+    return frame_;
+}
+
 FailureFrameStore::FailureFrameStore(FailureFrameCaptureConfig config) : config_(std::move(config)) {}
 
 bool FailureFrameStore::Store(const cv::Mat& frame, const std::string_view work_id) noexcept {

@@ -429,7 +429,7 @@ int main(const int argc, char* argv[]) {
         return 1;
     }
     auto next_heartbeat = Clock::now();
-    cv::Mat pending_capture;
+    logistics::vision::PendingWorkFrame pending_capture;
     bool camera_error_reported = false;
 #endif
 
@@ -471,7 +471,7 @@ int main(const int argc, char* argv[]) {
             camera.release();
             control_state.SetReady(false);
             mqtt_workflow.Reset();
-            pending_capture.release();
+            pending_capture.Reset();
             device_status->SetJobId(std::nullopt);
             device_status->SetCurrentState(control_state.CurrentState());
         }
@@ -558,7 +558,7 @@ int main(const int argc, char* argv[]) {
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
         if (!control_state.IsOperational()) {
-            pending_capture.release();
+            pending_capture.Reset();
             if (!settings.headless) {
                 DrawOperatingState(frame, control_state.CurrentState());
                 cv::imshow(kWindowName, frame);
@@ -603,7 +603,7 @@ int main(const int argc, char* argv[]) {
                                              mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
             logistics::device::CurrentIso8601Timestamp());
         if (box_event.has_value()) {
-            pending_capture.release();
+            pending_capture.Reset();
             if (control_state.IsOperational() && mqtt_client.PublishEvent(*box_event)) {
                 device_status->SetCurrentState("AWAITING_WORK_ID");
                 if (!control_state.IsOperational()) {
@@ -618,10 +618,8 @@ int main(const int argc, char* argv[]) {
                 }
             }
         }
-        if (detection_result.box.has_value() && !detection_result.barcodes.empty() &&
-            mqtt_workflow.HasPendingBarcode()) {
-            pending_capture = frame.clone();
-        }
+        pending_capture.Observe(frame, detection_result.box.has_value(),
+                                mqtt_workflow.HasPendingBarcode() || mqtt_workflow.NeedsBarcodeFallback());
 
         if (auto work = mqtt_workflow.TakeAssignedWork(); work.has_value() && control_state.IsOperational()) {
             const std::string timestamp = logistics::device::CurrentIso8601Timestamp();
@@ -638,14 +636,19 @@ int main(const int argc, char* argv[]) {
             const bool position_published = control_state.IsOperational() && mqtt_client.PublishEvent(position);
             const bool barcode_published = control_state.IsOperational() && mqtt_client.PublishEvent(barcode);
             const bool barcode_detected = work->observation.barcode.has_value();
-            if (!barcode_detected && !failure_frame_store.Store(frame, work->work_id)) {
-                std::cerr << "[vision][WARN] failed to archive barcode recognition failure frame; work_id="
-                          << work->work_id << '\n';
+            if (!barcode_detected) {
+                if (pending_capture.Empty()) {
+                    std::cerr << "[vision][WARN] barcode recognition failed without a retained box frame; work_id="
+                              << work->work_id << '\n';
+                } else if (!failure_frame_store.Store(pending_capture.Frame(), work->work_id)) {
+                    std::cerr << "[vision][WARN] failed to archive barcode recognition failure frame; work_id="
+                              << work->work_id << '\n';
+                }
             }
             bool image_published = !barcode_detected || image_uploader == nullptr;
-            if (barcode_detected && image_uploader != nullptr && !pending_capture.empty()) {
+            if (barcode_detected && image_uploader != nullptr && !pending_capture.Empty()) {
                 std::vector<std::uint8_t> jpeg;
-                if (cv::imencode(".jpg", pending_capture, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 })) {
+                if (cv::imencode(".jpg", pending_capture.Frame(), jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 })) {
                     const std::string upload_message_id = logistics::device::MakeMessageId(
                         device_id, mqtt_session_id, mqtt_sequence.fetch_add(1, std::memory_order_relaxed));
                     const std::string captured_at = logistics::device::CurrentIso8601Timestamp();
@@ -686,7 +689,7 @@ int main(const int argc, char* argv[]) {
             }
             const bool all_published = position_published && barcode_published && image_published;
             mqtt_workflow.CompleteWork();
-            pending_capture.release();
+            pending_capture.Reset();
             device_status->SetJobId(std::nullopt);
             if (all_published && control_state.IsOperational()) {
                 device_status->SetCurrentState(std::string(kWaitingForProductState));

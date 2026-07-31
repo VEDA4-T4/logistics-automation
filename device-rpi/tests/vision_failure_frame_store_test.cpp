@@ -58,10 +58,25 @@ void TestDisabledStoreDoesNotCreateDirectory() {
     Require(!std::filesystem::exists(directory));
 }
 
+void TestPendingWorkFrameRetainsLastFrameContainingABox() {
+    vision::PendingWorkFrame pending;
+    const cv::Mat box_frame(4, 4, CV_8UC1, cv::Scalar(42));
+    const cv::Mat empty_scene(4, 4, CV_8UC1, cv::Scalar(7));
+
+    pending.Observe(box_frame, true, true);
+    pending.Observe(empty_scene, false, true);
+    Require(!pending.Empty());
+    Require(pending.Frame().at<unsigned char>(0, 0) == 42);
+
+    pending.Reset();
+    Require(pending.Empty());
+}
+
 }  // namespace
 
 int main() {
     TestStorePrunesOldFrames();
     TestDisabledStoreDoesNotCreateDirectory();
+    TestPendingWorkFrameRetainsLastFrameContainingABox();
     return 0;
 }
