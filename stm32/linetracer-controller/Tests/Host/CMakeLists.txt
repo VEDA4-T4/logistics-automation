@@ -22,6 +22,41 @@ endif()
 add_test(NAME sensor_logic_test COMMAND sensor_logic_test)
 
 add_executable(
+    linetracer_unload_logic_test
+    unload_logic_test.cpp
+    ../../Application/Src/unload_logic.c
+)
+
+target_include_directories(
+    linetracer_unload_logic_test
+    PRIVATE ../../Application/Inc
+)
+
+target_link_libraries(linetracer_unload_logic_test PRIVATE logistics::contracts)
+
+if(MSVC)
+    target_compile_options(linetracer_unload_logic_test PRIVATE /W4 /WX)
+else()
+    target_compile_options(linetracer_unload_logic_test PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+    )
+endif()
+
+if(WIN32)
+    get_filename_component(LOGISTICS_UNLOAD_TEST_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    add_test(
+        NAME linetracer_unload_logic_test
+        COMMAND ${CMAKE_COMMAND} -E env "PATH=${LOGISTICS_UNLOAD_TEST_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:linetracer_unload_logic_test>
+    )
+else()
+    add_test(NAME linetracer_unload_logic_test COMMAND linetracer_unload_logic_test)
+endif()
+
+add_executable(
     linetracer_control_logic_test
     control_logic_test.cpp
     motor_control_logic_test.cpp

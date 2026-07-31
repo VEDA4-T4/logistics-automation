@@ -9,6 +9,7 @@ osMessageQueueId_t sensorSnapshotQueue;
 osMessageQueueId_t safetyEventQueue;
 osMessageQueueId_t controlSafetyQueue;
 osMessageQueueId_t unloadCommandQueue;
+osMessageQueueId_t unloadResultQueue;
 osMessageQueueId_t txSafetyQueue;
 osMessageQueueId_t txResponseQueue;
 osMessageQueueId_t txEventQueue;
@@ -35,6 +36,10 @@ static const osMessageQueueAttr_t unloadCommandQueueAttributes = {
     .name = "unloadCommandQueue",
 };
 
+static const osMessageQueueAttr_t unloadResultQueueAttributes = {
+    .name = "unloadResultQueue",
+};
+
 static const osMessageQueueAttr_t txSafetyQueueAttributes = {
     .name = "txSafetyQueue",
 };
@@ -53,9 +58,8 @@ static const osMessageQueueAttr_t healthEventQueueAttributes = {
 
 uint8_t AppQueues_AreReady(void) {
     return (controlCommandQueue != NULL && sensorSnapshotQueue != NULL && safetyEventQueue != NULL &&
-            controlSafetyQueue != NULL && unloadCommandQueue != NULL && txSafetyQueue != NULL &&
-            txResponseQueue != NULL &&
-            txEventQueue != NULL && healthEventQueue != NULL)
+            controlSafetyQueue != NULL && unloadCommandQueue != NULL && unloadResultQueue != NULL &&
+            txSafetyQueue != NULL && txResponseQueue != NULL && txEventQueue != NULL && healthEventQueue != NULL)
                ? 1U
                : 0U;
 }
@@ -76,6 +80,8 @@ uint8_t AppQueues_Init(void) {
                                            &controlSafetyQueueAttributes);
     unloadCommandQueue =
         osMessageQueueNew(APP_UNLOAD_COMMAND_QUEUE_DEPTH, sizeof(app_unload_command_t), &unloadCommandQueueAttributes);
+    unloadResultQueue =
+        osMessageQueueNew(APP_UNLOAD_RESULT_QUEUE_DEPTH, sizeof(app_unload_result_t), &unloadResultQueueAttributes);
     txSafetyQueue = osMessageQueueNew(APP_TX_SAFETY_QUEUE_DEPTH, sizeof(app_tx_event_t), &txSafetyQueueAttributes);
     txResponseQueue =
         osMessageQueueNew(APP_TX_RESPONSE_QUEUE_DEPTH, sizeof(app_tx_event_t), &txResponseQueueAttributes);

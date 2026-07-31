@@ -242,7 +242,8 @@ uint8_t ControlLogic_Transition(control_context_t* context, linetracer_control_s
         return 1U;
     }
 
-    if (next_state == LINETRACER_CONTROL_STOPPED && ControlLogic_StateCanResume(context->state) != 0U) {
+    if (next_state == LINETRACER_CONTROL_STOPPED &&
+        (ControlLogic_StateCanResume(context->state) != 0U || context->state == LINETRACER_CONTROL_UNLOADING)) {
         context->state = next_state;
         context->state_entered_at_ms = now_ms;
         return 1U;
@@ -493,6 +494,8 @@ static void ControlLogic_HandleAssignRoute(control_context_t* context, const app
 
 static void ControlLogic_HandleStop(control_context_t* context, const app_control_command_t* command, uint32_t now_ms,
                                     control_command_result_t* result) {
+    linetracer_control_state_t previous_state;
+
     if (uart_linetracer_job_id_is_valid(command->job_id) == 0U || ControlLogic_HasActiveJob(context) == 0U ||
         command->job_id != context->active_job_id) {
         ControlLogic_Reject(result, UART_STATUS_NACK, UART_ERROR_INVALID_PAYLOAD);
@@ -504,13 +507,23 @@ static void ControlLogic_HandleStop(control_context_t* context, const app_contro
         return;
     }
 
-    if (ControlLogic_StateCanResume(context->state) == 0U) {
+    if (ControlLogic_StateCanResume(context->state) == 0U && context->state != LINETRACER_CONTROL_UNLOADING) {
         ControlLogic_Reject(result, UART_STATUS_BUSY, UART_ERROR_BUSY);
         return;
     }
 
-    context->resume_state = context->state;
-    context->resume_valid = 1U;
+    previous_state = context->state;
+    if (previous_state == LINETRACER_CONTROL_UNLOADING) {
+        /*
+         * An interrupted unload must be restarted as a new operation after
+         * explicit reset. Never resume from an unknown servo/load position.
+         */
+        context->resume_state = LINETRACER_CONTROL_INITIALIZING;
+        context->resume_valid = 0U;
+    } else {
+        context->resume_state = context->state;
+        context->resume_valid = 1U;
+    }
     context->stop_reason = LINETRACER_STOP_REASON_COMMAND;
 
     if (ControlLogic_Transition(context, LINETRACER_CONTROL_STOPPED, now_ms) == 0U) {
@@ -518,6 +531,12 @@ static void ControlLogic_HandleStop(control_context_t* context, const app_contro
         context->stop_reason = LINETRACER_STOP_REASON_NONE;
         ControlLogic_Reject(result, UART_STATUS_ERROR, UART_ERROR_INTERNAL);
         return;
+    }
+
+    if (previous_state == LINETRACER_CONTROL_UNLOADING) {
+        result->unload_command = APP_UNLOAD_COMMAND_ABORT;
+        result->action_job_id = context->active_job_id;
+        result->action_route_id = context->active_route;
     }
 
     ControlLogic_Accept(result);
@@ -561,11 +580,13 @@ static void ControlLogic_HandleReset(control_context_t* context, uint32_t now_ms
         return;
     }
 
-    if (context->state == LINETRACER_CONTROL_UNLOADING) {
-        result->unload_command = APP_UNLOAD_COMMAND_RESET;
-        result->action_job_id = previous_job_id;
-        result->action_route_id = previous_route_id;
-    }
+    /*
+     * RESET also clears any command-stop or safety inhibit retained by
+     * UnloadTask, even if ControlTask has already left UNLOADING.
+     */
+    result->unload_command = APP_UNLOAD_COMMAND_RESET;
+    result->action_job_id = previous_job_id;
+    result->action_route_id = previous_route_id;
 
     ControlLogic_Init(context, now_ms);
     result->previous_state = previous_state;

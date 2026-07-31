@@ -8,6 +8,8 @@
 #include "control_logic.h"
 #include "main.h"
 #include "motor_control.h"
+#include "unload_hw.h"
+#include "unload_task.h"
 
 static control_context_t controlTaskContext;
 static uart_linetracer_load_state_t controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
@@ -22,6 +24,7 @@ typedef struct {
 } control_pending_response_t;
 
 static control_pending_response_t controlPendingResponses[CONTROL_TASK_PENDING_RESPONSE_CAPACITY];
+static void ControlTask_RequestUnloadReset(uint32_t now_ms, uint32_t inhibit_generation);
 
 static uint32_t ControlTask_EnterShortCriticalSection(void) {
     uint32_t primask = __get_PRIMASK();
@@ -191,6 +194,10 @@ static void ControlTask_ProcessSafetyEvents(void) {
         if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
             app_tx_event_t fault_event;
 
+            if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
+                ControlTask_RequestUnloadReset(now_ms, event.unload_inhibit_generation);
+            }
+
             if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
                                                    &fault_event) != 0U) {
                 ControlTask_PublishTxEvent(&fault_event, now_ms);
@@ -304,6 +311,35 @@ static void ControlTask_PublishSafetyFault(linetracer_stop_reason_t reason, uint
                                       controlTaskContext.active_route, UART_STATUS_ERROR, error_code, now_ms);
 }
 
+static void ControlTask_PublishUnloadFailure(const app_unload_result_t* result, uint32_t now_ms) {
+    app_safety_event_t safety_event = { 0 };
+    uart_error_t error_code;
+
+    if (result == NULL) {
+        return;
+    }
+
+    error_code = (uart_error_t)result->error_code;
+    if (error_code != UART_ERROR_TIMEOUT && error_code != UART_ERROR_SERVO && error_code != UART_ERROR_BUSY &&
+        error_code != UART_ERROR_INTERNAL) {
+        error_code = UART_ERROR_INTERNAL;
+    }
+
+    /* Existing safety policy has no unload-specific reason; keep the precise error code. */
+    safety_event.type = APP_SAFETY_EVENT_HEALTH_FAULT;
+    safety_event.occurred_at_ms = now_ms;
+    safety_event.reason = LINETRACER_STOP_REASON_HEALTH_FAULT;
+    safety_event.source_task = APP_TASK_UNLOAD;
+    safety_event.error_code = (uint8_t)error_code;
+    safety_event.active = 1U;
+    if (safetyEventQueue == NULL || osMessageQueuePut(safetyEventQueue, &safety_event, 0U, 0U) != osOK) {
+        ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)APP_SAFETY_EVENT_HEALTH_FAULT, now_ms);
+    }
+
+    ControlTask_PublishLifecycleEvent(APP_TX_EVENT_FAULT, result->job_id, result->route_id, UART_STATUS_ERROR,
+                                      error_code, now_ms);
+}
+
 static void ControlTask_StartUnload(uint32_t now_ms) {
     app_unload_command_t command = { 0 };
 
@@ -311,8 +347,62 @@ static void ControlTask_StartUnload(uint32_t now_ms) {
     command.requested_at_ms = now_ms;
     command.job_id = controlTaskContext.active_job_id;
     command.route_id = controlTaskContext.active_route;
-    if (osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+    if (unloadCommandQueue == NULL || osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+        app_unload_result_t failure = { 0 };
+
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)command.type, now_ms);
+        failure.type = APP_UNLOAD_RESULT_FAILED;
+        failure.job_id = command.job_id;
+        failure.route_id = command.route_id;
+        failure.error_code = (uint8_t)UART_ERROR_BUSY;
+        ControlTask_PublishUnloadFailure(&failure, now_ms);
+    }
+}
+
+static void ControlTask_RequestUnloadReset(uint32_t now_ms, uint32_t inhibit_generation) {
+    app_unload_command_t command = { 0 };
+
+    command.type = APP_UNLOAD_COMMAND_RESET;
+    command.requested_at_ms = now_ms;
+    command.inhibit_generation = inhibit_generation;
+    command.route_id = UART_LINETRACER_ROUTE_NONE;
+    if (unloadCommandQueue == NULL || osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+        ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)command.type, now_ms);
+    }
+}
+
+static void ControlTask_ProcessUnloadResults(void) {
+    app_unload_result_t result;
+    uint32_t processed = 0U;
+
+    if (unloadResultQueue == NULL) {
+        return;
+    }
+
+    while (processed < APP_UNLOAD_RESULT_QUEUE_DEPTH &&
+           osMessageQueueGet(unloadResultQueue, &result, NULL, 0U) == osOK) {
+        uint32_t now_ms = osKernelGetTickCount();
+        uint8_t matches_active_unload =
+            (controlTaskContext.state == LINETRACER_CONTROL_UNLOADING &&
+             controlTaskContext.active_job_id == result.job_id && controlTaskContext.active_route == result.route_id)
+                ? 1U
+                : 0U;
+
+        if (matches_active_unload != 0U) {
+            if (result.type == APP_UNLOAD_RESULT_COMPLETE) {
+                control_job_completion_t completion = ControlLogic_CompleteJob(&controlTaskContext, now_ms);
+
+                if (completion.completed != 0U) {
+                    controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
+                    ControlTask_PublishLifecycleEvent(APP_TX_EVENT_UNLOAD_COMPLETE, completion.job_id,
+                                                      completion.route_id, UART_STATUS_SUCCESS, UART_ERROR_NONE,
+                                                      now_ms);
+                }
+            } else if (result.type == APP_UNLOAD_RESULT_FAILED || result.type == APP_UNLOAD_RESULT_TIMEOUT) {
+                ControlTask_PublishUnloadFailure(&result, now_ms);
+            }
+        }
+        ++processed;
     }
 }
 
@@ -418,8 +508,7 @@ static void ControlTask_ProcessSensorSnapshots(void) {
             ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
         }
 
-        if ((controlTaskContext.state == LINETRACER_CONTROL_MOVING_TO_DEST ||
-             controlTaskContext.state == LINETRACER_CONTROL_UNLOADING) &&
+        if (controlTaskContext.state == LINETRACER_CONTROL_MOVING_TO_DEST &&
             snapshot.load_state == UART_LINETRACER_LOAD_EMPTY) {
             control_job_completion_t completion;
             linetracer_control_state_t previous_state = controlTaskContext.state;
@@ -474,10 +563,11 @@ static void ControlTask_PublishUnloadCommand(const control_command_result_t* res
 
     command.type = result->unload_command;
     command.requested_at_ms = now_ms;
+    command.inhibit_generation = UnloadHw_GetSafetyInhibitGeneration();
     command.job_id = result->action_job_id;
     command.route_id = result->action_route_id;
 
-    if (osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+    if (unloadCommandQueue == NULL || osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)result->unload_command, now_ms);
     }
 }
@@ -490,6 +580,12 @@ static void ControlTask_ProcessCommands(void) {
            osMessageQueueGet(controlCommandQueue, &command, NULL, 0U) == osOK) {
         uint32_t now_ms = osKernelGetTickCount();
         control_command_result_t result = ControlLogic_HandleCommand(&controlTaskContext, &command, now_ms);
+
+        if (command.type == APP_CONTROL_COMMAND_STOP_DRIVE && result.accepted != 0U &&
+            result.unload_command == APP_UNLOAD_COMMAND_ABORT) {
+            MotorControl_ForceStop();
+            (void)UnloadTask_RequestAbort();
+        }
 
         ControlTask_PublishCommandResult(&command, &result, now_ms);
         ControlTask_PublishUnloadCommand(&result, now_ms);
@@ -528,6 +624,7 @@ void StartControlTask(void* argument) {
         ControlTask_ProcessSafetyEvents();
         now_ms = osKernelGetTickCount();
         ControlTask_ProcessPendingResponses(now_ms);
+        ControlTask_ProcessUnloadResults();
         ControlTask_ProcessSensorSnapshots();
         ControlTask_ProcessCommands();
         now_ms = osKernelGetTickCount();

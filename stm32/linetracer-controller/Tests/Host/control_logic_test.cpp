@@ -231,6 +231,7 @@ void TestResetSafetyAndCommandMapping() {
     const auto reset = MakeCommand(APP_CONTROL_COMMAND_RESET_SYSTEM, 30U, 3U);
     const auto reset_result = ControlLogic_HandleCommand(&context, &reset, 30U);
     assert(reset_result.accepted != 0U);
+    assert(reset_result.unload_command == APP_UNLOAD_COMMAND_RESET);
     assert(context.state == LINETRACER_CONTROL_INITIALIZING);
     assert(context.current_position == UART_LINETRACER_POSITION_NONE);
     assert(context.active_route == UART_LINETRACER_ROUTE_NONE);
@@ -423,6 +424,39 @@ void TestCompletionOutsideUnloadingDoesNothing() {
     assert(context.state == LINETRACER_CONTROL_INITIALIZING);
 }
 
+void TestStopDuringUnloadRequestsAbort() {
+    control_context_t context{};
+    ControlLogic_Init(&context, 0U);
+
+    auto position = MakeCommand(APP_CONTROL_COMMAND_SET_CURRENT_POSITION, 1U, 1U);
+    position.position = UART_LINETRACER_POSITION_DEST_A;
+    assert(ControlLogic_HandleCommand(&context, &position, 1U).accepted != 0U);
+
+    auto assign = MakeCommand(APP_CONTROL_COMMAND_ASSIGN_ROUTE, 2U, 2U);
+    assign.job_id = 301U;
+    assign.route_id = UART_LINETRACER_ROUTE_C;
+    assert(ControlLogic_HandleCommand(&context, &assign, 2U).accepted != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION, 3U) != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_MOVING_ON_COMMON_LINE, 4U) != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_TURNING_TO_PICKUP, 5U) != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_MOVING_TO_PICKUP, 6U) != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_PICKUP_READY, 7U) != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_WAITING_LOAD, 8U) != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_TURNING_AT_PICKUP, 9U) != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_MOVING_TO_DEST, 10U) != 0U);
+    assert(ControlLogic_Transition(&context, LINETRACER_CONTROL_UNLOADING, 11U) != 0U);
+
+    auto stop = MakeCommand(APP_CONTROL_COMMAND_STOP_DRIVE, 12U, 3U);
+    stop.job_id = 301U;
+    const auto result = ControlLogic_HandleCommand(&context, &stop, 12U);
+    assert(result.accepted != 0U);
+    assert(result.unload_command == APP_UNLOAD_COMMAND_ABORT);
+    assert(result.action_job_id == 301U);
+    assert(result.action_route_id == UART_LINETRACER_ROUTE_C);
+    assert(context.state == LINETRACER_CONTROL_STOPPED);
+    assert(context.resume_valid == 0U);
+}
+
 void TestMarkerAndLoadEventsDriveRouteB() {
     control_context_t context{};
     ControlLogic_Init(&context, 0U);
@@ -562,6 +596,7 @@ int main() {
     TestRouteTimeouts();
     TestJobCompletionAllowsNextAssignment();
     TestCompletionOutsideUnloadingDoesNothing();
+    TestStopDuringUnloadRequestsAbort();
     TestMarkerAndLoadEventsDriveRouteB();
     TestLoadOffDuringReturnIsFault();
     TestTelemetrySnapshotAndLifecycleEvents();

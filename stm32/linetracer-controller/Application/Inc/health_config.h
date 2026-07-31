@@ -16,14 +16,10 @@
 #define HEALTH_MAX_EVENTS_PER_CYCLE 8U
 #define HEALTH_TRANSIENT_FAULT_CLEAR_MS 2000U
 
-/*
- * UnloadTask remains outside the required mask until its real implementation
- * replaces the generated weak loop. Add APP_TASK_UNLOAD here at that time.
- */
 #define HEALTH_TASK_MASK(task_id) (1UL << (uint32_t)(task_id))
 #define HEALTH_REQUIRED_TASK_MASK                                                                                  \
     (HEALTH_TASK_MASK(APP_TASK_SENSOR) | HEALTH_TASK_MASK(APP_TASK_COMM_RX) | HEALTH_TASK_MASK(APP_TASK_CONTROL) | \
-     HEALTH_TASK_MASK(APP_TASK_SAFETY) | HEALTH_TASK_MASK(APP_TASK_COMM_TX))
+     HEALTH_TASK_MASK(APP_TASK_SAFETY) | HEALTH_TASK_MASK(APP_TASK_COMM_TX) | HEALTH_TASK_MASK(APP_TASK_UNLOAD))
 
 /*
  * STM32F401 IWDG timeout is approximately 4 seconds:
