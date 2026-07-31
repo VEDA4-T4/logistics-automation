@@ -29,6 +29,9 @@ void TestDefaultsWhenSectionIsMissing() {
     assert(config.super_resolution_enabled);
     assert(config.super_resolution_backend == vision::SuperResolutionBackend::kBicubic);
     assert(config.super_resolution_scale == 2);
+    assert(config.failure_frame_capture.enabled);
+    assert(config.failure_frame_capture.directory == "/tmp/logistics-vision-failures");
+    assert(config.failure_frame_capture.maximum_frames == 200);
     std::filesystem::remove(path);
 }
 
@@ -49,6 +52,10 @@ super_resolution_scale=3
 failure_frames_before_super_resolution=4
 maximum_super_resolution_input_pixels=123456
 super_resolution_model_path=models/FSRCNN_x3.pb
+failure_frame_capture_enabled=true
+failure_frame_directory=failed-frames
+maximum_failure_frames=25
+failure_frame_jpeg_quality=85
 )ini";
     }
     const auto config = vision::LoadVisionProcessingConfig(path);
@@ -60,6 +67,9 @@ super_resolution_model_path=models/FSRCNN_x3.pb
     assert(config.failure_frames_before_super_resolution == 4);
     assert(config.maximum_super_resolution_input_pixels == 123456);
     assert(config.super_resolution_model_path == path.parent_path() / "models/FSRCNN_x3.pb");
+    assert(config.failure_frame_capture.directory == path.parent_path() / "failed-frames");
+    assert(config.failure_frame_capture.maximum_frames == 25);
+    assert(config.failure_frame_capture.jpeg_quality == 85);
     std::filesystem::remove(path);
 }
 

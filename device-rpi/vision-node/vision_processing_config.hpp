@@ -11,6 +11,15 @@ enum class SuperResolutionBackend {
     kFsrcnn,
 };
 
+struct FailureFrameCaptureConfig final {
+    bool enabled{ true };
+    std::filesystem::path directory{ "/tmp/logistics-vision-failures" };
+    std::size_t maximum_frames{ 200 };
+    int jpeg_quality{ 90 };
+
+    [[nodiscard]] bool IsValid() const noexcept;
+};
+
 struct VisionProcessingConfig final {
     bool perspective_rectification{ true };
     bool contrast_enhancement{ true };
@@ -22,6 +31,7 @@ struct VisionProcessingConfig final {
     int failure_frames_before_super_resolution{ 2 };
     std::size_t maximum_super_resolution_input_pixels{ 300000 };
     std::filesystem::path super_resolution_model_path;
+    FailureFrameCaptureConfig failure_frame_capture;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

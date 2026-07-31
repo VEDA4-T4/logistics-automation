@@ -163,6 +163,16 @@ if(LOGISTICS_BUILD_VISION_NODE)
     logistics_enable_warnings(vision_processing_config)
 
     add_library(
+        vision_failure_frame_store
+        vision-node/failure_frame_store.cpp
+        vision-node/failure_frame_store.hpp
+    )
+    add_library(logistics::vision_failure_frame_store ALIAS vision_failure_frame_store)
+    target_include_directories(vision_failure_frame_store PUBLIC vision-node ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(vision_failure_frame_store PUBLIC logistics::vision_processing_config ${OpenCV_LIBS})
+    logistics_enable_warnings(vision_failure_frame_store)
+
+    add_library(
         vision_detection
         vision-node/detection.cpp
         vision-node/detection.hpp
@@ -340,6 +350,11 @@ if(BUILD_TESTING)
         logistics_enable_warnings(vision_detection_test)
         add_test(NAME vision_detection_test COMMAND vision_detection_test)
 
+        add_executable(vision_failure_frame_store_test tests/vision_failure_frame_store_test.cpp)
+        target_link_libraries(vision_failure_frame_store_test PRIVATE logistics::vision_failure_frame_store)
+        logistics_enable_warnings(vision_failure_frame_store_test)
+        add_test(NAME vision_failure_frame_store_test COMMAND vision_failure_frame_store_test)
+
     endif()
 
     add_executable(device_image_uploader_test tests/image_uploader_test.cpp)
@@ -351,7 +366,11 @@ if(LOGISTICS_BUILD_VISION_NODE)
     add_device_node(logistics_vision_node vision-node/main.cpp)
     target_link_libraries(
         logistics_vision_node
-        PRIVATE logistics::device_control_state logistics::vision_detection logistics::vision_mqtt_workflow
+        PRIVATE
+            logistics::device_control_state
+            logistics::vision_detection
+            logistics::vision_failure_frame_store
+            logistics::vision_mqtt_workflow
     )
 
     add_executable(logistics_vision_benchmark vision-node/vision_benchmark.cpp)

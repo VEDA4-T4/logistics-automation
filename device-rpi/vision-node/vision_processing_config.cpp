@@ -83,6 +83,15 @@ void AssignValue(VisionProcessingConfig& config, const std::filesystem::path& pa
             ParseInteger<std::size_t>(path, line_number, key, value, 1, std::numeric_limits<std::size_t>::max());
     } else if (key == "super_resolution_model_path") {
         config.super_resolution_model_path = std::string(value);
+    } else if (key == "failure_frame_capture_enabled") {
+        config.failure_frame_capture.enabled = ParseBoolean(path, line_number, key, value);
+    } else if (key == "failure_frame_directory") {
+        config.failure_frame_capture.directory = std::string(value);
+    } else if (key == "maximum_failure_frames") {
+        config.failure_frame_capture.maximum_frames =
+            ParseInteger<std::size_t>(path, line_number, key, value, 1, 100000);
+    } else if (key == "failure_frame_jpeg_quality") {
+        config.failure_frame_capture.jpeg_quality = ParseInteger<int>(path, line_number, key, value, 1, 100);
     } else {
         ThrowLineError(path, line_number, "unknown [vision_processing] setting: " + std::string(key));
     }
@@ -90,12 +99,16 @@ void AssignValue(VisionProcessingConfig& config, const std::filesystem::path& pa
 
 }  // namespace
 
+bool FailureFrameCaptureConfig::IsValid() const noexcept {
+    return !enabled || (!directory.empty() && maximum_frames > 0 && jpeg_quality >= 1 && jpeg_quality <= 100);
+}
+
 bool VisionProcessingConfig::IsValid() const noexcept {
     const bool valid_backend = !super_resolution_enabled ||
                                super_resolution_backend != SuperResolutionBackend::kFsrcnn ||
                                !super_resolution_model_path.empty();
     return super_resolution_scale >= 2 && super_resolution_scale <= 4 && failure_frames_before_super_resolution > 0 &&
-           maximum_super_resolution_input_pixels > 0 && valid_backend;
+           maximum_super_resolution_input_pixels > 0 && valid_backend && failure_frame_capture.IsValid();
 }
 
 VisionProcessingConfig LoadVisionProcessingConfig(const std::filesystem::path& path) {
@@ -141,6 +154,10 @@ VisionProcessingConfig LoadVisionProcessingConfig(const std::filesystem::path& p
 
     if (!config.super_resolution_model_path.empty() && config.super_resolution_model_path.is_relative()) {
         config.super_resolution_model_path = path.parent_path() / config.super_resolution_model_path;
+    }
+    if (assigned_keys.contains("failure_frame_directory") && !config.failure_frame_capture.directory.empty() &&
+        config.failure_frame_capture.directory.is_relative()) {
+        config.failure_frame_capture.directory = path.parent_path() / config.failure_frame_capture.directory;
     }
     if (!config.IsValid()) {
         throw VisionProcessingConfigError("invalid [vision_processing] configuration in " + path.string());

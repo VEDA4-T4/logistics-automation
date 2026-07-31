@@ -45,6 +45,10 @@ super_resolution_backend=bicubic
 super_resolution_scale=2
 failure_frames_before_super_resolution=2
 maximum_super_resolution_input_pixels=300000
+failure_frame_capture_enabled=true
+failure_frame_directory=/tmp/logistics-vision-failures
+maximum_failure_frames=200
+failure_frame_jpeg_quality=90
 ```
 
 Use HTTPS in deployment. Plain HTTP is accepted only when `allow_insecure_http=true` is explicitly configured for an
@@ -91,6 +95,10 @@ missing, the node waits for `failure_frames_before_super_resolution` consecutive
 `bicubic` works without an external model and provides the deployment baseline. For learned SR, set
 `super_resolution_backend=fsrcnn` and `super_resolution_model_path` to a TensorFlow `.pb` model whose scale matches
 `super_resolution_scale`. Model files are deployment assets and are not stored in this repository.
+
+When final barcode recognition fails for an assigned work, the unannotated camera frame is saved separately under
+`failure_frame_directory`. Only `maximum_failure_frames` JPEG files are retained, so this temporary benchmark input
+cannot grow without bound. A storage failure is logged as a warning and does not replace the MQTT recognition result.
 
 ## Vision ablation benchmark
 

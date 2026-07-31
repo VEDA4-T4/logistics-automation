@@ -21,6 +21,7 @@
 #include <unordered_set>
 
 #include "detection.hpp"
+#include "failure_frame_store.hpp"
 #include "vision_mqtt_workflow.hpp"
 #include "vision_processing_config.hpp"
 
@@ -353,6 +354,7 @@ int main(const int argc, char* argv[]) {
         std::cerr << "[vision][ERROR] " << error.what() << '\n';
         return 2;
     }
+    logistics::vision::FailureFrameStore failure_frame_store(vision_processing_config.failure_frame_capture);
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
     logistics::device::MqttNodeConfig mqtt_config;
@@ -636,6 +638,10 @@ int main(const int argc, char* argv[]) {
             const bool position_published = control_state.IsOperational() && mqtt_client.PublishEvent(position);
             const bool barcode_published = control_state.IsOperational() && mqtt_client.PublishEvent(barcode);
             const bool barcode_detected = work->observation.barcode.has_value();
+            if (!barcode_detected && !failure_frame_store.Store(frame, work->work_id)) {
+                std::cerr << "[vision][WARN] failed to archive barcode recognition failure frame; work_id="
+                          << work->work_id << '\n';
+            }
             bool image_published = !barcode_detected || image_uploader == nullptr;
             if (barcode_detected && image_uploader != nullptr && !pending_capture.empty()) {
                 std::vector<std::uint8_t> jpeg;

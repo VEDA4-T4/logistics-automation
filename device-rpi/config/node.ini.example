@@ -52,6 +52,10 @@ super_resolution_backend=bicubic
 super_resolution_scale=2
 failure_frames_before_super_resolution=2
 maximum_super_resolution_input_pixels=300000
+failure_frame_capture_enabled=true
+failure_frame_directory=/tmp/logistics-vision-failures
+maximum_failure_frames=200
+failure_frame_jpeg_quality=90
 
 # To use a learned FSRCNN model, change the backend and place the TensorFlow
 # .pb file relative to this configuration file (or specify an absolute path).
