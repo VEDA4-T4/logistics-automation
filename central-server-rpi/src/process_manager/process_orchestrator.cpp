@@ -241,11 +241,15 @@ bool ProcessOrchestrator::RestoreAfterServerRestart(ProcessSystemState stored_st
     if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
         return false;
     }
-    for (auto iterator = gripper_targets.begin(); iterator != gripper_targets.end();) {
-        if (!state_machine_.FindWork(iterator->first).has_value()) {
-            iterator = gripper_targets.erase(iterator);
-        } else {
-            ++iterator;
+    if (!homography_.Enabled()) {
+        gripper_targets.clear();
+    } else {
+        for (auto iterator = gripper_targets.begin(); iterator != gripper_targets.end();) {
+            if (!state_machine_.FindWork(iterator->first).has_value()) {
+                iterator = gripper_targets.erase(iterator);
+            } else {
+                ++iterator;
+            }
         }
     }
     gripper_targets_ = std::move(gripper_targets);
@@ -362,7 +366,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         return result;
     }
     if (event.type == ProcessEventType::kProductInfoReady) {
-        const auto target = gripper_targets_.find(work->work_id);
+        const auto target = homography_.Enabled() ? gripper_targets_.find(work->work_id) : gripper_targets_.end();
         result.commands.push_back(MakeGripperCommand(work->work_id, work->destination,
                                                      target == gripper_targets_.end() ? nullptr : &target->second,
                                                      message.timestamp));
