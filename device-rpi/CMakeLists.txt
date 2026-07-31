@@ -350,6 +350,11 @@ if(BUILD_TESTING)
         logistics_enable_warnings(vision_detection_test)
         add_test(NAME vision_detection_test COMMAND vision_detection_test)
 
+        add_executable(vision_super_resolution_preview_test tests/vision_super_resolution_preview_test.cpp)
+        target_link_libraries(vision_super_resolution_preview_test PRIVATE logistics::vision_detection)
+        logistics_enable_warnings(vision_super_resolution_preview_test)
+        add_test(NAME vision_super_resolution_preview_test COMMAND vision_super_resolution_preview_test)
+
         add_executable(vision_failure_frame_store_test tests/vision_failure_frame_store_test.cpp)
         target_link_libraries(vision_failure_frame_store_test PRIVATE logistics::vision_failure_frame_store)
         logistics_enable_warnings(vision_failure_frame_store_test)
@@ -378,6 +383,14 @@ if(LOGISTICS_BUILD_VISION_NODE)
     logistics_enable_warnings(logistics_vision_benchmark)
     if(BUILD_TESTING)
         add_test(NAME vision_benchmark_help COMMAND logistics_vision_benchmark --help)
+        add_test(
+            NAME vision_benchmark_visual_output
+            COMMAND
+                ${CMAKE_COMMAND}
+                -DBENCHMARK_EXECUTABLE=$<TARGET_FILE:logistics_vision_benchmark>
+                -DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/vision-benchmark-visual-test
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/vision_benchmark_visual_test.cmake
+        )
     endif()
 
     if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)

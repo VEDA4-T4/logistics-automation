@@ -193,6 +193,16 @@ DetectionResult DetectionModule::Process(const cv::Mat& frame, const bool allow_
     return result;
 }
 
+cv::Mat DetectionModule::SuperResolveForPreview(const cv::Mat& image) {
+    if (image.empty()) {
+        throw std::invalid_argument("super-resolution preview image must not be empty");
+    }
+    if (!config_.super_resolution_enabled) {
+        throw std::logic_error("super-resolution preview requires an enabled backend");
+    }
+    return SuperResolve(image);
+}
+
 bool DetectionModule::DetectBarcodeRegions(const cv::Mat& image, std::vector<cv::Point2f>& corners) {
     corners.clear();
     return barcode_detector_.detect(image, corners) && corners.size() >= kBarcodeCornerCount;

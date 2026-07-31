@@ -7,6 +7,8 @@
 #include <iomanip>
 #include <iostream>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -49,7 +51,9 @@ struct Arguments final {
     std::filesystem::path manifest_path;
     std::filesystem::path output_path;
     std::filesystem::path fsrcnn_model_path;
+    std::filesystem::path visual_output_directory;
     int iterations{ 1 };
+    int visual_limit{ 10 };
 };
 
 std::string_view Trim(std::string_view value) {
@@ -77,7 +81,8 @@ Arguments ParseArguments(const int argc, char* argv[]) {
         const std::string_view option = argv[index];
         if (option == "--help" || option == "-h") {
             std::cout << "Usage: " << argv[0]
-                      << " --dataset DIR --manifest FILE [--output FILE] [--iterations N] [--fsrcnn-model FILE]\n";
+                      << " --dataset DIR --manifest FILE [--output FILE] [--iterations N] [--fsrcnn-model FILE]"
+                         " [--visual-output DIR] [--visual-limit N]\n";
             std::exit(0);
         }
         if (index + 1 >= argc) {
@@ -94,6 +99,10 @@ Arguments ParseArguments(const int argc, char* argv[]) {
             arguments.iterations = ParsePositiveInteger(value);
         } else if (option == "--fsrcnn-model") {
             arguments.fsrcnn_model_path = value;
+        } else if (option == "--visual-output") {
+            arguments.visual_output_directory = value;
+        } else if (option == "--visual-limit") {
+            arguments.visual_limit = ParsePositiveInteger(value);
         } else {
             throw std::invalid_argument("unknown option: " + std::string(option));
         }
@@ -264,6 +273,106 @@ void WriteResult(std::ostream& output, const std::string_view name, const Benchm
            << Average(result.diagnostics.barcode_decode_ms, result.samples) << '\n';
 }
 
+cv::Rect ExpandAndClip(const cv::Rect& rectangle, const cv::Size frame_size, const int padding) {
+    const cv::Rect expanded{ rectangle.x - padding, rectangle.y - padding, rectangle.width + padding * 2,
+                             rectangle.height + padding * 2 };
+    return expanded & cv::Rect{ 0, 0, frame_size.width, frame_size.height };
+}
+
+cv::Mat SelectPreviewRegion(const DatasetSample& sample, const vision::DetectionResult& result) {
+    if (!result.barcodes.empty() && !result.barcodes.front().corners.empty()) {
+        const cv::Rect barcode_bounds = cv::boundingRect(result.barcodes.front().corners);
+        const cv::Rect preview_bounds = ExpandAndClip(barcode_bounds, sample.image.size(), 16);
+        if (!preview_bounds.empty()) {
+            return sample.image(preview_bounds).clone();
+        }
+    }
+    if (result.box.has_value() && !result.box->roi.empty()) {
+        return sample.image(result.box->roi).clone();
+    }
+
+    constexpr int kFallbackPreviewSize = 512;
+    const int width = std::min(sample.image.cols, kFallbackPreviewSize);
+    const int height = std::min(sample.image.rows, kFallbackPreviewSize);
+    const int x = (sample.image.cols - width) / 2;
+    const int y = (sample.image.rows - height) / 2;
+    return sample.image(cv::Rect{ x, y, width, height }).clone();
+}
+
+cv::Mat AddPanelLabel(const cv::Mat& image, const std::string_view label) {
+    constexpr int kHeaderHeight = 40;
+    cv::Mat bgr;
+    if (image.channels() == 1) {
+        cv::cvtColor(image, bgr, cv::COLOR_GRAY2BGR);
+    } else {
+        bgr = image;
+    }
+    cv::Mat panel(bgr.rows + kHeaderHeight, bgr.cols, CV_8UC3, cv::Scalar(24, 24, 24));
+    bgr.copyTo(panel(cv::Rect{ 0, kHeaderHeight, bgr.cols, bgr.rows }));
+    cv::putText(panel, std::string(label), cv::Point{ 12, 27 }, cv::FONT_HERSHEY_SIMPLEX, 0.65,
+                cv::Scalar(245, 245, 245), 1, cv::LINE_AA);
+    return panel;
+}
+
+vision::VisionProcessingConfig PreviewConfig(const vision::SuperResolutionBackend backend,
+                                             const std::filesystem::path& model_path = {}) {
+    vision::VisionProcessingConfig config;
+    config.super_resolution_enabled = true;
+    config.super_resolution_backend = backend;
+    config.super_resolution_scale = 2;
+    config.super_resolution_model_path = model_path;
+    return config;
+}
+
+void WriteVisualComparisons(const Arguments& arguments, const std::vector<DatasetSample>& samples) {
+    if (arguments.visual_output_directory.empty()) {
+        return;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(arguments.visual_output_directory, error);
+    if (error) {
+        throw std::runtime_error("unable to create visual output directory: " + error.message());
+    }
+
+    vision::VisionProcessingConfig locator_config;
+    locator_config.super_resolution_enabled = false;
+    vision::DetectionModule locator(locator_config);
+    vision::DetectionModule bicubic(PreviewConfig(vision::SuperResolutionBackend::kBicubic));
+    std::optional<vision::DetectionModule> fsrcnn;
+    if (!arguments.fsrcnn_model_path.empty()) {
+        fsrcnn.emplace(PreviewConfig(vision::SuperResolutionBackend::kFsrcnn, arguments.fsrcnn_model_path));
+    }
+
+    const std::size_t count = std::min(samples.size(), static_cast<std::size_t>(arguments.visual_limit));
+    for (std::size_t index = 0; index < count; ++index) {
+        const DatasetSample& sample = samples[index];
+        const vision::DetectionResult located = locator.Process(sample.image, false);
+        const cv::Mat region = SelectPreviewRegion(sample, located);
+
+        cv::Mat nearest;
+        cv::resize(region, nearest, cv::Size{}, 2.0, 2.0, cv::INTER_NEAREST);
+        std::vector<cv::Mat> panels{
+            AddPanelLabel(nearest, "ORIGINAL x2 (NEAREST)"),
+            AddPanelLabel(bicubic.SuperResolveForPreview(region), "BICUBIC SR x2"),
+        };
+        if (fsrcnn.has_value()) {
+            panels.push_back(AddPanelLabel(fsrcnn->SuperResolveForPreview(region), "FSRCNN SR x2"));
+        }
+        cv::Mat comparison;
+        cv::hconcat(panels, comparison);
+
+        std::ostringstream filename;
+        filename << std::setw(3) << std::setfill('0') << index + 1 << '-' << sample.image_path.stem().string()
+                 << "-sr-comparison.png";
+        const std::filesystem::path output_path = arguments.visual_output_directory / filename.str();
+        if (!cv::imwrite(output_path.string(), comparison)) {
+            throw std::runtime_error("unable to write visual comparison: " + output_path.string());
+        }
+    }
+    std::clog << "[vision-benchmark] wrote " << count << " SR visual comparison image(s) to "
+              << arguments.visual_output_directory << '\n';
+}
+
 }  // namespace
 
 int main(const int argc, char* argv[]) {
@@ -286,6 +395,7 @@ int main(const int argc, char* argv[]) {
             }
             output << results.str();
         }
+        WriteVisualComparisons(arguments, samples);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "[vision-benchmark][ERROR] " << error.what() << '\n';

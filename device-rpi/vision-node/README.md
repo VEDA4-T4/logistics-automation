@@ -120,8 +120,20 @@ Run every profile over the exact same images:
   --dataset /data/vision-benchmark/images \
   --manifest /data/vision-benchmark/manifest.csv \
   --iterations 5 \
-  --output /tmp/vision-benchmark.csv
+  --output /tmp/vision-benchmark.csv \
+  --visual-output /tmp/vision-sr-comparisons \
+  --visual-limit 10
 ```
+
+Each visual comparison PNG shows the same detected barcode ROI (or box ROI when a barcode ROI is unavailable) at the
+same 2x dimensions:
+
+- `ORIGINAL x2 (NEAREST)` preserves the source pixels so blur and compression damage remain visible;
+- `BICUBIC SR x2` is the exact dependency-free SR path used by the node;
+- `FSRCNN SR x2` is added when `--fsrcnn-model` is supplied.
+
+Open the PNGs in `--visual-output` at 100% zoom. Nearest-neighbor output is intentionally used for the original panel;
+using a smooth viewer resize there would hide the difference that the comparison is intended to expose.
 
 To include learned SR:
 
@@ -130,7 +142,8 @@ To include learned SR:
   --dataset /data/vision-benchmark/images \
   --manifest /data/vision-benchmark/manifest.csv \
   --iterations 5 \
-  --fsrcnn-model /opt/logistics/models/FSRCNN_x2.pb
+  --fsrcnn-model /opt/logistics/models/FSRCNN_x2.pb \
+  --visual-output /tmp/vision-sr-comparisons
 ```
 
 The benchmark performs an ablation study with these profiles:

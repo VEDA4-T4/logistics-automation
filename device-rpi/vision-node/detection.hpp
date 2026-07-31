@@ -52,6 +52,7 @@ public:
     explicit DetectionModule(VisionProcessingConfig config = {});
 
     [[nodiscard]] DetectionResult Process(const cv::Mat& frame, bool allow_expensive_fallback = true);
+    [[nodiscard]] cv::Mat SuperResolveForPreview(const cv::Mat& image);
 
 private:
     [[nodiscard]] std::optional<DetectedBox> DetectStyrofoamBox(const cv::Mat& frame);
