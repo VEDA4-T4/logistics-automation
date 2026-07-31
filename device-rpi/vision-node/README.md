@@ -135,6 +135,21 @@ same 2x dimensions:
 Open the PNGs in `--visual-output` at 100% zoom. Nearest-neighbor output is intentionally used for the original panel;
 using a smooth viewer resize there would hide the difference that the comparison is intended to expose.
 
+The helper script builds the benchmark, runs the automated SR preview tests, generates the CSV, and verifies that the
+comparison PNGs were created:
+
+```sh
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images \
+  --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-test \
+  --iterations 5 \
+  --visual-limit 10
+```
+
+Pass `--fsrcnn-model /opt/logistics/models/FSRCNN_x2.pb` to include the learned SR panel. Use `--skip-build` when the
+benchmark has already been built in `build-vision-benchmark`.
+
 To include learned SR:
 
 ```sh
