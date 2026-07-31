@@ -141,10 +141,7 @@ typedef enum {
     UART_GRIPPER_MOTION_HOME = 0x03U
 } uart_gripper_motion_type_t;
 
-typedef enum {
-    UART_GRIPPER_EVENT_MOTION_COMPLETE = 0x01U,
-    UART_GRIPPER_EVENT_FAULT = 0x02U
-} uart_gripper_event_t;
+typedef enum { UART_GRIPPER_EVENT_MOTION_COMPLETE = 0x01U, UART_GRIPPER_EVENT_FAULT = 0x02U } uart_gripper_event_t;
 
 /*
  * MOTION_COMPLETE event:
@@ -348,8 +345,8 @@ static inline uint8_t uart_gripper_event_payload_is_valid(const uint8_t* payload
             return 0U;
     }
 
-    motion_id = uart_gripper_read_u16(payload, UART_GRIPPER_EVENT_MOTION_ID_LOW_INDEX,
-                                      UART_GRIPPER_EVENT_MOTION_ID_HIGH_INDEX);
+    motion_id =
+        uart_gripper_read_u16(payload, UART_GRIPPER_EVENT_MOTION_ID_LOW_INDEX, UART_GRIPPER_EVENT_MOTION_ID_HIGH_INDEX);
     return (uart_gripper_motion_id_is_valid(motion_id) != 0U &&
             uart_gripper_motion_type_is_valid(payload[UART_GRIPPER_EVENT_MOTION_TYPE_INDEX]) != 0U)
                ? 1U

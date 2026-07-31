@@ -176,7 +176,9 @@ struct IkSolution {
     // message can name it.
     std::string_view blocking_joint{};
 
-    [[nodiscard]] bool Succeeded() const noexcept { return status == IkStatus::kOk; }
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == IkStatus::kOk;
+    }
 };
 
 /*

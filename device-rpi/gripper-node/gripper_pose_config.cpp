@@ -66,8 +66,8 @@ template <typename Integer>
         const std::size_t comma = value.find(',', start);
         const std::string_view field =
             Trim(value.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start));
-        angles[parsed_count] = ParseInteger<std::uint16_t>(origin, line_number, key, field, 0U,
-                                                           UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+        angles[parsed_count] =
+            ParseInteger<std::uint16_t>(origin, line_number, key, field, 0U, UART_GRIPPER_ANGLE_DECI_DEG_MAX);
         ++parsed_count;
         if (comma == std::string_view::npos) {
             start = value.size() + 1U;
@@ -101,17 +101,16 @@ void AssignGripperValue(GripperPoseConfig& config, std::string_view origin, std:
         config.closed_position_percent =
             ParseInteger<std::uint8_t>(origin, line_number, key, value, 0U, UART_GRIPPER_POSITION_MAX);
     } else if (key == "arm_duration_ms") {
-        config.arm_duration_ms = ParseInteger<std::uint16_t>(origin, line_number, key, value,
-                                                             UART_GRIPPER_DURATION_MS_MIN, UART_GRIPPER_DURATION_MS_MAX);
+        config.arm_duration_ms = ParseInteger<std::uint16_t>(
+            origin, line_number, key, value, UART_GRIPPER_DURATION_MS_MIN, UART_GRIPPER_DURATION_MS_MAX);
     } else if (key == "claw_duration_ms") {
-        config.claw_duration_ms = ParseInteger<std::uint16_t>(origin, line_number, key, value,
-                                                              UART_GRIPPER_DURATION_MS_MIN,
-                                                              UART_GRIPPER_DURATION_MS_MAX);
+        config.claw_duration_ms = ParseInteger<std::uint16_t>(
+            origin, line_number, key, value, UART_GRIPPER_DURATION_MS_MIN, UART_GRIPPER_DURATION_MS_MAX);
     } else if (key == "base_deci_deg_per_pixel") {
         config.base_deci_deg_per_pixel = ParseScale(origin, line_number, key, value);
     } else if (key == "max_base_correction_deci_deg") {
-        config.max_base_correction_deci_deg = ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U,
-                                                                          UART_GRIPPER_ANGLE_DECI_DEG_MAX);
+        config.max_base_correction_deci_deg =
+            ParseInteger<std::uint16_t>(origin, line_number, key, value, 0U, UART_GRIPPER_ANGLE_DECI_DEG_MAX);
     } else if (key == "link_shoulder_to_elbow_mm") {
         config.geometry.shoulder_to_elbow_mm = ParseScale(origin, line_number, key, value);
     } else if (key == "link_elbow_to_tcp_mm") {
@@ -177,8 +176,8 @@ void AssignGripperValue(GripperPoseConfig& config, std::string_view origin, std:
 }  // namespace
 
 bool GripperPoseConfig::IsValid() const noexcept {
-    return home.IsValid() && pick_approach.IsValid() && pick.IsValid() && place_approach.IsValid() &&
-           place.IsValid() && uart_gripper_position_is_valid(open_position_percent) != 0U &&
+    return home.IsValid() && pick_approach.IsValid() && pick.IsValid() && place_approach.IsValid() && place.IsValid() &&
+           uart_gripper_position_is_valid(open_position_percent) != 0U &&
            uart_gripper_position_is_valid(closed_position_percent) != 0U &&
            uart_gripper_duration_is_valid(arm_duration_ms) != 0U &&
            uart_gripper_duration_is_valid(claw_duration_ms) != 0U &&
@@ -208,8 +207,8 @@ GripperPose GripperPoseConfig::PickPoseForOffset(std::int32_t offset_x_pixels) c
     // The controller clamps to its own mechanical limits as well, but keeping the
     // value inside the contract range here means the frame is never rejected
     // outright and the reason for the clamp stays visible on this side.
-    pose.base_deci_deg = static_cast<std::uint16_t>(
-        std::clamp(corrected, 0.0, static_cast<double>(UART_GRIPPER_ANGLE_DECI_DEG_MAX)));
+    pose.base_deci_deg =
+        static_cast<std::uint16_t>(std::clamp(corrected, 0.0, static_cast<double>(UART_GRIPPER_ANGLE_DECI_DEG_MAX)));
     return pose;
 }
 

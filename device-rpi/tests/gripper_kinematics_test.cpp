@@ -157,8 +157,8 @@ void test_base_yaw_follows_the_target_quadrant() {
     // base window stops at 1700, i.e. 80 degrees -- see the sibling test below.
     const double diagonal_mm = 150.0 / std::sqrt(2.0);
 
-    const auto solution = SolveInverseKinematics(
-        SymmetricGeometry(), PickPose{ .x_mm = diagonal_mm, .y_mm = diagonal_mm, .z_mm = 0.0 });
+    const auto solution =
+        SolveInverseKinematics(SymmetricGeometry(), PickPose{ .x_mm = diagonal_mm, .y_mm = diagonal_mm, .z_mm = 0.0 });
     assert(solution.Succeeded());
     assert(solution.angles.base_deci_deg == 1350U);
 

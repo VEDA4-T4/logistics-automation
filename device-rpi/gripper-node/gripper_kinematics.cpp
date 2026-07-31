@@ -47,8 +47,7 @@ constexpr double kReachEpsilonMm = 1e-6;
  */
 [[nodiscard]] bool ToContractAngle(double servo_deci_deg, std::uint16_t& out) noexcept {
     const double rounded = std::round(servo_deci_deg);
-    if (!std::isfinite(rounded) || rounded < 0.0 ||
-        rounded > static_cast<double>(UART_GRIPPER_ANGLE_DECI_DEG_MAX)) {
+    if (!std::isfinite(rounded) || rounded < 0.0 || rounded > static_cast<double>(UART_GRIPPER_ANGLE_DECI_DEG_MAX)) {
         return false;
     }
     out = static_cast<std::uint16_t>(rounded);
@@ -86,8 +85,7 @@ bool GripperGeometry::IsValid() const noexcept {
     const bool directions_usable = (base_direction == 1 || base_direction == -1) &&
                                    (shoulder_direction == 1 || shoulder_direction == -1) &&
                                    (elbow_direction == 1 || elbow_direction == -1);
-    const bool limits_usable = base_min_deci_deg < base_max_deci_deg &&
-                               shoulder_min_deci_deg < shoulder_max_deci_deg &&
+    const bool limits_usable = base_min_deci_deg < base_max_deci_deg && shoulder_min_deci_deg < shoulder_max_deci_deg &&
                                elbow_min_deci_deg < elbow_max_deci_deg &&
                                uart_gripper_angle_is_valid(base_max_deci_deg) != 0U &&
                                uart_gripper_angle_is_valid(shoulder_max_deci_deg) != 0U &&
@@ -162,8 +160,7 @@ IkSolution SolveInverseKinematics(const GripperGeometry& geometry, const PickPos
 
     const double cos_shoulder_offset =
         std::clamp((l1 * l1 + distance_mm * distance_mm - l2 * l2) / (2.0 * l1 * distance_mm), -1.0, 1.0);
-    const double shoulder_deg =
-        ToDegrees(std::atan2(height_mm, radius_mm)) + ToDegrees(std::acos(cos_shoulder_offset));
+    const double shoulder_deg = ToDegrees(std::atan2(height_mm, radius_mm)) + ToDegrees(std::acos(cos_shoulder_offset));
 
     // The elbow servo is referenced to a fully extended arm, so what it travels
     // is the deviation from 180 degrees rather than the interior angle itself.
@@ -182,9 +179,8 @@ IkSolution SolveInverseKinematics(const GripperGeometry& geometry, const PickPos
         solution.blocking_joint = "shoulder";
         return solution;
     }
-    if (!ToContractAngle(
-            ToServoDeciDeg(geometry.elbow_zero_deci_deg, geometry.elbow_direction, elbow_deviation_deg),
-            angles.elbow_deci_deg)) {
+    if (!ToContractAngle(ToServoDeciDeg(geometry.elbow_zero_deci_deg, geometry.elbow_direction, elbow_deviation_deg),
+                         angles.elbow_deci_deg)) {
         solution.status = IkStatus::kJointLimit;
         solution.blocking_joint = "elbow";
         return solution;
@@ -214,21 +210,17 @@ IkSolution SolveInverseKinematics(const GripperGeometry& geometry, const PickPos
     return solution;
 }
 
-std::optional<PickPose> SolveForwardKinematics(const GripperGeometry& geometry,
-                                               const JointAngles& angles) noexcept {
+std::optional<PickPose> SolveForwardKinematics(const GripperGeometry& geometry, const JointAngles& angles) noexcept {
     if (!geometry.IsValid()) {
         return std::nullopt;
     }
 
-    const double base_deg =
-        FromServoDeciDeg(geometry.base_zero_deci_deg, geometry.base_direction,
-                         static_cast<double>(angles.base_deci_deg));
-    const double shoulder_deg =
-        FromServoDeciDeg(geometry.shoulder_zero_deci_deg, geometry.shoulder_direction,
-                         static_cast<double>(angles.shoulder_deci_deg));
-    const double elbow_deviation_deg =
-        FromServoDeciDeg(geometry.elbow_zero_deci_deg, geometry.elbow_direction,
-                         static_cast<double>(angles.elbow_deci_deg));
+    const double base_deg = FromServoDeciDeg(geometry.base_zero_deci_deg, geometry.base_direction,
+                                             static_cast<double>(angles.base_deci_deg));
+    const double shoulder_deg = FromServoDeciDeg(geometry.shoulder_zero_deci_deg, geometry.shoulder_direction,
+                                                 static_cast<double>(angles.shoulder_deci_deg));
+    const double elbow_deviation_deg = FromServoDeciDeg(geometry.elbow_zero_deci_deg, geometry.elbow_direction,
+                                                        static_cast<double>(angles.elbow_deci_deg));
 
     // The forearm's angle above horizontal is the shoulder's, turned by however
     // far the elbow deviates from straight.
@@ -250,9 +242,8 @@ std::uint32_t MinimumArmDurationMs(const GripperGeometry& geometry, const JointA
                                    const JointAngles& to) noexcept {
     const std::uint32_t base_ms = DurationForDelta(AbsoluteDifference(from.base_deci_deg, to.base_deci_deg),
                                                    geometry.base_max_speed_deci_deg_per_sec);
-    const std::uint32_t shoulder_ms =
-        DurationForDelta(AbsoluteDifference(from.shoulder_deci_deg, to.shoulder_deci_deg),
-                         geometry.shoulder_max_speed_deci_deg_per_sec);
+    const std::uint32_t shoulder_ms = DurationForDelta(AbsoluteDifference(from.shoulder_deci_deg, to.shoulder_deci_deg),
+                                                       geometry.shoulder_max_speed_deci_deg_per_sec);
     const std::uint32_t elbow_ms = DurationForDelta(AbsoluteDifference(from.elbow_deci_deg, to.elbow_deci_deg),
                                                     geometry.elbow_max_speed_deci_deg_per_sec);
 
@@ -262,14 +253,12 @@ std::uint32_t MinimumArmDurationMs(const GripperGeometry& geometry, const JointA
 
 std::uint32_t MinimumClawDurationMs(const GripperGeometry& geometry, std::uint8_t from_percent,
                                     std::uint8_t to_percent) noexcept {
-    return DurationForDelta(AbsoluteDifference(from_percent, to_percent),
-                            geometry.claw_max_speed_percent_per_sec);
+    return DurationForDelta(AbsoluteDifference(from_percent, to_percent), geometry.claw_max_speed_percent_per_sec);
 }
 
 std::uint16_t ClampDurationMs(std::uint32_t requested_ms) noexcept {
-    const std::uint32_t clamped =
-        std::clamp(requested_ms, static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MIN),
-                   static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MAX));
+    const std::uint32_t clamped = std::clamp(requested_ms, static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MIN),
+                                             static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MAX));
     return static_cast<std::uint16_t>(clamped);
 }
 

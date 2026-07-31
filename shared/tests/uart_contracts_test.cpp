@@ -65,9 +65,9 @@ void TestGripperPayloadValidation() {
     constexpr std::array<std::uint8_t, 10> kMoveArm{ 0x34U, 0x12U, 0x84U, 0x03U, 0xC2U,
                                                      0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
     constexpr std::array<std::uint8_t, 10> kInvalidAngle{ 0x34U, 0x12U, 0x09U, 0x07U, 0xC2U,
-                                                         0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
+                                                          0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
     constexpr std::array<std::uint8_t, 10> kInvalidMotionId{ 0x00U, 0x00U, 0x84U, 0x03U, 0xC2U,
-                                                            0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
+                                                             0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
     constexpr std::array<std::uint8_t, 5> kSetGripper{ 0x78U, 0x56U, 100U, 0xF4U, 0x01U };
     constexpr std::array<std::uint8_t, 5> kInvalidPosition{ 0x78U, 0x56U, 101U, 0xF4U, 0x01U };
     constexpr std::array<std::uint8_t, 2> kHome{ 0xBCU, 0x9AU };
@@ -84,12 +84,10 @@ void TestGripperPayloadValidation() {
     assert(UART_IS_VALID_GRIPPER_COMMAND(0x120U) == 0U);
 
     assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kMoveArm.data(), kMoveArm.size()) != 0U);
-    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kInvalidAngle.data(),
-                                         kInvalidAngle.size()) == 0U);
-    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kInvalidMotionId.data(),
-                                         kInvalidMotionId.size()) == 0U);
-    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_SET_GRIPPER, kSetGripper.data(),
-                                         kSetGripper.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kInvalidAngle.data(), kInvalidAngle.size()) == 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kInvalidMotionId.data(), kInvalidMotionId.size()) ==
+           0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_SET_GRIPPER, kSetGripper.data(), kSetGripper.size()) != 0U);
     assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_SET_GRIPPER, kInvalidPosition.data(),
                                          kInvalidPosition.size()) == 0U);
     assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_HOME, kHome.data(), kHome.size()) != 0U);

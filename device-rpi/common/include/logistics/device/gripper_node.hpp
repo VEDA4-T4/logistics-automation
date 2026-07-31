@@ -17,9 +17,9 @@
 namespace logistics::device {
 
 enum class GripperCommandStatus {
-    kAccepted,          // motion started; completion arrives asynchronously
-    kSuccess,           // command finished within the UART transaction
-    kDuplicate,         // same request or same work is already running
+    kAccepted,   // motion started; completion arrives asynchronously
+    kSuccess,    // command finished within the UART transaction
+    kDuplicate,  // same request or same work is already running
     kActiveCycleConflict,
     kNotHomed,
     kRejected,

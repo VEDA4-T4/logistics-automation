@@ -184,15 +184,12 @@ struct IkFailure {
         case IkStatus::kUnreachableTooFar:
             return IkFailure{ "ERR-GRIPPER-UNREACHABLE-FAR", "pick pose is beyond the arm's reach" };
         case IkStatus::kUnreachableTooClose:
-            return IkFailure{ "ERR-GRIPPER-UNREACHABLE-NEAR",
-                              "pick pose is inside the arm's minimum fold radius" };
+            return IkFailure{ "ERR-GRIPPER-UNREACHABLE-NEAR", "pick pose is inside the arm's minimum fold radius" };
         case IkStatus::kJointLimit:
-            return IkFailure{ "ERR-GRIPPER-JOINT-LIMIT",
-                              "pick pose needs the " + std::string(solution.blocking_joint) +
-                                  " joint outside its mechanical limit" };
+            return IkFailure{ "ERR-GRIPPER-JOINT-LIMIT", "pick pose needs the " + std::string(solution.blocking_joint) +
+                                                             " joint outside its mechanical limit" };
         case IkStatus::kInvalidGeometry:
-            return IkFailure{ "ERR-GRIPPER-GEOMETRY",
-                              "arm geometry configuration cannot solve a Cartesian target" };
+            return IkFailure{ "ERR-GRIPPER-GEOMETRY", "arm geometry configuration cannot solve a Cartesian target" };
         case IkStatus::kOk:
             break;
     }
@@ -274,8 +271,9 @@ std::optional<GripperPhase> GripperNode::PhaseFromComponent(std::string_view com
 
 std::uint16_t GripperNode::AllocateMotionId() noexcept {
     const std::uint16_t motion_id = next_motion_id_;
-    next_motion_id_ = (next_motion_id_ == UART_GRIPPER_MOTION_ID_MAX) ? UART_GRIPPER_MOTION_ID_MIN
-                                                                      : static_cast<std::uint16_t>(next_motion_id_ + 1U);
+    next_motion_id_ = (next_motion_id_ == UART_GRIPPER_MOTION_ID_MAX)
+                          ? UART_GRIPPER_MOTION_ID_MIN
+                          : static_cast<std::uint16_t>(next_motion_id_ + 1U);
     return motion_id;
 }
 
@@ -778,9 +776,9 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
          * contract ceiling: the shoulder's 1200 deci-degree span at 120
          * deci-degrees per second is exactly 10 s.
          */
-        const std::uint32_t minimum_ms =
-            angles_known_ ? MinimumArmDurationMs(poses_.geometry, commanded_angles_, target)
-                          : static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MAX);
+        const std::uint32_t minimum_ms = angles_known_
+                                             ? MinimumArmDurationMs(poses_.geometry, commanded_angles_, target)
+                                             : static_cast<std::uint32_t>(UART_GRIPPER_DURATION_MS_MAX);
         expected_duration_ms = std::max<std::uint32_t>(poses_.arm_duration_ms, minimum_ms);
         const std::uint16_t duration_ms = ClampDurationMs(expected_duration_ms);
 
@@ -1013,7 +1011,7 @@ GripperCommandResult GripperNode::ExecuteAsync(GripperCommandResult result, std:
 
     result.uart_result = uart_session_.SendCommand(command, payload);
     result.status = (result.uart_result.status == InputTransactStatus::kSent) ? GripperCommandStatus::kAccepted
-                                                                             : GripperCommandStatus::kUartError;
+                                                                              : GripperCommandStatus::kUartError;
     return result;
 }
 
@@ -1108,10 +1106,9 @@ void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
         const bool matched = (pending_safety_.expected == PendingSafetyEvent::kEstopLatched && latched) ||
                              (pending_safety_.expected == PendingSafetyEvent::kReleased && !latched);
         if (matched) {
-            EmitCommandResponse(pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kSuccess,
-                                std::nullopt,
-                                latched ? "emergency stop latched"
-                                        : "emergency stop released; send RECOVERY to home the arm");
+            EmitCommandResponse(
+                pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kSuccess, std::nullopt,
+                latched ? "emergency stop latched" : "emergency stop released; send RECOVERY to home the arm");
             pending_safety_ = PendingSafetyCommand{};
         }
     }
@@ -1187,10 +1184,9 @@ void GripperNode::EmitControllerStatus(const uart_frame_t& response) {
      * describe a pose the arm has already left.
      */
     if (state == UART_GRIPPER_STATE_IDLE || state == UART_GRIPPER_STATE_STOPPED) {
-        commanded_angles_ =
-            JointAngles{ ReadU16(response.payload, UART_GRIPPER_STATUS_BASE_ANGLE_LOW_INDEX),
-                         ReadU16(response.payload, UART_GRIPPER_STATUS_SHOULDER_ANGLE_LOW_INDEX),
-                         ReadU16(response.payload, UART_GRIPPER_STATUS_ELBOW_ANGLE_LOW_INDEX) };
+        commanded_angles_ = JointAngles{ ReadU16(response.payload, UART_GRIPPER_STATUS_BASE_ANGLE_LOW_INDEX),
+                                         ReadU16(response.payload, UART_GRIPPER_STATUS_SHOULDER_ANGLE_LOW_INDEX),
+                                         ReadU16(response.payload, UART_GRIPPER_STATUS_ELBOW_ANGLE_LOW_INDEX) };
         commanded_claw_percent_ = response.payload[UART_GRIPPER_STATUS_POSITION_INDEX];
         angles_known_ = true;
     }
@@ -1216,7 +1212,8 @@ void GripperNode::Tick(std::chrono::milliseconds elapsed) {
         pending_safety_.elapsed += elapsed;
         if (pending_safety_.elapsed >= kSafetyEventTimeout) {
             EmitCommandResponse(pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kTimeout,
-                                std::string("ERR-SAFETY-EVENT-TIMEOUT"), "controller did not confirm the safety change");
+                                std::string("ERR-SAFETY-EVENT-TIMEOUT"),
+                                "controller did not confirm the safety change");
             pending_safety_ = PendingSafetyCommand{};
         }
     }
@@ -1333,14 +1330,14 @@ void GripperNode::EmitCycleStatus(std::string current_state) const {
 
 void GripperNode::EmitDeviceStatus(std::string current_state, std::optional<std::string> error_code,
                                    std::optional<std::string> job_id) const {
-    EmitReport(GripperReport{
-        .channel = GripperReportChannel::kStatus,
-        .message_type = mqtt::MessageType::kDeviceStatus,
-        .data = mqtt::DeviceStatusPayload{ .status = error_code.has_value() ? mqtt::ConnectionState::kUartError
-                                                                           : mqtt::ConnectionState::kOnline,
-                                           .current_state = std::move(current_state),
-                                           .job_id = std::move(job_id),
-                                           .error_code = std::move(error_code) } });
+    EmitReport(GripperReport{ .channel = GripperReportChannel::kStatus,
+                              .message_type = mqtt::MessageType::kDeviceStatus,
+                              .data = mqtt::DeviceStatusPayload{ .status = error_code.has_value()
+                                                                               ? mqtt::ConnectionState::kUartError
+                                                                               : mqtt::ConnectionState::kOnline,
+                                                                 .current_state = std::move(current_state),
+                                                                 .job_id = std::move(job_id),
+                                                                 .error_code = std::move(error_code) } });
 }
 
 void GripperNode::EmitError(std::string error_code, std::string error_level, std::string message,

@@ -3,10 +3,7 @@
 
 #include <stdint.h>
 
-typedef enum {
-    HAL_OK = 0,
-    HAL_ERROR = 1
-} HAL_StatusTypeDef;
+typedef enum { HAL_OK = 0, HAL_ERROR = 1 } HAL_StatusTypeDef;
 
 typedef struct {
     uint32_t ErrorCode;
@@ -34,9 +31,9 @@ typedef struct {
 #define TIM_CHANNEL_4 4U
 
 #define __HAL_DMA_DISABLE_IT(handle, interrupt) \
-    do {                                         \
-        (void)(handle);                          \
-        (void)(interrupt);                       \
+    do {                                        \
+        (void)(handle);                         \
+        (void)(interrupt);                      \
     } while (0)
 
 void fake_hal_tim_set_compare(TIM_HandleTypeDef* timer, uint32_t channel, uint32_t compare);

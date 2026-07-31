@@ -10,10 +10,7 @@ typedef void* osThreadId_t;
 #define osFlagsError 0x80000000U
 #define osFlagsErrorTimeout 0xFFFFFFFEU
 
-typedef enum {
-    osOK = 0,
-    osError = -1
-} osStatus_t;
+typedef enum { osOK = 0, osError = -1 } osStatus_t;
 
 osStatus_t osMessageQueuePut(osMessageQueueId_t queue, const void* message, uint8_t priority, uint32_t timeout);
 osStatus_t osMessageQueueGet(osMessageQueueId_t queue, void* message, uint8_t* priority, uint32_t timeout);

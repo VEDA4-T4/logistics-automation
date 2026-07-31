@@ -141,7 +141,7 @@ constexpr std::string_view kOtherWorkId = "3f2504e0-4f89-11d3-9a0c-0305e82c3302"
  * arm, so a usable target sits well out along +X.
  */
 [[nodiscard]] mqtt::MqttMessage MakePoseStartCommand(std::string request_id, std::string_view work_id, double x_mm,
-                                                    double y_mm, double z_mm) {
+                                                     double y_mm, double z_mm) {
     return MakeControlCommand(
         mqtt::ControlCommand::kStart, std::move(request_id), "gripper",
         mqtt::Json{ { "workId", work_id },
@@ -181,8 +181,8 @@ struct Fixture {
             // test in this file: real hardware answered correctly and every
             // motion command was still refused.
             const bool is_async_motion = request.command == UART_CMD_GRIPPER_MOVE_ARM ||
-                                        request.command == UART_CMD_GRIPPER_SET_GRIPPER ||
-                                        request.command == UART_CMD_GRIPPER_HOME;
+                                         request.command == UART_CMD_GRIPPER_SET_GRIPPER ||
+                                         request.command == UART_CMD_GRIPPER_HOME;
             return std::vector<uart_frame_t>{ MakeGripperResponse(
                 request.sequence, request.command, is_async_motion ? UART_STATUS_ACK : UART_STATUS_SUCCESS) };
         };
@@ -424,8 +424,7 @@ void test_motion_fault_aborts_the_cycle_and_reports_an_error() {
     fixture.Home();
 
     const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
-    fixture.node->HandleUartFrame(
-        MakeMotionFault(result.motion_id, UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO));
+    fixture.node->HandleUartFrame(MakeMotionFault(result.motion_id, UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO));
 
     assert(!fixture.node->HasActiveCycle());
     const auto* error = fixture.LastError();
@@ -473,8 +472,8 @@ void test_safety_release_reports_stopped_rather_than_ready() {
     fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
     fixture.reports.clear();
 
-    static_cast<void>(fixture.node->HandleMqttCommand(
-        MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-safety", "safety")));
+    static_cast<void>(
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-safety", "safety")));
     fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));
 
     // Releasing the latch does not home the arm, so reporting READY here would
@@ -540,7 +539,7 @@ void test_start_cycle_dispatch_failure_reports_exactly_one_response() {
         ++response_count;
         const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
         assert(response != nullptr && response->command == mqtt::ControlCommand::kStart &&
-              response->request_id == "req-1");
+               response->request_id == "req-1");
     }
     assert(response_count == 1);
 }
@@ -565,7 +564,7 @@ void test_recovery_home_dispatch_failure_reports_the_recovery_command() {
         ++response_count;
         const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
         assert(response != nullptr && response->command == mqtt::ControlCommand::kRecovery &&
-              response->request_id == "req-home");
+               response->request_id == "req-home");
     }
     assert(response_count == 1);
 }
@@ -610,9 +609,8 @@ void test_pick_phase_stops_with_the_box_held() {
     Fixture fixture;
     fixture.Home();
 
-    const GripperCommandResult result = fixture.node->HandleMqttCommand(
-        MakeControlCommand(mqtt::ControlCommand::kStart, "req-pick", "pick",
-                           mqtt::Json{ { "workId", kWorkId }, { "destination", "1" } }));
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeControlCommand(
+        mqtt::ControlCommand::kStart, "req-pick", "pick", mqtt::Json{ { "workId", kWorkId }, { "destination", "1" } }));
     assert(result.status == GripperCommandStatus::kAccepted);
 
     std::uint16_t motion_id = result.motion_id;
@@ -663,19 +661,17 @@ constexpr double kReachableX = 220.0;
 constexpr double kReachableZ = 20.0;
 
 [[nodiscard]] logistics::device::JointAngles ArmAnglesOf(const uart_frame_t& frame) {
-    return logistics::device::JointAngles{
-        static_cast<std::uint16_t>(uart_gripper_move_base_angle(frame.payload)),
-        static_cast<std::uint16_t>(uart_gripper_move_shoulder_angle(frame.payload)),
-        static_cast<std::uint16_t>(uart_gripper_move_elbow_angle(frame.payload))
-    };
+    return logistics::device::JointAngles{ static_cast<std::uint16_t>(uart_gripper_move_base_angle(frame.payload)),
+                                           static_cast<std::uint16_t>(uart_gripper_move_shoulder_angle(frame.payload)),
+                                           static_cast<std::uint16_t>(uart_gripper_move_elbow_angle(frame.payload)) };
 }
 
 void test_cartesian_pick_pose_drives_the_arm_through_kinematics() {
     Fixture fixture;
     fixture.Home();
 
-    const GripperCommandResult result = fixture.node->HandleMqttCommand(
-        MakePoseStartCommand("req-1", kWorkId, kReachableX, 0.0, kReachableZ));
+    const GripperCommandResult result =
+        fixture.node->HandleMqttCommand(MakePoseStartCommand("req-1", kWorkId, kReachableX, 0.0, kReachableZ));
     assert(result.status == GripperCommandStatus::kAccepted);
 
     // Step 1 opens the claw; the arm moves on the step after it.
@@ -764,8 +760,7 @@ void test_malformed_pick_pose_is_rejected_rather_than_ignored() {
     // that would move the arm somewhere the server did not ask for.
     const GripperCommandResult missing = fixture.node->HandleMqttCommand(MakeControlCommand(
         mqtt::ControlCommand::kStart, "req-bad", "gripper",
-        mqtt::Json{ { "workId", kWorkId },
-                    { "targetPose", mqtt::Json{ { "x", kReachableX }, { "y", 0.0 } } } }));
+        mqtt::Json{ { "workId", kWorkId }, { "targetPose", mqtt::Json{ { "x", kReachableX }, { "y", 0.0 } } } }));
     assert(missing.status == GripperCommandStatus::kUnreachablePose);
     assert(fixture.backend->written_commands.empty());
 
@@ -812,20 +807,23 @@ void test_full_server_target_pose_payload_is_accepted() {
     Fixture fixture;
     fixture.Home();
 
-    const mqtt::MqttMessage command = MakeControlCommand(
-        mqtt::ControlCommand::kStart, "req-1", "gripper",
-        mqtt::Json{
-            { "workId", kWorkId },
-            { "destination", "1" },
-            { "action", "PICK" },
-            { "coordinateFrame", "PI-GRIPPER-01_BASE" },
-            { "unit", "mm" },
-            { "targetPose",
-              mqtt::Json{ { "x", kReachableX }, { "y", 0.0 }, { "z", kReachableZ }, { "rollDeg", 180.0 },
-                         { "pitchDeg", 0.0 }, { "yawDeg", 37.5 } } },
-            { "box", mqtt::Json{ { "length", 200.0 }, { "width", 150.0 }, { "height", 90.0 } } },
-            { "calibrationVersion", 1 },
-        });
+    const mqtt::MqttMessage command =
+        MakeControlCommand(mqtt::ControlCommand::kStart, "req-1", "gripper",
+                           mqtt::Json{
+                               { "workId", kWorkId },
+                               { "destination", "1" },
+                               { "action", "PICK" },
+                               { "coordinateFrame", "PI-GRIPPER-01_BASE" },
+                               { "unit", "mm" },
+                               { "targetPose", mqtt::Json{ { "x", kReachableX },
+                                                           { "y", 0.0 },
+                                                           { "z", kReachableZ },
+                                                           { "rollDeg", 180.0 },
+                                                           { "pitchDeg", 0.0 },
+                                                           { "yawDeg", 37.5 } } },
+                               { "box", mqtt::Json{ { "length", 200.0 }, { "width", 150.0 }, { "height", 90.0 } } },
+                               { "calibrationVersion", 1 },
+                           });
 
     const GripperCommandResult result = fixture.node->HandleMqttCommand(command);
     assert(result.status == GripperCommandStatus::kAccepted);
@@ -886,8 +884,7 @@ void test_an_aborted_cycle_widens_the_next_motion_budget() {
 
     const GripperCommandResult first = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
     assert(first.status == GripperCommandStatus::kAccepted);
-    fixture.node->HandleUartFrame(
-        MakeMotionFault(first.motion_id, UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO));
+    fixture.node->HandleUartFrame(MakeMotionFault(first.motion_id, UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO));
     assert(!fixture.node->HasActiveCycle());
 
     // GET_STATUS is what re-anchors the pose, so without one the next cycle must
