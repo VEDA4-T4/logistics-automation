@@ -57,7 +57,16 @@ public:
 private:
     [[nodiscard]] std::optional<DetectedBox> DetectStyrofoamBox(const cv::Mat& frame);
     [[nodiscard]] bool DetectBarcodeRegions(const cv::Mat& image, std::vector<cv::Point2f>& corners);
+    [[nodiscard]] bool DetectBarcodeRegionsWithFallback(const cv::Mat& box_roi, bool allow_expensive_fallback,
+                                                        bool reached_failure_threshold,
+                                                        std::vector<cv::Point2f>& corners,
+                                                        DetectionDiagnostics& diagnostics);
     void DecodeBarcodeRegions(const cv::Mat& image, const std::vector<cv::Point2f>& corners);
+    [[nodiscard]] cv::Mat PrepareBarcodeDecodeRoi(const cv::Mat& box_roi, const std::vector<cv::Point2f>& corners,
+                                                  std::size_t barcode_index, DetectionDiagnostics& diagnostics) const;
+    void DecodeBarcodeCandidate(const cv::Mat& decode_roi, const std::vector<cv::Point2f>& selected_corners,
+                                const cv::Point2f& frame_offset, std::vector<DetectedBarcode>& barcodes,
+                                DetectionDiagnostics& diagnostics);
     [[nodiscard]] cv::Mat RectifyBarcode(const cv::Mat& image, const std::vector<cv::Point2f>& corners,
                                          std::size_t barcode_index) const;
     [[nodiscard]] cv::Mat CropBarcode(const cv::Mat& image, const std::vector<cv::Point2f>& corners,

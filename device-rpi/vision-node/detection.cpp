@@ -80,34 +80,10 @@ DetectionResult DetectionModule::Process(const cv::Mat& frame, const bool allow_
 
     const cv::Mat box_roi = frame(result.box->roi);
     std::vector<cv::Point2f> detected_corners;
-    const auto detection_started = Clock::now();
-    bool detected = DetectBarcodeRegions(box_roi, detected_corners);
-    result.diagnostics.barcode_detection_ms = ToMilliseconds(Clock::now() - detection_started);
-
     const bool reached_failure_threshold =
         ++consecutive_barcode_failures_ >= static_cast<std::size_t>(config_.failure_frames_before_super_resolution);
-    if (!detected && allow_expensive_fallback && reached_failure_threshold && config_.super_resolution_enabled &&
-        config_.barcode_detection_fallback && IsSuperResolutionAllowed(box_roi)) {
-        const auto sr_started = Clock::now();
-        const std::optional<cv::Mat> super_resolved_box = TrySuperResolve(box_roi, result.diagnostics);
-        result.diagnostics.super_resolution_ms += ToMilliseconds(Clock::now() - sr_started);
-        result.diagnostics.used_super_resolution_for_detection = true;
-        if (!super_resolved_box.has_value()) {
-            return result;
-        }
-
-        std::vector<cv::Point2f> super_resolved_corners;
-        const auto retry_started = Clock::now();
-        detected = DetectBarcodeRegions(*super_resolved_box, super_resolved_corners);
-        result.diagnostics.barcode_detection_ms += ToMilliseconds(Clock::now() - retry_started);
-        if (detected) {
-            const float inverse_scale = 1.0F / static_cast<float>(config_.super_resolution_scale);
-            detected_corners.reserve(super_resolved_corners.size());
-            for (const cv::Point2f& corner : super_resolved_corners) {
-                detected_corners.push_back(corner * inverse_scale);
-            }
-        }
-    }
+    const bool detected = DetectBarcodeRegionsWithFallback(box_roi, allow_expensive_fallback, reached_failure_threshold,
+                                                           detected_corners, result.diagnostics);
 
     result.diagnostics.barcode_region_detected = detected;
     if (!detected) {
@@ -136,56 +112,11 @@ DetectionResult DetectionModule::Process(const cv::Mat& frame, const bool allow_
             detected_corners.begin() + static_cast<std::ptrdiff_t>(barcode_index * kBarcodeCornerCount);
         const std::vector<cv::Point2f> selected_corners(
             first_corner, first_corner + static_cast<std::ptrdiff_t>(kBarcodeCornerCount));
-        cv::Mat decode_roi;
-        if (config_.perspective_rectification) {
-            const auto rectify_started = Clock::now();
-            decode_roi = RectifyBarcode(box_roi, detected_corners, barcode_index);
-            result.diagnostics.perspective_rectification_ms += ToMilliseconds(Clock::now() - rectify_started);
-            result.diagnostics.used_perspective_rectification = !decode_roi.empty();
-        } else {
-            decode_roi = CropBarcode(box_roi, detected_corners, barcode_index);
-        }
+        cv::Mat decode_roi = PrepareBarcodeDecodeRoi(box_roi, detected_corners, barcode_index, result.diagnostics);
         if (decode_roi.empty()) {
             continue;
         }
-
-        if (config_.contrast_enhancement) {
-            const auto contrast_started = Clock::now();
-            decode_roi = EnhanceContrast(decode_roi);
-            result.diagnostics.contrast_enhancement_ms += ToMilliseconds(Clock::now() - contrast_started);
-            result.diagnostics.used_contrast_enhancement = true;
-        }
-
-        decoded_values_.clear();
-        decoded_types_.clear();
-        barcode_corners_.clear();
-        const auto enhanced_decode_started = Clock::now();
-        barcode_detector_.detectAndDecodeWithType(decode_roi, decoded_values_, decoded_types_, barcode_corners_);
-        result.diagnostics.barcode_decode_ms += ToMilliseconds(Clock::now() - enhanced_decode_started);
-        AppendDecodedBarcodes(selected_corners, frame_offset, result.barcodes);
-        if (!result.barcodes.empty()) {
-            break;
-        }
-
-        if (!config_.super_resolution_enabled || !IsSuperResolutionAllowed(decode_roi)) {
-            continue;
-        }
-        const auto sr_started = Clock::now();
-        const std::optional<cv::Mat> super_resolved_barcode = TrySuperResolve(decode_roi, result.diagnostics);
-        result.diagnostics.super_resolution_ms += ToMilliseconds(Clock::now() - sr_started);
-        result.diagnostics.used_super_resolution_for_decode = true;
-        if (!super_resolved_barcode.has_value()) {
-            continue;
-        }
-
-        decoded_values_.clear();
-        decoded_types_.clear();
-        barcode_corners_.clear();
-        const auto sr_decode_started = Clock::now();
-        barcode_detector_.detectAndDecodeWithType(*super_resolved_barcode, decoded_values_, decoded_types_,
-                                                  barcode_corners_);
-        result.diagnostics.barcode_decode_ms += ToMilliseconds(Clock::now() - sr_decode_started);
-        AppendDecodedBarcodes(selected_corners, frame_offset, result.barcodes);
+        DecodeBarcodeCandidate(decode_roi, selected_corners, frame_offset, result.barcodes, result.diagnostics);
     }
 
     if (!result.barcodes.empty()) {
@@ -210,11 +141,103 @@ bool DetectionModule::DetectBarcodeRegions(const cv::Mat& image, std::vector<cv:
     return barcode_detector_.detect(image, corners) && corners.size() >= kBarcodeCornerCount;
 }
 
+bool DetectionModule::DetectBarcodeRegionsWithFallback(const cv::Mat& box_roi, const bool allow_expensive_fallback,
+                                                       const bool reached_failure_threshold,
+                                                       std::vector<cv::Point2f>& corners,
+                                                       DetectionDiagnostics& diagnostics) {
+    const auto detection_started = Clock::now();
+    bool detected = DetectBarcodeRegions(box_roi, corners);
+    diagnostics.barcode_detection_ms = ToMilliseconds(Clock::now() - detection_started);
+
+    if (!detected && allow_expensive_fallback && reached_failure_threshold && config_.super_resolution_enabled &&
+        config_.barcode_detection_fallback && IsSuperResolutionAllowed(box_roi)) {
+        const auto sr_started = Clock::now();
+        const std::optional<cv::Mat> super_resolved_box = TrySuperResolve(box_roi, diagnostics);
+        diagnostics.super_resolution_ms += ToMilliseconds(Clock::now() - sr_started);
+        diagnostics.used_super_resolution_for_detection = true;
+        if (!super_resolved_box.has_value()) {
+            return false;
+        }
+
+        std::vector<cv::Point2f> super_resolved_corners;
+        const auto retry_started = Clock::now();
+        detected = DetectBarcodeRegions(*super_resolved_box, super_resolved_corners);
+        diagnostics.barcode_detection_ms += ToMilliseconds(Clock::now() - retry_started);
+        if (detected) {
+            const float inverse_scale = 1.0F / static_cast<float>(config_.super_resolution_scale);
+            corners.reserve(super_resolved_corners.size());
+            for (const cv::Point2f& corner : super_resolved_corners) {
+                corners.push_back(corner * inverse_scale);
+            }
+        }
+    }
+
+    return detected;
+}
+
 void DetectionModule::DecodeBarcodeRegions(const cv::Mat& image, const std::vector<cv::Point2f>& corners) {
     decoded_values_.clear();
     decoded_types_.clear();
     barcode_corners_.clear();
     static_cast<void>(barcode_detector_.decodeWithType(image, corners, decoded_values_, decoded_types_));
+}
+
+cv::Mat DetectionModule::PrepareBarcodeDecodeRoi(const cv::Mat& box_roi, const std::vector<cv::Point2f>& corners,
+                                                 const std::size_t barcode_index,
+                                                 DetectionDiagnostics& diagnostics) const {
+    if (!config_.perspective_rectification) {
+        return CropBarcode(box_roi, corners, barcode_index);
+    }
+
+    const auto rectify_started = Clock::now();
+    cv::Mat decode_roi = RectifyBarcode(box_roi, corners, barcode_index);
+    diagnostics.perspective_rectification_ms += ToMilliseconds(Clock::now() - rectify_started);
+    diagnostics.used_perspective_rectification = !decode_roi.empty();
+    return decode_roi;
+}
+
+void DetectionModule::DecodeBarcodeCandidate(const cv::Mat& decode_roi,
+                                             const std::vector<cv::Point2f>& selected_corners,
+                                             const cv::Point2f& frame_offset, std::vector<DetectedBarcode>& barcodes,
+                                             DetectionDiagnostics& diagnostics) {
+    cv::Mat enhanced_decode_roi = decode_roi;
+    if (config_.contrast_enhancement) {
+        const auto contrast_started = Clock::now();
+        enhanced_decode_roi = EnhanceContrast(enhanced_decode_roi);
+        diagnostics.contrast_enhancement_ms += ToMilliseconds(Clock::now() - contrast_started);
+        diagnostics.used_contrast_enhancement = true;
+    }
+
+    decoded_values_.clear();
+    decoded_types_.clear();
+    barcode_corners_.clear();
+    const auto enhanced_decode_started = Clock::now();
+    barcode_detector_.detectAndDecodeWithType(enhanced_decode_roi, decoded_values_, decoded_types_, barcode_corners_);
+    diagnostics.barcode_decode_ms += ToMilliseconds(Clock::now() - enhanced_decode_started);
+    AppendDecodedBarcodes(selected_corners, frame_offset, barcodes);
+    if (!barcodes.empty()) {
+        return;
+    }
+
+    if (!config_.super_resolution_enabled || !IsSuperResolutionAllowed(enhanced_decode_roi)) {
+        return;
+    }
+    const auto sr_started = Clock::now();
+    const std::optional<cv::Mat> super_resolved_barcode = TrySuperResolve(enhanced_decode_roi, diagnostics);
+    diagnostics.super_resolution_ms += ToMilliseconds(Clock::now() - sr_started);
+    diagnostics.used_super_resolution_for_decode = true;
+    if (!super_resolved_barcode.has_value()) {
+        return;
+    }
+
+    decoded_values_.clear();
+    decoded_types_.clear();
+    barcode_corners_.clear();
+    const auto sr_decode_started = Clock::now();
+    barcode_detector_.detectAndDecodeWithType(*super_resolved_barcode, decoded_values_, decoded_types_,
+                                              barcode_corners_);
+    diagnostics.barcode_decode_ms += ToMilliseconds(Clock::now() - sr_decode_started);
+    AppendDecodedBarcodes(selected_corners, frame_offset, barcodes);
 }
 
 cv::Mat DetectionModule::RectifyBarcode(const cv::Mat& image, const std::vector<cv::Point2f>& corners,
