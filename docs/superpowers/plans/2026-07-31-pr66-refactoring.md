@@ -425,8 +425,6 @@ git commit -m "refactor: encapsulate work invalidation reporting"
 **Files:**
 - Modify: `device-rpi/vision-node/detection.hpp`
 - Modify: `device-rpi/vision-node/detection.cpp`
-- Test: `device-rpi/tests/vision_detection_test.cpp`
-- Test: `device-rpi/tests/vision_super_resolution_preview_test.cpp`
 
 **Interfaces:**
 - Consumes: existing `VisionProcessingConfig`, `DetectionDiagnostics`, barcode detector, DNN model, ROI and corner
@@ -458,45 +456,7 @@ void DecodeBarcodeCandidate(
 - `DetectionModule::Process` retains box detection, failure-counter updates, helper sequencing, success reset, and
   final result construction.
 
-- [ ] **Step 1: Strengthen public-behavior characterization checks**
-
-In `vision_detection_test.cpp`, add:
-
-```cpp
-void TestNoBoxResetsFallbackStateWithoutDiagnostics() {
-    vision::VisionProcessingConfig config;
-    config.super_resolution_enabled = false;
-    vision::DetectionModule detector(config);
-    const cv::Mat dark_frame(240, 320, CV_8UC3, cv::Scalar(0, 0, 0));
-
-    const auto first = detector.Process(dark_frame);
-    const auto second = detector.Process(dark_frame);
-    Require(!first.box.has_value());
-    Require(!second.box.has_value());
-    Require(!first.diagnostics.barcode_region_detected);
-    Require(!second.diagnostics.used_super_resolution_for_detection);
-    Require(!second.diagnostics.used_super_resolution_for_decode);
-}
-```
-
-In `vision_super_resolution_preview_test.cpp`, extend the existing preview test:
-
-```cpp
-vision::VisionProcessingConfig disabled;
-disabled.super_resolution_enabled = false;
-vision::DetectionModule baseline(disabled);
-bool rejected = false;
-try {
-    static_cast<void>(baseline.SuperResolveForPreview(source));
-} catch (const std::logic_error&) {
-    rejected = true;
-}
-Require(rejected);
-```
-
-Call both new test functions from their respective `main` functions.
-
-- [ ] **Step 2: Run the characterization tests before refactoring**
+- [ ] **Step 1: Run the existing behavior baseline before refactoring**
 
 Run:
 
@@ -508,7 +468,7 @@ ctest --test-dir build --output-on-failure \
 
 Expected: both tests pass before production code changes, establishing the behavior baseline.
 
-- [ ] **Step 3: Extract barcode-region detection with SR fallback**
+- [ ] **Step 2: Extract barcode-region detection with SR fallback**
 
 Move the initial barcode detection, SR eligibility check, SR execution, retry timing, and inverse corner scaling from
 `Process` into `DetectBarcodeRegionsWithFallback`.
@@ -523,7 +483,7 @@ record the initial and retry time in `diagnostics.barcode_detection_ms`, set
 `used_super_resolution_for_detection` only when the SR attempt is made, return `false` if SR throws through
 `TrySuperResolve`, and scale only the retry corners by `1.0F / super_resolution_scale`.
 
-- [ ] **Step 4: Extract decode ROI preparation**
+- [ ] **Step 3: Extract decode ROI preparation**
 
 Move the perspective/crop branch into `PrepareBarcodeDecodeRoi`.
 
@@ -531,7 +491,7 @@ For perspective mode, measure `perspective_rectification_ms` and set `used_persp
 returned ROI is non-empty. For disabled perspective mode, return `CropBarcode` directly. Do not apply contrast or SR
 in this helper.
 
-- [ ] **Step 5: Extract one-candidate decode fallback**
+- [ ] **Step 4: Extract one-candidate decode fallback**
 
 Move contrast enhancement, candidate decode, decoded-barcode append, SR eligibility, SR execution, and SR decode into
 `DecodeBarcodeCandidate`.
@@ -551,7 +511,7 @@ optional contrast enhancement
 Accumulate `contrast_enhancement_ms`, `barcode_decode_ms`, and `super_resolution_ms`; preserve
 `used_contrast_enhancement`, `used_super_resolution_for_decode`, and `super_resolution_failed`.
 
-- [ ] **Step 6: Reduce `Process` to orchestration**
+- [ ] **Step 5: Reduce `Process` to orchestration**
 
 Replace the extracted blocks with:
 
@@ -575,7 +535,7 @@ DecodeBarcodeCandidate(
 
 Do not change when `consecutive_barcode_failures_` increments or resets.
 
-- [ ] **Step 7: Build and run vision verification**
+- [ ] **Step 6: Build and run vision verification**
 
 Run:
 
@@ -592,22 +552,18 @@ ctest --test-dir build --output-on-failure \
 
 Expected: all four targets build and all four selected tests pass.
 
-- [ ] **Step 8: Format and commit**
+- [ ] **Step 7: Format and commit**
 
 Run:
 
 ```bash
 clang-format -i \
   device-rpi/vision-node/detection.hpp \
-  device-rpi/vision-node/detection.cpp \
-  device-rpi/tests/vision_detection_test.cpp \
-  device-rpi/tests/vision_super_resolution_preview_test.cpp
+  device-rpi/vision-node/detection.cpp
 git diff --check
 git add \
   device-rpi/vision-node/detection.hpp \
-  device-rpi/vision-node/detection.cpp \
-  device-rpi/tests/vision_detection_test.cpp \
-  device-rpi/tests/vision_super_resolution_preview_test.cpp
+  device-rpi/vision-node/detection.cpp
 git commit -m "refactor: isolate staged barcode fallbacks"
 ```
 

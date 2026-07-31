@@ -115,13 +115,10 @@ Central-server tests will verify:
 - work invalidation persistence is atomic and idempotent;
 - MQTT recalibration errors contain the expected work ID, code, state, level, and reason.
 
-Vision tests will verify:
-
-- perspective rectification enabled and disabled paths both reach decode fallback;
-- SR detection fallback still observes the configured failure threshold;
-- SR decode fallback is limited to the selected barcode ROI;
-- diagnostic flags and timing fields are preserved;
-- baseline behavior remains unchanged when SR is disabled.
+Vision verification will use the existing detection, SR preview, benchmark-help, and benchmark visual-output tests as
+the behavior baseline. The refactoring does not add a generated barcode fixture, expose private processing state, or
+introduce a detector-injection seam solely for tests. Review of the extracted code must confirm that fallback order,
+threshold checks, selected ROI use, diagnostics, and timing accumulation are moved without semantic changes.
 
 Each refactoring commit must pass the directly affected tests, clang-format, and compilation of the changed production
 sources. The final branch verification runs all central-server and vision tests available in the CI configuration.
