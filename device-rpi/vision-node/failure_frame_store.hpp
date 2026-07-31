@@ -10,7 +10,7 @@ namespace logistics::vision {
 
 class PendingWorkFrame final {
 public:
-    void Observe(const cv::Mat& frame, bool box_detected, bool work_pending);
+    void Observe(const cv::Mat& frame, bool box_detected, bool barcode_detected, bool work_pending);
     void Reset() noexcept;
 
     [[nodiscard]] bool Empty() const noexcept;
@@ -18,6 +18,7 @@ public:
 
 private:
     cv::Mat frame_;
+    bool barcode_frame_locked_{};
 };
 
 class FailureFrameStore final {

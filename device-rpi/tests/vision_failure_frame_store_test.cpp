@@ -63,13 +63,30 @@ void TestPendingWorkFrameRetainsLastFrameContainingABox() {
     const cv::Mat box_frame(4, 4, CV_8UC1, cv::Scalar(42));
     const cv::Mat empty_scene(4, 4, CV_8UC1, cv::Scalar(7));
 
-    pending.Observe(box_frame, true, true);
-    pending.Observe(empty_scene, false, true);
+    pending.Observe(box_frame, true, false, true);
+    pending.Observe(empty_scene, false, false, true);
     Require(!pending.Empty());
     Require(pending.Frame().at<unsigned char>(0, 0) == 42);
 
     pending.Reset();
     Require(pending.Empty());
+}
+
+void TestPendingWorkFrameLocksTheBarcodeFrame() {
+    vision::PendingWorkFrame pending;
+    const cv::Mat box_frame(4, 4, CV_8UC1, cv::Scalar(21));
+    const cv::Mat barcode_frame(4, 4, CV_8UC1, cv::Scalar(42));
+    const cv::Mat later_box_frame(4, 4, CV_8UC1, cv::Scalar(84));
+
+    pending.Observe(box_frame, true, false, true);
+    pending.Observe(barcode_frame, true, true, true);
+    pending.Observe(later_box_frame, true, false, true);
+    Require(!pending.Empty());
+    Require(pending.Frame().at<unsigned char>(0, 0) == 42);
+
+    pending.Reset();
+    pending.Observe(later_box_frame, true, false, true);
+    Require(pending.Frame().at<unsigned char>(0, 0) == 84);
 }
 
 }  // namespace
@@ -78,5 +95,6 @@ int main() {
     TestStorePrunesOldFrames();
     TestDisabledStoreDoesNotCreateDirectory();
     TestPendingWorkFrameRetainsLastFrameContainingABox();
+    TestPendingWorkFrameLocksTheBarcodeFrame();
     return 0;
 }
