@@ -190,3 +190,5 @@ stm32/conveyor-controller/docs/
 
 # Local Superpowers planning and design documents
 docs/superpowers/
+
+.codex/
