@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure runner cache paths
-        run: echo "OPENCV_INSTALL_DIR=${RUNNER_TOOL_CACHE}/opencv/4.10.0-gcc10" >> "$GITHUB_ENV"
+        run: echo "OPENCV_INSTALL_DIR=${RUNNER_TOOL_CACHE}/opencv/4.10.0-gcc10-dnn-v1" >> "$GITHUB_ENV"
 
       - name: Install build tools
         run: |
@@ -53,7 +53,9 @@ jobs:
         run: |
           config_dir="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
           if [[ -f "${config_dir}/OpenCVConfig.cmake" && \
-                -f "${config_dir}/OpenCVConfig-version.cmake" ]]; then
+                -f "${config_dir}/OpenCVConfig-version.cmake" && \
+                -f "${config_dir}/OpenCVModules.cmake" ]] && \
+             grep --quiet "opencv_dnn" "${config_dir}/OpenCVModules.cmake"; then
             echo "Using runner-cached OpenCV ${OPENCV_VERSION} from ${OPENCV_INSTALL_DIR}"
           else
             bash .github/scripts/install-opencv.sh "${OPENCV_VERSION}" "${OPENCV_INSTALL_DIR}"
@@ -64,6 +66,8 @@ jobs:
           config_dir="${OPENCV_INSTALL_DIR}/lib/cmake/opencv4"
           test -f "${config_dir}/OpenCVConfig.cmake"
           test -f "${config_dir}/OpenCVConfig-version.cmake"
+          test -f "${config_dir}/OpenCVModules.cmake"
+          grep --quiet "opencv_dnn" "${config_dir}/OpenCVModules.cmake"
 
       - name: Configure
         run: |

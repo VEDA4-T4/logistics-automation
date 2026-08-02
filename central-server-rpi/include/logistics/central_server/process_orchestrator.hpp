@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include "logistics/central_server/homography.hpp"
 #include "logistics/central_server/process_state_machine.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
@@ -18,6 +20,7 @@ struct ProcessOrchestratorConfig final {
     std::string sorting_device_id{ "PI-SORTING-01" };
     std::string line_tracer_device_id{ "PI-LT-01" };
     std::string line_tracer_initial_position;
+    HomographyConfig homography;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -32,6 +35,16 @@ struct ProcessOrchestrationResult final {
     bool handled{ false };
     ProcessTransition transition;
     std::vector<ProcessCommandIntent> commands;
+};
+
+struct InvalidatedRestoredWork final {
+    std::string work_id;
+    std::string reason;
+};
+
+struct ProcessRestoreResult final {
+    bool restored{ false };
+    std::vector<InvalidatedRestoredWork> invalidated_works;
 };
 
 class ProcessOrchestrator final {
@@ -51,9 +64,10 @@ public:
     [[nodiscard]] ProcessTransition PreviewSystemCommand(contracts::mqtt::ControlCommand command) const;
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
-    [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                 std::vector<WorkProcessSnapshot> works,
-                                                 std::uint64_t message_sequence);
+    [[nodiscard]] ProcessRestoreResult RestoreAfterServerRestart(
+        ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
+        std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence);
+    [[nodiscard]] const std::unordered_map<std::string, GripperTarget>& GripperTargets() const noexcept;
     [[nodiscard]] std::uint64_t MessageSequence() const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
 
@@ -62,7 +76,7 @@ private:
                                                         const contracts::mqtt::MqttMessage& message,
                                                         bool create_commands);
     [[nodiscard]] ProcessCommandIntent MakeGripperCommand(std::string_view work_id, std::string_view destination,
-                                                          std::string_view timestamp);
+                                                          const GripperTarget* target, std::string_view timestamp);
     [[nodiscard]] ProcessCommandIntent MakeDestinationCommand(std::string_view work_id, std::string_view destination,
                                                               std::string_view target_device_id,
                                                               ProcessEventType dispatched_event,
@@ -70,6 +84,8 @@ private:
     [[nodiscard]] std::string NextMessageId();
 
     ProcessOrchestratorConfig config_;
+    HomographyTransformer homography_;
+    std::unordered_map<std::string, GripperTarget> gripper_targets_;
     ProcessStateMachine state_machine_;
     std::uint64_t message_sequence_{};
     std::uint64_t revision_{};

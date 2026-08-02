@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "logistics/central_server/database.hpp"
+#include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_message.hpp"
 
 namespace logistics::central_server {
@@ -109,6 +110,7 @@ class ProductRepository final {
 public:
     explicit ProductRepository(Database& database) : database_(database) {}
     [[nodiscard]] DatabaseStatus Create(std::string_view work_id, std::int64_t now_ms);
+    [[nodiscard]] DatabaseStatus MarkError(std::string_view work_id, std::int64_t now_ms);
     [[nodiscard]] DatabaseStatus ApplyEvent(std::string_view work_id, contracts::mqtt::MessageType type,
                                             const EventPayload& payload, std::int64_t now_ms);
     [[nodiscard]] DatabaseStatus AppendHistory(std::string_view work_id, std::string_view message_id,
@@ -148,6 +150,7 @@ public:
     [[nodiscard]] PersistenceResult PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                           const EventPayload& payload,
                                                           const TransportMetadata& metadata);
+    [[nodiscard]] DatabaseStatus RecordWorkInvalidation(const WorkInvalidation& invalidation);
     [[nodiscard]] DatabaseStatus FindActiveProductByBarcode(std::string_view barcode,
                                                             std::optional<CatalogProduct>& output);
 

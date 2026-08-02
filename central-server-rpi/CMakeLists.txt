@@ -16,6 +16,7 @@ add_library(
     src/http_upload/upload_service.cpp
     src/db_manager/persistence.cpp
     src/db_manager/process_state_store.cpp
+    src/process_manager/work_invalidation.cpp
 )
 add_library(logistics::central_storage ALIAS logistics_central_storage)
 
@@ -146,6 +147,7 @@ target_link_libraries(
 
 add_library(
     logistics_central_server_process_orchestrator
+    src/process_manager/homography.cpp
     src/process_manager/process_orchestrator.cpp
 )
 add_library(
@@ -436,6 +438,14 @@ if(BUILD_TESTING)
         NAME central_server_process_orchestrator_test
         COMMAND central_server_process_orchestrator_test
     )
+
+    add_executable(central_server_homography_test tests/homography_test.cpp)
+    target_link_libraries(
+        central_server_homography_test
+        PRIVATE logistics::central_server_process_orchestrator
+    )
+    logistics_enable_warnings(central_server_homography_test)
+    add_test(NAME central_server_homography_test COMMAND central_server_homography_test)
 
     add_executable(
         central_server_mqtt_handler_test

@@ -39,3 +39,25 @@ maximum_attempts=5
 initial_backoff_seconds=1
 maximum_backoff_seconds=60
 allow_insecure_http=true
+
+[vision_processing]
+# The production path always tries the original frame first. Expensive fallback
+# processing starts only after the configured number of consecutive failures.
+perspective_rectification=true
+contrast_enhancement=true
+super_resolution_enabled=true
+barcode_detection_fallback=true
+barcode_decode_fallback=true
+super_resolution_backend=bicubic
+super_resolution_scale=2
+failure_frames_before_super_resolution=2
+maximum_super_resolution_input_pixels=300000
+failure_frame_capture_enabled=true
+failure_frame_directory=/tmp/logistics-vision-failures
+maximum_failure_frames=200
+failure_frame_jpeg_quality=90
+
+# To use a learned FSRCNN model, change the backend and place the TensorFlow
+# .pb file relative to this configuration file (or specify an absolute path).
+# super_resolution_backend=fsrcnn
+# super_resolution_model_path=models/FSRCNN_x2.pb

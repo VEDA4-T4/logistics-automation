@@ -9,6 +9,9 @@
 #include "logistics/central_server/history_service.hpp"
 #include "logistics/central_server/persistence.hpp"
 #include "logistics/central_server/upload_service.hpp"
+#include "logistics/central_server/work_invalidation.hpp"
+#include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/mqtt_validation.hpp"
 
 namespace {
 
@@ -57,7 +60,7 @@ int main() {
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(database.IntegrityCheck().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 4);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 6);
     assert(Scalar(database,
                   "SELECT count(*) FROM product_catalog WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
                   "product_name='VEDA107 기본 상품' AND destination='1' AND active=1") == 1);
@@ -183,6 +186,35 @@ int main() {
                                                Metadata(base_time + 5));
     assert(result.status == server::PersistenceStatus::kStored);
     assert(Scalar(database, "SELECT count(*) FROM product WHERE lifecycle_state='COMPLETED'") == 1);
+
+    const std::string invalidated_work_id = "97c42b78-9299-4a3b-85aa-0f959954ea73";
+    assert(server::ProductRepository(database).Create(invalidated_work_id, base_time + 6).ok());
+    const server::WorkInvalidation invalidation{
+        .work_id = invalidated_work_id,
+        .message_id = "RECALIBRATION-" + invalidated_work_id,
+        .error_code = "ERR-PROCESS-RECALIBRATION-REQUIRED",
+        .reason = "stored gripper target uses stale homography calibration",
+        .cause = "CALIBRATION_CHANGED",
+        .occurred_at_ms = base_time + 7,
+    };
+    assert(persistence.RecordWorkInvalidation(invalidation).ok());
+    assert(persistence.RecordWorkInvalidation(invalidation).ok());
+    const auto error = server::MakeWorkInvalidationError("central-server", invalidation, "2026-07-31T00:00:00Z");
+    assert(error.message_id == invalidation.message_id);
+    const auto* error_payload = mqtt::GetPayload<mqtt::ErrorOccurredPayload>(error);
+    assert(error_payload != nullptr);
+    assert(error_payload->job_id == invalidation.work_id);
+    assert(error_payload->error_code == invalidation.error_code);
+    assert(error_payload->error_level == "ERROR");
+    assert(error_payload->current_state == "RECALIBRATION_REQUIRED");
+    assert(error_payload->message == invalidation.reason);
+    assert(mqtt::ValidateTopicMessage(mqtt::QtErrorTopic("control-center"), error).IsSuccess());
+    assert(Scalar(database, "SELECT count(*) FROM product WHERE work_id='" + invalidated_work_id +
+                                "' AND lifecycle_state='ERROR'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM error_log WHERE work_id='" + invalidated_work_id +
+                                "' AND error_code='ERR-PROCESS-RECALIBRATION-REQUIRED'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM work_history WHERE work_id='" + invalidated_work_id +
+                                "' AND event_type='ERROR_OCCURRED' AND process_state='ERROR'") == 1);
 
     server::EventPayload device_error;
     device_error.work_id = work_id;

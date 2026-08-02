@@ -1,8 +1,12 @@
 #include "logistics/central_server/server_config.hpp"
 
+#include <array>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <fstream>
+#include <locale>
+#include <sstream>
 #include <string_view>
 #include <system_error>
 #include <unordered_set>
@@ -37,6 +41,42 @@ namespace {
                            std::to_string(maximum) + "]");
     }
     return parsed;
+}
+
+[[nodiscard]] double ParseDouble(const std::filesystem::path& path, std::size_t line_number, std::string_view key,
+                                 std::string_view value) {
+    double parsed{};
+    std::istringstream input{ std::string(value) };
+    input.imbue(std::locale::classic());
+    input >> std::noskipws >> parsed;
+    if (!input || input.peek() != std::char_traits<char>::eof() || !std::isfinite(parsed)) {
+        ThrowLineError(path, line_number, std::string(key) + " must be a finite number");
+    }
+    return parsed;
+}
+
+[[nodiscard]] std::array<double, 9> ParseHomographyMatrix(const std::filesystem::path& path,
+                                                          const std::size_t line_number, std::string_view value) {
+    std::array<double, 9> matrix{};
+    for (std::size_t index = 0; index < matrix.size(); ++index) {
+        const auto delimiter = value.find(',');
+        const std::string_view token = Trim(value.substr(0, delimiter));
+        if (token.empty()) {
+            ThrowLineError(path, line_number, "pixel_to_conveyor must contain nine comma-separated numbers");
+        }
+        matrix[index] = ParseDouble(path, line_number, "pixel_to_conveyor", token);
+        if (index + 1U == matrix.size()) {
+            if (delimiter != std::string_view::npos) {
+                ThrowLineError(path, line_number, "pixel_to_conveyor must contain exactly nine numbers");
+            }
+        } else {
+            if (delimiter == std::string_view::npos) {
+                ThrowLineError(path, line_number, "pixel_to_conveyor must contain exactly nine numbers");
+            }
+            value.remove_prefix(delimiter + 1U);
+        }
+    }
+    return matrix;
 }
 
 [[nodiscard]] bool ParseBoolean(const std::filesystem::path& path, std::size_t line_number, std::string_view key,
@@ -110,6 +150,38 @@ void AssignProcessId(ServerConfig& config, const std::filesystem::path& path, st
         config.process.sorting_device_id = value;
     } else {
         config.process.line_tracer_device_id = value;
+    }
+}
+
+void AssignHomographyValue(ServerConfig& config, const std::filesystem::path& path, const std::size_t line_number,
+                           std::string_view key, std::string_view value) {
+    auto& homography = config.process.homography;
+    if (key == "enabled") {
+        homography.enabled = ParseBoolean(path, line_number, key, value);
+    } else if (key == "pixel_to_conveyor") {
+        homography.pixel_to_conveyor = ParseHomographyMatrix(path, line_number, value);
+    } else if (key == "conveyor_plane_z_mm") {
+        homography.conveyor_plane_z_mm = ParseDouble(path, line_number, key, value);
+    } else if (key == "robot_base_x_mm") {
+        homography.robot_base_x_mm = ParseDouble(path, line_number, key, value);
+    } else if (key == "robot_base_y_mm") {
+        homography.robot_base_y_mm = ParseDouble(path, line_number, key, value);
+    } else if (key == "robot_base_z_mm") {
+        homography.robot_base_z_mm = ParseDouble(path, line_number, key, value);
+    } else if (key == "robot_base_yaw_deg") {
+        homography.robot_base_yaw_deg = ParseDouble(path, line_number, key, value);
+    } else if (key == "box_length_mm") {
+        homography.box_length_mm = ParseDouble(path, line_number, key, value);
+    } else if (key == "box_width_mm") {
+        homography.box_width_mm = ParseDouble(path, line_number, key, value);
+    } else if (key == "box_height_mm") {
+        homography.box_height_mm = ParseDouble(path, line_number, key, value);
+    } else if (key == "coordinate_frame") {
+        homography.coordinate_frame = value;
+    } else if (key == "calibration_version") {
+        homography.calibration_version = ParseInteger(path, line_number, key, value, 1, 1'000'000);
+    } else {
+        ThrowLineError(path, line_number, "unknown [homography] setting: " + std::string(key));
     }
 }
 
@@ -187,6 +259,10 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
         }
         return;
     }
+    if (section == "homography") {
+        AssignHomographyValue(config, path, line_number, key, value);
+        return;
+    }
     ThrowLineError(path, line_number, "unknown [" + std::string(section) + "] setting: " + std::string(key));
 }
 
@@ -213,6 +289,11 @@ void ValidateConfig(const std::filesystem::path& path, const ServerConfig& confi
     }
     if (!config.process.IsValid()) {
         throw ConfigError(path.string() + ": [process] contains an invalid device identifier");
+    }
+    if (config.process.homography.enabled && !config.process.homography.IsValid()) {
+        throw ConfigError(path.string() +
+                          ": [homography] requires a non-singular matrix, positive box dimensions, and valid "
+                          "robot coordinate frame");
     }
 }
 
@@ -243,7 +324,7 @@ ServerConfig LoadServerConfig(const std::filesystem::path& path) {
         if (text.front() == '[' && text.back() == ']') {
             section = std::string(Trim(text.substr(1, text.size() - 2)));
             if (section != "mqtt" && section != "device_registry" && section != "database" && section != "storage" &&
-                section != "http" && section != "routing" && section != "process") {
+                section != "http" && section != "routing" && section != "process" && section != "homography") {
                 ThrowLineError(path, line_number, "unknown configuration section: " + section);
             }
             continue;

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -20,7 +21,9 @@
 #include <unordered_set>
 
 #include "detection.hpp"
+#include "failure_frame_store.hpp"
 #include "vision_mqtt_workflow.hpp"
+#include "vision_processing_config.hpp"
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
 #include "logistics/contracts/mqtt_codec.hpp"
@@ -278,6 +281,15 @@ logistics::vision::VisionObservation MakeObservation(const cv::Mat& frame,
                                                      const logistics::vision::DetectionResult& result,
                                                      std::string image_name) {
     const cv::Rect& box = result.box->roi;
+    std::array<logistics::contracts::mqtt::PixelPoint, kBarcodeCornerCount> box_corners{};
+    cv::Point2f detected_corners[kBarcodeCornerCount];
+    result.box->outline.points(detected_corners);
+    for (std::size_t index = 0; index < box_corners.size(); ++index) {
+        box_corners[index] = {
+            .x = static_cast<double>(detected_corners[index].x),
+            .y = static_cast<double>(detected_corners[index].y),
+        };
+    }
     std::optional<std::string> barcode;
     if (!result.barcodes.empty()) {
         barcode = result.barcodes.front().value;
@@ -290,6 +302,7 @@ logistics::vision::VisionObservation MakeObservation(const cv::Mat& frame,
         .box_height = box.height,
         .frame_width = frame.cols,
         .frame_height = frame.rows,
+        .box_corners = box_corners,
         .barcode = std::move(barcode),
     };
 }
@@ -334,6 +347,14 @@ int main(const int argc, char* argv[]) {
         settings.headless = true;
         std::clog << "No graphical display detected; running in headless mode.\n";
     }
+    logistics::vision::VisionProcessingConfig vision_processing_config;
+    try {
+        vision_processing_config = logistics::vision::LoadVisionProcessingConfig(settings.config_path);
+    } catch (const logistics::vision::VisionProcessingConfigError& error) {
+        std::cerr << "[vision][ERROR] " << error.what() << '\n';
+        return 2;
+    }
+    logistics::vision::FailureFrameStore failure_frame_store(vision_processing_config.failure_frame_capture);
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
     logistics::device::MqttNodeConfig mqtt_config;
@@ -408,7 +429,7 @@ int main(const int argc, char* argv[]) {
         return 1;
     }
     auto next_heartbeat = Clock::now();
-    cv::Mat pending_capture;
+    logistics::vision::PendingWorkFrame pending_capture;
     bool camera_error_reported = false;
 #endif
 
@@ -418,12 +439,22 @@ int main(const int argc, char* argv[]) {
     }
 
     cv::VideoCapture camera;
-    logistics::vision::DetectionModule detection_module;
+    std::unique_ptr<logistics::vision::DetectionModule> detection_module;
+    try {
+        detection_module = std::make_unique<logistics::vision::DetectionModule>(std::move(vision_processing_config));
+    } catch (const std::exception& error) {
+        std::cerr << "[vision][ERROR] failed to initialize vision processing: " << error.what() << '\n';
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+        mqtt_client.Stop();
+#endif
+        return 2;
+    }
     LatencyTracker latency_tracker;
     std::unordered_set<std::string> reported_barcodes;
     cv::Mat frame;
     int consecutive_frame_errors = 0;
     int exit_code = 0;
+    bool super_resolution_error_reported = false;
     auto last_latency_log = Clock::now();
 
     std::cout << "Camera settings: " << settings.width << 'x' << settings.height << " @ " << settings.fps << " FPS\n";
@@ -440,7 +471,7 @@ int main(const int argc, char* argv[]) {
             camera.release();
             control_state.SetReady(false);
             mqtt_workflow.Reset();
-            pending_capture.release();
+            pending_capture.Reset();
             device_status->SetJobId(std::nullopt);
             device_status->SetCurrentState(control_state.CurrentState());
         }
@@ -527,7 +558,7 @@ int main(const int argc, char* argv[]) {
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
         if (!control_state.IsOperational()) {
-            pending_capture.release();
+            pending_capture.Reset();
             if (!settings.headless) {
                 DrawOperatingState(frame, control_state.CurrentState());
                 cv::imshow(kWindowName, frame);
@@ -537,7 +568,19 @@ int main(const int argc, char* argv[]) {
         }
 #endif
 
-        const logistics::vision::DetectionResult detection_result = detection_module.Process(frame);
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+        const bool allow_expensive_fallback = mqtt_workflow.NeedsBarcodeFallback();
+#else
+        constexpr bool allow_expensive_fallback = true;
+#endif
+        const logistics::vision::DetectionResult detection_result =
+            detection_module->Process(frame, allow_expensive_fallback);
+        if (detection_result.diagnostics.super_resolution_failed && !super_resolution_error_reported) {
+            std::cerr << "[vision][WARN] super-resolution fallback failed; original-frame processing remains active\n";
+            super_resolution_error_reported = true;
+        } else if (!detection_result.diagnostics.super_resolution_failed) {
+            super_resolution_error_reported = false;
+        }
         const auto processing_finished = Clock::now();
 
         const LatencyMetrics current_latency{
@@ -560,7 +603,7 @@ int main(const int argc, char* argv[]) {
                                              mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
             logistics::device::CurrentIso8601Timestamp());
         if (box_event.has_value()) {
-            pending_capture.release();
+            pending_capture.Reset();
             if (control_state.IsOperational() && mqtt_client.PublishEvent(*box_event)) {
                 device_status->SetCurrentState("AWAITING_WORK_ID");
                 if (!control_state.IsOperational()) {
@@ -575,10 +618,8 @@ int main(const int argc, char* argv[]) {
                 }
             }
         }
-        if (detection_result.box.has_value() && !detection_result.barcodes.empty() &&
-            mqtt_workflow.HasPendingBarcode()) {
-            pending_capture = frame.clone();
-        }
+        pending_capture.Observe(frame, detection_result.box.has_value(), !detection_result.barcodes.empty(),
+                                mqtt_workflow.HasPendingBarcode() || mqtt_workflow.NeedsBarcodeFallback());
 
         if (auto work = mqtt_workflow.TakeAssignedWork(); work.has_value() && control_state.IsOperational()) {
             const std::string timestamp = logistics::device::CurrentIso8601Timestamp();
@@ -595,10 +636,19 @@ int main(const int argc, char* argv[]) {
             const bool position_published = control_state.IsOperational() && mqtt_client.PublishEvent(position);
             const bool barcode_published = control_state.IsOperational() && mqtt_client.PublishEvent(barcode);
             const bool barcode_detected = work->observation.barcode.has_value();
+            if (!barcode_detected) {
+                if (pending_capture.Empty()) {
+                    std::cerr << "[vision][WARN] barcode recognition failed without a retained box frame; work_id="
+                              << work->work_id << '\n';
+                } else if (!failure_frame_store.Store(pending_capture.Frame(), work->work_id)) {
+                    std::cerr << "[vision][WARN] failed to archive barcode recognition failure frame; work_id="
+                              << work->work_id << '\n';
+                }
+            }
             bool image_published = !barcode_detected || image_uploader == nullptr;
-            if (barcode_detected && image_uploader != nullptr && !pending_capture.empty()) {
+            if (barcode_detected && image_uploader != nullptr && !pending_capture.Empty()) {
                 std::vector<std::uint8_t> jpeg;
-                if (cv::imencode(".jpg", pending_capture, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 })) {
+                if (cv::imencode(".jpg", pending_capture.Frame(), jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 })) {
                     const std::string upload_message_id = logistics::device::MakeMessageId(
                         device_id, mqtt_session_id, mqtt_sequence.fetch_add(1, std::memory_order_relaxed));
                     const std::string captured_at = logistics::device::CurrentIso8601Timestamp();
@@ -639,7 +689,7 @@ int main(const int argc, char* argv[]) {
             }
             const bool all_published = position_published && barcode_published && image_published;
             mqtt_workflow.CompleteWork();
-            pending_capture.release();
+            pending_capture.Reset();
             device_status->SetJobId(std::nullopt);
             if (all_published && control_state.IsOperational()) {
                 device_status->SetCurrentState(std::string(kWaitingForProductState));
