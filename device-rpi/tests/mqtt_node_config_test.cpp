@@ -27,10 +27,10 @@ void TestConfigLoading() {
 [device]
 device_id=PI-01
 node_name=vision-node-01
-ip_address=192.168.0.21
+ip_address=192.0.2.10
 
 [mqtt]
-host=192.168.0.10
+host=192.0.2.10
 port=1884
 client_id=PI-01
 username=device
@@ -76,8 +76,8 @@ allow_insecure_http=false
     const auto config = device::LoadMqttNodeConfig(path);
     assert(config.device_id == "PI-01");
     assert(config.node_name == "vision-node-01");
-    assert(config.ip_address == "192.168.0.21");
-    assert(config.host == "192.168.0.10");
+    assert(config.ip_address == "192.0.2.10");
+    assert(config.host == "192.0.2.10");
     assert(config.port == 1884);
     assert(config.client_id == "PI-01");
     assert(config.keep_alive_seconds == 45);
@@ -121,10 +121,10 @@ void TestTlsWithoutCaIsRejected() {
 [device]
 device_id=PI-TEST
 node_name=mqtt-security-test
-ip_address=172.20.33.12
+ip_address=192.0.2.10
 
 [mqtt]
-host=172.20.33.246
+host=192.0.2.10
 port=8883
 client_id=PI-TEST
 username=PI-TEST
