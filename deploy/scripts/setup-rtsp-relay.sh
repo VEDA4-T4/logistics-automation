@@ -93,6 +93,10 @@ should_keep_config() {
         "${sudo_command[@]}" test -e "${config_path}"
 }
 
+select_checksum() {
+    grep -F " *${asset_name}" "$@"
+}
+
 run_self_check() {
     test "${mediamtx_version}" = 1.19.3
     test "${asset_name}" = mediamtx_v1.19.3_linux_arm64.tar.gz
@@ -116,6 +120,11 @@ run_self_check() {
     ! should_keep_config
     expected_directory_install='install -d -m 0750 -o root -g logistics /etc/logistics'
     grep -Fq "\"\${sudo_command[@]}\" ${expected_directory_install}" "${BASH_SOURCE[0]}"
+
+    checksum_fixture=$'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef *mediamtx_v1.19.3_linux_amd64.tar.gz\n9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e *mediamtx_v1.19.3_linux_arm64.tar.gz'
+    mapfile -t selected_checksums < <(select_checksum <<<"${checksum_fixture}")
+    test "${#selected_checksums[@]}" -eq 1
+    test "${selected_checksums[0]}" = '9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e *mediamtx_v1.19.3_linux_arm64.tar.gz'
 
     rendered="$(render_config \
         'rtsp://camera-1/stream' 'rtsp://camera-2/stream' \
@@ -196,7 +205,7 @@ curl -fsSL "${release_base}/${asset_name}" --output "${download_dir}/${asset_nam
 curl -fsSL "${release_base}/checksums.sha256" --output "${download_dir}/checksums.sha256"
 (
     cd "${download_dir}"
-    grep -F "  ${asset_name}" checksums.sha256 >selected.sha256
+    select_checksum checksums.sha256 >selected.sha256
     test "$(wc -l <selected.sha256)" -eq 1
     sha256sum --check selected.sha256
     tar -xzf "${asset_name}" mediamtx
