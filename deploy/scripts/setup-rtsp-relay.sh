@@ -87,6 +87,11 @@ render_config() {
         '    rtspTransport: tcp'
 }
 
+should_keep_config() {
+    [[ "${force_config}" != 1 ]] &&
+        "${sudo_command[@]}" test -e "${config_path}"
+}
+
 run_self_check() {
     validate_rtsp_url 'rtsp://camera:554/stream'
     validate_rtsp_url 'rtsps://user:p%21@camera.example/stream'
@@ -95,6 +100,12 @@ run_self_check() {
     test "$(yaml_quote "a'b")" = "'a''b'"
     validate_relay_credentials 'control-center' 'relay-password'
     ! validate_relay_credentials 'any' 'relay-password'
+    config_path="${BASH_SOURCE[0]}"
+    force_config=0
+    sudo_command=()
+    should_keep_config
+    force_config=1
+    ! should_keep_config
 
     rendered="$(render_config \
         'rtsp://camera-1/stream' 'rtsp://camera-2/stream' \
@@ -185,7 +196,7 @@ curl -fsSL "${release_base}/checksums.sha256" --output "${download_dir}/checksum
 "${sudo_command[@]}" install -m 0755 "${download_dir}/mediamtx" "${binary_path}.new"
 "${sudo_command[@]}" mv -f -- "${binary_path}.new" "${binary_path}"
 
-if [[ -e "${config_path}" && "${force_config}" != 1 ]]; then
+if should_keep_config; then
     echo 'Keeping existing RTSP relay config'
     exit 0
 fi
