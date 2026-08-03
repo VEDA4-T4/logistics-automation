@@ -172,6 +172,51 @@ int main(int argc, char* argv[]) {
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 345));
 
+    logistics::control_center::FactoryTopViewWidget unrouted_view;
+    auto unrouted_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-02"),
+                                 QStringLiteral("FOLLOWING_LINE"), QStringLiteral("WORK-WITHOUT-ROUTE"));
+    const auto unrouted_position = unrouted_view.boxPosition(QStringLiteral("linetracer"));
+    unrouted_view.setProcesses({ unrouted_line });
+    unrouted_view.advanceAnimationsForTest();
+    assert(unrouted_view.boxPosition(QStringLiteral("linetracer")) == unrouted_position);
+
+    logistics::control_center::FactoryTopViewWidget disconnected_view;
+    auto disconnected_input = Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-02"), QStringLiteral("RUNNING"),
+                                      QStringLiteral("WORK-STALE-IN"));
+    disconnected_input.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
+    disconnected_input.sensors.append({ .sensor_id = 1,
+                                        .display_name = QStringLiteral("S1"),
+                                        .measurement_status = QStringLiteral("DETECTED"),
+                                        .distance_cm = 7,
+                                        .updated_at = {} });
+    auto disconnected_sorting = Process(QStringLiteral("sorting"), QStringLiteral("PI-SORTING-02"),
+                                        QStringLiteral("SORTING"), QStringLiteral("WORK-STALE-SORT"));
+    disconnected_sorting.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
+    disconnected_sorting.sensors.append({ .sensor_id = 2,
+                                          .display_name = QStringLiteral("S2"),
+                                          .measurement_status = QStringLiteral("DETECTED"),
+                                          .distance_cm = 9,
+                                          .updated_at = {} });
+    auto disconnected_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-03"),
+                                     QStringLiteral("FOLLOWING_LINE"), QStringLiteral("ROUTE_2"));
+    disconnected_line.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
+    const auto disconnected_input_position = disconnected_view.boxPosition(QStringLiteral("input"));
+    const auto disconnected_sorting_position = disconnected_view.boxPosition(QStringLiteral("sorting"));
+    const auto disconnected_line_position = disconnected_view.boxPosition(QStringLiteral("linetracer"));
+    disconnected_view.setProcesses({ disconnected_input, disconnected_sorting, disconnected_line });
+    assert(disconnected_view.boxPosition(QStringLiteral("input")) == disconnected_input_position);
+    assert(disconnected_view.boxPosition(QStringLiteral("sorting")) == disconnected_sorting_position);
+    assert(disconnected_view.boxPosition(QStringLiteral("linetracer")) == disconnected_line_position);
+
+    const bool animation_preference = QApplication::isEffectEnabled(Qt::UI_AnimateCombo);
+    QApplication::setEffectEnabled(Qt::UI_AnimateCombo, false);
+    logistics::control_center::FactoryTopViewWidget reduced_motion_view;
+    reduced_motion_view.setProcesses({ vision });
+    reduced_motion_view.advanceAnimationsForTest();
+    reduced_motion_view.advanceAnimationsForTest();
+    assert(reduced_motion_view.nodeOpacity(QStringLiteral("vision")) == 1.0);
+    QApplication::setEffectEnabled(Qt::UI_AnimateCombo, animation_preference);
+
     QString selected;
     QObject::connect(&view, &logistics::control_center::FactoryTopViewWidget::controlTargetSelected,
                      [&selected](const QString& id, const QString&) { selected = id; });
