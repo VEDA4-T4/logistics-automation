@@ -15,16 +15,18 @@ ip_address=192.168.0.22
 [mqtt]
 # Replace with the central server/MQTT broker IP address or resolvable hostname.
 host=192.168.0.10
-port=1883
+port=8883
 
 # Must be unique among clients connected to the same MQTT broker.
 client_id=PI-SORTING-01
 
 # Leave both values empty only when the MQTT broker permits anonymous access.
-username=
-password=
+username=PI-SORTING-01
+password=hanwhat4
 
 # Connection recovery policy. The defaults normally do not need adjustment.
+tls_enabled=true
+ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30

@@ -1,14 +1,16 @@
 [device]
-device_id=PI-TEST
+device_id=PI-VISION-01
 node_name=vision-node-01
 ip_address=192.168.0.21
 
 [mqtt]
-host=127.0.0.1
-port=1883
-client_id=PI-TEST
-username=
-password=
+host=192.168.0.10
+port=8883
+client_id=PI-VISION-01
+username=PI-VISION-01
+password=hanwhat4
+tls_enabled=true
+ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30

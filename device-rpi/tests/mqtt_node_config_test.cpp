@@ -35,6 +35,8 @@ port=1884
 client_id=PI-01
 username=device
 password=secret
+tls_enabled=false
+ca_certificate=
 keep_alive_seconds=45
 reconnect_min_delay_seconds=2
 reconnect_max_delay_seconds=20
@@ -109,6 +111,47 @@ allow_insecure_http=false
     std::filesystem::remove(path, error);
 }
 
+void TestTlsWithoutCaIsRejected() {
+    const auto path = MakeTemporaryConfigPath();
+
+    {
+        std::ofstream output(path);
+        assert(output);
+        output << R"ini(
+[device]
+device_id=PI-TEST
+node_name=mqtt-security-test
+ip_address=172.20.33.12
+
+[mqtt]
+host=172.20.33.246
+port=8883
+client_id=PI-TEST
+username=PI-TEST
+password=test-only-password
+tls_enabled=true
+ca_certificate=
+keep_alive_seconds=30
+reconnect_min_delay_seconds=1
+reconnect_max_delay_seconds=30
+clean_session=true
+)ini";
+    }
+
+    bool rejected = false;
+
+    try {
+        static_cast<void>(device::LoadMqttNodeConfig(path));
+    } catch (const device::NodeConfigError&) {
+        rejected = true;
+    }
+
+    assert(rejected);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 void TestRegistrationFieldsAreRequired() {
     const auto path = MakeTemporaryConfigPath();
     {
@@ -141,5 +184,6 @@ client_id=PI-01
 int main() {
     TestConfigLoading();
     TestRegistrationFieldsAreRequired();
+    TestTlsWithoutCaIsRejected();
     return 0;
 }

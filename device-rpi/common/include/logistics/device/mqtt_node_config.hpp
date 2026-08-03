@@ -18,12 +18,14 @@ struct MqttNodeConfig final {
     std::string client_id;
     std::string username;
     std::string password;
+    std::filesystem::path ca_certificate;
     std::uint16_t port{ 1883 };
     std::uint16_t keep_alive_seconds{ 30 };
     std::uint32_t reconnect_min_delay_seconds{ 1 };
     std::uint32_t reconnect_max_delay_seconds{ 30 };
     std::uint8_t sorting_default_speed{ 50 };
     bool clean_session{ true };
+    bool tls_enabled{ false };
     bool log_upload_enabled{ false };
     LogSpoolConfig log_upload;
     bool image_upload_enabled{ false };
