@@ -112,6 +112,8 @@ run_self_check() {
     should_keep_config
     force_config=1
     ! should_keep_config
+    expected_directory_install='install -d -m 0750 -o root -g logistics /etc/logistics'
+    grep -Fq "\"\${sudo_command[@]}\" ${expected_directory_install}" "${BASH_SOURCE[0]}"
 
     rendered="$(render_config \
         'rtsp://camera-1/stream' 'rtsp://camera-2/stream' \
@@ -208,7 +210,7 @@ else
     temporary_config="$(mktemp)"
     render_config "${source_1}" "${source_2}" "${source_3}" "${source_4}" \
         "${relay_user}" "${relay_password}" >"${temporary_config}"
-    "${sudo_command[@]}" install -d -m 0750 /etc/logistics
+    "${sudo_command[@]}" install -d -m 0750 -o root -g logistics /etc/logistics
     "${sudo_command[@]}" install -m 0640 -o root -g logistics "${temporary_config}" "${config_path}.new"
     "${sudo_command[@]}" mv -f -- "${config_path}.new" "${config_path}"
 fi
