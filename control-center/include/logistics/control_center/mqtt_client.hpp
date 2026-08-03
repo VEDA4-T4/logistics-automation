@@ -2,8 +2,8 @@
 
 #include <QJsonObject>
 #include <QObject>
-#include <QString>
 #include <QSslConfiguration>
+#include <QString>
 
 #include "logistics/contracts/mqtt_message.hpp"
 
