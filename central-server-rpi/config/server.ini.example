@@ -1,9 +1,11 @@
 [mqtt]
-host=127.0.0.1
-port=1883
+host=192.168.0.10
+port=8883
 client_id=central-server
-username=
-password=
+username=central-server
+password=hanwhat4
+tls_enabled=true
+ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
