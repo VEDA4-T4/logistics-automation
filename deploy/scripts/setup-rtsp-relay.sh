@@ -3,7 +3,7 @@
 set -euo pipefail
 
 mediamtx_version=1.19.3
-asset_name="mediamtx_v${mediamtx_version}_linux_arm64v8.tar.gz"
+asset_name="mediamtx_v${mediamtx_version}_linux_arm64.tar.gz"
 release_base="https://github.com/bluenviron/mediamtx/releases/download/v${mediamtx_version}"
 force_config="${LOGISTICS_FORCE_CONFIG:-0}"
 unit_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../systemd" && pwd)/logistics-rtsp-relay.service"
@@ -94,6 +94,8 @@ should_keep_config() {
 }
 
 run_self_check() {
+    test "${mediamtx_version}" = 1.19.3
+    test "${asset_name}" = mediamtx_v1.19.3_linux_arm64.tar.gz
     validate_rtsp_url 'rtsp://camera:554/stream'
     validate_rtsp_url 'rtsps://user:p%21@camera.example/stream'
     ! validate_rtsp_url 'http://camera/stream'
