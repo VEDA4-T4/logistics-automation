@@ -55,6 +55,11 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 ```
 
+## RTSP 릴레이 unit
+
+`setup-rtsp-relay.sh`는 저장소의 `logistics-rtsp-relay.service`를 설치하고 활성화합니다. 이 서비스는
+`/usr/local/bin/mediamtx`를 `/etc/logistics/rtsp-relay.yml` 설정으로 실행합니다.
+
 카메라와 UART 장치 접근을 위해 배포 사용자에게 필요한 그룹만 부여합니다. 무조건 root로 실행하지 않습니다.
 
 ## 적용
@@ -74,10 +79,26 @@ journalctl -u logistics-central-server -f
 journalctl -u logistics-vision -f
 ```
 
+RTSP 릴레이의 운영 상태, 로그와 네 채널 준비 상태는 중앙 Raspberry Pi에서 다음 순서로 확인합니다.
+
+```sh
+sudo systemctl status logistics-rtsp-relay --no-pager
+sudo journalctl -u logistics-rtsp-relay -f
+./deploy/scripts/check-rtsp-relay.sh
+```
+
 unit 또는 INI를 변경한 후에는 해당 서비스만 재시작합니다.
 
 ```sh
 sudo systemctl restart logistics-central-server
+```
+
+`logistics-central-server`를 재시작해도 `logistics-rtsp-relay`를 재시작해서는 안 됩니다. 두 서비스는 독립적으로
+운영합니다. 카메라 소스를 변경할 때만 여섯 RTSP 환경 변수를 다시 지정하고 `LOGISTICS_FORCE_CONFIG=1`로
+`setup-rtsp-relay.sh`를 실행한 뒤 다음 명령으로 릴레이를 재시작합니다.
+
+```sh
+sudo systemctl restart logistics-rtsp-relay
 ```
 
 비밀번호, 토큰과 개인키를 unit의 `Environment=`에 직접 넣지 말고 권한이 제한된 `/etc/logistics/*.ini` 또는 별도

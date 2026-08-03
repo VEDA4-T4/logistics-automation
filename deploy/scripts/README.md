@@ -22,6 +22,34 @@ runtime/central-server/uploads/
 
 이 스크립트는 Mosquitto 설정을 수정하거나 서비스를 재시작하지 않습니다.
 
+## RTSP 릴레이
+
+ARM64 중앙 Raspberry Pi에서 다음 여섯 환경 변수를 모두 지정해 실행합니다. 아래 값은 예시이며 실제 카메라 URL이나
+릴레이 비밀번호를 저장소에 기록하지 않습니다.
+
+```sh
+export LOGISTICS_RTSP_SOURCE_1='rtsp://camera-1.example.com/stream'
+export LOGISTICS_RTSP_SOURCE_2='rtsp://camera-2.example.com/stream'
+export LOGISTICS_RTSP_SOURCE_3='rtsp://camera-3.example.com/stream'
+export LOGISTICS_RTSP_SOURCE_4='rtsp://camera-4.example.com/stream'
+export LOGISTICS_RTSP_RELAY_USER='control-center'
+export LOGISTICS_RTSP_RELAY_PASSWORD='replace-with-relay-password'
+./deploy/scripts/setup-rtsp-relay.sh
+```
+
+스크립트는 ARM64용 MediaMTX를 `1.19.3`으로 고정해 내려받고, 배포된 `checksums.sha256`으로 아카이브를 검증한 뒤에만
+바이너리를 설치합니다. `/etc/logistics/rtsp-relay.yml`이 이미 있으면 기본적으로 보존합니다. 카메라 소스를 바꾸려면
+같은 여섯 환경 변수를 다시 지정하고 `LOGISTICS_FORCE_CONFIG=1`로 설치 스크립트를 실행한 다음 릴레이를 재시작합니다.
+
+```sh
+export LOGISTICS_FORCE_CONFIG=1
+./deploy/scripts/setup-rtsp-relay.sh
+sudo systemctl restart logistics-rtsp-relay
+```
+
+실제 카메라 URL과 릴레이 비밀번호는 권한이 제한된 `/etc/logistics/rtsp-relay.yml`과 커밋하지 않는 Qt 런타임 INI에만
+둡니다.
+
 ## Vision Raspberry Pi
 
 ```sh
