@@ -6,6 +6,7 @@ mediamtx_version=1.19.3
 asset_name="mediamtx_v${mediamtx_version}_linux_arm64v8.tar.gz"
 release_base="https://github.com/bluenviron/mediamtx/releases/download/v${mediamtx_version}"
 force_config="${LOGISTICS_FORCE_CONFIG:-0}"
+unit_source="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../systemd" && pwd)/logistics-rtsp-relay.service"
 
 reject_line_breaks() {
     [[ "$1" != *$'\n'* && "$1" != *$'\r'* ]]
@@ -203,12 +204,15 @@ curl -fsSL "${release_base}/checksums.sha256" --output "${download_dir}/checksum
 
 if should_keep_config; then
     echo 'Keeping existing RTSP relay config'
-    exit 0
+else
+    temporary_config="$(mktemp)"
+    render_config "${source_1}" "${source_2}" "${source_3}" "${source_4}" \
+        "${relay_user}" "${relay_password}" >"${temporary_config}"
+    "${sudo_command[@]}" install -d -m 0750 /etc/logistics
+    "${sudo_command[@]}" install -m 0640 -o root -g logistics "${temporary_config}" "${config_path}.new"
+    "${sudo_command[@]}" mv -f -- "${config_path}.new" "${config_path}"
 fi
 
-temporary_config="$(mktemp)"
-render_config "${source_1}" "${source_2}" "${source_3}" "${source_4}" \
-    "${relay_user}" "${relay_password}" >"${temporary_config}"
-"${sudo_command[@]}" install -d -m 0750 /etc/logistics
-"${sudo_command[@]}" install -m 0640 -o root -g logistics "${temporary_config}" "${config_path}.new"
-"${sudo_command[@]}" mv -f -- "${config_path}.new" "${config_path}"
+"${sudo_command[@]}" install -m 0644 "${unit_source}" /etc/systemd/system/logistics-rtsp-relay.service
+"${sudo_command[@]}" systemctl daemon-reload
+"${sudo_command[@]}" systemctl enable --now logistics-rtsp-relay.service
