@@ -52,24 +52,20 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("operationalLogPanel"));
     setStyleSheet(
         "#operationalLogPanel{background:#181818;}"
-        "QLabel{color:#cccccc;}"
-        "QComboBox,QLineEdit{background:#202020;color:#d4d4d4;border:1px solid #303030;border-radius:6px;padding:7px;}"
-        "QComboBox:hover,QLineEdit:hover{border-color:#454545;}"
+        "QLineEdit{background:#202020;color:#d4d4d4;border:1px solid #303030;border-radius:6px;padding:7px;}"
+        "QLineEdit:hover{border-color:#454545;}"
         "QCheckBox{color:#a8a8a8;spacing:6px;}"
-        "QPushButton{background:#242424;color:#d4d4d4;border:1px solid #353535;border-radius:6px;padding:6px 10px;}"
-        "QPushButton:hover:enabled{background:#303030;border-color:#4a4a4a;}"
-        "QPushButton:disabled{color:#666666;background:#202020;border-color:#292929;}"
         "QPushButton#acknowledgeAllLogsButton{color:#ff938a;border-color:#5d3235;background:#2a2021;}"
         "QTableWidget{background:#181818;color:#cccccc;border:0;gridline-color:transparent;outline:0;}"
         "QHeaderView::section{background:#181818;color:#777777;border:0;border-bottom:1px solid #303030;"
         "font-size:10px;font-weight:600;padding:7px;}"
-        "QTableWidget::item{border-bottom:1px solid #272727;padding:8px;}"
+        "QTableWidget::item{border-bottom:1px solid #303030;padding:8px;}"
         "QTableWidget::item:hover{background:#202a33;}"
         "QTableWidget::item:selected{background:#21364a;color:#f0f0f0;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 11, 12, 12);
-    layout->setSpacing(9);
+    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setSpacing(8);
 
     auto* header = new QHBoxLayout();
     auto* header_text = new QVBoxLayout();

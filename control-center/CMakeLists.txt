@@ -22,6 +22,7 @@ qt_standard_project_setup()
 set(
     CONTROL_CENTER_APP_SOURCES
     src/main_window.cpp
+    src/control_center_theme.cpp
     src/command_response.cpp
     src/current_product_state.cpp
     src/detection_overlay.cpp
@@ -40,6 +41,7 @@ set(
     src/rtsp_stream_worker.cpp
     src/ui_dialog.cpp
     include/logistics/control_center/main_window.hpp
+    include/logistics/control_center/control_center_theme.hpp
     include/logistics/control_center/command_response.hpp
     include/logistics/control_center/current_product_state.hpp
     include/logistics/control_center/detection_overlay.hpp

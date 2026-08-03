@@ -206,8 +206,8 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     setObjectName(QStringLiteral("operationsDashboard"));
     setMinimumHeight(250);
     setStyleSheet(
-        "#operationsDashboard{background:#1f1f1f;border-bottom:1px solid #2b2b2b;}"
-        "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
+        "#operationsDashboard{background:#1f1f1f;border-bottom:1px solid #303030;}"
+        "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #303030;border-radius:6px;}"
         "#overallProcessCard[selectedControlTarget=\"true\"],#processUnitCard[selectedControlTarget=\"true\"]{"
         "background:#172534;border:2px solid #4daafc;}"
         "#overallProcessCard:hover,#processUnitCard:hover{border-color:#75beff;}"
@@ -215,7 +215,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
         "QLabel{color:#cccccc;}");
 
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(10, 7, 10, 7);
+    layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
 
     factory_top_view_ = new FactoryTopViewWidget(this);
@@ -264,10 +264,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     scroll_area->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll_area->setStyleSheet(
         "QScrollArea{background:#1f1f1f;border:0;}"
-        "QScrollArea>QWidget>QWidget{background:#1f1f1f;}"
-        "QScrollBar:vertical{width:4px;background:#1f1f1f;}"
-        "QScrollBar::handle:vertical{background:#454545;border-radius:2px;min-height:24px;}"
-        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}");
+        "QScrollArea>QWidget>QWidget{background:#1f1f1f;}");
     scroll_area->viewport()->setStyleSheet("background:#1f1f1f;");
 
     auto* process_section = new QWidget(scroll_area);
@@ -275,7 +272,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     process_section->setAttribute(Qt::WA_StyledBackground);
     auto* process_section_layout = new QVBoxLayout(process_section);
     process_section_layout->setContentsMargins(0, 0, 0, 0);
-    process_section_layout->setSpacing(3);
+    process_section_layout->setSpacing(8);
     auto* process_header = new QHBoxLayout();
     process_header->setContentsMargins(2, 0, 2, 0);
     auto* process_title = new QLabel(QStringLiteral("공정·지원 노드 실시간 상태"), process_section);
@@ -293,7 +290,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     process_content->setAttribute(Qt::WA_StyledBackground);
     process_layout_ = new QGridLayout(process_content);
     process_layout_->setContentsMargins(0, 0, 0, 0);
-    process_layout_->setSpacing(4);
+    process_layout_->setSpacing(8);
     process_layout_->addWidget(overall_card_, 0, 0, 1, 2);
     process_section_layout->addWidget(process_content, 1);
     scroll_area->setWidget(process_section);
@@ -408,7 +405,7 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.device_and_updated_at->setStyleSheet("color:#7f7f7f;font-size:8px;");
     auto* sensor_layout = new QHBoxLayout();
     sensor_layout->setContentsMargins(0, 0, 0, 0);
-    sensor_layout->setSpacing(7);
+    sensor_layout->setSpacing(8);
     for (const auto& sensor : process.sensors) {
         auto* indicator = new QLabel(widgets.card);
         indicator->setObjectName(QStringLiteral("sensorStatusIndicator"));

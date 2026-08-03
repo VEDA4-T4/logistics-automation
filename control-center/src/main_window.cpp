@@ -30,6 +30,7 @@
 
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/control_center/command_response.hpp"
+#include "logistics/control_center/control_center_theme.hpp"
 #include "logistics/control_center/detection_overlay.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
 #include "logistics/control_center/onvif_metadata.hpp"
@@ -410,10 +411,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Smart Logistics Control Center");
     setMinimumSize(1280, 720);
     resize(1600, 900);
-    setStyleSheet(
-        "QMainWindow{background:#1f1f1f;}"
-        "QStatusBar{background:#181818;color:#cccccc;border-top:1px solid #2b2b2b;}"
-        "QToolTip{background:#252526;color:#f0f0f0;border:1px solid #454545;padding:5px;}");
+    setStyleSheet(ControlCenterStyleSheet());
 
     const auto config = loadControlCenterConfig();
     control_target_device_id_ = config.control_target_device_id;
@@ -444,14 +442,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* central_widget = new QWidget(this);
     central_widget->setObjectName(QStringLiteral("centralSurface"));
-    central_widget->setStyleSheet("#centralSurface{background:#1f1f1f;}");
     auto* root_layout = new QVBoxLayout(central_widget);
     root_layout->setContentsMargins(0, 0, 0, 0);
     root_layout->setSpacing(0);
 
     auto* app_header = new QFrame(central_widget);
     app_header->setObjectName(QStringLiteral("appHeader"));
-    app_header->setStyleSheet("#appHeader{background:#181818;border-bottom:1px solid #2b2b2b;}");
     app_header->setMinimumHeight(54);
     app_header->setMaximumHeight(54);
     auto* app_header_layout = new QHBoxLayout(app_header);
@@ -481,22 +477,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* content = new QWidget(central_widget);
     auto* content_layout = new QHBoxLayout(content);
-    content_layout->setContentsMargins(10, 0, 10, 0);
+    content_layout->setContentsMargins(10, 10, 10, 10);
     content_layout->setSpacing(0);
 
     auto* content_splitter = new QSplitter(Qt::Horizontal, content);
     content_splitter->setObjectName(QStringLiteral("contentSplitter"));
     content_splitter->setChildrenCollapsible(false);
     content_splitter->setHandleWidth(7);
-    content_splitter->setStyleSheet(
-        "QSplitter::handle{background:#1f1f1f;border-left:1px solid #303030;border-right:1px solid #303030;}"
-        "QSplitter::handle:hover{background:#264f78;}");
 
     auto* video_container = new QWidget(content_splitter);
     auto* video_grid = new QGridLayout(video_container);
     video_grid->setContentsMargins(0, 0, 0, 0);
     video_grid->setHorizontalSpacing(8);
-    video_grid->setVerticalSpacing(0);
+    video_grid->setVerticalSpacing(8);
 
     auto* side_panel = new QWidget(content_splitter);
     side_panel->setObjectName(QStringLiteral("sidePanel"));
@@ -504,17 +497,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     side_panel->setStyleSheet("#sidePanel{background:transparent;}");
     auto* side_layout = new QVBoxLayout(side_panel);
     side_layout->setContentsMargins(0, 0, 0, 0);
-    side_layout->setSpacing(10);
+    side_layout->setSpacing(8);
     detail_tabs_ = new QTabWidget(side_panel);
     detail_tabs_->setObjectName(QStringLiteral("detailTabs"));
     detail_tabs_->setDocumentMode(false);
-    detail_tabs_->setStyleSheet(
-        "QTabWidget::pane{border:1px solid #2b2b2b;background:#181818;top:-1px;}"
-        "QTabBar::tab{background:#252526;color:#9d9d9d;border:1px solid #333333;border-bottom:0;"
-        "font-size:11px;font-weight:600;min-width:92px;padding:8px 16px;margin-right:2px;}"
-        "QTabBar::tab:hover{background:#2d2d30;color:#f0f0f0;}"
-        "QTabBar::tab:selected{background:#181818;color:#f0f0f0;border-top:2px solid #4daafc;"
-        "padding-top:7px;}");
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_tabs_);
     operational_log_panel_ = new OperationalLogPanel(detail_tabs_);
     detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));
@@ -721,14 +707,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         reconnect_timers_[channel] = new QTimer(this);
 
         channel_panel->setMinimumSize(320, 180);
-        channel_panel->setStyleSheet("background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;");
+        channel_panel->setStyleSheet("background-color:#181818;border:1px solid #303030;border-radius:6px;");
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
         video_layout->addWidget(detection_overlays_[channel], 0, 0);
         detection_overlays_[channel]->setChannelLabel(QStringLiteral("CH %1 · 재생 중").arg(channel + 1));
 
         state_overlays_[channel]->setAttribute(Qt::WA_StyledBackground, true);
-        state_overlays_[channel]->setStyleSheet("background-color:#181818;border-radius:5px;");
+        state_overlays_[channel]->setStyleSheet("background-color:#181818;border-radius:6px;");
         overlay_layout->setContentsMargins(16, 12, 16, 12);
         channel_label->setStyleSheet("color:#cccccc;font-size:12px;font-weight:700;");
         status_labels_[channel]->setObjectName(QStringLiteral("channelStatus%1").arg(channel + 1));
