@@ -155,8 +155,7 @@ ca_certificate=
 
     bool rejected = false;
     try {
-        static_cast<void>(
-            logistics::central_server::LoadMqttConfig(path));
+        static_cast<void>(logistics::central_server::LoadMqttConfig(path));
     } catch (const logistics::central_server::ConfigError&) {
         rejected = true;
     }
@@ -215,8 +214,8 @@ client_id=central-server
         .reconnect_min_delay_seconds = 1,
         .reconnect_max_delay_seconds = 16,
         .clean_session = true,
-	.tls_enabled = false,
-	.ca_certificate = {},
+        .tls_enabled = false,
+        .ca_certificate = {},
     };
 }
 

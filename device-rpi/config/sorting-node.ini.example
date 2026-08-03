@@ -22,7 +22,7 @@ client_id=PI-SORTING-01
 
 # Leave both values empty only when the MQTT broker permits anonymous access.
 username=PI-SORTING-01
-password=hanwhat4
+password=test-for-test
 
 # Connection recovery policy. The defaults normally do not need adjustment.
 tls_enabled=true

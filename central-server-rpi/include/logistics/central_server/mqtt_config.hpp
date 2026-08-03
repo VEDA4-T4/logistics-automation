@@ -18,7 +18,7 @@ struct MqttConfig final {
     std::uint32_t reconnect_min_delay_seconds{ 1 };
     std::uint32_t reconnect_max_delay_seconds{ 30 };
     bool clean_session{ false };
-    bool tls_enabled{false};
+    bool tls_enabled{ false };
     std::string ca_certificate;
 
     [[nodiscard]] bool IsValid() const noexcept;

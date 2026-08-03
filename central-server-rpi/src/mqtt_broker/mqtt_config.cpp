@@ -67,9 +67,9 @@ void AssignMqttValue(MqttConfig& config, const std::filesystem::path& path, std:
     } else if (key == "password") {
         config.password = value;
     } else if (key == "tls_enabled") {
-    config.tls_enabled = ParseBoolean(path, line_number, key, value);
+        config.tls_enabled = ParseBoolean(path, line_number, key, value);
     } else if (key == "ca_certificate") {
-    config.ca_certificate = value;
+        config.ca_certificate = value;
     } else if (key == "keep_alive_seconds") {
         config.keep_alive_seconds = ParseInteger<std::uint16_t>(path, line_number, key, value, 1, 65535);
     } else if (key == "reconnect_min_delay_seconds") {
@@ -88,18 +88,11 @@ void AssignMqttValue(MqttConfig& config, const std::filesystem::path& path, std:
 }  // namespace
 
 bool MqttConfig::IsValid() const noexcept {
-    const bool valid_tls =
-        !tls_enabled || !ca_certificate.empty();
+    const bool valid_tls = !tls_enabled || !ca_certificate.empty();
 
-    return !host.empty() &&
-           contracts::mqtt::IsValidTopicLevel(client_id) &&
-           port != 0 &&
-           keep_alive_seconds != 0 &&
-           reconnect_min_delay_seconds != 0 &&
-           reconnect_max_delay_seconds >=
-               reconnect_min_delay_seconds &&
-           (password.empty() || !username.empty()) &&
-           valid_tls;
+    return !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
+           reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
+           (password.empty() || !username.empty()) && valid_tls;
 }
 
 MqttConfig LoadMqttConfig(const std::filesystem::path& path) {
@@ -167,10 +160,9 @@ MqttConfig LoadMqttConfig(const std::filesystem::path& path) {
         throw ConfigError("server configuration has no [mqtt] section: " + path.string());
     }
     if (!config.IsValid()) {
-	throw ConfigError(
-    "invalid [mqtt] configuration in " + path.string() +
-    ": host/client_id are required, delays must be ordered, "
-    "password requires username, and TLS requires ca_certificate");    
+        throw ConfigError("invalid [mqtt] configuration in " + path.string() +
+                          ": host/client_id are required, delays must be ordered, "
+                          "password requires username, and TLS requires ca_certificate");
     }
     if (config.device_registry_path.empty()) {
         config.device_registry_path = path.parent_path() / "devices.json";

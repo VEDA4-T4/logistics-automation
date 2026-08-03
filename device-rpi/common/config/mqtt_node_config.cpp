@@ -184,37 +184,20 @@ void AssignImageUploadValue(MqttNodeConfig& config, const std::filesystem::path&
 bool MqttNodeConfig::IsValid() const noexcept {
     const bool valid_log_upload =
         !log_upload_enabled ||
-        (!log_upload.endpoint_url.empty() &&
-         !log_upload.spool_directory.empty() &&
-         log_upload.rotate_bytes != 0 &&
-         log_upload.maximum_spool_bytes >= log_upload.rotate_bytes &&
-         log_upload.rotate_interval.count() > 0 &&
-         log_upload.request_timeout.count() > 0 &&
-         log_upload.maximum_attempts > 0 &&
-         log_upload.initial_backoff.count() > 0 &&
-         log_upload.maximum_backoff >= log_upload.initial_backoff);
+        (!log_upload.endpoint_url.empty() && !log_upload.spool_directory.empty() && log_upload.rotate_bytes != 0 &&
+         log_upload.maximum_spool_bytes >= log_upload.rotate_bytes && log_upload.rotate_interval.count() > 0 &&
+         log_upload.request_timeout.count() > 0 && log_upload.maximum_attempts > 0 &&
+         log_upload.initial_backoff.count() > 0 && log_upload.maximum_backoff >= log_upload.initial_backoff);
 
-    const bool valid_image_upload =
-        !image_upload_enabled || image_upload.IsValid();
+    const bool valid_image_upload = !image_upload_enabled || image_upload.IsValid();
 
-    const bool valid_mqtt_tls =
-        !tls_enabled || !ca_certificate.empty();
+    const bool valid_mqtt_tls = !tls_enabled || !ca_certificate.empty();
 
-    return contracts::mqtt::IsValidTopicLevel(device_id) &&
-           !node_name.empty() &&
-           !ip_address.empty() &&
-           !host.empty() &&
-           contracts::mqtt::IsValidTopicLevel(client_id) &&
-           port != 0 &&
-           keep_alive_seconds != 0 &&
-           reconnect_min_delay_seconds != 0 &&
-           reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
-           sorting_default_speed > 0 &&
-           sorting_default_speed <= 100 &&
-           (password.empty() || !username.empty()) &&
-           valid_mqtt_tls &&
-           valid_log_upload &&
-           valid_image_upload;
+    return contracts::mqtt::IsValidTopicLevel(device_id) && !node_name.empty() && !ip_address.empty() &&
+           !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
+           reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
+           sorting_default_speed > 0 && sorting_default_speed <= 100 && (password.empty() || !username.empty()) &&
+           valid_mqtt_tls && valid_log_upload && valid_image_upload;
 }
 
 MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
@@ -278,20 +261,16 @@ MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
 
     if (config.tls_enabled) {
         if (config.ca_certificate.empty()) {
-            throw NodeConfigError(
-                "MQTT TLS is enabled but ca_certificate is empty");
+            throw NodeConfigError("MQTT TLS is enabled but ca_certificate is empty");
         }
 
         if (config.ca_certificate.is_relative()) {
-            config.ca_certificate =
-                path.parent_path() / config.ca_certificate;
+            config.ca_certificate = path.parent_path() / config.ca_certificate;
         }
 
         std::ifstream ca_input(config.ca_certificate);
         if (!ca_input) {
-            throw NodeConfigError(
-                "unable to read MQTT CA certificate: " +
-                config.ca_certificate.string());
+            throw NodeConfigError("unable to read MQTT CA certificate: " + config.ca_certificate.string());
         }
     }
 

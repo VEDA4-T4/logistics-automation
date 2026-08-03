@@ -116,22 +116,20 @@ bool MqttClient::Start() {
                                std::string_view message) { HandleTransportLog(level, message); },
     });
 
-const MqttTransportOptions options{
-    .host = config_.host,
-    .client_id = config_.client_id,
-    .username = config_.username,
-    .password = config_.password,
-    .port = config_.port,
-    .keep_alive_seconds = config_.keep_alive_seconds,
-    .reconnect_min_delay_seconds =
-        config_.reconnect_min_delay_seconds,
-    .reconnect_max_delay_seconds =
-        config_.reconnect_max_delay_seconds,
-    .clean_session = config_.clean_session,
-    .tls_enabled = config_.tls_enabled,
-    .ca_certificate = config_.ca_certificate,
-    .will = will_,
-};
+    const MqttTransportOptions options{
+        .host = config_.host,
+        .client_id = config_.client_id,
+        .username = config_.username,
+        .password = config_.password,
+        .port = config_.port,
+        .keep_alive_seconds = config_.keep_alive_seconds,
+        .reconnect_min_delay_seconds = config_.reconnect_min_delay_seconds,
+        .reconnect_max_delay_seconds = config_.reconnect_max_delay_seconds,
+        .clean_session = config_.clean_session,
+        .tls_enabled = config_.tls_enabled,
+        .ca_certificate = config_.ca_certificate,
+        .will = will_,
+    };
     const auto result = transport_->Start(options);
     if (!result) {
         connected_ = false;
