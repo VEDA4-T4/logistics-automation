@@ -138,7 +138,7 @@ path=/var/lib/logistics/logistics.db
 }
 
 void TestTlsWithoutCaIsRejected() {
-    const auto path = MakeTemporaryConfigPath();
+    const auto path = MakeTemporaryConfigPath("tls-without-ca");
 
     {
         std::ofstream output(path);

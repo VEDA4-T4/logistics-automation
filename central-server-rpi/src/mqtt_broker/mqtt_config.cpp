@@ -88,9 +88,18 @@ void AssignMqttValue(MqttConfig& config, const std::filesystem::path& path, std:
 }  // namespace
 
 bool MqttConfig::IsValid() const noexcept {
-    return !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
-           reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
-           (password.empty() || !username.empty());
+    const bool valid_tls =
+        !tls_enabled || !ca_certificate.empty();
+
+    return !host.empty() &&
+           contracts::mqtt::IsValidTopicLevel(client_id) &&
+           port != 0 &&
+           keep_alive_seconds != 0 &&
+           reconnect_min_delay_seconds != 0 &&
+           reconnect_max_delay_seconds >=
+               reconnect_min_delay_seconds &&
+           (password.empty() || !username.empty()) &&
+           valid_tls;
 }
 
 MqttConfig LoadMqttConfig(const std::filesystem::path& path) {
@@ -158,8 +167,10 @@ MqttConfig LoadMqttConfig(const std::filesystem::path& path) {
         throw ConfigError("server configuration has no [mqtt] section: " + path.string());
     }
     if (!config.IsValid()) {
-        throw ConfigError("invalid [mqtt] configuration in " + path.string() +
-                          ": host/client_id are required, delays must be ordered, and password requires username");
+	throw ConfigError(
+    "invalid [mqtt] configuration in " + path.string() +
+    ": host/client_id are required, delays must be ordered, "
+    "password requires username, and TLS requires ca_certificate");    
     }
     if (config.device_registry_path.empty()) {
         config.device_registry_path = path.parent_path() / "devices.json";
