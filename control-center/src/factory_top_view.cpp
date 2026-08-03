@@ -25,6 +25,9 @@ QString NormalizedState(const QString& current_state) {
 }
 
 FactoryMotionPhase MotionPhaseFor(const ProcessUnitStatus& process, const QString& state) {
+    if (process.work_completed && process.key == QString::fromLatin1(kLineTracerProcessKey)) {
+        return FactoryMotionPhase::LineCompleted;
+    }
     if (state == QStringLiteral("VISION_PROCESSING")) {
         return FactoryMotionPhase::VisionProcessing;
     }
@@ -37,9 +40,8 @@ FactoryMotionPhase MotionPhaseFor(const ProcessUnitStatus& process, const QStrin
     if (state == QStringLiteral("PLACED")) {
         return FactoryMotionPhase::GripperPlaced;
     }
-    if (state == QStringLiteral("COMPLETED")) {
-        return process.key == QString::fromLatin1(kLineTracerProcessKey) ? FactoryMotionPhase::LineCompleted
-                                                                         : FactoryMotionPhase::GripperPlaced;
+    if (state == QStringLiteral("COMPLETED") && process.key != QString::fromLatin1(kLineTracerProcessKey)) {
+        return FactoryMotionPhase::GripperPlaced;
     }
     if (state == QStringLiteral("SORTING") || state == QStringLiteral("ROUTING")) {
         for (const auto& sensor : process.sensors) {
@@ -152,7 +154,7 @@ FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
     if (process.has_error) {
         return ErrorVisual(process);
     }
-    if (!process.work_id.isEmpty() && IsWorkingState(state)) {
+    if (!process.work_id.isEmpty() && (process.work_completed || IsWorkingState(state))) {
         return WorkingVisual(process, state);
     }
     if (state == QStringLiteral("RUNNING") || state == QStringLiteral("ONLINE")) {
@@ -464,7 +466,6 @@ struct FactoryTopViewWidget::Impl {
     void setProcesses(const QList<ProcessUnitStatus>& processes) {
         QString input_work_id;
         QString sorting_work_id;
-        std::optional<int> sorting_route;
         for (const auto& process : processes) {
             const auto visual = BuildFactoryNodeVisual(process);
             if (!HasLiveTelemetry(visual) || process.work_id.isEmpty()) {
@@ -474,7 +475,6 @@ struct FactoryTopViewWidget::Impl {
                 input_work_id = process.work_id;
             } else if (process.key == QString::fromLatin1(kSortingProcessKey)) {
                 sorting_work_id = process.work_id;
-                sorting_route = FactoryRouteIndex(process.destination);
             }
         }
 
@@ -522,9 +522,7 @@ struct FactoryTopViewWidget::Impl {
                     applySortingRoute(process);
                 }
             } else if (process.key == QString::fromLatin1(kLineTracerProcessKey)) {
-                const auto route = telemetry_live && !sorting_work_id.isEmpty() && sorting_work_id == process.work_id
-                                       ? sorting_route
-                                       : std::nullopt;
+                const auto route = telemetry_live ? FactoryRouteIndex(process.destination) : std::nullopt;
                 if (route.has_value()) {
                     if (line_route != route) {
                         node.animation_phase = 0;

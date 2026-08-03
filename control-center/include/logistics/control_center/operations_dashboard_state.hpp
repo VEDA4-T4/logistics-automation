@@ -73,6 +73,7 @@ struct ProcessUnitStatus {
     QString current_state{ QStringLiteral("상태 수신 대기") };
     QString work_id;
     QString destination;
+    bool work_completed{ false };
     QString error_code;
     QDateTime updated_at;
     bool has_error{ false };
@@ -133,6 +134,8 @@ private:
     QList<ProcessUnitStatus> process_snapshots_;
     QHash<QString, int> process_index_by_device_;
     QHash<QString, int> process_index_by_key_;
+    QHash<QString, QString> destination_by_work_id_;
+    QQueue<QString> destination_work_order_;
     ProcessDashboardStatus overall_;
     QSet<QString> processed_message_ids_;
     QQueue<QString> processed_message_order_;

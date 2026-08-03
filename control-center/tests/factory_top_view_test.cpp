@@ -178,11 +178,13 @@ int main(int argc, char* argv[]) {
     };
     for (const auto& route_case : route_cases) {
         sorting.destination = route_case.destination;
+        line_tracer.destination = route_case.destination;
         view.setProcesses({ sorting, line_tracer });
         assert(view.sortingServoAngle() == route_case.servo_angle);
         assert(view.boxPosition(QStringLiteral("linetracer")) == route_case.line_start);
     }
     sorting.destination.clear();
+    line_tracer.destination.clear();
     const auto unrouted_servo_angle = view.sortingServoAngle();
     const auto unrouted_line_position = view.boxPosition(QStringLiteral("linetracer"));
     view.setProcesses({ sorting, line_tracer });
@@ -221,6 +223,7 @@ int main(int argc, char* argv[]) {
     line_tracer.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
     line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
     line_tracer.work_id = QStringLiteral("WORK-LT");
+    line_tracer.destination = QStringLiteral("2");
     sorting.work_id = QStringLiteral("WORK-LT");
     sorting.destination = QStringLiteral("2");
     view.setProcesses({ sorting, line_tracer });
@@ -228,11 +231,36 @@ int main(int argc, char* argv[]) {
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
     line_tracer.current_state = QStringLiteral("COMPLETED");
+    line_tracer.work_completed = true;
     view.setProcesses({ sorting, line_tracer });
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 345));
     view.advanceAnimationsForTest();
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 345));
+
+    sorting.work_id = QStringLiteral("WORK-B");
+    sorting.destination = QStringLiteral("3");
+    line_tracer.work_id = QStringLiteral("WORK-A");
+    line_tracer.destination = QStringLiteral("1");
+    line_tracer.current_state = QStringLiteral("배송 완료");
+    line_tracer.work_completed = false;
+    visual = BuildFactoryNodeVisual(line_tracer);
+    assert(visual.motion_phase != FactoryMotionPhase::LineCompleted);
+    line_tracer.work_completed = true;
+    visual = BuildFactoryNodeVisual(line_tracer);
+    assert(visual.motion_phase == FactoryMotionPhase::LineCompleted);
+    view.setProcesses({ sorting, line_tracer });
+    assert(view.sortingServoAngle() == 90.0);
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 250));
+
+    line_tracer.work_id = QStringLiteral("WORK-C");
+    line_tracer.destination.clear();
+    line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
+    line_tracer.work_completed = false;
+    const auto completed_line_position = view.boxPosition(QStringLiteral("linetracer"));
+    view.setProcesses({ sorting, line_tracer });
+    view.advanceAnimationsForTest();
+    assert(view.boxPosition(QStringLiteral("linetracer")) == completed_line_position);
 
     logistics::control_center::FactoryTopViewWidget unrouted_view;
     auto unrouted_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-02"),
