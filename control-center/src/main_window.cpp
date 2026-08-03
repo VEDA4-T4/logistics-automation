@@ -481,7 +481,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* content = new QWidget(central_widget);
     auto* content_layout = new QHBoxLayout(content);
-    content_layout->setContentsMargins(10, 10, 10, 10);
+    content_layout->setContentsMargins(10, 0, 10, 0);
     content_layout->setSpacing(0);
 
     auto* content_splitter = new QSplitter(Qt::Horizontal, content);
@@ -495,7 +495,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* video_container = new QWidget(content_splitter);
     auto* video_grid = new QGridLayout(video_container);
     video_grid->setContentsMargins(0, 0, 0, 0);
-    video_grid->setSpacing(8);
+    video_grid->setHorizontalSpacing(8);
+    video_grid->setVerticalSpacing(0);
 
     auto* side_panel = new QWidget(content_splitter);
     side_panel->setObjectName(QStringLiteral("sidePanel"));
@@ -719,6 +720,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         detection_overlays_[channel] = new DetectionOverlay(video_layers_[channel]);
         reconnect_timers_[channel] = new QTimer(this);
 
+        channel_panel->setMinimumSize(320, 180);
         channel_panel->setStyleSheet("background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;");
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
