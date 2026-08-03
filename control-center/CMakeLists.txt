@@ -19,9 +19,8 @@ find_package(Qt6 6.10 REQUIRED COMPONENTS Mqtt Multimedia Network Widgets)
 
 qt_standard_project_setup()
 
-qt_add_executable(
-    logistics_control_center
-    src/main.cpp
+set(
+    CONTROL_CENTER_APP_SOURCES
     src/main_window.cpp
     src/command_response.cpp
     src/current_product_state.cpp
@@ -61,6 +60,12 @@ qt_add_executable(
     include/logistics/control_center/ui_dialog.hpp
 )
 
+qt_add_executable(
+    logistics_control_center
+    src/main.cpp
+    ${CONTROL_CENTER_APP_SOURCES}
+)
+
 add_custom_target(
     logistics_control_center_config ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/config"
@@ -88,6 +93,24 @@ include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ProjectWarnings.cmake")
 logistics_enable_warnings(logistics_control_center)
 
 if(BUILD_TESTING)
+    add_executable(
+        control_center_main_window_layout_test
+        tests/main_window_layout_test.cpp
+        ${CONTROL_CENTER_APP_SOURCES}
+    )
+    target_include_directories(control_center_main_window_layout_test PRIVATE include)
+    target_link_libraries(
+        control_center_main_window_layout_test
+        PRIVATE
+            Qt6::Mqtt
+            Qt6::Multimedia
+            Qt6::Network
+            Qt6::Widgets
+            logistics::contracts
+    )
+    logistics_enable_warnings(control_center_main_window_layout_test)
+    add_test(NAME control_center_main_window_layout_test COMMAND control_center_main_window_layout_test)
+
     add_executable(
         control_center_mqtt_validator_test
         tests/mqtt_message_validator_test.cpp

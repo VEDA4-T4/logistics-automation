@@ -478,7 +478,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
     operations_dashboard_panel_->setState(operations_dashboard_state_);
     operations_dashboard_panel_->setControlTarget(config.control_target_device_id);
-    root_layout->addWidget(operations_dashboard_panel_);
 
     auto* content = new QWidget(central_widget);
     auto* content_layout = new QHBoxLayout(content);
@@ -538,7 +537,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     content_splitter->setStretchFactor(1, 2);
     content_splitter->setSizes({ 740, 500 });
     content_layout->addWidget(content_splitter);
-    root_layout->addWidget(content, 1);
+
+    auto* workspace_splitter = new QSplitter(Qt::Vertical, central_widget);
+    workspace_splitter->setObjectName(QStringLiteral("workspaceSplitter"));
+    workspace_splitter->setChildrenCollapsible(false);
+    workspace_splitter->setHandleWidth(7);
+    operations_dashboard_panel_->setMinimumHeight(250);
+    content->setMinimumHeight(360);
+    workspace_splitter->addWidget(operations_dashboard_panel_);
+    workspace_splitter->addWidget(content);
+    workspace_splitter->setStretchFactor(0, 0);
+    workspace_splitter->setStretchFactor(1, 1);
+    workspace_splitter->setSizes({ 300, 520 });
+    root_layout->addWidget(workspace_splitter, 1);
     setCentralWidget(central_widget);
 
     mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
