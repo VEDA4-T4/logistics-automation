@@ -6,6 +6,7 @@
 #include <QString>
 #include <QUrl>
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 #include "logistics/contracts/mqtt_message.hpp"
@@ -31,10 +32,12 @@ class ProcessControlPanel;
 class DetectionOverlay;
 class OnvifRtspMetadataClient;
 class RtspH264Stream;
+class RtspStreamWorker;
 
 class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
 private:
     enum class ChannelState {
@@ -57,6 +60,7 @@ private:
     void refreshOperationalLogBadge();
 
     std::vector<QMediaPlayer*> players_{};
+    std::vector<std::unique_ptr<RtspStreamWorker>> video_stream_workers_{};
     std::vector<RtspH264Stream*> video_streams_{};
     std::vector<QLabel*> status_labels_{};
     std::vector<QStackedLayout*> channel_stacks_{};

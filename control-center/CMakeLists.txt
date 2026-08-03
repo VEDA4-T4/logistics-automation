@@ -37,6 +37,7 @@ qt_add_executable(
     src/product_result_panel.cpp
     src/process_control_panel.cpp
     src/rtsp_h264_stream.cpp
+    src/rtsp_stream_worker.cpp
     src/ui_dialog.cpp
     include/logistics/control_center/main_window.hpp
     include/logistics/control_center/command_response.hpp
@@ -54,6 +55,7 @@ qt_add_executable(
     include/logistics/control_center/process_control_panel.hpp
     include/logistics/control_center/process_control_state.hpp
     include/logistics/control_center/rtsp_h264_stream.hpp
+    include/logistics/control_center/rtsp_stream_worker.hpp
     include/logistics/control_center/ui_dialog.hpp
 )
 
@@ -160,12 +162,39 @@ if(BUILD_TESTING)
         control_center_rtsp_h264_stream_test
         tests/rtsp_h264_stream_test.cpp
         src/rtsp_h264_stream.cpp
+        src/rtsp_stream_worker.cpp
         include/logistics/control_center/rtsp_h264_stream.hpp
+        include/logistics/control_center/rtsp_stream_worker.hpp
     )
     target_include_directories(control_center_rtsp_h264_stream_test PRIVATE include)
     target_link_libraries(control_center_rtsp_h264_stream_test PRIVATE Qt6::Core Qt6::Network)
     logistics_enable_warnings(control_center_rtsp_h264_stream_test)
     add_test(NAME control_center_rtsp_h264_stream_test COMMAND control_center_rtsp_h264_stream_test)
+
+    add_executable(
+        control_center_rtsp_stream_worker_player_test
+        tests/rtsp_stream_worker_player_test.cpp
+        src/rtsp_h264_stream.cpp
+        src/rtsp_stream_worker.cpp
+        include/logistics/control_center/rtsp_h264_stream.hpp
+        include/logistics/control_center/rtsp_stream_worker.hpp
+    )
+    target_include_directories(control_center_rtsp_stream_worker_player_test PRIVATE include)
+    target_link_libraries(
+        control_center_rtsp_stream_worker_player_test
+        PRIVATE Qt6::Core Qt6::Multimedia Qt6::Network Qt6::Widgets
+    )
+    logistics_enable_warnings(control_center_rtsp_stream_worker_player_test)
+    add_test(
+        NAME control_center_rtsp_stream_worker_player_test
+        COMMAND control_center_rtsp_stream_worker_player_test
+    )
+    set_tests_properties(
+        control_center_rtsp_stream_worker_player_test
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
 
     add_executable(
         control_center_process_control_state_test

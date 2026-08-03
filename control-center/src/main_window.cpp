@@ -39,6 +39,7 @@
 #include "logistics/control_center/process_control_panel.hpp"
 #include "logistics/control_center/product_result_panel.hpp"
 #include "logistics/control_center/rtsp_h264_stream.hpp"
+#include "logistics/control_center/rtsp_stream_worker.hpp"
 #include "logistics/control_center/ui_dialog.hpp"
 
 namespace logistics::control_center {
@@ -429,6 +430,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
     players_.resize(channel_count_);
+    video_stream_workers_.resize(channel_count_);
     video_streams_.resize(channel_count_);
     status_labels_.resize(channel_count_);
     channel_stacks_.resize(channel_count_);
@@ -686,9 +688,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     for (std::size_t channel = 0; channel < channel_count_; ++channel) {
         players_[channel] = new QMediaPlayer(this);
-        video_streams_[channel] = new RtspH264Stream(this);
-        video_streams_[channel]->setNetworkTimeout(rtsp_network_timeout_ms_);
-        video_streams_[channel]->setMaximumBufferSize(rtsp_maximum_buffer_size_bytes_);
+        video_stream_workers_[channel] =
+            std::make_unique<RtspStreamWorker>(rtsp_network_timeout_ms_, rtsp_maximum_buffer_size_bytes_);
+        video_streams_[channel] = video_stream_workers_[channel]->stream();
         QPlaybackOptions playback_options;
         playback_options.setPlaybackIntent(rtsp_low_latency_ ? QPlaybackOptions::PlaybackIntent::LowLatencyStreaming
                                                              : QPlaybackOptions::PlaybackIntent::Playback);
@@ -916,7 +918,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         } else {
             setChannelState(channel, ChannelState::Connecting);
             reconnecting_[channel] = true;
-            video_streams_[channel]->start(stream_urls_[channel]);
+            video_stream_workers_[channel]->start(stream_urls_[channel]);
             if (metadata_clients_[channel] != nullptr) {
                 metadata_clients_[channel]->start(metadata_stream_urls_[channel]);
             }
@@ -940,6 +942,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
 
     mqtt_client_->start();
+}
+
+MainWindow::~MainWindow() {
+    for (auto* player : players_) {
+        player->stop();
+        player->setSource({});
+    }
+    video_stream_workers_.clear();
+    video_streams_.clear();
 }
 
 void MainWindow::updatePlaybackState(std::size_t channel) {
@@ -1008,10 +1019,10 @@ void MainWindow::reconnectChannel(std::size_t channel) {
 
     reconnecting_[channel] = true;
     setChannelState(channel, ChannelState::Connecting);
-    video_streams_[channel]->stop();
     players_[channel]->stop();
     players_[channel]->setSource({});
-    video_streams_[channel]->start(stream_urls_[channel]);
+    video_stream_workers_[channel]->stop();
+    video_stream_workers_[channel]->start(stream_urls_[channel]);
 }
 
 void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand command,
