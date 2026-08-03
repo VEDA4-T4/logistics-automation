@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QEvent>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
@@ -14,6 +15,7 @@
 #include <QVBoxLayout>
 
 #include "logistics/contracts/mqtt_message.hpp"
+#include "logistics/control_center/factory_top_view.hpp"
 
 namespace logistics::control_center {
 namespace {
@@ -202,8 +204,7 @@ QString SensorIndicatorText(const SensorUnitStatus& sensor) {
 
 OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("operationsDashboard"));
-    setMinimumHeight(112);
-    setMaximumHeight(112);
+    setMinimumHeight(250);
     setStyleSheet(
         "#operationsDashboard{background:#1f1f1f;border-bottom:1px solid #2b2b2b;}"
         "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
@@ -217,9 +218,14 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     layout->setContentsMargins(10, 7, 10, 7);
     layout->setSpacing(8);
 
+    factory_top_view_ = new FactoryTopViewWidget(this);
+    factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
+    layout->addWidget(factory_top_view_, 3);
+
     overall_card_ = new QFrame(this);
     overall_card_->setObjectName(QStringLiteral("overallProcessCard"));
-    overall_card_->setFixedWidth(250);
+    overall_card_->setMinimumWidth(250);
+    overall_card_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     overall_card_->setCursor(Qt::PointingHandCursor);
     overall_card_->setProperty("controlTargetDeviceId", QStringLiteral("SYSTEM"));
     overall_card_->installEventFilter(this);
@@ -250,10 +256,22 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     for (auto* label : overall_card_->findChildren<QLabel*>()) {
         label->setAttribute(Qt::WA_TransparentForMouseEvents);
     }
-    layout->addWidget(overall_card_);
+    auto* scroll_area = new QScrollArea(this);
+    scroll_area->setObjectName(QStringLiteral("processStatusSection"));
+    scroll_area->setWidgetResizable(true);
+    scroll_area->setFrameShape(QFrame::NoFrame);
+    scroll_area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll_area->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll_area->setStyleSheet(
+        "QScrollArea{background:#1f1f1f;border:0;}"
+        "QScrollArea>QWidget>QWidget{background:#1f1f1f;}"
+        "QScrollBar:vertical{width:4px;background:#1f1f1f;}"
+        "QScrollBar::handle:vertical{background:#454545;border-radius:2px;min-height:24px;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}");
+    scroll_area->viewport()->setStyleSheet("background:#1f1f1f;");
 
-    auto* process_section = new QWidget(this);
-    process_section->setObjectName(QStringLiteral("processStatusSection"));
+    auto* process_section = new QWidget(scroll_area);
+    process_section->setObjectName(QStringLiteral("processStatusContent"));
     process_section->setAttribute(Qt::WA_StyledBackground);
     auto* process_section_layout = new QVBoxLayout(process_section);
     process_section_layout->setContentsMargins(0, 0, 0, 0);
@@ -270,27 +288,22 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     process_header->addWidget(live_status_);
     process_section_layout->addLayout(process_header);
 
-    auto* scroll_area = new QScrollArea(process_section);
-    scroll_area->setWidgetResizable(true);
-    scroll_area->setFrameShape(QFrame::NoFrame);
-    scroll_area->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    scroll_area->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll_area->setStyleSheet(
-        "QScrollArea{background:#1f1f1f;border:0;}"
-        "QScrollArea>QWidget>QWidget{background:#1f1f1f;}"
-        "QScrollBar:horizontal{height:4px;background:#1f1f1f;}"
-        "QScrollBar::handle:horizontal{background:#454545;border-radius:2px;min-width:24px;}"
-        "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}");
-    scroll_area->viewport()->setStyleSheet("background:#1f1f1f;");
-    auto* process_content = new QWidget(scroll_area);
-    process_content->setObjectName(QStringLiteral("processStatusContent"));
+    auto* process_content = new QWidget(process_section);
+    process_content->setObjectName(QStringLiteral("processCardGrid"));
     process_content->setAttribute(Qt::WA_StyledBackground);
-    process_layout_ = new QHBoxLayout(process_content);
+    process_layout_ = new QGridLayout(process_content);
     process_layout_->setContentsMargins(0, 0, 0, 0);
     process_layout_->setSpacing(4);
-    scroll_area->setWidget(process_content);
-    process_section_layout->addWidget(scroll_area, 1);
-    layout->addWidget(process_section, 1);
+    process_layout_->addWidget(overall_card_, 0, 0, 1, 2);
+    process_section_layout->addWidget(process_content, 1);
+    scroll_area->setWidget(process_section);
+    layout->addWidget(scroll_area, 2);
+
+    connect(factory_top_view_, &FactoryTopViewWidget::controlTargetSelected, this,
+            [this](const QString& device_id, const QString& display_name) {
+                setControlTarget(device_id);
+                emit controlTargetSelected(device_id, display_name);
+            });
 
     timestamp_timer_ = new QTimer(this);
     timestamp_timer_->setInterval(1000);
@@ -330,6 +343,7 @@ void OperationsDashboardPanel::setState(const OperationsDashboardState& state) {
     }
     refreshOverall();
     refreshProcesses();
+    factory_top_view_->setProcesses(processes_);
 }
 
 void OperationsDashboardPanel::setMqttConnected(bool connected) {
@@ -341,6 +355,7 @@ void OperationsDashboardPanel::setMqttConnected(bool connected) {
 void OperationsDashboardPanel::setControlTarget(const QString& target_device_id) {
     selected_control_target_ = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
     refreshControlTargetSelection();
+    factory_top_view_->setSelectedDeviceId(selected_control_target_);
 }
 
 bool OperationsDashboardPanel::eventFilter(QObject* watched, QEvent* event) {
@@ -368,7 +383,7 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.card = new QFrame(this);
     widgets.card->setObjectName(QStringLiteral("processUnitCard"));
     widgets.card->setAttribute(Qt::WA_StyledBackground);
-    widgets.card->setMinimumWidth(170);
+    widgets.card->setMinimumWidth(180);
     widgets.card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     widgets.card->setCursor(Qt::PointingHandCursor);
     widgets.card->setProperty("controlTargetDeviceId", process.device_id);
@@ -419,14 +434,14 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
 }
 
 void OperationsDashboardPanel::rebuildProcessCards() {
-    process_cards_.clear();
-    while (auto* item = process_layout_->takeAt(0)) {
-        delete item->widget();
-        delete item;
+    for (const auto& widgets : process_cards_) {
+        delete widgets.card;
     }
-    for (const auto& process : processes_) {
+    process_cards_.clear();
+    for (qsizetype index = 0; index < processes_.size(); ++index) {
+        const auto& process = processes_[index];
         auto widgets = createProcessCard(process);
-        process_layout_->addWidget(widgets.card, 1);
+        process_layout_->addWidget(widgets.card, static_cast<int>(index / 2) + 1, static_cast<int>(index % 2));
         process_cards_.insert(process.key, widgets);
     }
     refreshControlTargetSelection();

@@ -276,8 +276,10 @@ if(BUILD_TESTING)
     add_executable(
         control_center_operations_dashboard_panel_test
         tests/operations_dashboard_panel_test.cpp
+        src/factory_top_view.cpp
         src/operations_dashboard_panel.cpp
         src/operations_dashboard_state.cpp
+        include/logistics/control_center/factory_top_view.hpp
         include/logistics/control_center/operations_dashboard_panel.hpp
         include/logistics/control_center/operations_dashboard_state.hpp
     )
