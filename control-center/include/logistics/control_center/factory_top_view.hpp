@@ -1,7 +1,11 @@
 #pragma once
 
+#include <QColor>
+#include <QGraphicsView>
 #include <QList>
+#include <QPointF>
 #include <QString>
+#include <memory>
 #include <optional>
 
 #include "logistics/control_center/operations_dashboard_state.hpp"
@@ -48,5 +52,33 @@ struct FactoryNodeVisual {
 [[nodiscard]] QString FactoryDistanceText(int distance_cm);
 [[nodiscard]] std::optional<int> FactoryRouteIndex(const QString& current_state);
 [[nodiscard]] FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process);
+
+class FactoryTopViewWidget final : public QGraphicsView {
+    Q_OBJECT
+
+public:
+    explicit FactoryTopViewWidget(QWidget* parent = nullptr);
+    ~FactoryTopViewWidget() override;
+
+    void setProcesses(const QList<ProcessUnitStatus>& processes);
+    void setSelectedDeviceId(const QString& device_id);
+    [[nodiscard]] QString selectedDeviceId() const;
+    [[nodiscard]] qreal nodeOpacity(const QString& process_key) const;
+    [[nodiscard]] QColor nodeColor(const QString& process_key) const;
+    [[nodiscard]] QString sensorText(const QString& process_key, int sensor_id) const;
+    [[nodiscard]] QPointF boxPosition(const QString& process_key) const;
+    [[nodiscard]] qreal gripperAngle() const;
+    void advanceAnimationsForTest();
+    void selectProcessForTest(const QString& process_key);
+
+signals:
+    void controlTargetSelected(const QString& device_id, const QString& display_name);
+
+private:
+    void selectProcess(const QString& process_key);
+
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 }  // namespace logistics::control_center

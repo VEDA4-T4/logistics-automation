@@ -1,7 +1,12 @@
 #include "logistics/control_center/factory_top_view.hpp"
 
 #include <QApplication>
+#include <QColor>
+#include <QGraphicsScene>
+#include <QPointF>
+#include <QRectF>
 #include <cassert>
+#include <utility>
 
 using logistics::control_center::BuildFactoryNodeVisual;
 using logistics::control_center::FactoryDistanceText;
@@ -89,4 +94,90 @@ int main(int argc, char* argv[]) {
     assert(FactoryRouteIndex(QStringLiteral("destination-2")) == 2);
     assert(FactoryRouteIndex(QStringLiteral("start-3")) == 3);
     assert(FactoryRouteIndex(QStringLiteral("DELIVERING")) == std::nullopt);
+
+    auto Process = [](QString key, QString id, QString state, QString work) {
+        ProcessUnitStatus process;
+        process.key = std::move(key);
+        process.device_id = std::move(id);
+        process.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
+        process.current_state = std::move(state);
+        process.work_id = std::move(work);
+        return process;
+    };
+    auto input = Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-01"), QStringLiteral("RUNNING"),
+                         QStringLiteral("WORK-IN"));
+    auto vision = Process(QStringLiteral("vision"), QStringLiteral("PI-VISION-01"), QStringLiteral("VISION_PROCESSING"),
+                          QStringLiteral("WORK-VISION"));
+    auto gripper = Process(QStringLiteral("gripper"), QStringLiteral("PI-GRIPPER-01"), QStringLiteral("TRANSFERRING"),
+                           QStringLiteral("WORK-GRIPPER"));
+    sorting = Process(QStringLiteral("sorting"), QStringLiteral("PI-SORTING-01"), QStringLiteral("SORTING"),
+                      QStringLiteral("WORK-SORT"));
+    sorting.sensors.append({ .sensor_id = 2,
+                             .display_name = QStringLiteral("S2"),
+                             .measurement_status = QStringLiteral("DETECTED"),
+                             .distance_cm = 11,
+                             .updated_at = {} });
+    auto line_tracer = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-01"), QStringLiteral("DISCONNECTED"),
+                               QStringLiteral("WORK-LT"));
+
+    logistics::control_center::FactoryTopViewWidget view;
+    view.resize(700, 500);
+    view.setProcesses({ input, vision, gripper, sorting, line_tracer });
+    view.show();
+    application.processEvents();
+    const auto scene_item_count = view.scene()->items().size();
+
+    assert(view.sceneRect() == QRectF(0, 0, 700, 500));
+    assert(view.nodeOpacity(QStringLiteral("input")) == 1.0);
+    assert(view.nodeOpacity(QStringLiteral("linetracer")) == 0.15);
+    assert(view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#89d185")));
+    assert(view.nodeColor(QStringLiteral("linetracer")) == QColor(QStringLiteral("#777777")));
+    assert(view.sensorText(QStringLiteral("sorting"), 2) == QStringLiteral("11 cm"));
+    assert(view.gripperAngle() == 90.0);
+
+    auto stale_sorting = sorting;
+    stale_sorting.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
+    view.setProcesses({ stale_sorting });
+    assert(view.sensorText(QStringLiteral("sorting"), 2) == QStringLiteral("-- cm"));
+    view.setProcesses({ sorting });
+
+    const auto input_before = view.boxPosition(QStringLiteral("input"));
+    const auto sorting_pinned = view.boxPosition(QStringLiteral("sorting"));
+    assert(sorting_pinned == QPointF(525, 178));
+    view.advanceAnimationsForTest();
+    assert(view.boxPosition(QStringLiteral("input")) != input_before);
+    assert(view.boxPosition(QStringLiteral("sorting")) == sorting_pinned);
+
+    input.current_state = QStringLiteral("STOPPED");
+    sorting.sensors.clear();
+    view.setProcesses({ input, vision, gripper, sorting, line_tracer });
+    assert(view.sensorText(QStringLiteral("sorting"), 2) == QStringLiteral("-- cm"));
+    const auto input_stopped = view.boxPosition(QStringLiteral("input"));
+    const auto sorting_before = view.boxPosition(QStringLiteral("sorting"));
+    view.advanceAnimationsForTest();
+    assert(view.boxPosition(QStringLiteral("input")) == input_stopped);
+    assert(view.boxPosition(QStringLiteral("sorting")) != sorting_before);
+
+    line_tracer.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
+    line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
+    line_tracer.work_id = QStringLiteral("ROUTE_2");
+    view.setProcesses({ line_tracer });
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(500, 345));
+    view.advanceAnimationsForTest();
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
+    line_tracer.current_state = QStringLiteral("COMPLETED");
+    view.setProcesses({ line_tracer });
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 345));
+    view.advanceAnimationsForTest();
+    view.advanceAnimationsForTest();
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 345));
+
+    QString selected;
+    QObject::connect(&view, &logistics::control_center::FactoryTopViewWidget::controlTargetSelected,
+                     [&selected](const QString& id, const QString&) { selected = id; });
+    view.selectProcessForTest(QStringLiteral("vision"));
+    assert(selected == QStringLiteral("PI-VISION-01"));
+    view.setSelectedDeviceId(QStringLiteral("PI-VISION-01"));
+    assert(view.selectedDeviceId() == QStringLiteral("PI-VISION-01"));
+    assert(view.scene()->items().size() == scene_item_count);
 }
