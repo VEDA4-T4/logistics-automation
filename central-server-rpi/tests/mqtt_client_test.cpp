@@ -183,6 +183,8 @@ client_id=central-server
         .reconnect_min_delay_seconds = 1,
         .reconnect_max_delay_seconds = 16,
         .clean_session = true,
+	.tls_enabled = false,
+	.ca_certificate = {},
     };
 }
 

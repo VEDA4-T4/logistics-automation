@@ -96,6 +96,19 @@ public:
             result = mosquitto_username_pw_set(client_, options.username.c_str(),
                                                options.password.empty() ? nullptr : options.password.c_str());
         }
+	if (result == MOSQ_ERR_SUCCESS && options.tls_enabled) {
+    if (options.ca_certificate.empty()) {
+        result = MOSQ_ERR_INVAL;
+    } else {
+        result = mosquitto_tls_set(
+            client_,
+            options.ca_certificate.c_str(),
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr);
+    }
+}
         if (result == MOSQ_ERR_SUCCESS) {
             result = mosquitto_reconnect_delay_set(client_, options.reconnect_min_delay_seconds,
                                                    options.reconnect_max_delay_seconds, true);

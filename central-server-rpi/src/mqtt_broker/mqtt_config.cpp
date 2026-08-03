@@ -66,6 +66,10 @@ void AssignMqttValue(MqttConfig& config, const std::filesystem::path& path, std:
         config.username = value;
     } else if (key == "password") {
         config.password = value;
+    } else if (key == "tls_enabled") {
+    config.tls_enabled = ParseBoolean(path, line_number, key, value);
+    } else if (key == "ca_certificate") {
+    config.ca_certificate = value;
     } else if (key == "keep_alive_seconds") {
         config.keep_alive_seconds = ParseInteger<std::uint16_t>(path, line_number, key, value, 1, 65535);
     } else if (key == "reconnect_min_delay_seconds") {
