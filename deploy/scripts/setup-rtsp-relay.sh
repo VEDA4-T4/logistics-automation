@@ -94,7 +94,7 @@ should_keep_config() {
 }
 
 select_checksum() {
-    grep -F " *${asset_name}" "$@"
+    awk -v asset="*${asset_name}" 'NF == 2 && $2 == asset' "$@"
 }
 
 run_self_check() {
@@ -121,7 +121,7 @@ run_self_check() {
     expected_directory_install='install -d -m 0750 -o root -g logistics /etc/logistics'
     grep -Fq "\"\${sudo_command[@]}\" ${expected_directory_install}" "${BASH_SOURCE[0]}"
 
-    checksum_fixture=$'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef *mediamtx_v1.19.3_linux_amd64.tar.gz\n9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e *mediamtx_v1.19.3_linux_arm64.tar.gz'
+    checksum_fixture=$'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef *mediamtx_v1.19.3_linux_amd64.tar.gz\n9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e *mediamtx_v1.19.3_linux_arm64.tar.gz\nabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789 *mediamtx_v1.19.3_linux_arm64.tar.gz.bak'
     mapfile -t selected_checksums < <(select_checksum <<<"${checksum_fixture}")
     test "${#selected_checksums[@]}" -eq 1
     test "${selected_checksums[0]}" = '9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e *mediamtx_v1.19.3_linux_arm64.tar.gz'
