@@ -106,6 +106,11 @@ run_self_check() {
     should_keep_config
     force_config=1
     ! should_keep_config
+    sudo_command=(command)
+    force_config=0
+    should_keep_config
+    force_config=1
+    ! should_keep_config
 
     rendered="$(render_config \
         'rtsp://camera-1/stream' 'rtsp://camera-2/stream' \
