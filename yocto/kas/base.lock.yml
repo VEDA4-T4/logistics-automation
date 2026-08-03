@@ -1,0 +1,8 @@
+header:
+  version: 14
+overrides:
+  repos:
+    poky:
+      commit: 5de2230907ac20b7af344c73db4c7d5bde372d1e
+    meta-raspberrypi:
+      commit: 6ca1f75017cc5d5acdb8bb05634c4bc01fa049fd
