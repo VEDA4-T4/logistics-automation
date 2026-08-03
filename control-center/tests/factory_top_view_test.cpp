@@ -93,6 +93,10 @@ int main(int argc, char* argv[]) {
     assert(FactoryRouteIndex(QStringLiteral("  route-1  ")) == 1);
     assert(FactoryRouteIndex(QStringLiteral("destination-2")) == 2);
     assert(FactoryRouteIndex(QStringLiteral("start-3")) == 3);
+    assert(FactoryRouteIndex(QStringLiteral("1")) == 1);
+    assert(FactoryRouteIndex(QStringLiteral("2")) == 2);
+    assert(FactoryRouteIndex(QStringLiteral("3")) == 3);
+    assert(FactoryRouteIndex(QStringLiteral("4")) == std::nullopt);
     assert(FactoryRouteIndex(QStringLiteral("DELIVERING")) == std::nullopt);
 
     auto Process = [](QString key, QString id, QString state, QString work) {
@@ -135,6 +139,62 @@ int main(int argc, char* argv[]) {
     assert(view.sensorText(QStringLiteral("sorting"), 2) == QStringLiteral("11 cm"));
     assert(view.gripperAngle() == 90.0);
 
+    input.work_id = QStringLiteral("WORK-GRIPPER");
+    gripper.current_state = QStringLiteral("PICKING");
+    view.setProcesses({ input, gripper });
+    assert(view.gripperProductVisible());
+    assert(view.gripperProductPosition() == QPointF(440, 103));
+    gripper.current_state = QStringLiteral("TRANSFERRING");
+    view.setProcesses({ input, gripper });
+    assert(view.gripperProductVisible());
+    assert(view.gripperProductPosition() == QPointF(482, 145));
+    gripper.current_state = QStringLiteral("PLACED");
+    sorting.work_id = QStringLiteral("WORK-GRIPPER");
+    view.setProcesses({ input, gripper, sorting });
+    assert(view.gripperProductVisible());
+    assert(view.gripperProductPosition() == QPointF(525, 126));
+
+    gripper.work_id = QStringLiteral("WORK-MISMATCH");
+    view.setProcesses({ input, gripper, sorting });
+    assert(!view.gripperProductVisible());
+    gripper.work_id = QStringLiteral("WORK-GRIPPER");
+    gripper.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
+    view.setProcesses({ input, gripper, sorting });
+    assert(!view.gripperProductVisible());
+    gripper.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
+
+    line_tracer.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
+    line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
+    line_tracer.work_id = QStringLiteral("WORK-ROUTE");
+    sorting.work_id = QStringLiteral("WORK-ROUTE");
+    const struct {
+        QString destination;
+        qreal servo_angle;
+        QPointF line_start;
+    } route_cases[] = {
+        { QStringLiteral("1"), 0.0, QPointF(500, 250) },
+        { QStringLiteral("route-2"), 45.0, QPointF(500, 345) },
+        { QStringLiteral("destination-3"), 90.0, QPointF(500, 442) },
+    };
+    for (const auto& route_case : route_cases) {
+        sorting.destination = route_case.destination;
+        view.setProcesses({ sorting, line_tracer });
+        assert(view.sortingServoAngle() == route_case.servo_angle);
+        assert(view.boxPosition(QStringLiteral("linetracer")) == route_case.line_start);
+    }
+    sorting.destination.clear();
+    const auto unrouted_servo_angle = view.sortingServoAngle();
+    const auto unrouted_line_position = view.boxPosition(QStringLiteral("linetracer"));
+    view.setProcesses({ sorting, line_tracer });
+    view.advanceAnimationsForTest();
+    assert(view.sortingServoAngle() == unrouted_servo_angle);
+    assert(view.boxPosition(QStringLiteral("linetracer")) == unrouted_line_position);
+    sorting.destination = QStringLiteral("2");
+    line_tracer.work_id = QStringLiteral("WORK-OTHER");
+    view.setProcesses({ sorting, line_tracer });
+    view.advanceAnimationsForTest();
+    assert(view.boxPosition(QStringLiteral("linetracer")) == unrouted_line_position);
+
     auto stale_sorting = sorting;
     stale_sorting.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
     view.setProcesses({ stale_sorting });
@@ -160,13 +220,15 @@ int main(int argc, char* argv[]) {
 
     line_tracer.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
     line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
-    line_tracer.work_id = QStringLiteral("ROUTE_2");
-    view.setProcesses({ line_tracer });
+    line_tracer.work_id = QStringLiteral("WORK-LT");
+    sorting.work_id = QStringLiteral("WORK-LT");
+    sorting.destination = QStringLiteral("2");
+    view.setProcesses({ sorting, line_tracer });
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(500, 345));
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
     line_tracer.current_state = QStringLiteral("COMPLETED");
-    view.setProcesses({ line_tracer });
+    view.setProcesses({ sorting, line_tracer });
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 345));
     view.advanceAnimationsForTest();
     view.advanceAnimationsForTest();

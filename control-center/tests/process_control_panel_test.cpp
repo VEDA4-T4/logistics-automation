@@ -43,9 +43,11 @@ int main(int argc, char* argv[]) {
             .connection_state = logistics::contracts::mqtt::ConnectionState::kOnline,
             .current_state = QStringLiteral("STOPPED"),
             .work_id = {},
+            .destination = {},
             .error_code = {},
             .updated_at = QDateTime::currentDateTimeUtc(),
             .has_error = false,
+            .sensors = {},
         },
         {
             .key = QStringLiteral("sorting"),
@@ -54,9 +56,11 @@ int main(int argc, char* argv[]) {
             .connection_state = logistics::contracts::mqtt::ConnectionState::kOnline,
             .current_state = QStringLiteral("STOPPED"),
             .work_id = {},
+            .destination = {},
             .error_code = {},
             .updated_at = QDateTime::currentDateTimeUtc(),
             .has_error = false,
+            .sensors = {},
         },
     };
     panel.setProcessStates(logistics::control_center::OverallProcessState::Error, processes);
@@ -129,9 +133,11 @@ int main(int argc, char* argv[]) {
             .connection_state = logistics::contracts::mqtt::ConnectionState::kOnline,
             .current_state = QStringLiteral("EMERGENCY_STOP"),
             .work_id = {},
+            .destination = {},
             .error_code = {},
             .updated_at = QDateTime::currentDateTimeUtc(),
             .has_error = false,
+            .sensors = {},
         },
         {
             .key = QString::fromLatin1(logistics::control_center::kSortingProcessKey),
@@ -140,9 +146,11 @@ int main(int argc, char* argv[]) {
             .connection_state = logistics::contracts::mqtt::ConnectionState::kOnline,
             .current_state = QStringLiteral("EMERGENCY_STOP"),
             .work_id = {},
+            .destination = {},
             .error_code = {},
             .updated_at = QDateTime::currentDateTimeUtc(),
             .has_error = false,
+            .sensors = {},
         },
     };
     panel.setProcessStates(logistics::control_center::OverallProcessState::EmergencyStop, processes);

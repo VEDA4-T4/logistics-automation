@@ -70,6 +70,9 @@ public:
     [[nodiscard]] QString sensorText(const QString& process_key, int sensor_id) const;
     [[nodiscard]] QPointF boxPosition(const QString& process_key) const;
     [[nodiscard]] qreal gripperAngle() const;
+    [[nodiscard]] bool gripperProductVisible() const;
+    [[nodiscard]] QPointF gripperProductPosition() const;
+    [[nodiscard]] qreal sortingServoAngle() const;
     void advanceAnimationsForTest();
     void selectProcessForTest(const QString& process_key);
 

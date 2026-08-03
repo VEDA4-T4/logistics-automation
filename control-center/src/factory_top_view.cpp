@@ -137,16 +137,7 @@ QString FactoryDistanceText(int distance_cm) {
 }
 
 std::optional<int> FactoryRouteIndex(const QString& current_state) {
-    auto state = NormalizedState(current_state);
-    state.replace(QLatin1Char('-'), QLatin1Char('_'));
-    for (int route = 1; route <= 3; ++route) {
-        const auto suffix = QString::number(route);
-        if (state == QStringLiteral("ROUTE_") + suffix || state == QStringLiteral("DESTINATION_") + suffix ||
-            state == QStringLiteral("START_") + suffix) {
-            return route;
-        }
-    }
-    return std::nullopt;
+    return DestinationRouteIndex(current_state);
 }
 
 FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
@@ -233,6 +224,11 @@ bool AllowsMotion(const QString& process_key, const FactoryNodeVisual& visual) {
     return visual.state == FactoryNodeVisualState::Running && !visual.work_id.isEmpty() &&
            (process_key == QString::fromLatin1(kInputProcessKey) ||
             process_key == QString::fromLatin1(kSortingProcessKey));
+}
+
+bool HasLiveTelemetry(const FactoryNodeVisual& visual) {
+    return visual.state != FactoryNodeVisualState::Disconnected && visual.state != FactoryNodeVisualState::Error &&
+           visual.state != FactoryNodeVisualState::EmergencyStop;
 }
 
 std::optional<int> DetectedSensor(const FactoryNodeVisual& visual) {
@@ -349,6 +345,11 @@ struct FactoryTopViewWidget::Impl {
         gripper_arm = addStateLine(gripper, QLineF(kGripperPivot, kGripperPivot - QPointF(0, 42)), 7);
         gripper_jaw_left = addStateLine(gripper, QLineF(432, 103, 440, 103), 3);
         gripper_jaw_right = addStateLine(gripper, QLineF(440, 103, 448, 103), 3);
+        gripper_product = new QGraphicsRectItem(QRectF(-8, -8, 16, 16), gripper.group);
+        gripper_product->setBrush(QColor(QStringLiteral("#ce9178")));
+        gripper_product->setPen(QPen(QColor(QStringLiteral("#f0f0f0")), 1));
+        gripper_product->setPos(kGripperPivot - QPointF(0, 42));
+        gripper_product->hide();
         scene->addItem(gripper.group);
         finalizeNode(gripper);
 
@@ -435,11 +436,22 @@ struct FactoryTopViewWidget::Impl {
         }
     }
 
-    void applySortingRoute(const ProcessUnitStatus& process) {
-        auto route = FactoryRouteIndex(process.current_state);
-        if (!route.has_value()) {
-            route = FactoryRouteIndex(process.work_id);
+    void applyGripperProduct(FactoryMotionPhase phase, bool visible) {
+        gripper_product->setVisible(visible);
+        if (!visible) {
+            return;
         }
+        if (phase == FactoryMotionPhase::GripperPick) {
+            gripper_product->setPos(kGripperPivot - QPointF(0, 42));
+        } else if (phase == FactoryMotionPhase::GripperTransfer) {
+            gripper_product->setPos(kGripperPivot + QPointF(42, 0));
+        } else {
+            gripper_product->setPos(kSortingPositions[0]);
+        }
+    }
+
+    void applySortingRoute(const ProcessUnitStatus& process) {
+        const auto route = FactoryRouteIndex(process.destination);
         if (!route.has_value()) {
             return;
         }
@@ -450,6 +462,22 @@ struct FactoryTopViewWidget::Impl {
     }
 
     void setProcesses(const QList<ProcessUnitStatus>& processes) {
+        QString input_work_id;
+        QString sorting_work_id;
+        std::optional<int> sorting_route;
+        for (const auto& process : processes) {
+            const auto visual = BuildFactoryNodeVisual(process);
+            if (!HasLiveTelemetry(visual) || process.work_id.isEmpty()) {
+                continue;
+            }
+            if (process.key == QString::fromLatin1(kInputProcessKey)) {
+                input_work_id = process.work_id;
+            } else if (process.key == QString::fromLatin1(kSortingProcessKey)) {
+                sorting_work_id = process.work_id;
+                sorting_route = FactoryRouteIndex(process.destination);
+            }
+        }
+
         for (const auto& process : processes) {
             auto iterator = nodes.find(process.key);
             if (iterator == nodes.end()) {
@@ -468,7 +496,7 @@ struct FactoryTopViewWidget::Impl {
             }
             updateSensors(node);
             applyVisual(node);
-            const bool telemetry_live = node.visual.state != FactoryNodeVisualState::Disconnected;
+            const bool telemetry_live = HasLiveTelemetry(node.visual);
 
             if (process.key == QString::fromLatin1(kInputProcessKey)) {
                 if (telemetry_live && DetectedSensor(node.visual).has_value()) {
@@ -476,6 +504,13 @@ struct FactoryTopViewWidget::Impl {
                 }
             } else if (process.key == QString::fromLatin1(kGripperProcessKey)) {
                 applyGripperPhase(node.visual.motion_phase);
+                const bool input_matches = !input_work_id.isEmpty() && input_work_id == process.work_id;
+                const bool sorting_matches = !sorting_work_id.isEmpty() && sorting_work_id == process.work_id;
+                const bool placed = node.visual.motion_phase == FactoryMotionPhase::GripperPlaced;
+                const bool trusted_work = placed && !sorting_work_id.isEmpty() ? sorting_matches : input_matches;
+                const bool product_phase = node.visual.motion_phase == FactoryMotionPhase::GripperPick ||
+                                           node.visual.motion_phase == FactoryMotionPhase::GripperTransfer || placed;
+                applyGripperProduct(node.visual.motion_phase, telemetry_live && product_phase && trusted_work);
             } else if (process.key == QString::fromLatin1(kSortingProcessKey)) {
                 if (const auto sensor = DetectedSensor(node.visual);
                     telemetry_live && sensor.has_value() && *sensor >= 1 && *sensor <= 3) {
@@ -487,10 +522,9 @@ struct FactoryTopViewWidget::Impl {
                     applySortingRoute(process);
                 }
             } else if (process.key == QString::fromLatin1(kLineTracerProcessKey)) {
-                auto route = telemetry_live ? FactoryRouteIndex(process.current_state) : std::nullopt;
-                if (telemetry_live && !route.has_value()) {
-                    route = FactoryRouteIndex(process.work_id);
-                }
+                const auto route = telemetry_live && !sorting_work_id.isEmpty() && sorting_work_id == process.work_id
+                                       ? sorting_route
+                                       : std::nullopt;
                 if (route.has_value()) {
                     if (line_route != route) {
                         node.animation_phase = 0;
@@ -499,6 +533,7 @@ struct FactoryTopViewWidget::Impl {
                     line_route = route;
                 } else {
                     node.motion_enabled = false;
+                    line_route.reset();
                 }
                 if (route.has_value() && node.visual.motion_phase == FactoryMotionPhase::LineCompleted) {
                     node.moving_item->setPos(kLineDestinations[*route - 1]);
@@ -577,6 +612,7 @@ struct FactoryTopViewWidget::Impl {
     QGraphicsLineItem* gripper_arm{ nullptr };
     QGraphicsLineItem* gripper_jaw_left{ nullptr };
     QGraphicsLineItem* gripper_jaw_right{ nullptr };
+    QGraphicsRectItem* gripper_product{ nullptr };
     QGraphicsLineItem* sorting_servo{ nullptr };
     qreal gripper_angle{ 0.0 };
     qreal sorting_servo_angle{ 0.0 };
@@ -629,6 +665,18 @@ QPointF FactoryTopViewWidget::boxPosition(const QString& process_key) const {
 
 qreal FactoryTopViewWidget::gripperAngle() const {
     return impl_->gripper_angle;
+}
+
+bool FactoryTopViewWidget::gripperProductVisible() const {
+    return impl_->gripper_product->isVisible();
+}
+
+QPointF FactoryTopViewWidget::gripperProductPosition() const {
+    return impl_->gripper_product->pos();
+}
+
+qreal FactoryTopViewWidget::sortingServoAngle() const {
+    return impl_->sorting_servo_angle;
 }
 
 void FactoryTopViewWidget::advanceAnimationsForTest() {

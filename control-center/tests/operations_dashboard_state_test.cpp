@@ -178,6 +178,67 @@ int main() {
     assert(state.overall().active_unit_count == 5);
     assert(state.overall().active_work_count == 5);
 
+    OperationsDashboardState destination_state;
+    result = destination_state.applyEnvelope(Envelope(
+        "SORTING-ROUTE-ONLINE", "DEVICE_STATUS", DeviceStatus("ONLINE", "SORTING", "WORK-ROUTE"), "PI-SORTING-01"));
+    assert(result.applied);
+    result = destination_state.applyEnvelope(
+        Envelope("DESTINATION-2", "DESTINATION_SET",
+                 WorkData("WORK-ROUTE", { { QStringLiteral("destination"), QStringLiteral("2") } }), "central-server",
+                 "2026-07-23T01:00:01.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).work_id == QStringLiteral("WORK-ROUTE"));
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination == QStringLiteral("2"));
+
+    result = destination_state.applyEnvelope(
+        Envelope("DESTINATION-INVALID", "DESTINATION_SET",
+                 WorkData("WORK-ROUTE", { { QStringLiteral("destination"), QStringLiteral("4") } }), "central-server",
+                 "2026-07-23T01:00:02.000Z"));
+    assert(result.handled && !result.applied && !result.error.isEmpty());
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination == QStringLiteral("2"));
+
+    result = destination_state.applyEnvelope(Envelope("SORTING-NEW-WORK", "DEVICE_STATUS",
+                                                      DeviceStatus("ONLINE", "SORTING", "WORK-NEXT"), "PI-SORTING-01",
+                                                      "2026-07-23T01:00:03.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination.isEmpty());
+    result = destination_state.applyEnvelope(
+        Envelope("DESTINATION-LATE", "DESTINATION_SET",
+                 WorkData("WORK-ROUTE", { { QStringLiteral("destination"), QStringLiteral("route-1") } }),
+                 "central-server", "2026-07-23T01:00:04.000Z"));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).work_id == QStringLiteral("WORK-NEXT"));
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination.isEmpty());
+
+    result = destination_state.applyEnvelope(
+        Envelope("DESTINATION-3", "DESTINATION_SET",
+                 WorkData("WORK-NEXT", { { QStringLiteral("destination"), QStringLiteral("destination-3") } }),
+                 "central-server", "2026-07-23T01:00:05.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination == QStringLiteral("destination-3"));
+    result = destination_state.applyEnvelope(Envelope("SORTING-ROUTE-OFFLINE", "DEVICE_STATUS",
+                                                      DeviceStatus("OFFLINE", "DISCONNECTED", "WORK-NEXT"),
+                                                      "PI-SORTING-01", "2026-07-23T01:00:05.500Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination.isEmpty());
+    destination_state.markMqttDisconnected(
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:06.000Z"), Qt::ISODateWithMs));
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination.isEmpty());
+
+    OperationsDashboardState stale_destination_state;
+    result = stale_destination_state.applyEnvelope(Envelope("SORTING-STALE-ROUTE", "DEVICE_STATUS",
+                                                            DeviceStatus("ONLINE", "SORTING", "WORK-STALE-ROUTE"),
+                                                            "PI-SORTING-01"));
+    assert(result.applied);
+    result = stale_destination_state.applyEnvelope(
+        Envelope("DESTINATION-STALE-ROUTE", "DESTINATION_SET",
+                 WorkData("WORK-STALE-ROUTE", { { QStringLiteral("destination"), QStringLiteral("start-1") } }),
+                 "central-server", "2026-07-23T01:00:01.000Z"));
+    assert(result.applied);
+    assert(stale_destination_state.expireStaleProcesses(
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:15.000Z"), Qt::ISODateWithMs)));
+    assert(ProcessByKey(stale_destination_state, QStringLiteral("sorting")).destination.isEmpty());
+
     result = state.applyEnvelope(
         Envelope("SORTING-SENSOR-STALE", "ERROR_OCCURRED",
                  { { QStringLiteral("errorCode"), QStringLiteral("err_health_sensor_stale") },

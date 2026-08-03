@@ -216,12 +216,6 @@ if(BUILD_TESTING)
         NAME control_center_rtsp_stream_worker_player_test
         COMMAND control_center_rtsp_stream_worker_player_test
     )
-    set_tests_properties(
-        control_center_rtsp_stream_worker_player_test
-        PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
-    )
 
     add_executable(
         control_center_process_control_state_test
@@ -360,4 +354,12 @@ if(BUILD_TESTING)
         PRIVATE Qt6::Core Qt6::Mqtt logistics::contracts
     )
     logistics_enable_warnings(control_center_mqtt_integration_test)
+
+    get_property(control_center_tests DIRECTORY PROPERTY TESTS)
+    set_tests_properties(
+        ${control_center_tests}
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
 endif()
