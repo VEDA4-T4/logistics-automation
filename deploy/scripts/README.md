@@ -46,36 +46,38 @@ id logistics
 
 그 다음 보안 채널로 전달받은 네 CCTV URL과 relay 계정을 같은 shell의 non-echoing prompt로 입력합니다. 네 URL은 위
 host, port와 경로를 사용하되 같은 CCTV 계정을 포함한 완전한 값이어야 합니다. relay username은 `control-centor`를
-입력합니다. `read -s`를 사용하는 아래 block은 Bash에서 실행해야 합니다. 값은 shell history에 쓰지 않으며 setup 성공
-여부와 관계없이 즉시 제거합니다.
+입력합니다. `read -s`를 사용하는 아래 block은 Bash에서 실행해야 합니다. subshell 안에서만 변수와 trap을 만들므로 기존
+interactive shell 상태는 바뀌지 않습니다. 값은 shell history에 쓰지 않으며 setup 성공 여부와 관계없이 즉시 제거합니다.
 
 ```bash
-cleanup_rtsp_env() {
-  unset LOGISTICS_RTSP_SOURCE_1 LOGISTICS_RTSP_SOURCE_2 \
+(
+  cleanup_rtsp_env() {
+    unset LOGISTICS_RTSP_SOURCE_1 LOGISTICS_RTSP_SOURCE_2 \
+      LOGISTICS_RTSP_SOURCE_3 LOGISTICS_RTSP_SOURCE_4 \
+      LOGISTICS_RTSP_RELAY_USER LOGISTICS_RTSP_RELAY_PASSWORD
+  }
+  trap cleanup_rtsp_env EXIT
+  trap 'cleanup_rtsp_env; exit 129' HUP
+  trap 'cleanup_rtsp_env; exit 130' INT
+  trap 'cleanup_rtsp_env; exit 143' TERM
+
+  printf 'CCTV channel 1 URL: '; read -rs LOGISTICS_RTSP_SOURCE_1; printf '\n'
+  printf 'CCTV channel 2 URL: '; read -rs LOGISTICS_RTSP_SOURCE_2; printf '\n'
+  printf 'CCTV channel 3 URL: '; read -rs LOGISTICS_RTSP_SOURCE_3; printf '\n'
+  printf 'CCTV channel 4 URL: '; read -rs LOGISTICS_RTSP_SOURCE_4; printf '\n'
+  printf 'Relay username: '; read -rs LOGISTICS_RTSP_RELAY_USER; printf '\n'
+  printf 'Relay password: '; read -rs LOGISTICS_RTSP_RELAY_PASSWORD; printf '\n'
+  export LOGISTICS_RTSP_SOURCE_1 LOGISTICS_RTSP_SOURCE_2 \
     LOGISTICS_RTSP_SOURCE_3 LOGISTICS_RTSP_SOURCE_4 \
     LOGISTICS_RTSP_RELAY_USER LOGISTICS_RTSP_RELAY_PASSWORD
-}
-trap cleanup_rtsp_env EXIT HUP INT TERM
 
-printf 'CCTV channel 1 URL: '; read -rs LOGISTICS_RTSP_SOURCE_1; printf '\n'
-printf 'CCTV channel 2 URL: '; read -rs LOGISTICS_RTSP_SOURCE_2; printf '\n'
-printf 'CCTV channel 3 URL: '; read -rs LOGISTICS_RTSP_SOURCE_3; printf '\n'
-printf 'CCTV channel 4 URL: '; read -rs LOGISTICS_RTSP_SOURCE_4; printf '\n'
-printf 'Relay username: '; read -rs LOGISTICS_RTSP_RELAY_USER; printf '\n'
-printf 'Relay password: '; read -rs LOGISTICS_RTSP_RELAY_PASSWORD; printf '\n'
-export LOGISTICS_RTSP_SOURCE_1 LOGISTICS_RTSP_SOURCE_2 \
-  LOGISTICS_RTSP_SOURCE_3 LOGISTICS_RTSP_SOURCE_4 \
-  LOGISTICS_RTSP_RELAY_USER LOGISTICS_RTSP_RELAY_PASSWORD
-
-if ./deploy/scripts/setup-rtsp-relay.sh; then
-  setup_status=0
-else
-  setup_status=$?
-fi
-cleanup_rtsp_env
-trap - EXIT HUP INT TERM
-unset -f cleanup_rtsp_env
-test "${setup_status}" -eq 0
+  if ./deploy/scripts/setup-rtsp-relay.sh; then
+    setup_status=0
+  else
+    setup_status=$?
+  fi
+  exit "${setup_status}"
+)
 ```
 
 스크립트는 ARM64용 MediaMTX를 `1.19.3`으로 고정해 내려받고, 배포된 `checksums.sha256`으로 아카이브를 검증한 뒤에만
