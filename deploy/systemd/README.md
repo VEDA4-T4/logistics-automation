@@ -121,14 +121,33 @@ production sign-off 전에 Qt runtime INI를 위 네 relay endpoint와 별도 �
 - `logistics-central-server`만 재시작해도 relay 재생은 끊기지 않는다.
 
 마지막으로 대표 채널의 direct URL과 credential-bearing relay URL을 non-echoing prompt로 받아 stream 설명을 비교합니다.
-JSON에는 credential을 기록하지 않지만 명령 완료 후 URL 변수는 즉시 제거합니다.
+JSON에는 credential을 기록하지 않습니다. 아래 Bash subshell의 EXIT/signal trap은 URL 변수를 제거하며, 기존 interactive
+shell의 변수와 trap 상태는 바꾸지 않습니다. `ffprobe` 오류는 credential을 가린 뒤 표시하고 원래 종료 상태는 유지합니다.
 
-```sh
-printf 'Direct RTSP URL: '; read -rs DIRECT_RTSP_URL; printf '\n'
-printf 'Relay RTSP URL: '; read -rs RELAY_RTSP_URL; printf '\n'
-ffprobe -v error -rtsp_transport tcp -show_streams -of json "${DIRECT_RTSP_URL}" >direct.json
-ffprobe -v error -rtsp_transport tcp -show_streams -of json "${RELAY_RTSP_URL}" >relay.json
-unset DIRECT_RTSP_URL RELAY_RTSP_URL
+```bash
+(
+  cleanup_ffprobe() {
+    unset DIRECT_RTSP_URL RELAY_RTSP_URL
+  }
+  trap cleanup_ffprobe EXIT
+  trap 'cleanup_ffprobe; exit 129' HUP
+  trap 'cleanup_ffprobe; exit 130' INT
+  trap 'cleanup_ffprobe; exit 143' TERM
+
+  printf 'Direct RTSP URL: '; read -rs DIRECT_RTSP_URL; printf '\n'
+  printf 'Relay RTSP URL: '; read -rs RELAY_RTSP_URL; printf '\n'
+
+  ffprobe_status=0
+  ffprobe -v error -rtsp_transport tcp -show_streams -of json "${DIRECT_RTSP_URL}" >direct.json \
+    2> >(sed -E 's#(rtsps?://)[^/@[:space:]]+(:[^@[:space:]]*)?@#\1[credentials]@#g' >&2) \
+    || ffprobe_status=$?
+  if ((ffprobe_status == 0)); then
+    ffprobe -v error -rtsp_transport tcp -show_streams -of json "${RELAY_RTSP_URL}" >relay.json \
+      2> >(sed -E 's#(rtsps?://)[^/@[:space:]]+(:[^@[:space:]]*)?@#\1[credentials]@#g' >&2) \
+      || ffprobe_status=$?
+  fi
+  exit "${ffprobe_status}"
+)
 ```
 
 두 결과의 codec name, width, height, frame rate와 metadata/data track이 같아야 합니다. 같은 camera clock 장면과 Qt 설정으로

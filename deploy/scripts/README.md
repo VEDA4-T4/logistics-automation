@@ -46,9 +46,10 @@ id logistics
 
 그 다음 보안 채널로 전달받은 네 CCTV URL과 relay 계정을 같은 shell의 non-echoing prompt로 입력합니다. 네 URL은 위
 host, port와 경로를 사용하되 같은 CCTV 계정을 포함한 완전한 값이어야 합니다. relay username은 `control-centor`를
-입력합니다. 값은 shell history에 쓰지 않으며 setup 성공 여부와 관계없이 즉시 제거합니다.
+입력합니다. `read -s`를 사용하는 아래 block은 Bash에서 실행해야 합니다. 값은 shell history에 쓰지 않으며 setup 성공
+여부와 관계없이 즉시 제거합니다.
 
-```sh
+```bash
 cleanup_rtsp_env() {
   unset LOGISTICS_RTSP_SOURCE_1 LOGISTICS_RTSP_SOURCE_2 \
     LOGISTICS_RTSP_SOURCE_3 LOGISTICS_RTSP_SOURCE_4 \
