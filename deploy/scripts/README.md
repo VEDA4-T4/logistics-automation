@@ -24,26 +24,68 @@ runtime/central-server/uploads/
 
 ## RTSP 릴레이
 
-ARM64 중앙 Raspberry Pi에서 다음 여섯 환경 변수를 모두 지정해 실행합니다. 아래 값은 예시이며 실제 카메라 URL이나
-릴레이 비밀번호를 저장소에 기록하지 않습니다.
+승인된 네 채널은 같은 CCTV endpoint를 사용하고 경로만 다릅니다. 계정 정보는 표에 포함하지 않습니다.
+
+| 릴레이 경로 | CCTV host:port | CCTV 경로 | Qt에서 사용할 relay URL |
+| --- | --- | --- | --- |
+| `channel1` | `veda4-t4.iptime.org:8554` | `/0/profile2/media.smp` | `rtsp://172.20.33.72:8554/channel1` |
+| `channel2` | `veda4-t4.iptime.org:8554` | `/1/profile2/media.smp` | `rtsp://172.20.33.72:8554/channel2` |
+| `channel3` | `veda4-t4.iptime.org:8554` | `/2/profile2/media.smp` | `rtsp://172.20.33.72:8554/channel3` |
+| `channel4` | `veda4-t4.iptime.org:8554` | `/3/profile2/media.smp` | `rtsp://172.20.33.72:8554/channel4` |
+
+ARM64 중앙 Raspberry Pi에서 처음 설치할 때 서비스 계정을 멱등하게 준비합니다.
 
 ```sh
-export LOGISTICS_RTSP_SOURCE_1='rtsp://camera-1.example.com/stream'
-export LOGISTICS_RTSP_SOURCE_2='rtsp://camera-2.example.com/stream'
-export LOGISTICS_RTSP_SOURCE_3='rtsp://camera-3.example.com/stream'
-export LOGISTICS_RTSP_SOURCE_4='rtsp://camera-4.example.com/stream'
-export LOGISTICS_RTSP_RELAY_USER='control-center'
-export LOGISTICS_RTSP_RELAY_PASSWORD='replace-with-relay-password'
-./deploy/scripts/setup-rtsp-relay.sh
+sudo -v
+getent group logistics >/dev/null || sudo groupadd --system logistics
+id logistics >/dev/null 2>&1 || sudo useradd --system --gid logistics \
+  --home-dir /nonexistent --shell /usr/sbin/nologin logistics
+getent group logistics
+id logistics
+```
+
+그 다음 보안 채널로 전달받은 네 CCTV URL과 relay 계정을 같은 shell의 non-echoing prompt로 입력합니다. 네 URL은 위
+host, port와 경로를 사용하되 같은 CCTV 계정을 포함한 완전한 값이어야 합니다. relay username은 `control-centor`를
+입력합니다. 값은 shell history에 쓰지 않으며 setup 성공 여부와 관계없이 즉시 제거합니다.
+
+```sh
+cleanup_rtsp_env() {
+  unset LOGISTICS_RTSP_SOURCE_1 LOGISTICS_RTSP_SOURCE_2 \
+    LOGISTICS_RTSP_SOURCE_3 LOGISTICS_RTSP_SOURCE_4 \
+    LOGISTICS_RTSP_RELAY_USER LOGISTICS_RTSP_RELAY_PASSWORD
+}
+trap cleanup_rtsp_env EXIT HUP INT TERM
+
+printf 'CCTV channel 1 URL: '; read -rs LOGISTICS_RTSP_SOURCE_1; printf '\n'
+printf 'CCTV channel 2 URL: '; read -rs LOGISTICS_RTSP_SOURCE_2; printf '\n'
+printf 'CCTV channel 3 URL: '; read -rs LOGISTICS_RTSP_SOURCE_3; printf '\n'
+printf 'CCTV channel 4 URL: '; read -rs LOGISTICS_RTSP_SOURCE_4; printf '\n'
+printf 'Relay username: '; read -rs LOGISTICS_RTSP_RELAY_USER; printf '\n'
+printf 'Relay password: '; read -rs LOGISTICS_RTSP_RELAY_PASSWORD; printf '\n'
+export LOGISTICS_RTSP_SOURCE_1 LOGISTICS_RTSP_SOURCE_2 \
+  LOGISTICS_RTSP_SOURCE_3 LOGISTICS_RTSP_SOURCE_4 \
+  LOGISTICS_RTSP_RELAY_USER LOGISTICS_RTSP_RELAY_PASSWORD
+
+if ./deploy/scripts/setup-rtsp-relay.sh; then
+  setup_status=0
+else
+  setup_status=$?
+fi
+cleanup_rtsp_env
+trap - EXIT HUP INT TERM
+unset -f cleanup_rtsp_env
+test "${setup_status}" -eq 0
 ```
 
 스크립트는 ARM64용 MediaMTX를 `1.19.3`으로 고정해 내려받고, 배포된 `checksums.sha256`으로 아카이브를 검증한 뒤에만
 바이너리를 설치합니다. `/etc/logistics/rtsp-relay.yml`이 이미 있으면 기본적으로 보존합니다. 카메라 소스를 바꾸려면
-같은 여섯 환경 변수를 다시 지정하고 `LOGISTICS_FORCE_CONFIG=1`로 설치 스크립트를 실행한 다음 릴레이를 재시작합니다.
+위와 같이 여섯 값을 다시 입력하고 setup 실행 전에 `export LOGISTICS_FORCE_CONFIG=1`을 추가합니다. 실행 후에는 이 변수도
+제거하고 릴레이를 재시작합니다.
 
 ```sh
 export LOGISTICS_FORCE_CONFIG=1
-./deploy/scripts/setup-rtsp-relay.sh
+# 위 non-echoing 입력과 setup block을 다시 실행합니다.
+unset LOGISTICS_FORCE_CONFIG
 sudo systemctl restart logistics-rtsp-relay
 ```
 
