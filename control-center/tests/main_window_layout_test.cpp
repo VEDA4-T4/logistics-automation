@@ -3,12 +3,25 @@
 #include <QSize>
 #include <QSplitter>
 #include <QStackedLayout>
+#include <QStringView>
 #include <QTemporaryDir>
 #include <QWidget>
 #include <algorithm>
 #include <cstdio>
 
+#include "logistics/control_center/control_center_theme.hpp"
 #include "logistics/control_center/main_window.hpp"
+
+namespace {
+
+bool StyleRuleContains(const QString& style_sheet, QStringView selector, QStringView property) {
+    const auto rule_start = style_sheet.indexOf(selector);
+    const auto rule_end = style_sheet.indexOf('}', rule_start);
+    return rule_start >= 0 && rule_end > rule_start &&
+           QStringView(style_sheet).sliced(rule_start, rule_end - rule_start).contains(property);
+}
+
+}  // namespace
 
 int main(int argc, char* argv[]) {
     const auto check = [](bool condition, const char* message) {
@@ -41,6 +54,19 @@ int main(int argc, char* argv[]) {
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
 
     logistics::control_center::MainWindow window;
+    const auto shared_theme = logistics::control_center::ControlCenterStyleSheet();
+    constexpr auto combo_popup = u"QComboBox QAbstractItemView";
+    if (!check(StyleRuleContains(shared_theme, combo_popup, u"background:#252526"),
+               "shared theme does not give combo popups a dark background") ||
+        !check(StyleRuleContains(shared_theme, combo_popup, u"color:#f0f0f0"),
+               "shared theme does not give combo popups a light foreground") ||
+        !check(StyleRuleContains(window.styleSheet(), combo_popup, u"background:#252526"),
+               "MainWindow does not apply the shared combo popup theme") ||
+        !check(StyleRuleContains(window.styleSheet(), combo_popup, u"color:#f0f0f0"),
+               "MainWindow does not apply the shared combo popup foreground")) {
+        return 1;
+    }
+
     auto* workspace = window.findChild<QSplitter*>(QStringLiteral("workspaceSplitter"));
     if (!check(workspace != nullptr, "workspaceSplitter is missing")) {
         return 1;
