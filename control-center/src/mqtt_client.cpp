@@ -13,6 +13,10 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <QFile>
+#include <QSslCertificate>
+#include <QSslConfiguration>
+#include <QSslSocket>
 
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/control_center/mqtt_message_validator.hpp"
@@ -142,11 +146,46 @@ void MqttClient::connectToBroker() {
     if (stopping_ || client_->state() != QMqttClient::Disconnected) {
         return;
     }
-    emit connectionStateChanged(ConnectionState::Connecting,
-                                QStringLiteral("%1:%2 연결 중").arg(config_.host).arg(config_.port));
-    client_->connectToHost();
-}
 
+    emit connectionStateChanged(
+        ConnectionState::Connecting,
+        QStringLiteral("%1:%2 연결 중")
+            .arg(config_.host)
+            .arg(config_.port));
+
+    if (!config_.tls_enabled) {
+        client_->connectToHost();
+        return;
+    }
+
+    QFile ca_file(config_.ca_certificate);
+    if (!ca_file.open(QIODevice::ReadOnly)) {
+        const auto detail =
+            QStringLiteral("MQTT CA 인증서를 읽을 수 없습니다: %1")
+                .arg(config_.ca_certificate);
+        emit connectionStateChanged(ConnectionState::Error, detail);
+        emit errorOccurred(detail);
+        return;
+    }
+
+    const auto ca_certificates =
+        QSslCertificate::fromDevice(&ca_file, QSsl::Pem);
+    if (ca_certificates.isEmpty()) {
+        const auto detail =
+            QStringLiteral("MQTT CA 인증서 형식이 올바르지 않습니다: %1")
+                .arg(config_.ca_certificate);
+        emit connectionStateChanged(ConnectionState::Error, detail);
+        emit errorOccurred(detail);
+        return;
+    }
+
+    auto ssl_configuration = QSslConfiguration::defaultConfiguration();
+    ssl_configuration.addCaCertificates(ca_certificates);
+    ssl_configuration.setPeerVerifyMode(QSslSocket::VerifyPeer);
+    ssl_configuration.setProtocol(QSsl::TlsV1_2OrLater);
+
+    client_->connectToHostEncrypted(ssl_configuration);
+}
 void MqttClient::scheduleReconnect() {
     if (stopping_) {
         return;

@@ -2,11 +2,13 @@
 ; Do not commit control-centor.ini because it can contain credentials.
 
 [mqtt]
-host=127.0.0.1
-port=1883
+host=192.168.0.10
+port=8883
 client_id=control-center
-username=
-password=
+username=control-center
+password=hanwhat4
+tls_enabled=true
+ca_certificate=C:/ProgramData/Logistics/tls/ca.crt
 reconnect_interval_ms=3000
 keep_alive_seconds=30
 
