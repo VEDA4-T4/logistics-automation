@@ -477,7 +477,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* content = new QWidget(central_widget);
     auto* content_layout = new QHBoxLayout(content);
-    content_layout->setContentsMargins(10, 10, 10, 10);
+    content_layout->setContentsMargins(10, 0, 10, 0);
     content_layout->setSpacing(0);
 
     auto* content_splitter = new QSplitter(Qt::Horizontal, content);
@@ -489,7 +489,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* video_grid = new QGridLayout(video_container);
     video_grid->setContentsMargins(0, 0, 0, 0);
     video_grid->setHorizontalSpacing(8);
-    video_grid->setVerticalSpacing(8);
+    video_grid->setVerticalSpacing(0);
 
     auto* side_panel = new QWidget(content_splitter);
     side_panel->setObjectName(QStringLiteral("sidePanel"));
