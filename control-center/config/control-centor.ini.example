@@ -51,11 +51,12 @@ onvif_log_payload=false
 ; Remove boxes when no newer metadata frame arrives within this time.
 metadata_stale_timeout_ms=1500
 
-; CCTV credentials stay on the Raspberry Pi relay. Percent-encode the relay password for URL use.
-channel_1_url=rtsp://control-center:relay-password@172.20.33.72:8554/channel1
-channel_2_url=rtsp://control-center:relay-password@172.20.33.72:8554/channel2
-channel_3_url=rtsp://control-center:relay-password@172.20.33.72:8554/channel3
-channel_4_url=rtsp://control-center:relay-password@172.20.33.72:8554/channel4
+; CCTV credentials stay on the Raspberry Pi relay. The relay username is control-centor.
+; Replace relay-password with the separately supplied password, percent-encoded for URL use.
+channel_1_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel1
+channel_2_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel2
+channel_3_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel3
+channel_4_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel4
 ; Leave channel_N_metadata_url unset when MediaMTX relays video and ONVIF metadata on the same path.
 
 [ui]
