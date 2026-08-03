@@ -76,6 +76,15 @@ int main(int argc, char* argv[]) {
     assert(panel.maximumHeight() == QWIDGETSIZE_MAX);
     assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
     assert(panel.findChild<QWidget*>(QStringLiteral("processCardGrid")) != nullptr);
+    const auto assert_scene_fits = [&application, top_view, &panel](const QSize& panel_size) {
+        panel.resize(panel_size);
+        application.processEvents();
+        assert(top_view->viewport()->rect().contains(top_view->mapFromScene(top_view->sceneRect().topLeft())));
+        assert(top_view->viewport()->rect().contains(top_view->mapFromScene(top_view->sceneRect().bottomRight())));
+        assert(qFuzzyCompare(qAbs(top_view->transform().m11()), qAbs(top_view->transform().m22())));
+    };
+    assert_scene_fits(QSize(1280, 250));
+    assert_scene_fits(QSize(1600, 300));
     assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
     assert(panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator")).size() == 4);
     QLabel* sorting_sensor_2 = nullptr;

@@ -10,6 +10,8 @@
 
 #include "logistics/control_center/operations_dashboard_state.hpp"
 
+class QResizeEvent;
+
 namespace logistics::control_center {
 
 enum class FactoryNodeVisualState { Disconnected, EmergencyStop, Error, Working, Running, Waiting };
@@ -73,6 +75,9 @@ public:
 
 signals:
     void controlTargetSelected(const QString& device_id, const QString& display_name);
+
+protected:
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void selectProcess(const QString& process_key);

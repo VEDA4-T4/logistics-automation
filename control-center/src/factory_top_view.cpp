@@ -13,6 +13,7 @@
 #include <QLineF>
 #include <QPainter>
 #include <QPen>
+#include <QResizeEvent>
 #include <QTimer>
 #include <functional>
 
@@ -586,6 +587,11 @@ FactoryTopViewWidget::FactoryTopViewWidget(QWidget* parent)
     : QGraphicsView(parent), impl_(std::make_unique<Impl>(this)) {}
 
 FactoryTopViewWidget::~FactoryTopViewWidget() = default;
+
+void FactoryTopViewWidget::resizeEvent(QResizeEvent* event) {
+    QGraphicsView::resizeEvent(event);
+    fitInView(sceneRect(), Qt::KeepAspectRatio);
+}
 
 void FactoryTopViewWidget::setProcesses(const QList<ProcessUnitStatus>& processes) {
     impl_->setProcesses(processes);
