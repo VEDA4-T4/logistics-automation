@@ -26,6 +26,7 @@ qt_add_executable(
     src/command_response.cpp
     src/current_product_state.cpp
     src/detection_overlay.cpp
+    src/factory_top_view.cpp
     src/mqtt_client.cpp
     src/mqtt_message_validator.cpp
     src/operational_log_panel.cpp
@@ -43,6 +44,7 @@ qt_add_executable(
     include/logistics/control_center/command_response.hpp
     include/logistics/control_center/current_product_state.hpp
     include/logistics/control_center/detection_overlay.hpp
+    include/logistics/control_center/factory_top_view.hpp
     include/logistics/control_center/mqtt_client.hpp
     include/logistics/control_center/mqtt_message_validator.hpp
     include/logistics/control_center/operational_log_panel.hpp
@@ -259,6 +261,17 @@ if(BUILD_TESTING)
         NAME control_center_operations_dashboard_state_test
         COMMAND control_center_operations_dashboard_state_test
     )
+
+    add_executable(
+        control_center_factory_top_view_test
+        tests/factory_top_view_test.cpp
+        src/factory_top_view.cpp
+        include/logistics/control_center/factory_top_view.hpp
+    )
+    target_include_directories(control_center_factory_top_view_test PRIVATE include)
+    target_link_libraries(control_center_factory_top_view_test PRIVATE Qt6::Widgets logistics::contracts)
+    logistics_enable_warnings(control_center_factory_top_view_test)
+    add_test(NAME control_center_factory_top_view_test COMMAND control_center_factory_top_view_test)
 
     add_executable(
         control_center_operations_dashboard_panel_test
