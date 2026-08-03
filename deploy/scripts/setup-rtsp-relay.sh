@@ -25,6 +25,12 @@ yaml_quote() {
     printf "'%s'" "${value}"
 }
 
+validate_relay_credentials() {
+    local user=$1 password=$2
+    [[ -n "${user}" && -n "${password}" && "${user}" != any ]] &&
+        reject_line_breaks "${user}" && reject_line_breaks "${password}"
+}
+
 render_config() {
     local source_1=$1 source_2=$2 source_3=$3 source_4=$4 relay_user=$5 relay_password=$6
 
@@ -87,6 +93,8 @@ run_self_check() {
     ! validate_rtsp_url 'http://camera/stream'
     ! validate_rtsp_url $'rtsp://camera/stream\ninvalid'
     test "$(yaml_quote "a'b")" = "'a''b'"
+    validate_relay_credentials 'control-center' 'relay-password'
+    ! validate_relay_credentials 'any' 'relay-password'
 
     rendered="$(render_config \
         'rtsp://camera-1/stream' 'rtsp://camera-2/stream' \
@@ -141,9 +149,8 @@ for source in "${source_1}" "${source_2}" "${source_3}" "${source_4}"; do
         exit 2
     }
 done
-if [[ -z "${relay_user}" || -z "${relay_password}" ]] ||
-    ! reject_line_breaks "${relay_user}" || ! reject_line_breaks "${relay_password}"; then
-    echo 'LOGISTICS_RTSP_RELAY_USER and LOGISTICS_RTSP_RELAY_PASSWORD must be non-empty single-line values.' >&2
+if ! validate_relay_credentials "${relay_user}" "${relay_password}"; then
+    echo "LOGISTICS_RTSP_RELAY_USER and LOGISTICS_RTSP_RELAY_PASSWORD must be non-empty single-line values, and the user must not be 'any'." >&2
     exit 2
 fi
 if [[ "${force_config}" != 0 && "${force_config}" != 1 ]]; then
