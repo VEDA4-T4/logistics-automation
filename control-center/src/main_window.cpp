@@ -466,8 +466,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* app_header = new QFrame(central_widget);
     app_header->setObjectName(QStringLiteral("appHeader"));
-    app_header->setMinimumHeight(54);
-    app_header->setMaximumHeight(54);
+    app_header->setMinimumHeight(92);
+    app_header->setMaximumHeight(92);
     auto* app_header_layout = new QHBoxLayout(app_header);
     app_header_layout->setContentsMargins(16, 7, 16, 7);
     auto* app_title_layout = new QVBoxLayout();
@@ -484,8 +484,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     channel_badge->setStyleSheet(
         "background:#252526;color:#cccccc;border:1px solid #3c3c3c;border-radius:4px;"
         "font-size:10px;font-weight:700;padding:5px 10px;");
+    process_control_panel_ = new ProcessControlPanel(app_header);
     app_header_layout->addLayout(app_title_layout);
-    app_header_layout->addStretch();
+    app_header_layout->addWidget(process_control_panel_, 1);
     app_header_layout->addWidget(channel_badge);
     root_layout->addWidget(app_header);
 
@@ -520,7 +521,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_splitter->setStretchFactor(1, 3);
     detail_splitter->setSizes({ 480, 720 });
 
-    process_control_panel_ = new ProcessControlPanel(central_widget);
     QString initial_control_target_name = QStringLiteral("전체 공정");
     for (const auto& process : config.process_definitions) {
         if (process.device_id == config.control_target_device_id) {
@@ -534,7 +534,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     root_layout->addWidget(operations_workspace, 1);
     root_layout->addWidget(operations_dashboard_panel_);
     root_layout->addWidget(detail_splitter, 1);
-    root_layout->addWidget(process_control_panel_);
     setCentralWidget(central_widget);
 
     mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
@@ -701,7 +700,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         detection_overlays_[channel] = new DetectionOverlay(video_layers_[channel]);
         reconnect_timers_[channel] = new QTimer(this);
 
-        channel_panel->setMinimumSize(320, 180);
+        channel_panel->setMinimumSize(240, 135);
         channel_panel->setStyleSheet("background-color:#181818;border:1px solid #303030;border-radius:6px;");
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
@@ -722,7 +721,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel]->addWidget(video_layers_[channel]);
         channel_stacks_[channel]->addWidget(state_overlays_[channel]);
 
-        detection_overlays_[channel]->setMinimumSize(320, 180);
+        detection_overlays_[channel]->setMinimumSize(240, 135);
         players_[channel]->setVideoSink(detection_overlays_[channel]->videoSink());
         reconnect_timers_[channel]->setInterval(reconnect_interval_ms_);
         detection_overlays_[channel]->setStaleTimeout(metadata_stale_timeout_ms_);

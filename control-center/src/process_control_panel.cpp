@@ -120,8 +120,8 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
 ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("processControlPanel"));
     setMinimumWidth(0);
-    setMinimumHeight(170);
-    setMaximumHeight(190);
+    setMinimumHeight(76);
+    setMaximumHeight(92);
     setStyleSheet(
         "#processControlPanel{background-color:#181818;border:1px solid #303030;border-radius:6px;}"
         "QPushButton{min-height:27px;font-size:12px;font-weight:600;padding:3px 8px;}"
@@ -134,8 +134,8 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "font-size:13px;border:1px solid #c42b1c;}"
         "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
 
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 10, 10, 10);
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(8, 6, 8, 6);
     layout->setSpacing(8);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
@@ -147,14 +147,13 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "font-size:10px;font-weight:700;padding:4px 8px;");
     target_label_->setToolTip(
         QStringLiteral("상단 공정 카드를 클릭하여 대상을 변경합니다. 비상정지는 항상 전체 공정에 적용됩니다."));
-    auto* title_row = new QHBoxLayout();
-    title_row->setContentsMargins(0, 0, 0, 0);
-    title_row->setSpacing(8);
-    title_row->addWidget(title);
-    title_row->addStretch();
-    title_row->addWidget(target_label_);
+    auto* title_column = new QVBoxLayout();
+    title_column->setContentsMargins(0, 0, 0, 0);
+    title_column->setSpacing(4);
+    title_column->addWidget(title);
+    title_column->addWidget(target_label_);
     connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
-    connection_hint_->setWordWrap(true);
+    connection_hint_->setWordWrap(false);
     connection_hint_->setStyleSheet("color:#9d9d9d;font-size:10px;");
 
     command_status_ = new QLabel(QStringLiteral("대기 중"), this);
@@ -185,20 +184,24 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         emit commandRequested(mqtt::ControlCommand::kEmergencyStop, command_target_device_id_);
     });
 
-    layout->addLayout(title_row);
-    layout->addWidget(connection_hint_);
-    layout->addWidget(command_status_);
+    auto* status_column = new QVBoxLayout();
+    status_column->setContentsMargins(0, 0, 0, 0);
+    status_column->setSpacing(4);
+    status_column->addWidget(connection_hint_);
+    status_column->addWidget(command_status_);
     auto* normal_commands = new QHBoxLayout();
     normal_commands->setContentsMargins(0, 0, 0, 0);
     normal_commands->setSpacing(8);
     normal_commands->addWidget(start_button_);
     normal_commands->addWidget(stop_button_);
     normal_commands->addWidget(recovery_button_);
-    layout->addLayout(normal_commands);
 
     auto* divider = new QFrame(this);
-    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShape(QFrame::VLine);
     divider->setStyleSheet("color:#303030;");
+    layout->addLayout(title_column);
+    layout->addLayout(status_column, 1);
+    layout->addLayout(normal_commands);
     layout->addWidget(divider);
     layout->addWidget(emergency_stop_button_);
 

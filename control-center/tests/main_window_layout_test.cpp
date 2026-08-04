@@ -1,5 +1,9 @@
 #include <QApplication>
 #include <QFile>
+#include <QFrame>
+#include <QLabel>
+#include <QMouseEvent>
+#include <QRegularExpression>
 #include <QSize>
 #include <QSplitter>
 #include <QStackedLayout>
@@ -10,7 +14,9 @@
 #include <cstdio>
 
 #include "logistics/control_center/control_center_theme.hpp"
+#include "logistics/control_center/factory_top_view.hpp"
 #include "logistics/control_center/main_window.hpp"
+#include "logistics/control_center/process_control_panel.hpp"
 
 namespace {
 
@@ -107,10 +113,8 @@ int main(int argc, char* argv[]) {
     const auto widgets = window.findChildren<QWidget*>();
     QList<QWidget*> video_cells;
     for (auto* widget : widgets) {
-        const auto descendants = widget->findChildren<QWidget*>();
         if (qobject_cast<QStackedLayout*>(widget->layout()) != nullptr &&
-            std::ranges::any_of(descendants,
-                                [](const QWidget* child) { return child->minimumSize() == QSize(320, 180); })) {
+            !widget->findChildren<QLabel*>(QRegularExpression(QStringLiteral("channelStatus[1-4]"))).isEmpty()) {
             video_cells.append(widget);
         }
     }
@@ -130,27 +134,54 @@ int main(int argc, char* argv[]) {
     window.show();
     application.processEvents();
 
-    auto* factory = window.findChild<QWidget*>(QStringLiteral("factoryTopView"));
+    auto* factory =
+        window.findChild<logistics::control_center::FactoryTopViewWidget*>(QStringLiteral("factoryTopView"));
     auto* video = window.findChild<QWidget*>(QStringLiteral("videoWorkspace"));
     auto* process_status = window.findChild<QWidget*>(QStringLiteral("processStatusSection"));
     auto* product = window.findChild<QWidget*>(QStringLiteral("productResultPanel"));
     auto* log = window.findChild<QWidget*>(QStringLiteral("operationalLogPanel"));
+    auto* process_control =
+        window.findChild<logistics::control_center::ProcessControlPanel*>(QStringLiteral("processControlPanel"));
     if (!check(window.size() == QSize(1280, 720), "offscreen window did not keep 1280x720") ||
         !check(factory != nullptr && factory->isVisible(), "factoryTopView is not visible") ||
         !check(video != nullptr && video->isVisible(), "videoWorkspace is not visible") ||
         !check(process_status != nullptr && process_status->isVisible(), "processStatusSection is not visible") ||
         !check(product != nullptr && product->isVisible(), "productResultPanel is not visible") ||
-        !check(log != nullptr && log->isVisible(), "operationalLogPanel is not visible")) {
+        !check(log != nullptr && log->isVisible(), "operationalLogPanel is not visible") ||
+        !check(process_control != nullptr && process_control->isVisible(), "processControlPanel is not visible")) {
         return 2;
     }
 
-    const auto window_rect = [&window](const QWidget* widget) {
-        return QRect(widget->mapTo(&window, QPoint{}), widget->size());
+    auto* central = window.centralWidget();
+    const auto central_rect = [central](const QWidget* widget) {
+        return QRect(widget->mapTo(central, QPoint{}), widget->size());
     };
-    const auto factory_rect = window_rect(factory);
-    const auto video_rect = window_rect(video);
-    const auto product_rect = window_rect(product);
-    const auto log_rect = window_rect(log);
+    const auto factory_rect = central_rect(factory);
+    const auto video_rect = central_rect(video);
+    const auto process_status_rect = central_rect(process_status);
+    const auto product_rect = central_rect(product);
+    const auto log_rect = central_rect(log);
+    const auto process_control_rect = central_rect(process_control);
+    for (const auto& [rect, message] : {
+             std::pair{ factory_rect, "factoryTopView is empty or outside centralWidget" },
+             std::pair{ video_rect, "videoWorkspace is empty or outside centralWidget" },
+             std::pair{ process_status_rect, "processStatusSection is empty or outside centralWidget" },
+             std::pair{ product_rect, "productResultPanel is empty or outside centralWidget" },
+             std::pair{ log_rect, "operationalLogPanel is empty or outside centralWidget" },
+             std::pair{ process_control_rect, "processControlPanel is empty or outside centralWidget" },
+         }) {
+        if (!check(!rect.isEmpty() && central->rect().contains(rect), message)) {
+            return 3;
+        }
+    }
+    for (const auto* cell : video_cells) {
+        const QRect rect(cell->mapTo(video, QPoint{}), cell->size());
+        if (!check(cell->minimumSize() == QSize(240, 135), "video cell minimum is not 240x135") ||
+            !check(cell->width() >= 240 && cell->height() >= 135, "video cell is smaller than 240x135") ||
+            !check(video->rect().contains(rect), "video cell is clipped by videoWorkspace")) {
+            return 4;
+        }
+    }
     const auto overlaps_vertically = [](const QRect& left, const QRect& right) {
         return left.top() <= right.bottom() && right.top() <= left.bottom();
     };
@@ -163,6 +194,37 @@ int main(int argc, char* argv[]) {
                "factory and video workspaces overlap horizontally") ||
         !check(overlaps_vertically(product_rect, log_rect), "product and log panels do not overlap vertically") ||
         !check(!overlaps_horizontally(product_rect, log_rect), "product and log panels overlap horizontally")) {
-        return 3;
+        return 5;
+    }
+
+    QFrame* vision_card = nullptr;
+    QFrame* input_card = nullptr;
+    for (auto* card : window.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
+        const auto target = card->property("controlTargetDeviceId").toString();
+        if (target == QStringLiteral("PI-VISION-01")) {
+            vision_card = card;
+        } else if (target == QStringLiteral("PI-INPUT-01")) {
+            input_card = card;
+        }
+    }
+    if (!check(vision_card != nullptr && input_card != nullptr, "selection test cards are missing")) {
+        return 6;
+    }
+    QMouseEvent select_vision(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(vision_card, &select_vision);
+    if (!check(factory->selectedDeviceId() == QStringLiteral("PI-VISION-01"),
+               "card selection did not propagate to factory map") ||
+        !check(process_control->selectedTargetDeviceId() == QStringLiteral("PI-VISION-01"),
+               "card selection did not propagate to process controls")) {
+        return 7;
+    }
+
+    factory->selectProcessForTest(QStringLiteral("input"));
+    if (!check(input_card->property("selectedControlTarget").toBool(),
+               "factory selection did not propagate to process card") ||
+        !check(process_control->selectedTargetDeviceId() == QStringLiteral("PI-INPUT-01"),
+               "factory selection did not propagate to process controls")) {
+        return 8;
     }
 }

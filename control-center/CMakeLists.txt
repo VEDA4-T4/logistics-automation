@@ -244,6 +244,21 @@ if(BUILD_TESTING)
     add_test(NAME control_center_process_control_panel_test COMMAND control_center_process_control_panel_test)
 
     add_executable(
+        control_center_product_result_panel_test
+        tests/product_result_panel_test.cpp
+        src/product_result_panel.cpp
+        include/logistics/control_center/product_result_panel.hpp
+        include/logistics/control_center/current_product_state.hpp
+    )
+    target_include_directories(control_center_product_result_panel_test PRIVATE include)
+    target_link_libraries(
+        control_center_product_result_panel_test
+        PRIVATE Qt6::Network Qt6::Widgets logistics::contracts
+    )
+    logistics_enable_warnings(control_center_product_result_panel_test)
+    add_test(NAME control_center_product_result_panel_test COMMAND control_center_product_result_panel_test)
+
+    add_executable(
         control_center_operational_log_state_test
         tests/operational_log_state_test.cpp
         src/operational_log_state.cpp

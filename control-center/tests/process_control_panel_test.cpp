@@ -1,6 +1,7 @@
 #include "logistics/control_center/process_control_panel.hpp"
 
 #include <QApplication>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
@@ -24,6 +25,19 @@ int main(int argc, char* argv[]) {
     assert(emergency_stop != nullptr);
     assert(target_label != nullptr);
     assert(command_status != nullptr);
+    panel.resize(760, 92);
+    panel.show();
+    application.processEvents();
+    assert(panel.minimumHeight() <= 92);
+    assert(panel.maximumHeight() <= 92);
+    assert(qobject_cast<QHBoxLayout*>(panel.layout()) != nullptr);
+    for (const auto* widget : { static_cast<QWidget*>(start), static_cast<QWidget*>(stop),
+                                static_cast<QWidget*>(recovery), static_cast<QWidget*>(emergency_stop),
+                                static_cast<QWidget*>(target_label), static_cast<QWidget*>(command_status) }) {
+        const QRect rect(widget->mapTo(&panel, QPoint{}), widget->size());
+        assert(!rect.isEmpty());
+        assert(panel.rect().contains(rect));
+    }
     assert(stop->text() == QStringLiteral("정지"));
     assert(recovery->text() == QStringLiteral("전체 복구"));
     assert(panel.findChild<QPushButton*>(QStringLiteral("restartButton")) == nullptr);

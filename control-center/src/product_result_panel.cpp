@@ -62,15 +62,15 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     : QWidget(parent), image_base_url_(std::move(image_base_url)), network_manager_(new QNetworkAccessManager(this)) {
     setObjectName(QStringLiteral("productResultPanel"));
     setMinimumWidth(0);
-    setMinimumHeight(330);
+    setMinimumHeight(180);
     setStyleSheet(
         "#productResultPanel{background-color:#181818;border:0;}"
         "#productInfoCard,#productDetailCard{background-color:#1f1f1f;border:1px solid #303030;"
         "border-radius:6px;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 10, 10, 10);
-    layout->setSpacing(8);
+    layout->setContentsMargins(8, 6, 8, 6);
+    layout->setSpacing(6);
 
     auto* header_layout = new QHBoxLayout();
     header_layout->setContentsMargins(0, 0, 0, 0);
@@ -87,23 +87,21 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     header_layout->addLayout(header_text_layout);
     header_layout->addStretch();
 
-    auto* status_layout = new QHBoxLayout();
-    status_layout->setContentsMargins(0, 0, 0, 0);
-    status_layout->setSpacing(8);
     recognition_status_ = new QLabel(QStringLiteral("상품 데이터 대기 중"), this);
     recognition_status_->setAlignment(Qt::AlignCenter);
-    recognition_status_->setMinimumHeight(28);
+    recognition_status_->setMinimumHeight(24);
     recognition_status_->setStyleSheet(StatusPillStyle("#252526", "#cccccc", "#3c3c3c"));
     processing_status_ = new QLabel(QStringLiteral("처리 대기"), this);
     processing_status_->setAlignment(Qt::AlignCenter);
-    processing_status_->setMinimumHeight(28);
+    processing_status_->setMinimumHeight(24);
     processing_status_->setStyleSheet(StatusPillStyle("#252526", "#cccccc", "#3c3c3c"));
-    status_layout->addWidget(recognition_status_, 1);
-    status_layout->addWidget(processing_status_, 1);
+    header_layout->addWidget(recognition_status_);
+    header_layout->addWidget(processing_status_);
 
     image_label_ = new QLabel(this);
     image_label_->setObjectName(QStringLiteral("productImage"));
-    image_label_->setMinimumHeight(220);
+    image_label_->setMinimumHeight(120);
+    image_label_->setMinimumWidth(150);
     image_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     image_label_->setAlignment(Qt::AlignCenter);
     setImagePlaceholder(QStringLiteral("상품 이미지 대기 중"));
@@ -144,11 +142,20 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     detail_layout->addWidget(detail_title);
     detail_layout->addWidget(detail_value_);
 
+    auto* metadata = new QWidget(this);
+    auto* metadata_layout = new QVBoxLayout(metadata);
+    metadata_layout->setContentsMargins(0, 0, 0, 0);
+    metadata_layout->setSpacing(6);
+    metadata_layout->addWidget(info_card, 1);
+    metadata_layout->addWidget(detail_card);
+    auto* content_layout = new QHBoxLayout();
+    content_layout->setContentsMargins(0, 0, 0, 0);
+    content_layout->setSpacing(8);
+    content_layout->addWidget(image_label_, 2);
+    content_layout->addWidget(metadata, 3);
+
     layout->addLayout(header_layout);
-    layout->addLayout(status_layout);
-    layout->addWidget(image_label_, 1);
-    layout->addWidget(info_card);
-    layout->addWidget(detail_card);
+    layout->addLayout(content_layout, 1);
 }
 
 void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
