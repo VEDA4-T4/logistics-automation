@@ -141,6 +141,59 @@ int main(int argc, char* argv[]) {
         process.work_id = std::move(work);
         return process;
     };
+
+    auto assigned_vision = Process(QStringLiteral("vision"), QStringLiteral("PI-VISION-01"),
+                                   QStringLiteral("WORK_ASSIGNED"), QStringLiteral("WORK-VISION"));
+    visual = BuildFactoryNodeVisual(assigned_vision);
+    assert(visual.state == FactoryNodeVisualState::Working);
+    assert(visual.motion_enabled);
+    assert(visual.motion_phase == FactoryMotionPhase::VisionProcessing);
+    assigned_vision.work_id.clear();
+    visual = BuildFactoryNodeVisual(assigned_vision);
+    assert(visual.state == FactoryNodeVisualState::Working);
+    assert(!visual.motion_enabled);
+    assigned_vision.current_state = QStringLiteral("AWAITING_WORK_ID");
+    assert(BuildFactoryNodeVisual(assigned_vision).state == FactoryNodeVisualState::Working);
+    assigned_vision.current_state = QStringLiteral("WAITING_FOR_PRODUCT");
+    assert(BuildFactoryNodeVisual(assigned_vision).state == FactoryNodeVisualState::Running);
+
+    auto actual_sorting = Process(QStringLiteral("sorting"), QStringLiteral("PI-SORTING-01"),
+                                  QStringLiteral("GATE_MOVING_DEST_2"), QStringLiteral("WORK-SORT"));
+    assert(BuildFactoryNodeVisual(actual_sorting).state == FactoryNodeVisualState::Working);
+    actual_sorting.current_state = QStringLiteral("WAITING_ITEM_DEST_2");
+    assert(BuildFactoryNodeVisual(actual_sorting).state == FactoryNodeVisualState::Working);
+    actual_sorting.current_state = QStringLiteral("GATE_MOVING_DEST_20");
+    assert(BuildFactoryNodeVisual(actual_sorting).state == FactoryNodeVisualState::Waiting);
+    actual_sorting.current_state = QStringLiteral("GATE_MOVING_DEST_2");
+    auto actual_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-01"), QStringLiteral("CORRECTING"),
+                               QStringLiteral("WORK-LINE"));
+    assert(BuildFactoryNodeVisual(actual_line).state == FactoryNodeVisualState::Working);
+
+    logistics::control_center::FactoryTopViewWidget no_work_view;
+    auto no_work_input =
+        Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-01"), QStringLiteral("RUNNING"), QString{});
+    actual_sorting.work_id.clear();
+    assigned_vision.current_state = QStringLiteral("AWAITING_WORK_ID");
+    no_work_view.setProcesses({ no_work_input, assigned_vision, actual_sorting });
+    assert(no_work_view.nodeColor(QStringLiteral("vision")) == QColor(QStringLiteral("#75beff")));
+    assert(VisibleProducts(no_work_view).isEmpty());
+    const auto no_work_input_position = no_work_view.boxPosition(QStringLiteral("input"));
+    const auto no_work_sorting_position = no_work_view.boxPosition(QStringLiteral("sorting"));
+    no_work_view.advanceAnimationsForTest();
+    assert(no_work_view.nodeOpacity(QStringLiteral("vision")) < 1.0);
+    assert(no_work_view.boxPosition(QStringLiteral("input")) == no_work_input_position);
+    assert(no_work_view.boxPosition(QStringLiteral("sorting")) == no_work_sorting_position);
+    assert(VisibleProducts(no_work_view).isEmpty());
+
+    assigned_vision.has_error = true;
+    no_work_view.setProcesses({ assigned_vision });
+    assert(no_work_view.nodeColor(QStringLiteral("vision")) == QColor(QStringLiteral("#f14c4c")));
+    assigned_vision.has_error = false;
+    no_work_view.setProcesses({ assigned_vision });
+    assert(no_work_view.nodeColor(QStringLiteral("vision")) == QColor(QStringLiteral("#75beff")));
+    no_work_view.advanceAnimationsForTest();
+    assert(no_work_view.nodeOpacity(QStringLiteral("vision")) < 1.0);
+
     auto input = Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-01"), QStringLiteral("RUNNING"),
                          QStringLiteral("WORK-IN"));
     auto vision = Process(QStringLiteral("vision"), QStringLiteral("PI-VISION-01"), QStringLiteral("VISION_PROCESSING"),

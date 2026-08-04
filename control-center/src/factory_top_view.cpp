@@ -33,11 +33,21 @@ std::optional<int> RouteSuffix(const QString& state, QStringView prefix) {
                                                                     : std::nullopt;
 }
 
+bool HasDestinationSuffix(const QString& state, QStringView prefix) {
+    if (!state.startsWith(prefix) || state.size() != prefix.size() + 1) {
+        return false;
+    }
+    const auto suffix = state.back();
+    return suffix >= QLatin1Char('1') && suffix <= QLatin1Char('3');
+}
+
 FactoryMotionPhase MotionPhaseFor(const ProcessUnitStatus& process, const QString& state) {
     if (process.work_completed && process.key == QString::fromLatin1(kLineTracerProcessKey)) {
         return FactoryMotionPhase::LineCompleted;
     }
-    if (state == QStringLiteral("VISION_PROCESSING")) {
+    if (process.key == QString::fromLatin1(kVisionProcessKey) &&
+        (state == QStringLiteral("VISION_PROCESSING") || state == QStringLiteral("WORK_ASSIGNED") ||
+         state == QStringLiteral("AWAITING_WORK_ID"))) {
         return FactoryMotionPhase::VisionProcessing;
     }
     if (state == QStringLiteral("PICKING")) {
@@ -76,12 +86,17 @@ FactoryMotionPhase MotionPhaseFor(const ProcessUnitStatus& process, const QStrin
 }
 
 bool IsWorkingState(const QString& state) {
-    return state == QStringLiteral("VISION_PROCESSING") || state == QStringLiteral("PICKING") ||
-           state == QStringLiteral("TRANSFERRING") || state == QStringLiteral("PLACED") ||
-           state == QStringLiteral("COMPLETED") || state == QStringLiteral("SORTING") ||
-           state == QStringLiteral("ROUTING") || state == QStringLiteral("DELIVERING") ||
-           state == QStringLiteral("FOLLOWING_LINE") || RouteSuffix(state, u"PICKUP_READY_").has_value() ||
-           RouteSuffix(state, u"ARRIVED_").has_value() || RouteSuffix(state, u"UNLOADING_").has_value();
+    return state == QStringLiteral("WORK_ASSIGNED") || state == QStringLiteral("AWAITING_WORK_ID") ||
+           state == QStringLiteral("VISION_PROCESSING") || state == QStringLiteral("BUSY") ||
+           state == QStringLiteral("PICKING") || state == QStringLiteral("TRANSFERRING") ||
+           state == QStringLiteral("PLACED") || state == QStringLiteral("COMPLETED") ||
+           state == QStringLiteral("SORTING") || state == QStringLiteral("ROUTING") ||
+           state == QStringLiteral("DELIVERING") || state == QStringLiteral("FOLLOWING_LINE") ||
+           state == QStringLiteral("CORRECTING") || state == QStringLiteral("RETURNING_HOME") ||
+           HasDestinationSuffix(state, u"GATE_MOVING_DEST_") || HasDestinationSuffix(state, u"WAITING_ITEM_DEST_") ||
+           RouteSuffix(state, u"PICKUP_READY_").has_value() || RouteSuffix(state, u"ARRIVED_").has_value() ||
+           RouteSuffix(state, u"UNLOADING_").has_value() || RouteSuffix(state, u"LOAD_ON_").has_value() ||
+           RouteSuffix(state, u"LOAD_OFF_").has_value();
 }
 
 FactoryNodeVisual BaseVisual(const ProcessUnitStatus& process) {
@@ -127,7 +142,7 @@ FactoryNodeVisual WorkingVisual(const ProcessUnitStatus& process, const QString&
     visual.state = FactoryNodeVisualState::Working;
     visual.motion_phase = MotionPhaseFor(process, state);
     visual.opacity = 1.0;
-    visual.motion_enabled = true;
+    visual.motion_enabled = !process.work_id.isEmpty();
     return visual;
 }
 
@@ -164,10 +179,11 @@ FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
     if (process.has_error) {
         return ErrorVisual(process);
     }
-    if (!process.work_id.isEmpty() && (process.work_completed || IsWorkingState(state))) {
+    if (process.work_completed || IsWorkingState(state)) {
         return WorkingVisual(process, state);
     }
-    if (state == QStringLiteral("RUNNING") || state == QStringLiteral("ONLINE")) {
+    if (state == QStringLiteral("RUNNING") || state == QStringLiteral("ONLINE") ||
+        state == QStringLiteral("WAITING_FOR_PRODUCT") || RouteSuffix(state, u"PARKED_").has_value()) {
         return RunningVisual(process);
     }
     return WaitingVisual(process);
