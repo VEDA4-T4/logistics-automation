@@ -1,9 +1,9 @@
 [mqtt]
-host=192.168.0.10
+host=mqtt.logistics.local
 port=8883
 client_id=central-server
 username=central-server
-password=test-for-test
+password=replace-with-central-server-mqtt-password
 tls_enabled=true
 ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30

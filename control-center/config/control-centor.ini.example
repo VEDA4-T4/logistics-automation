@@ -2,11 +2,11 @@
 ; Do not commit control-centor.ini because it can contain credentials.
 
 [mqtt]
-host=192.168.0.10
+host=mqtt.logistics.local
 port=8883
 client_id=control-center
 username=control-center
-password=test-for-test
+password=replace-with-control-center-mqtt-password
 tls_enabled=true
 ca_certificate=C:/ProgramData/Logistics/tls/ca.crt
 reconnect_interval_ms=3000
@@ -28,7 +28,7 @@ linetracer_device_id=PI-LT-01
 
 [http]
 ; Relative image paths from MQTT are resolved against this central-server URL.
-image_base_url=http://127.0.0.1:8080/
+image_base_url=http://central-server.logistics.local:8080/
 
 [rtsp]
 ; Supported channel count: 1-16
