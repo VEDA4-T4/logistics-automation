@@ -25,6 +25,20 @@ inline constexpr auto kLineTracerProcessKey = "linetracer";
     return normalized == QStringLiteral("ERR-HEALTH-SENSOR-STALE");
 }
 
+[[nodiscard]] inline std::optional<int> DestinationRouteIndex(QString destination) {
+    destination = destination.trimmed().toUpper();
+    destination.replace(QLatin1Char('-'), QLatin1Char('_'));
+    for (int route = 1; route <= 3; ++route) {
+        const auto suffix = QString::number(route);
+        if (destination == suffix || destination == QStringLiteral("ROUTE_") + suffix ||
+            destination == QStringLiteral("DESTINATION_") + suffix ||
+            destination == QStringLiteral("START_") + suffix) {
+            return route;
+        }
+    }
+    return std::nullopt;
+}
+
 enum class OverallProcessState {
     Idle,
     Running,
@@ -58,6 +72,8 @@ struct ProcessUnitStatus {
     };
     QString current_state{ QStringLiteral("상태 수신 대기") };
     QString work_id;
+    QString destination;
+    bool work_completed{ false };
     QString error_code;
     QDateTime updated_at;
     bool has_error{ false };
@@ -118,6 +134,8 @@ private:
     QList<ProcessUnitStatus> process_snapshots_;
     QHash<QString, int> process_index_by_device_;
     QHash<QString, int> process_index_by_key_;
+    QHash<QString, QString> destination_by_work_id_;
+    QQueue<QString> destination_work_order_;
     ProcessDashboardStatus overall_;
     QSet<QString> processed_message_ids_;
     QQueue<QString> processed_message_order_;

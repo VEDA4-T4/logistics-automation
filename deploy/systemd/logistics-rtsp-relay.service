@@ -1,0 +1,28 @@
+[Unit]
+Description=Logistics RTSP Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=logistics
+Group=logistics
+ExecStart=/usr/local/bin/mediamtx /etc/logistics/rtsp-relay.yml
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

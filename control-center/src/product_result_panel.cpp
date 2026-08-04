@@ -65,13 +65,12 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     setMinimumHeight(330);
     setStyleSheet(
         "#productResultPanel{background-color:#181818;border:0;}"
-        "#productInfoCard,#productDetailCard{background-color:#1f1f1f;border:1px solid #2b2b2b;"
-        "border-radius:4px;}"
-        "QLabel{color:#cccccc;}");
+        "#productInfoCard,#productDetailCard{background-color:#1f1f1f;border:1px solid #303030;"
+        "border-radius:6px;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 10, 12, 10);
-    layout->setSpacing(7);
+    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setSpacing(8);
 
     auto* header_layout = new QHBoxLayout();
     header_layout->setContentsMargins(0, 0, 0, 0);
@@ -231,7 +230,7 @@ void ProductResultPanel::setImagePlaceholder(const QString& text, bool is_error)
     image_label_->setText(text);
     image_label_->setStyleSheet(is_error
                                     ? "background:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;"
-                                    : "background:#1f1f1f;color:#9d9d9d;border:1px solid #2b2b2b;border-radius:4px;");
+                                    : "background:#1f1f1f;color:#9d9d9d;border:1px solid #303030;border-radius:6px;");
 }
 
 void ProductResultPanel::loadImage(const CurrentProduct& product) {
@@ -290,7 +289,7 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
             return;
         }
         image_label_->setText({});
-        image_label_->setStyleSheet("background:#1f1f1f;border:1px solid #2b2b2b;border-radius:4px;");
+        image_label_->setStyleSheet("background:#1f1f1f;border:1px solid #303030;border-radius:6px;");
         source_image_ = image;
         updateImagePixmap();
         image_label_->setToolTip({});
