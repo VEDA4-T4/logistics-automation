@@ -11,4 +11,5 @@ RDEPENDS:${PN} = " \
     ca-certificates \
     openssl-bin \
     mosquitto-clients \
+    logistics-production-access \
 "

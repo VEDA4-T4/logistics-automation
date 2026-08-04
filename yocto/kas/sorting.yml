@@ -10,3 +10,10 @@ target:
 local_conf_header:
   sorting-vedauart: |
     RPI_EXTRA_CONFIG:append = "\n# Enable VEDAUART\ndtoverlay=vedauart\n"
+
+
+  production-security: |
+    EXTRA_IMAGE_FEATURES += "allow-root-login"
+
+  production-identity: |
+    hostname:pn-base-files = "sorting-node-01"

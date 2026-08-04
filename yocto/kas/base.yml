@@ -44,7 +44,7 @@ local_conf_header:
 
     IMAGE_FSTYPES = "wic.bz2 wic.bmap"
 
-    EXTRA_IMAGE_FEATURES += "debug-tweaks ssh-server-dropbear"
+    EXTRA_IMAGE_FEATURES += "ssh-server-dropbear"
 
   licenses: |
     LICENSE_FLAGS_ACCEPTED += "synaptics-killswitch"
