@@ -45,6 +45,7 @@ static volatile app_control_safety_event_t s_latest_control_event;
 static volatile uint8_t s_latest_control_event_valid;
 static volatile uint32_t s_control_event_count;
 static volatile uint32_t s_control_event_drop_count;
+static volatile uint32_t s_control_event_deferred_count;
 static volatile uint32_t s_duplicate_event_count;
 static volatile uint32_t s_invalid_event_count;
 static volatile uint32_t s_emergency_stop_interrupt_count;
@@ -54,6 +55,9 @@ static uint8_t s_centered_stable_valid;
 static uint8_t s_line_auto_recovery_failed;
 static uint32_t s_centered_since_ms;
 static uint32_t s_line_recovery_started_at_ms;
+static app_control_safety_event_t s_control_event_outbox[APP_CONTROL_SAFETY_QUEUE_DEPTH];
+static uint32_t s_control_event_outbox_head;
+static uint32_t s_control_event_outbox_count;
 
 static void SafetyTask_ProcessEvent(const app_safety_event_t* event);
 
@@ -264,6 +268,7 @@ static void SafetyTask_StoreLatestControlEvent(const app_control_safety_event_t*
 
 static uint8_t SafetyTask_PublishControlEvent(const app_control_safety_event_t* event) {
     app_control_safety_event_t queued_event;
+    uint32_t tail;
 
     if ((event == NULL) || (controlSafetyQueue == NULL)) {
         ++s_control_event_drop_count;
@@ -272,14 +277,37 @@ static uint8_t SafetyTask_PublishControlEvent(const app_control_safety_event_t* 
 
     queued_event = *event;
     queued_event.motor_inhibit_generation = MotorControl_GetSafetyInhibitGeneration();
-    if (osMessageQueuePut(controlSafetyQueue, &queued_event, 0U, 0U) != osOK) {
-        ++s_control_event_drop_count;
-        SafetyTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)event->type, event->occurred_at_ms);
-        return 0U;
+    if (s_control_event_outbox_count == 0U &&
+        osMessageQueuePut(controlSafetyQueue, &queued_event, 0U, 0U) == osOK) {
+        SafetyTask_StoreLatestControlEvent(&queued_event);
+        return 1U;
     }
 
-    SafetyTask_StoreLatestControlEvent(&queued_event);
-    return 1U;
+    if (s_control_event_outbox_count < APP_CONTROL_SAFETY_QUEUE_DEPTH) {
+        tail = (s_control_event_outbox_head + s_control_event_outbox_count) % APP_CONTROL_SAFETY_QUEUE_DEPTH;
+        s_control_event_outbox[tail] = queued_event;
+        ++s_control_event_outbox_count;
+        ++s_control_event_deferred_count;
+        return 1U;
+    }
+
+    ++s_control_event_drop_count;
+    SafetyTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)event->type, event->occurred_at_ms);
+    return 0U;
+}
+
+static void SafetyTask_FlushControlEventOutbox(void) {
+    while (s_control_event_outbox_count != 0U && controlSafetyQueue != NULL) {
+        app_control_safety_event_t* event = &s_control_event_outbox[s_control_event_outbox_head];
+
+        if (osMessageQueuePut(controlSafetyQueue, event, 0U, 0U) != osOK) {
+            return;
+        }
+
+        SafetyTask_StoreLatestControlEvent(event);
+        s_control_event_outbox_head = (s_control_event_outbox_head + 1U) % APP_CONTROL_SAFETY_QUEUE_DEPTH;
+        --s_control_event_outbox_count;
+    }
 }
 
 static void SafetyTask_CopyRequestMetadata(app_control_safety_event_t* destination, const app_safety_event_t* request) {
@@ -688,6 +716,10 @@ static void SafetyTask_Initialize(void) {
     s_latest_control_event_valid = 0U;
     s_control_event_count = 0U;
     s_control_event_drop_count = 0U;
+    s_control_event_deferred_count = 0U;
+    s_control_event_outbox_head = 0U;
+    s_control_event_outbox_count = 0U;
+    (void)memset(s_control_event_outbox, 0, sizeof(s_control_event_outbox));
     s_duplicate_event_count = 0U;
     s_invalid_event_count = 0U;
     s_emergency_stop_interrupt_count = 0U;
@@ -715,11 +747,13 @@ void StartSafetyTask(void* argument) {
 
     for (;;) {
         now_ms = osKernelGetTickCount();
+        SafetyTask_FlushControlEventOutbox();
         SafetyTask_ProcessEmergencyStopInput(now_ms);
         SafetyTask_UpdateCenteredStability(now_ms);
         SafetyTask_ProcessQueue();
         SafetyTask_ReconcileLineLoss(now_ms);
         SafetyTask_MonitorLineRecovery(now_ms);
+        SafetyTask_FlushControlEventOutbox();
 
         if ((uint32_t)(now_ms - last_alive_ms) >= APP_TIMING_HEALTH_PERIOD_MS) {
             SafetyTask_PublishHealthEvent(APP_HEALTH_EVENT_TASK_ALIVE, s_safety_context.latched_hazard_mask, now_ms);
