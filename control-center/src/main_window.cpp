@@ -60,6 +60,7 @@ constexpr int kDefaultMetadataStaleTimeoutMs = 1500;
 constexpr int kMaximumRtspNetworkTimeoutMs = 60000;
 constexpr int kDefaultChannelCount = 4;
 constexpr int kMaximumChannelCount = 16;
+constexpr int kDefaultVideoGridMinimumWidth = 480;
 constexpr int kDefaultMqttPort = 1883;
 
 struct ControlCenterConfig {
@@ -680,6 +681,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     grid_column_count_ = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(channel_count_))));
     grid_row_count_ = static_cast<int>(std::ceil(static_cast<double>(channel_count_) / grid_column_count_));
+    const int channel_minimum_width = kDefaultVideoGridMinimumWidth / grid_column_count_;
+    const QSize channel_minimum_size(
+        channel_minimum_width, static_cast<int>(std::lround(static_cast<double>(channel_minimum_width) * 9.0 / 16.0)));
     channel_panels_.reserve(channel_count_);
 
     for (std::size_t channel = 0; channel < channel_count_; ++channel) {
@@ -708,7 +712,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         detection_overlays_[channel] = new DetectionOverlay(video_layers_[channel]);
         reconnect_timers_[channel] = new QTimer(this);
 
-        channel_panel->setMinimumSize(240, 135);
+        channel_panel->setMinimumSize(channel_minimum_size);
         channel_panel->setStyleSheet("background-color:#181818;border:1px solid #303030;border-radius:6px;");
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
@@ -729,7 +733,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel]->addWidget(video_layers_[channel]);
         channel_stacks_[channel]->addWidget(state_overlays_[channel]);
 
-        detection_overlays_[channel]->setMinimumSize(240, 135);
+        detection_overlays_[channel]->setMinimumSize(channel_minimum_size);
         players_[channel]->setVideoSink(detection_overlays_[channel]->videoSink());
         reconnect_timers_[channel]->setInterval(reconnect_interval_ms_);
         detection_overlays_[channel]->setStaleTimeout(metadata_stale_timeout_ms_);

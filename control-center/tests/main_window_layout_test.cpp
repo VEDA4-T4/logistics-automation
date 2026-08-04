@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QByteArray>
 #include <QColor>
 #include <QComboBox>
 #include <QDateTime>
@@ -24,6 +25,125 @@
 #include "logistics/control_center/mqtt_client.hpp"
 #include "logistics/control_center/operational_log_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
+
+namespace {
+
+bool LayoutCheck(bool condition, const char* message) {
+    if (!condition) {
+        std::fprintf(stderr, "main_window_layout_test: %s\n", message);
+    }
+    return condition;
+}
+
+bool WriteChannelConfig(const QString& path, int channel_count) {
+    QFile config(path);
+    if (!config.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return false;
+    }
+    QByteArray contents =
+        "[mqtt]\nhost=127.0.0.1\nport=1883\n"
+        "[http]\nimage_base_url=http://127.0.0.1:1/\n"
+        "[rtsp]\nchannel_count=" +
+        QByteArray::number(channel_count) + "\nonvif_metadata_enabled=false\n";
+    for (int channel = 1; channel <= channel_count; ++channel) {
+        contents += "channel_" + QByteArray::number(channel) + "_url=rtsp://127.0.0.1:1/channel" +
+                    QByteArray::number(channel) + "\n";
+    }
+    return config.write(contents) == contents.size();
+}
+
+bool CheckVideoCells(logistics::control_center::MainWindow& window, QWidget& video, const QList<QWidget*>& cells) {
+    QList<QRect> cell_rects;
+    for (auto* cell : cells) {
+        const QRect rect(cell->mapTo(&video, QPoint{}), cell->size());
+        if (!LayoutCheck(cell->isVisible(), "configured video cell is hidden") ||
+            !LayoutCheck(!rect.isEmpty(), "configured video cell has empty geometry") ||
+            !LayoutCheck(video.rect().contains(rect), "configured video cell is clipped by videoWorkspace")) {
+            return false;
+        }
+        cell_rects.append(rect);
+    }
+    for (qsizetype left = 0; left < cell_rects.size(); ++left) {
+        for (qsizetype right = left + 1; right < cell_rects.size(); ++right) {
+            if (!LayoutCheck(!cell_rects[left].intersects(cell_rects[right]), "configured video cells overlap")) {
+                return false;
+            }
+        }
+    }
+    return LayoutCheck(
+        window.centralWidget()->rect().contains(QRect(video.mapTo(window.centralWidget(), QPoint{}), video.size())),
+        "videoWorkspace is outside centralWidget");
+}
+
+bool CheckConfiguredChannelGrid(QApplication& application, int channel_count) {
+    QTemporaryDir directory;
+    if (!LayoutCheck(directory.isValid(), "channel-grid temporary directory is invalid")) {
+        return false;
+    }
+    const auto config_path = directory.filePath(QStringLiteral("control-centor.ini"));
+    if (!LayoutCheck(WriteChannelConfig(config_path, channel_count), "could not write complete channel config")) {
+        return false;
+    }
+    qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
+
+    logistics::control_center::MainWindow window;
+    auto* video = window.findChild<QWidget*>(QStringLiteral("videoWorkspace"));
+    auto* factory = window.findChild<QWidget*>(QStringLiteral("factoryTopView"));
+    if (!LayoutCheck(video != nullptr && factory != nullptr, "configured workspace widgets are missing")) {
+        return false;
+    }
+    QList<QWidget*> cells;
+    for (int channel = 1; channel <= channel_count; ++channel) {
+        auto* cell = window.findChild<QWidget*>(QStringLiteral("videoChannel%1").arg(channel));
+        if (!LayoutCheck(cell != nullptr, "configured video cell is missing")) {
+            return false;
+        }
+        cells.append(cell);
+    }
+
+    for (const auto size : { QSize(1280, 720), QSize(1600, 900) }) {
+        window.resize(size);
+        window.show();
+        application.processEvents();
+        if (qAbs(video->width() - factory->width()) > 2) {
+            std::fprintf(stderr, "main_window_layout_test: %d channels at %dx%d produced %d/%d workspace widths\n",
+                         channel_count, size.width(), size.height(), video->width(), factory->width());
+            return false;
+        }
+        if (!LayoutCheck(window.size() == size, "configured window did not keep the requested geometry") ||
+            !LayoutCheck(factory->isVisible(), "factoryTopView is hidden for configured channels") ||
+            !CheckVideoCells(window, *video, cells)) {
+            return false;
+        }
+
+        auto* focused = cells.back();
+        QMouseEvent focus(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(focused, &focus);
+        application.processEvents();
+        for (auto* cell : cells) {
+            if (!LayoutCheck(cell->isVisible() == (cell == focused),
+                             "configured focus did not isolate the selected channel")) {
+                return false;
+            }
+        }
+        const QRect focused_rect(focused->mapTo(video, QPoint{}), focused->size());
+        if (!LayoutCheck(factory->isVisible(), "factoryTopView is hidden by configured channel focus") ||
+            !LayoutCheck(!focused_rect.isEmpty() && video->rect().contains(focused_rect),
+                         "focused configured channel is clipped")) {
+            return false;
+        }
+
+        QApplication::sendEvent(focused, &focus);
+        application.processEvents();
+        if (!CheckVideoCells(window, *video, cells)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
 
 int main(int argc, char* argv[]) {
     const auto check = [](bool condition, const char* message) {
@@ -350,4 +470,13 @@ int main(int argc, char* argv[]) {
                "factory selection did not propagate to process controls")) {
         return 8;
     }
+
+    window.hide();
+    application.processEvents();
+    for (const int channel_count : { 1, 5, 9, 16 }) {
+        if (!CheckConfiguredChannelGrid(application, channel_count)) {
+            return 9;
+        }
+    }
+    return 0;
 }
