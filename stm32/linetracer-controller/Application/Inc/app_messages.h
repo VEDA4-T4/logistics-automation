@@ -96,6 +96,7 @@ typedef struct {
     uint8_t line_left;
     uint8_t line_right;
     uint8_t marker_count;
+    uint8_t fsr_valid;
 } app_sensor_snapshot_t;
 
 typedef enum {
@@ -157,6 +158,7 @@ typedef struct {
     app_unload_command_type_t type;
     uint32_t requested_at_ms;
     uint32_t inhibit_generation;
+    uint32_t request_id;
     uint16_t job_id;
     uart_linetracer_route_t route_id;
 } app_unload_command_t;
@@ -175,6 +177,8 @@ typedef struct {
     app_unload_result_type_t type;
     uint32_t requested_at_ms;
     uint32_t completed_at_ms;
+    uint32_t inhibit_generation;
+    uint32_t request_id;
     uint16_t job_id;
     uart_linetracer_route_t route_id;
     uint8_t error_code;

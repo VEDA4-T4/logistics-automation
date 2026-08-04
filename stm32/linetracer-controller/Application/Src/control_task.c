@@ -18,6 +18,9 @@ static uint8_t controlTaskMotorReady;
 static volatile uint8_t controlTaskInitialized;
 static app_control_safety_event_t controlTaskPendingUnloadReset;
 static uint8_t controlTaskPendingUnloadResetActive;
+static uint32_t controlTaskPendingUnloadResetDeadlineMs;
+static uint32_t controlTaskPendingUnloadResetRequestId;
+static uint32_t controlTaskNextUnloadRequestId;
 
 typedef struct {
     app_tx_event_t event;
@@ -26,7 +29,7 @@ typedef struct {
 } control_pending_response_t;
 
 static control_pending_response_t controlPendingResponses[CONTROL_TASK_PENDING_RESPONSE_CAPACITY];
-static uint8_t ControlTask_RequestUnloadReset(uint32_t now_ms, uint32_t inhibit_generation);
+static uint8_t ControlTask_RequestUnloadReset(uint32_t now_ms, uint32_t inhibit_generation, uint32_t* request_id);
 
 static uint32_t ControlTask_EnterShortCriticalSection(void) {
     uint32_t primask = __get_PRIMASK();
@@ -193,29 +196,35 @@ static void ControlTask_ProcessSafetyEvents(void) {
         uint32_t now_ms = osKernelGetTickCount();
 
         MotorControl_ForceStop();
+        if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
+            uint32_t request_id = 0U;
+
+            if (event.reason == LINETRACER_STOP_REASON_NONE) {
+                event.reason = controlTaskContext.stop_reason;
+            }
+            if (controlTaskPendingUnloadResetActive != 0U ||
+                ControlTask_RequestUnloadReset(now_ms, event.unload_inhibit_generation, &request_id) == 0U) {
+                event.type = APP_CONTROL_SAFETY_RESET_REJECTED;
+                event.error_code = UART_ERROR_BUSY;
+            } else {
+                /* Keep ControlTask latched until UnloadTask confirms the same request and generation. */
+                controlTaskPendingUnloadReset = event;
+                controlTaskPendingUnloadResetRequestId = request_id;
+                controlTaskPendingUnloadResetDeadlineMs = now_ms + CONTROL_TASK_UNLOAD_RESET_TIMEOUT_MS;
+                controlTaskPendingUnloadResetActive = 1U;
+                ++processed;
+                continue;
+            }
+        }
+
         if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
             app_tx_event_t fault_event;
-            uint8_t publish_reset_result = 1U;
-
-            if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
-                if (controlTaskPendingUnloadResetActive != 0U ||
-                    ControlTask_RequestUnloadReset(now_ms, event.unload_inhibit_generation) == 0U) {
-                    event.type = APP_CONTROL_SAFETY_RESET_REJECTED;
-                    event.error_code = UART_ERROR_BUSY;
-                } else {
-                    controlTaskPendingUnloadReset = event;
-                    controlTaskPendingUnloadResetActive = 1U;
-                    publish_reset_result = 0U;
-                }
-            }
 
             if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
                                                    &fault_event) != 0U) {
                 ControlTask_PublishTxEvent(&fault_event, now_ms);
             }
-            if (publish_reset_result != 0U) {
-                ControlTask_PublishSafetyResetResult(&event, now_ms);
-            }
+            ControlTask_PublishSafetyResetResult(&event, now_ms);
         }
         ++processed;
     }
@@ -373,19 +382,62 @@ static void ControlTask_StartUnload(uint32_t now_ms) {
     }
 }
 
-static uint8_t ControlTask_RequestUnloadReset(uint32_t now_ms, uint32_t inhibit_generation) {
+static uint8_t ControlTask_RequestUnloadReset(uint32_t now_ms, uint32_t inhibit_generation, uint32_t* request_id) {
     app_unload_command_t command = { 0 };
 
+    if (request_id == NULL) {
+        return 0U;
+    }
+
+    ++controlTaskNextUnloadRequestId;
+    if (controlTaskNextUnloadRequestId == 0U) {
+        ++controlTaskNextUnloadRequestId;
+    }
     command.type = APP_UNLOAD_COMMAND_RESET;
     command.requested_at_ms = now_ms;
     command.inhibit_generation = inhibit_generation;
+    command.request_id = controlTaskNextUnloadRequestId;
     command.route_id = UART_LINETRACER_ROUTE_NONE;
     if (unloadCommandQueue == NULL || osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)command.type, now_ms);
         return 0U;
     }
 
+    *request_id = command.request_id;
     return 1U;
+}
+
+static void ControlTask_ClearPendingUnloadReset(void) {
+    controlTaskPendingUnloadReset = (app_control_safety_event_t){ 0 };
+    controlTaskPendingUnloadResetDeadlineMs = 0U;
+    controlTaskPendingUnloadResetRequestId = 0U;
+    controlTaskPendingUnloadResetActive = 0U;
+}
+
+static void ControlTask_RejectPendingUnloadReset(uint8_t error_code, uint32_t now_ms) {
+    app_control_safety_event_t reset_event;
+
+    if (controlTaskPendingUnloadResetActive == 0U) {
+        return;
+    }
+
+    reset_event = controlTaskPendingUnloadReset;
+    reset_event.type = APP_CONTROL_SAFETY_RESET_REJECTED;
+    reset_event.error_code = (error_code != UART_ERROR_NONE) ? error_code : (uint8_t)UART_ERROR_BUSY;
+    MotorControl_ForceStop();
+    (void)ControlLogic_ApplySafetyEvent(&controlTaskContext, &reset_event, now_ms);
+    ControlTask_PublishSafetyResetResult(&reset_event, now_ms);
+    ControlTask_ClearPendingUnloadReset();
+}
+
+static void ControlTask_CheckPendingUnloadResetTimeout(uint32_t now_ms) {
+    if (controlTaskPendingUnloadResetActive == 0U ||
+        ControlTask_TimeReached(now_ms, controlTaskPendingUnloadResetDeadlineMs) == 0U) {
+        return;
+    }
+
+    ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR, CONTROL_HEALTH_UNLOAD_RESET_TIMEOUT, now_ms);
+    ControlTask_RejectPendingUnloadReset((uint8_t)UART_ERROR_TIMEOUT, now_ms);
 }
 
 static void ControlTask_ProcessUnloadResults(void) {
@@ -406,16 +458,21 @@ static void ControlTask_ProcessUnloadResults(void) {
                 : 0U;
 
         if (result.type == APP_UNLOAD_RESULT_RESET_COMPLETE || result.type == APP_UNLOAD_RESULT_RESET_FAILED) {
-            if (controlTaskPendingUnloadResetActive != 0U) {
+            if (controlTaskPendingUnloadResetActive != 0U &&
+                result.request_id == controlTaskPendingUnloadResetRequestId &&
+                result.inhibit_generation == controlTaskPendingUnloadReset.unload_inhibit_generation) {
                 app_control_safety_event_t reset_event = controlTaskPendingUnloadReset;
 
                 if (result.type == APP_UNLOAD_RESULT_RESET_FAILED) {
-                    reset_event.type = APP_CONTROL_SAFETY_RESET_REJECTED;
-                    reset_event.error_code =
-                        (result.error_code != UART_ERROR_NONE) ? result.error_code : (uint8_t)UART_ERROR_BUSY;
+                    ControlTask_RejectPendingUnloadReset(result.error_code, now_ms);
+                } else {
+                    (void)ControlLogic_ApplySafetyEvent(&controlTaskContext, &reset_event, now_ms);
+                    ControlTask_PublishSafetyResetResult(&reset_event, now_ms);
+                    ControlTask_ClearPendingUnloadReset();
                 }
-                ControlTask_PublishSafetyResetResult(&reset_event, now_ms);
-                controlTaskPendingUnloadResetActive = 0U;
+            } else {
+                ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR,
+                                               CONTROL_HEALTH_UNLOAD_RESET_RESULT_MISMATCH, now_ms);
             }
             ++processed;
             continue;
@@ -634,6 +691,9 @@ void StartControlTask(void* argument) {
     controlTaskInitialized = 0U;
     controlTaskPendingUnloadReset = (app_control_safety_event_t){ 0 };
     controlTaskPendingUnloadResetActive = 0U;
+    controlTaskPendingUnloadResetDeadlineMs = 0U;
+    controlTaskPendingUnloadResetRequestId = 0U;
+    controlTaskNextUnloadRequestId = 0U;
     next_wake_tick = osKernelGetTickCount();
     last_alive_tick = next_wake_tick;
     ControlLogic_Init(&controlTaskContext, next_wake_tick);
@@ -660,6 +720,7 @@ void StartControlTask(void* argument) {
         now_ms = osKernelGetTickCount();
         ControlTask_ProcessPendingResponses(now_ms);
         ControlTask_ProcessUnloadResults();
+        ControlTask_CheckPendingUnloadResetTimeout(osKernelGetTickCount());
         ControlTask_ProcessSensorSnapshots();
         ControlTask_ProcessCommands();
         now_ms = osKernelGetTickCount();

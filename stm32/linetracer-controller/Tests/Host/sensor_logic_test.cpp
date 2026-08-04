@@ -356,9 +356,13 @@ void TestSensorErrorsAndStaleness() {
     SensorLogic_Init(&context, 0U);
     SensorLogic_CheckStaleness(&context, SENSOR_FSR_ADC_TIMEOUT_MS);
     CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_FSR_TIMEOUT) != 0U);
+    CHECK_TRUE(context.snapshot.fsr_valid == 0U);
     update = {};
     SensorLogic_UpdateFsr(&context, 1000U, SENSOR_FSR_ADC_TIMEOUT_MS + 1U, &update);
     CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_FSR_TIMEOUT) == 0U);
+    CHECK_TRUE(context.snapshot.fsr_valid != 0U);
+    SensorLogic_MarkFsrError(&context, SENSOR_LOGIC_ERROR_FSR_ADC, SENSOR_FSR_ADC_TIMEOUT_MS + 2U);
+    CHECK_TRUE(context.snapshot.fsr_valid == 0U);
 }
 
 }  // namespace

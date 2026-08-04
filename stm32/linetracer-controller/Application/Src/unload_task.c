@@ -55,6 +55,8 @@ static void UnloadTask_SetResetResult(const app_unload_command_t* command, app_u
     unloadTaskResetResult.type = type;
     unloadTaskResetResult.requested_at_ms = command->requested_at_ms;
     unloadTaskResetResult.completed_at_ms = now_ms;
+    unloadTaskResetResult.inhibit_generation = command->inhibit_generation;
+    unloadTaskResetResult.request_id = command->request_id;
     unloadTaskResetResult.route_id = UART_LINETRACER_ROUTE_NONE;
     unloadTaskResetResult.error_code = (uint8_t)error_code;
     unloadTaskResetResultPending = 1U;
@@ -212,7 +214,7 @@ void StartUnloadTask(void* argument) {
 
         UnloadTask_ProcessStopRequests(now_ms);
         UnloadTask_ProcessCommands(now_ms);
-        if (SensorTask_GetLatest(&snapshot) &&
+        if (SensorTask_GetLatest(&snapshot) && snapshot.fsr_valid != 0U &&
             uart_linetracer_load_state_is_valid(snapshot.load_state) != 0U &&
             (uint32_t)(now_ms - snapshot.sampled_at_ms) <= UNLOAD_SENSOR_SNAPSHOT_MAX_AGE_MS) {
             load_state = snapshot.load_state;
@@ -224,6 +226,9 @@ void StartUnloadTask(void* argument) {
             if (UnloadHw_Apply(UnloadLogic_GetServoOutput(&unloadTaskContext)) == 0U) {
                 UnloadLogic_Fail(&unloadTaskContext, now_ms, UART_ERROR_SERVO);
             }
+        } else {
+            /* UnloadTask owns HAL PWM start/stop; external tasks only force compare to zero. */
+            (void)UnloadHw_Apply(UNLOAD_SERVO_OUTPUT_DISABLE);
         }
         UnloadTask_PublishResult();
 

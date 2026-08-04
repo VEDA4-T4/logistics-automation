@@ -91,14 +91,12 @@ void UnloadHw_SetSafetyInhibit(uint8_t inhibited) {
     if (inhibited != 0U) {
         ++s_safety_inhibit_generation;
         s_safety_inhibited = 1U;
+        /* Immediate register-level shutdown is safe from any task context. */
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0U);
     } else {
         s_safety_inhibited = 0U;
     }
     UnloadHw_ExitCriticalSection(primask);
-
-    if (inhibited != 0U) {
-        (void)UnloadHw_StopPwm();
-    }
 }
 
 uint8_t UnloadHw_IsSafetyInhibited(void) {

@@ -13,6 +13,8 @@ app_unload_command_t MakeStart(std::uint16_t job_id, uart_linetracer_route_t rou
 
     command.type = APP_UNLOAD_COMMAND_START;
     command.requested_at_ms = now_ms;
+    command.inhibit_generation = 7U;
+    command.request_id = 11U;
     command.job_id = job_id;
     command.route_id = route_id;
     return command;
@@ -42,6 +44,8 @@ void TestCompletionAfterDebouncedLoadOff() {
     assert(UnloadLogic_GetServoOutput(&context) == UNLOAD_SERVO_OUTPUT_DISABLE);
     assert(UnloadLogic_GetPendingResult(&context, &result) != 0U);
     assert(result.type == APP_UNLOAD_RESULT_COMPLETE);
+    assert(result.inhibit_generation == command.inhibit_generation);
+    assert(result.request_id == command.request_id);
     assert(result.job_id == 101U);
     assert(result.route_id == UART_LINETRACER_ROUTE_B);
     assert(result.error_code == UART_ERROR_NONE);

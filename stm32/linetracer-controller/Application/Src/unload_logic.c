@@ -17,6 +17,8 @@ static void UnloadLogic_PublishResult(unload_logic_context_t* context, app_unloa
     context->pending_result.type = type;
     context->pending_result.requested_at_ms = context->active_command.requested_at_ms;
     context->pending_result.completed_at_ms = now_ms;
+    context->pending_result.inhibit_generation = context->active_command.inhibit_generation;
+    context->pending_result.request_id = context->active_command.request_id;
     context->pending_result.job_id = context->active_command.job_id;
     context->pending_result.route_id = context->active_command.route_id;
     context->pending_result.error_code = (uint8_t)error_code;
