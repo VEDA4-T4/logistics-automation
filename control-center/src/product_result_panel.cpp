@@ -172,11 +172,16 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
 }
 
 void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
-    if (current_work_id_ != product.work_id) {
+    const bool work_changed = current_work_id_ != product.work_id;
+    const bool image_changed = current_image_path_ != product.image_path;
+    if (work_changed) {
         current_work_id_ = product.work_id;
-        current_image_path_.clear();
+    }
+    if (work_changed || image_changed) {
+        current_image_path_ = product.image_path;
         if (active_image_reply_ != nullptr)
             active_image_reply_->abort();
+        setImagePlaceholder(QStringLiteral("상품 이미지 대기 중"));
     }
 
     switch (product.recognition_state) {
@@ -231,8 +236,7 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
     detail_value_->setToolTip(QStringLiteral("messageId: %1\nimageId: %2\nchecksum: %3")
                                   .arg(product.message_id, product.image_id, product.image_checksum));
 
-    if (!product.image_path.isEmpty() && current_image_path_ != product.image_path) {
-        current_image_path_ = product.image_path;
+    if ((work_changed || image_changed) && !product.image_path.isEmpty()) {
         loadImage(product);
     }
 }
@@ -248,6 +252,7 @@ void ProductResultPanel::setImagePlaceholder(const QString& text, bool is_error)
     source_image_ = {};
     image_label_->clear();
     image_label_->setText(text);
+    image_label_->setToolTip({});
     image_label_->setStyleSheet(is_error
                                     ? "background:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;"
                                     : "background:#141d26;color:#91a3b0;border:1px solid #24313d;border-radius:6px;");

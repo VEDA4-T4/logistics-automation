@@ -1,8 +1,14 @@
 #include "logistics/control_center/product_result_panel.hpp"
 
 #include <QApplication>
+#include <QByteArray>
 #include <QDateTime>
+#include <QElapsedTimer>
+#include <QHostAddress>
 #include <QLabel>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QThread>
 #include <QWidget>
 #include <cassert>
 
@@ -82,5 +88,50 @@ int main(int argc, char* argv[]) {
     for (const auto& value : expected_values) {
         AssertHasFullValueToolTip(panel, value);
     }
+
+    QTcpServer image_server;
+    assert(image_server.listen(QHostAddress::LocalHost));
+    const auto png = QByteArray::fromBase64(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+    QByteArray request;
+    QObject::connect(&image_server, &QTcpServer::newConnection, &application, [&]() {
+        auto* socket = image_server.nextPendingConnection();
+        QObject::connect(socket, &QTcpSocket::readyRead, &application, [&, socket]() {
+            request.append(socket->readAll());
+            if (!request.contains("\r\n\r\n")) {
+                return;
+            }
+            socket->write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: " +
+                          QByteArray::number(png.size()) + "\r\nConnection: close\r\n\r\n" + png);
+            socket->disconnectFromHost();
+        });
+    });
+
+    logistics::control_center::ProductResultPanel image_panel(
+        QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(image_server.serverPort())));
+    image_panel.resize(460, 210);
+    image_panel.show();
+    logistics::control_center::CurrentProduct imaged_product;
+    imaged_product.work_id = QStringLiteral("work-with-image");
+    imaged_product.image_path = QStringLiteral("product.png");
+    image_panel.setCurrentProduct(imaged_product);
+    auto* image = image_panel.findChild<QLabel*>(QStringLiteral("productImage"));
+    assert(image != nullptr);
+    QElapsedTimer image_timeout;
+    image_timeout.start();
+    while (image->pixmap().isNull() && image_timeout.elapsed() < 3000) {
+        application.processEvents();
+        QThread::msleep(1);
+    }
+    assert(!image->pixmap().isNull());
+
+    logistics::control_center::CurrentProduct image_less_product;
+    image_less_product.work_id = QStringLiteral("different-work-without-image");
+    image_panel.setCurrentProduct(image_less_product);
+    assert(image->pixmap().isNull());
+    assert(!image->text().isEmpty());
+    image_panel.resize(640, 260);
+    application.processEvents();
+    assert(image->pixmap().isNull());
     return 0;
 }
