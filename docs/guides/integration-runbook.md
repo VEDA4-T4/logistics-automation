@@ -16,7 +16,6 @@
 
 - MQTT over TLS: TCP `8883`
 - HTTP 이미지 업로드/다운로드: TCP `8080`
-- RTSP Relay: TCP `8554` (`feature/rtsp-relay` 통합 후)
 
 마이그레이션용 MQTT `1883` listener도 사용자 인증과 ACL을 적용하며 익명 접근을 허용하지 않습니다. MQTT broker
 DNS 이름 또는 IP는 서버 인증서 SAN과 일치해야 합니다. 상세 설정은
