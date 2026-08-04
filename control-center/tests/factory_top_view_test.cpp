@@ -175,8 +175,8 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.nodeOpacity(QStringLiteral("sorting")) == 1.0);
     assert(concurrent_view.nodeOpacity(QStringLiteral("linetracer")) == 1.0);
     assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(78, 69));
-    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(525, 345));
-    assert(concurrent_view.boxPosition(QStringLiteral("linetracer")) == QPointF(500, 345));
+    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) ==
+           concurrent_view.boxPosition(QStringLiteral("linetracer")));
     assert(concurrent_view.gripperAngle() == 90.0);
     assert(concurrent_view.gripperProductVisible());
     assert(concurrent_view.gripperProductPosition() == QPointF(482, 145));
@@ -268,22 +268,29 @@ int main(int argc, char* argv[]) {
     line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
     line_tracer.work_id = QStringLiteral("WORK-ROUTE");
     sorting.work_id = QStringLiteral("WORK-ROUTE");
+    const auto sorting_sensors = sorting.sensors;
     const struct {
         QString destination;
         qreal servo_angle;
-        QPointF line_start;
+        int sensor_id;
     } route_cases[] = {
-        { QStringLiteral("1"), 0.0, QPointF(500, 250) },
-        { QStringLiteral("route-2"), 45.0, QPointF(500, 345) },
-        { QStringLiteral("destination-3"), 90.0, QPointF(500, 442) },
+        { QStringLiteral("1"), 0.0, 1 },
+        { QStringLiteral("route-2"), 45.0, 2 },
+        { QStringLiteral("destination-3"), 90.0, 3 },
     };
     for (const auto& route_case : route_cases) {
         sorting.destination = route_case.destination;
+        sorting.sensors = { { .sensor_id = route_case.sensor_id,
+                              .display_name = QStringLiteral("route sensor"),
+                              .measurement_status = QStringLiteral("DETECTED"),
+                              .distance_cm = 10,
+                              .updated_at = {} } };
         line_tracer.destination = route_case.destination;
         view.setProcesses({ sorting, line_tracer });
         assert(view.sortingServoAngle() == route_case.servo_angle);
-        assert(view.boxPosition(QStringLiteral("linetracer")) == route_case.line_start);
+        assert(view.boxPosition(QStringLiteral("sorting")) == view.boxPosition(QStringLiteral("linetracer")));
     }
+    sorting.sensors = sorting_sensors;
     sorting.destination.clear();
     line_tracer.destination.clear();
     const auto unrouted_servo_angle = view.sortingServoAngle();
@@ -328,7 +335,7 @@ int main(int argc, char* argv[]) {
     sorting.work_id = QStringLiteral("WORK-LT");
     sorting.destination = QStringLiteral("2");
     view.setProcesses({ sorting, line_tracer });
-    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(500, 345));
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(525, 345));
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
     line_tracer.current_state = QStringLiteral("COMPLETED");

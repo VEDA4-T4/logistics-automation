@@ -169,7 +169,6 @@ constexpr QRectF kFactoryScene{ 0, 0, 700, 500 };
 constexpr QPointF kInputPositions[]{ { 78, 69 }, { 174, 69 }, { 270, 69 }, { 375, 81 } };
 constexpr QPointF kSortingPositions[]{ { 525, 250 }, { 525, 345 }, { 525, 442 } };
 constexpr QPointF kGripperPivot{ 440, 145 };
-constexpr QPointF kLineStarts[]{ { 500, 250 }, { 500, 345 }, { 500, 442 } };
 constexpr QPointF kLineIntersections[]{ { 292, 250 }, { 292, 345 }, { 292, 442 } };
 constexpr QPointF kLineDestinations[]{ { 58, 250 }, { 58, 345 }, { 58, 442 } };
 
@@ -371,13 +370,13 @@ struct FactoryTopViewWidget::Impl {
         auto& line_tracer =
             addNode(QString::fromLatin1(kLineTracerProcessKey), QStringLiteral("Line tracer"), QPointF(525, 280));
         for (int route = 0; route < 3; ++route) {
-            addStateLine(line_tracer, QLineF(kLineStarts[route], kLineIntersections[route]), 3);
+            addStateLine(line_tracer, QLineF(kSortingPositions[route], kLineIntersections[route]), 3);
             addStateLine(line_tracer, QLineF(kLineIntersections[route], kLineDestinations[route]), 3);
         }
         auto* tracer = new QGraphicsEllipseItem(QRectF(-7, -7, 14, 14), line_tracer.group);
         tracer->setBrush(QColor(QStringLiteral("#dcdcaa")));
         tracer->setPen(QPen(QColor(QStringLiteral("#f0f0f0")), 1));
-        tracer->setPos(kLineStarts[0]);
+        tracer->setPos(kSortingPositions[0]);
         line_tracer.moving_item = tracer;
         scene->addItem(line_tracer.group);
         finalizeNode(line_tracer);
@@ -526,7 +525,7 @@ struct FactoryTopViewWidget::Impl {
                 if (route.has_value()) {
                     if (line_route != route) {
                         node.animation_phase = 0;
-                        node.moving_item->setPos(kLineStarts[*route - 1]);
+                        node.moving_item->setPos(kSortingPositions[*route - 1]);
                     }
                     line_route = route;
                 } else {
@@ -585,7 +584,7 @@ struct FactoryTopViewWidget::Impl {
                 ++node.animation_phase;
                 const int position = node.animation_phase % 3;
                 if (position == 0) {
-                    node.moving_item->setPos(kLineStarts[route]);
+                    node.moving_item->setPos(kSortingPositions[route]);
                 } else if (position == 1) {
                     node.moving_item->setPos(kLineIntersections[route]);
                 } else {
