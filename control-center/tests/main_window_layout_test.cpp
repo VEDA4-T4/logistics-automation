@@ -345,6 +345,25 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    emit_device_status(QStringLiteral("LAYOUT-LINETRACER-PICKUP"), QStringLiteral("PI-LT-01"),
+                       QStringLiteral("PICKUP_READY_B"), 6);
+    application.processEvents();
+    if (!check(factory->nodeColor(QStringLiteral("linetracer")) == QColor(QStringLiteral("#75beff")),
+               "line-tracer lifecycle state did not receive the working color") ||
+        !check(factory->boxPosition(QStringLiteral("linetracer")) == factory->lineTracerPickupPosition(2),
+               "line-tracer pickup-ready state did not reach the live factory view")) {
+        return 2;
+    }
+    emit_device_status(QStringLiteral("LAYOUT-LINETRACER-RETURN"), QStringLiteral("PI-LT-01"),
+                       QStringLiteral("FOLLOWING_LINE"), 7);
+    application.processEvents();
+    const auto return_before_tick = factory->boxPosition(QStringLiteral("linetracer"));
+    factory->advanceAnimationsForTest();
+    if (!check(factory->boxPosition(QStringLiteral("linetracer")) != return_before_tick,
+               "line-tracer did not resume its return leg after pickup-ready")) {
+        return 2;
+    }
+
     mqtt_client->messageReceived(QStringLiteral("logistics/emergency-stop"),
                                  { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
                                    { QStringLiteral("messageId"), QStringLiteral("LAYOUT-GLOBAL-EMERGENCY-STOP") },
