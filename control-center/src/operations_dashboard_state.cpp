@@ -14,6 +14,7 @@ namespace mqtt = logistics::contracts::mqtt;
 constexpr qsizetype kMaximumRememberedMessages = 2048;
 constexpr qsizetype kMaximumRetiredWorksPerProcess = 512;
 constexpr qsizetype kMaximumRememberedDestinations = 512;
+constexpr qsizetype kMaximumRetiredDeviceSessions = 512;
 
 QString StringValue(const QJsonObject& object, const char* key) {
     const auto value = object.value(QString::fromLatin1(key));
@@ -54,6 +55,33 @@ bool IsDashboardMessage(mqtt::MessageType type) {
 bool IsDeviceMessage(mqtt::MessageType type) {
     return type == mqtt::MessageType::kHeartbeat || type == mqtt::MessageType::kDeviceStatus ||
            type == mqtt::MessageType::kErrorOccurred;
+}
+
+struct DeviceMessageOrder {
+    QString session_id;
+    quint64 sequence;
+};
+
+std::optional<DeviceMessageOrder> ParseDeviceMessageOrder(const QString& message_id, const QString& source_id) {
+    const auto prefix = source_id + QStringLiteral("-MSG-");
+    const auto separator = message_id.lastIndexOf(QLatin1Char('-'));
+    if (!message_id.startsWith(prefix) || separator <= prefix.size()) {
+        return std::nullopt;
+    }
+
+    const auto sequence_text = message_id.mid(separator + 1);
+    if (sequence_text.isEmpty() ||
+        !std::all_of(sequence_text.cbegin(), sequence_text.cend(), [](const QChar character) {
+            return character >= QLatin1Char('0') && character <= QLatin1Char('9');
+        })) {
+        return std::nullopt;
+    }
+
+    bool valid = false;
+    const auto sequence = sequence_text.toULongLong(&valid);
+    return valid ? std::optional<DeviceMessageOrder>{ { message_id.mid(prefix.size(), separator - prefix.size()),
+                                                        sequence } }
+                 : std::nullopt;
 }
 
 bool IsConnectionError(mqtt::ConnectionState state) {
@@ -428,7 +456,14 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             return result;
         }
 
-        if (process.last_device_message_at.isValid() && timestamp < process.last_device_message_at) {
+        const auto device_order = ParseDeviceMessageOrder(message_id, source_id);
+        if (device_order.has_value()) {
+            if (process.retired_device_message_sessions.contains(device_order->session_id) ||
+                (process.device_message_session_id == device_order->session_id &&
+                 device_order->sequence <= process.last_device_message_sequence)) {
+                return result;
+            }
+        } else if (process.last_device_message_at.isValid() && timestamp < process.last_device_message_at) {
             return result;
         }
 
@@ -501,6 +536,18 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 process.status.destination.clear();
             }
             process.status.updated_at = timestamp;
+        }
+        if (device_order.has_value()) {
+            if (!process.device_message_session_id.isEmpty() &&
+                process.device_message_session_id != device_order->session_id) {
+                process.retired_device_message_sessions.enqueue(process.device_message_session_id);
+                // ponytail: 512 sessions bounds malformed-device memory; persist epochs for longer replay protection.
+                while (process.retired_device_message_sessions.size() > kMaximumRetiredDeviceSessions) {
+                    process.retired_device_message_sessions.dequeue();
+                }
+            }
+            process.device_message_session_id = device_order->session_id;
+            process.last_device_message_sequence = device_order->sequence;
         }
         process.last_device_message_at = timestamp;
         process.last_received_at = effective_received_at;
@@ -854,6 +901,10 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         process.status.updated_at = timestamp;
         ResetSensors(process.status);
         process.last_received_at = {};
+        process.last_device_message_at = {};
+        process.device_message_session_id.clear();
+        process.last_device_message_sequence = 0;
+        process.retired_device_message_sessions.clear();
         process.last_event_at = {};
     }
 

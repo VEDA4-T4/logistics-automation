@@ -116,6 +116,9 @@ private:
         ProcessUnitStatus status;
         QDateTime last_received_at;
         QDateTime last_device_message_at;
+        QString device_message_session_id;
+        quint64 last_device_message_sequence{ 0 };
+        QQueue<QString> retired_device_message_sessions;
         QDateTime last_event_at;
         QSet<QString> retired_work_ids;
         QQueue<QString> retired_work_order;
