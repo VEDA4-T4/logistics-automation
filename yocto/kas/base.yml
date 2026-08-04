@@ -19,6 +19,10 @@ repos:
     url: https://github.com/agherzan/meta-raspberrypi.git
     branch: scarthgap
 
+  logistics-automation:
+    layers:
+      yocto/meta-logistics:
+
 local_conf_header:
   logistics-base: |
     DL_DIR = "${TOPDIR}/../downloads"
