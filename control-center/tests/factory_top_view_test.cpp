@@ -203,10 +203,10 @@ int main(int argc, char* argv[]) {
     const auto wrong_sorting_position = cross_process_view.boxPosition(QStringLiteral("sorting"));
     const auto wrong_line_position = cross_process_view.boxPosition(QStringLiteral("linetracer"));
     cross_process_view.advanceAnimationsForTest();
-    assert(cross_process_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#9d9d9d")));
-    assert(cross_process_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#9d9d9d")));
-    assert(cross_process_view.nodeColor(QStringLiteral("gripper")) == QColor(QStringLiteral("#9d9d9d")));
-    assert(cross_process_view.nodeColor(QStringLiteral("linetracer")) == QColor(QStringLiteral("#9d9d9d")));
+    assert(cross_process_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#f0f0f0")));
+    assert(cross_process_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#f0f0f0")));
+    assert(cross_process_view.nodeColor(QStringLiteral("gripper")) == QColor(QStringLiteral("#f0f0f0")));
+    assert(cross_process_view.nodeColor(QStringLiteral("linetracer")) == QColor(QStringLiteral("#f0f0f0")));
     assert(cross_process_view.boxPosition(QStringLiteral("input")) == wrong_input_position);
     assert(cross_process_view.boxPosition(QStringLiteral("sorting")) == wrong_sorting_position);
     assert(cross_process_view.boxPosition(QStringLiteral("linetracer")) == wrong_line_position);

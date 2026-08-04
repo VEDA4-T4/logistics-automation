@@ -260,7 +260,7 @@ QColor ColorFor(FactoryNodeVisualState state) {
         case FactoryNodeVisualState::Running:
             return QColor(QStringLiteral("#89d185"));
         case FactoryNodeVisualState::Waiting:
-            return QColor(QStringLiteral("#9d9d9d"));
+            return QColor(QStringLiteral("#f0f0f0"));
     }
     return QColor(QStringLiteral("#9d9d9d"));
 }
