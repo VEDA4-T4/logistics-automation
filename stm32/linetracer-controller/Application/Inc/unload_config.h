@@ -12,7 +12,6 @@
 /* Mechanical timings are intentionally conservative and must be calibrated on the vehicle. */
 #define UNLOAD_SERVO_DEPLOY_MS 700U
 #define UNLOAD_SERVO_HOME_MS 500U
-#define UNLOAD_LOAD_OFF_STABLE_MS APP_TIMING_FSR_STABLE_MS
 #define UNLOAD_OPERATION_TIMEOUT_MS 5000U
 #define UNLOAD_SENSOR_SNAPSHOT_MAX_AGE_MS 100U
 

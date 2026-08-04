@@ -766,6 +766,11 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, app_marker_
         return ROUTE_ACTION_ERROR;
     }
 
+    /* Destination marker activity can continue while the vehicle is stationary for unloading. */
+    if (context->state == LINETRACER_CONTROL_UNLOADING) {
+        return ROUTE_ACTION_NONE;
+    }
+
     expected_marker = ControlLogic_ExpectedMarkerCode(context);
     event_time = (marker_detected_at_ms != 0U) ? marker_detected_at_ms : now_ms;
 

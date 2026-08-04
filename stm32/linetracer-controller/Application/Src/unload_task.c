@@ -16,6 +16,8 @@ static unload_logic_context_t unloadTaskContext;
 static volatile uint8_t unloadTaskSafetyStopRequested;
 static volatile uint8_t unloadTaskAbortStopRequested;
 static uint8_t unloadTaskResultQueueFaultReported;
+static app_unload_result_t unloadTaskResetResult;
+static uint8_t unloadTaskResetResultPending;
 
 static void UnloadTask_PublishHealthEvent(app_health_event_type_t type, uint32_t detail, uint32_t now_ms) {
     app_health_event_t event = { 0 };
@@ -27,25 +29,50 @@ static void UnloadTask_PublishHealthEvent(app_health_event_type_t type, uint32_t
     (void)AppQueues_TryPutHealth(&event);
 }
 
-static void UnloadTask_PublishResult(void) {
-    app_unload_result_t result;
+static uint8_t UnloadTask_TryPublishResult(const app_unload_result_t* result) {
     uint32_t now_ms;
 
-    if (UnloadLogic_GetPendingResult(&unloadTaskContext, &result) == 0U) {
-        return;
+    if (result == NULL) {
+        return 0U;
     }
 
     now_ms = osKernelGetTickCount();
-    if (unloadResultQueue == NULL || osMessageQueuePut(unloadResultQueue, &result, 0U, 0U) != osOK) {
+    if (unloadResultQueue == NULL || osMessageQueuePut(unloadResultQueue, result, 0U, 0U) != osOK) {
         if (unloadTaskResultQueueFaultReported == 0U) {
-            UnloadTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)result.type, now_ms);
+            UnloadTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)result->type, now_ms);
             unloadTaskResultQueueFaultReported = 1U;
         }
-        return;
+        return 0U;
     }
 
     unloadTaskResultQueueFaultReported = 0U;
-    UnloadLogic_AcknowledgeResult(&unloadTaskContext);
+    return 1U;
+}
+
+static void UnloadTask_SetResetResult(const app_unload_command_t* command, app_unload_result_type_t type,
+                                      uint32_t now_ms, uart_error_t error_code) {
+    unloadTaskResetResult = (app_unload_result_t){ 0 };
+    unloadTaskResetResult.type = type;
+    unloadTaskResetResult.requested_at_ms = command->requested_at_ms;
+    unloadTaskResetResult.completed_at_ms = now_ms;
+    unloadTaskResetResult.route_id = UART_LINETRACER_ROUTE_NONE;
+    unloadTaskResetResult.error_code = (uint8_t)error_code;
+    unloadTaskResetResultPending = 1U;
+}
+
+static void UnloadTask_PublishResult(void) {
+    app_unload_result_t result;
+
+    if (UnloadLogic_GetPendingResult(&unloadTaskContext, &result) != 0U) {
+        if (UnloadTask_TryPublishResult(&result) == 0U) {
+            return;
+        }
+        UnloadLogic_AcknowledgeResult(&unloadTaskContext);
+    }
+
+    if (unloadTaskResetResultPending != 0U && UnloadTask_TryPublishResult(&unloadTaskResetResult) != 0U) {
+        unloadTaskResetResultPending = 0U;
+    }
 }
 
 static void UnloadTask_HandleCommand(const app_unload_command_t* command, uint32_t now_ms) {
@@ -82,10 +109,12 @@ static void UnloadTask_HandleCommand(const app_unload_command_t* command, uint32
             unloadTaskAbortStopRequested = 0U;
             if (UnloadHw_ReleaseSafetyInhibit(command->inhibit_generation) == 0U) {
                 unloadTaskSafetyStopRequested = 1U;
+                UnloadTask_SetResetResult(command, APP_UNLOAD_RESULT_RESET_FAILED, now_ms, UART_ERROR_BUSY);
                 break;
             }
             unloadTaskResultQueueFaultReported = 0U;
             UnloadLogic_Reset(&unloadTaskContext, now_ms);
+            UnloadTask_SetResetResult(command, APP_UNLOAD_RESULT_RESET_COMPLETE, now_ms, UART_ERROR_NONE);
             break;
 
         case APP_UNLOAD_COMMAND_NONE:
@@ -166,6 +195,8 @@ void StartUnloadTask(void* argument) {
 
     (void)argument;
     unloadTaskResultQueueFaultReported = 0U;
+    unloadTaskResetResult = (app_unload_result_t){ 0 };
+    unloadTaskResetResultPending = 0U;
     next_wake_tick = osKernelGetTickCount();
     last_alive_tick = next_wake_tick;
     UnloadLogic_Init(&unloadTaskContext, next_wake_tick);

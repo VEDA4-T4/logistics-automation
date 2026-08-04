@@ -47,9 +47,7 @@ uint8_t UnloadLogic_Start(unload_logic_context_t* context, const app_unload_comm
     context->state = UNLOAD_LOGIC_MOVING_TO_RELEASE;
     context->started_at_ms = now_ms;
     context->state_entered_at_ms = now_ms;
-    context->load_empty_since_ms = 0U;
     context->active = 1U;
-    context->load_empty_tracking = 0U;
     context->load_present_seen = 0U;
     context->result_pending = 0U;
     return 1U;
@@ -64,8 +62,6 @@ void UnloadLogic_Abort(unload_logic_context_t* context, uint32_t now_ms, uart_er
     context->state = UNLOAD_LOGIC_IDLE;
     context->started_at_ms = now_ms;
     context->state_entered_at_ms = now_ms;
-    context->load_empty_since_ms = 0U;
-    context->load_empty_tracking = 0U;
     context->load_present_seen = 0U;
     UnloadLogic_PublishResult(context, APP_UNLOAD_RESULT_ABORTED, now_ms, error_code);
 }
@@ -79,8 +75,6 @@ void UnloadLogic_Fail(unload_logic_context_t* context, uint32_t now_ms, uart_err
     context->state = UNLOAD_LOGIC_FAILED;
     context->started_at_ms = now_ms;
     context->state_entered_at_ms = now_ms;
-    context->load_empty_since_ms = 0U;
-    context->load_empty_tracking = 0U;
     context->load_present_seen = 0U;
     UnloadLogic_PublishResult(context, APP_UNLOAD_RESULT_FAILED, now_ms, error_code);
 }
@@ -94,8 +88,6 @@ void UnloadLogic_Reset(unload_logic_context_t* context, uint32_t now_ms) {
     context->state = UNLOAD_LOGIC_IDLE;
     context->started_at_ms = now_ms;
     context->state_entered_at_ms = now_ms;
-    context->load_empty_since_ms = 0U;
-    context->load_empty_tracking = 0U;
     context->load_present_seen = 0U;
     context->result_pending = 0U;
     context->active_command = (app_unload_command_t){ 0 };
@@ -124,28 +116,17 @@ void UnloadLogic_Update(unload_logic_context_t* context, uart_linetracer_load_st
             if (UnloadLogic_TimeReached(now_ms, context->state_entered_at_ms + UNLOAD_SERVO_DEPLOY_MS) != 0U) {
                 context->state = UNLOAD_LOGIC_WAITING_LOAD_OFF;
                 context->state_entered_at_ms = now_ms;
-                context->load_empty_since_ms = 0U;
-                context->load_empty_tracking = 0U;
             }
             break;
 
         case UNLOAD_LOGIC_WAITING_LOAD_OFF:
             if (context->load_present_seen == 0U || load_state != UART_LINETRACER_LOAD_EMPTY) {
-                context->load_empty_since_ms = 0U;
-                context->load_empty_tracking = 0U;
                 break;
             }
 
-            if (context->load_empty_tracking == 0U) {
-                context->load_empty_since_ms = now_ms;
-                context->load_empty_tracking = 1U;
-                break;
-            }
-
-            if (UnloadLogic_TimeReached(now_ms, context->load_empty_since_ms + UNLOAD_LOAD_OFF_STABLE_MS) != 0U) {
-                context->state = UNLOAD_LOGIC_MOVING_HOME;
-                context->state_entered_at_ms = now_ms;
-            }
+            /* SensorTask publishes load_state only after its FSR stability filter has settled. */
+            context->state = UNLOAD_LOGIC_MOVING_HOME;
+            context->state_entered_at_ms = now_ms;
             break;
 
         case UNLOAD_LOGIC_MOVING_HOME:

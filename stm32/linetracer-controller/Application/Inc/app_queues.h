@@ -32,7 +32,7 @@ extern osMessageQueueId_t safetyEventQueue;
 /* SafetyTask produces; ControlTask consumes before normal commands. */
 extern osMessageQueueId_t controlSafetyQueue;
 extern osMessageQueueId_t unloadCommandQueue;
-/* UnloadTask produces one terminal result for each accepted start command. */
+/* UnloadTask produces terminal operation results and explicit reset acknowledgements. */
 extern osMessageQueueId_t unloadResultQueue;
 /* Fault events; kept separate because the FreeRTOS CMSIS adapter ignores message priority. */
 extern osMessageQueueId_t txSafetyQueue;

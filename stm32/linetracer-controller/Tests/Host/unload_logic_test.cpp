@@ -18,7 +18,7 @@ app_unload_command_t MakeStart(std::uint16_t job_id, uart_linetracer_route_t rou
     return command;
 }
 
-void TestCompletionAfterStableLoadOff() {
+void TestCompletionAfterDebouncedLoadOff() {
     unload_logic_context_t context{};
     app_unload_result_t result{};
     const auto command = MakeStart(101U, UART_LINETRACER_ROUTE_B, 100U);
@@ -34,15 +34,10 @@ void TestCompletionAfterStableLoadOff() {
     assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
 
     UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 1000U);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 1000U + UNLOAD_LOAD_OFF_STABLE_MS - 1U);
-    assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
-
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 1000U + UNLOAD_LOAD_OFF_STABLE_MS);
     assert(context.state == UNLOAD_LOGIC_MOVING_HOME);
     assert(UnloadLogic_GetServoOutput(&context) == UNLOAD_SERVO_OUTPUT_HOME);
 
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY,
-                       1000U + UNLOAD_LOAD_OFF_STABLE_MS + UNLOAD_SERVO_HOME_MS);
+    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 1000U + UNLOAD_SERVO_HOME_MS);
     assert(context.state == UNLOAD_LOGIC_IDLE);
     assert(UnloadLogic_GetServoOutput(&context) == UNLOAD_SERVO_OUTPUT_DISABLE);
     assert(UnloadLogic_GetPendingResult(&context, &result) != 0U);
@@ -55,17 +50,15 @@ void TestCompletionAfterStableLoadOff() {
     assert(UnloadLogic_GetPendingResult(&context, &result) == 0U);
 }
 
-void TestLoadOffMustRemainStable() {
+void TestNonEmptyLoadDoesNotStartHomeMove() {
     unload_logic_context_t context{};
     const auto command = MakeStart(102U, UART_LINETRACER_ROUTE_C, 100U);
 
     UnloadLogic_Init(&context, 0U);
     assert(UnloadLogic_Start(&context, &command, 100U) != 0U);
     UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 100U + UNLOAD_SERVO_DEPLOY_MS);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 1000U);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 1000U + UNLOAD_LOAD_OFF_STABLE_MS - 1U);
-    assert(context.load_empty_since_ms == 0U);
-    assert(context.load_empty_tracking == 0U);
+    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_UNLOADING, 1000U);
+    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 1100U);
     assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
 }
 
@@ -77,8 +70,6 @@ void TestPreexistingEmptyLoadCannotComplete() {
     UnloadLogic_Init(&context, 0U);
     assert(UnloadLogic_Start(&context, &command, 100U) != 0U);
     UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 100U + UNLOAD_SERVO_DEPLOY_MS);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY,
-                       100U + UNLOAD_SERVO_DEPLOY_MS + UNLOAD_LOAD_OFF_STABLE_MS);
     assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
     assert(context.load_present_seen == 0U);
     assert(UnloadLogic_GetPendingResult(&context, &result) == 0U);
@@ -98,8 +89,6 @@ void TestLoadOffHandlesTickWraparound() {
     UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 0U);
     assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
     UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 0U);
-    assert(context.load_empty_tracking != 0U);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, UNLOAD_LOAD_OFF_STABLE_MS);
     assert(context.state == UNLOAD_LOGIC_MOVING_HOME);
 }
 
@@ -141,8 +130,8 @@ void TestRejectsConcurrentOrInvalidStart() {
 }  // namespace
 
 int main() {
-    TestCompletionAfterStableLoadOff();
-    TestLoadOffMustRemainStable();
+    TestCompletionAfterDebouncedLoadOff();
+    TestNonEmptyLoadDoesNotStartHomeMove();
     TestPreexistingEmptyLoadCannotComplete();
     TestLoadOffHandlesTickWraparound();
     TestTimeoutAndAbortAreTerminal();

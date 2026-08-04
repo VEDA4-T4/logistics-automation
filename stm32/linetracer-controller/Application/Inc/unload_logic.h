@@ -29,9 +29,7 @@ typedef struct {
     app_unload_result_t pending_result;
     uint32_t started_at_ms;
     uint32_t state_entered_at_ms;
-    uint32_t load_empty_since_ms;
     uint8_t active;
-    uint8_t load_empty_tracking;
     uint8_t load_present_seen;
     uint8_t result_pending;
 } unload_logic_context_t;

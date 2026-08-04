@@ -496,6 +496,12 @@ void TestMarkerAndLoadEventsDriveRouteB() {
     assert(HandleExpectedMarker(context, 130U) == ROUTE_ACTION_STOP_AT_DEST);
     assert(context.state == LINETRACER_CONTROL_UNLOADING);
 
+    const auto route_target = context.route_plan.target_index;
+    assert(ControlLogic_HandleMarker(&context, APP_MARKER_DEST_B, 131U, 131U) == ROUTE_ACTION_NONE);
+    assert(context.state == LINETRACER_CONTROL_UNLOADING);
+    assert(context.stop_reason == LINETRACER_STOP_REASON_NONE);
+    assert(context.route_plan.target_index == route_target);
+
     control_job_completion_t completion{};
     assert(ControlLogic_HandleLoadOff(&context, 140U, &completion) == ROUTE_ACTION_JOB_COMPLETE);
     assert(completion.completed != 0U);
