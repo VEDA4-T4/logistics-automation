@@ -121,6 +121,20 @@ int main(int argc, char* argv[]) {
     assert(command_status->text().contains(QStringLiteral("비전 시작 완료")));
     assert(command_status->toolTip().contains(QLatin1Char('\n')));
 
+    panel.setMqttConnected(false);
+    assert(command_status->text().contains(QStringLiteral("MQTT 연결 끊김")));
+    assert(command_status->toolTip().contains(QStringLiteral("MQTT 연결 끊김")));
+    assert(!command_status->toolTip().contains(QStringLiteral("비전 시작 완료")));
+    panel.setControlTarget(QStringLiteral("PI-SORTING-01"), QStringLiteral("분류 컨베이어"));
+    assert(command_status->text().contains(QStringLiteral("MQTT 연결 끊김")));
+    assert(command_status->toolTip().contains(QStringLiteral("MQTT 연결 끊김")));
+    assert(!command_status->toolTip().contains(QStringLiteral("비전 시작 완료")));
+    panel.setControlTarget(QStringLiteral("PI-VISION-01"), QStringLiteral("비전 처리"));
+    assert(command_status->text().contains(QStringLiteral("MQTT 연결 끊김")));
+    assert(command_status->toolTip().contains(QStringLiteral("MQTT 연결 끊김")));
+    assert(!command_status->toolTip().contains(QStringLiteral("비전 시작 완료")));
+    panel.setMqttConnected(true);
+
     processes[0].current_state = QStringLiteral("WAITING_FOR_PRODUCT");
     panel.setProcessStates(logistics::control_center::OverallProcessState::Running, processes);
     assert(!start->isEnabled());

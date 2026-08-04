@@ -232,6 +232,7 @@ void ProcessControlPanel::setMqttConnected(bool connected) {
         }
         command_target_device_id_.clear();
         command_status_->setText(QStringLiteral("MQTT 연결 끊김"));
+        command_status_->setToolTip(QStringLiteral("MQTT 연결 끊김"));
         command_status_->setStyleSheet(FailureCommandStyle());
     }
     updateButtonStates();
