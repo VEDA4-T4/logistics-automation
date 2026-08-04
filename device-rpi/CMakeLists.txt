@@ -401,3 +401,22 @@ if(LOGISTICS_BUILD_VISION_NODE)
         )
     endif()
 endif()
+# ------------------------------------------------------------------------------
+# Runtime installation
+# ------------------------------------------------------------------------------
+
+foreach(
+    node_target
+    IN ITEMS
+        logistics_input_node
+        logistics_vision_node
+        logistics_sorting_node
+        logistics_linetracer_node
+)
+    if(TARGET ${node_target})
+        install(
+            TARGETS ${node_target}
+            RUNTIME DESTINATION bin
+        )
+    endif()
+endforeach()

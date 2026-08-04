@@ -1,8 +1,7 @@
 [Unit]
-Description=Logistics Central Server
-After=network-online.target mosquitto.service
+Description=Logistics Sorting Node
+After=network-online.target
 Wants=network-online.target
-Requires=mosquitto.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -10,8 +9,10 @@ StartLimitBurst=5
 Type=simple
 User=logistics
 Group=logistics
+SupplementaryGroups=dialout
 WorkingDirectory=/var/lib/logistics
-ExecStart=/opt/logistics-automation/bin/logistics_central_server --config /etc/logistics/server.ini
+
+ExecStart=/opt/logistics-automation/bin/logistics_sorting_node /etc/logistics/sorting-node.ini /dev/vedauart
 
 KillSignal=SIGTERM
 TimeoutStopSec=20
@@ -21,7 +22,7 @@ RestartSec=3
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=logistics-central-server
+SyslogIdentifier=logistics-sorting-node
 
 NoNewPrivileges=true
 PrivateTmp=true
