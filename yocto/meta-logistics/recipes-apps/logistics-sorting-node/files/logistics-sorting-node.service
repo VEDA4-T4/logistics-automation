@@ -1,0 +1,25 @@
+[Unit]
+Description=Logistics Sorting Conveyor Node
+Wants=network-online.target
+After=network-online.target systemd-modules-load.service
+ConditionPathExists=/etc/logistics/sorting-node.ini
+ConditionPathExists=/etc/logistics/tls/ca.crt
+
+[Service]
+Type=simple
+User=logistics-sorting
+Group=logistics
+SupplementaryGroups=dialout
+WorkingDirectory=/var/lib/logistics
+ExecStart=/usr/bin/logistics_sorting_node /etc/logistics/sorting-node.ini /dev/vedauart
+Restart=on-failure
+RestartSec=2
+StateDirectory=logistics
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target
