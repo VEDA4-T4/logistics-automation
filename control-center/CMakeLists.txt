@@ -247,6 +247,7 @@ if(BUILD_TESTING)
         control_center_product_result_panel_test
         tests/product_result_panel_test.cpp
         src/product_result_panel.cpp
+        src/current_product_state.cpp
         include/logistics/control_center/product_result_panel.hpp
         include/logistics/control_center/current_product_state.hpp
     )

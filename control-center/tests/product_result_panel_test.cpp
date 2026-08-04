@@ -1,41 +1,84 @@
 #include "logistics/control_center/product_result_panel.hpp"
 
 #include <QApplication>
-#include <QFrame>
+#include <QDateTime>
 #include <QLabel>
+#include <QWidget>
 #include <cassert>
+
+namespace {
+
+QRect PanelRect(const QWidget& panel, const QWidget& widget) {
+    return { widget.mapTo(&panel, QPoint{}), widget.size() };
+}
+
+void AssertHasFullValueToolTip(const QWidget& parent, const QString& value) {
+    const auto labels = parent.findChildren<QLabel*>();
+    for (const auto* label : labels) {
+        if (label->text() == value) {
+            assert(label->toolTip().contains(value));
+            return;
+        }
+    }
+    assert(false);
+}
+
+void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel& panel, const QSize& size) {
+    panel.resize(size);
+    panel.show();
+    QApplication::processEvents();
+
+    auto* image = panel.findChild<QLabel*>(QStringLiteral("productImage"));
+    auto* metadata = panel.findChild<QWidget*>(QStringLiteral("productMetadata"));
+    auto* status_row = panel.findChild<QWidget*>(QStringLiteral("productStatusRow"));
+    assert(image != nullptr);
+    assert(metadata != nullptr);
+    assert(status_row != nullptr);
+    assert(panel.size() == size);
+
+    const auto image_rect = PanelRect(panel, *image);
+    const auto metadata_rect = PanelRect(panel, *metadata);
+    const auto status_rect = PanelRect(panel, *status_row);
+    for (const auto& rect : { image_rect, metadata_rect, status_rect }) {
+        assert(!rect.isEmpty());
+        assert(panel.rect().contains(rect));
+    }
+    assert(image_rect.right() < metadata_rect.left());
+    assert(image_rect.width() > metadata_rect.width());
+}
+
+}  // namespace
 
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
 
     logistics::control_center::ProductResultPanel panel(QUrl(QStringLiteral("http://127.0.0.1/")));
-    panel.resize(480, 180);
-    panel.show();
-    application.processEvents();
+    logistics::control_center::CurrentProduct product;
+    product.work_id = QStringLiteral("work-20260804-very-long-identifier");
+    product.barcode = QStringLiteral("880123456789012345678901234567890");
+    product.product_id = QStringLiteral("product-very-long-identifier-001");
+    product.product_name = QStringLiteral("Long product name that must stay available in full");
+    product.destination = QStringLiteral("outbound-dispatch-zone-northwest");
+    product.confidence = 0.987;
+    product.updated_at = QDateTime::fromString(QStringLiteral("2026-08-04T12:34:56"), Qt::ISODate);
+    panel.setCurrentProduct(product);
 
-    auto* image = panel.findChild<QLabel*>(QStringLiteral("productImage"));
-    auto* info = panel.findChild<QFrame*>(QStringLiteral("productInfoCard"));
-    auto* detail = panel.findChild<QFrame*>(QStringLiteral("productDetailCard"));
-    assert(image != nullptr);
-    assert(info != nullptr);
-    assert(detail != nullptr);
     assert(panel.minimumHeight() <= 180);
-    assert(panel.size() == QSize(480, 180));
+    AssertUsableHorizontalContent(panel, QSize(460, 210));
+    AssertUsableHorizontalContent(panel, QSize(640, 260));
 
-    const auto panel_rect = [&panel](const QWidget* widget) {
-        return QRect(widget->mapTo(&panel, QPoint{}), widget->size());
+    const auto expected_values = {
+        product.work_id,
+        product.barcode,
+        product.product_id,
+        product.product_name,
+        product.destination,
+        QStringLiteral("98.7%"),
+        product.updated_at.toLocalTime().toString(QStringLiteral("MM-dd HH:mm:ss")),
     };
-    const auto image_rect = panel_rect(image);
-    const auto info_rect = panel_rect(info);
-    const auto detail_rect = panel_rect(detail);
-    for (const auto& rect : { image_rect, info_rect, detail_rect }) {
-        assert(!rect.isEmpty());
-        assert(panel.rect().contains(rect));
+    for (const auto& value : expected_values) {
+        AssertHasFullValueToolTip(panel, value);
     }
-    assert(image_rect.top() <= info_rect.bottom() && info_rect.top() <= image_rect.bottom());
-    assert(image_rect.right() < info_rect.left() || info_rect.right() < image_rect.left());
-    assert(info_rect.left() == detail_rect.left());
-    assert(info_rect.right() == detail_rect.right());
     return 0;
 }
