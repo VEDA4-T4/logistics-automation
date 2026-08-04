@@ -28,7 +28,7 @@ journalctl -u mosquitto -n 200 --no-pager
 nc -vz mqtt.logistics.local 8883
 mosquitto_sub -h mqtt.logistics.local -p 8883 \
   --cafile /etc/logistics/tls/ca.crt \
-  -u PI-VISION-01 -P '해당-장치에-발급한-비밀번호' \
+  -u central-server -P '중앙서버에-발급한-비밀번호' \
   -t 'device/PI-VISION-01/status' -d
 ```
 

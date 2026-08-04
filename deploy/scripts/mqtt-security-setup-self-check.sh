@@ -52,4 +52,10 @@ for obsolete_text in \
     fi
 done
 
+operations_guide="${script_dir}/../../docs/guides/operations-troubleshooting.md"
+if ! grep -Fq -- "-u central-server -P '중앙서버에-발급한-비밀번호'" "${operations_guide}"; then
+    echo 'The MQTT subscribe diagnostic must use the ACL-authorized central-server account.' >&2
+    exit 1
+fi
+
 echo 'MQTT setup security self-checks passed.'
