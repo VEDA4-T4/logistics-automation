@@ -66,6 +66,7 @@ struct ControlCenterConfig {
     QString mqtt_client_id{ "control-center" };
     QString mqtt_username;
     QString mqtt_password;
+    QString mqtt_ca_certificate;
     int mqtt_port{ kDefaultMqttPort };
     int mqtt_reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     int mqtt_keep_alive_seconds{ 30 };
@@ -75,6 +76,7 @@ struct ControlCenterConfig {
     int channel_count{ kDefaultChannelCount };
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     bool low_latency{ true };
+    bool mqtt_tls_enabled{ false };
     int network_timeout_ms{ kDefaultRtspNetworkTimeoutMs };
     qsizetype probe_size_bytes{ kDefaultRtspProbeSizeBytes };
     qsizetype maximum_buffer_size_bytes{ kDefaultRtspMaximumBufferSizeBytes };
@@ -178,6 +180,22 @@ ControlCenterConfig loadControlCenterConfig() {
 
     config.mqtt_username = settings.value("mqtt/username").toString();
     config.mqtt_password = settings.value("mqtt/password").toString();
+
+    const auto mqtt_tls_value = settings.value("mqtt/tls_enabled", false).toString().trimmed().toLower();
+
+    if (mqtt_tls_value == QStringLiteral("true") || mqtt_tls_value == QStringLiteral("1")) {
+        config.mqtt_tls_enabled = true;
+    } else if (mqtt_tls_value == QStringLiteral("false") || mqtt_tls_value == QStringLiteral("0")) {
+        config.mqtt_tls_enabled = false;
+    } else {
+        config.warnings.append(QStringLiteral("mqtt/tls_enabled는 true 또는 false여야 하므로 false를 사용합니다."));
+    }
+
+    config.mqtt_ca_certificate = settings.value("mqtt/ca_certificate").toString().trimmed();
+
+    if (config.mqtt_tls_enabled && config.mqtt_ca_certificate.isEmpty()) {
+        config.warnings.append(QStringLiteral("MQTT TLS가 활성화됐지만 mqtt/ca_certificate가 비어 있습니다."));
+    }
 
     bool mqtt_port_is_valid = false;
     const auto mqtt_port = settings.value("mqtt/port", kDefaultMqttPort).toInt(&mqtt_port_is_valid);
@@ -578,15 +596,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             statusBar()->showMessage(QStringLiteral("오류 로그 %1건을 확인 처리했습니다.").arg(count), 3000);
         }
     });
+    mqtt_client_ = new MqttClient(
+        {
+            .host = config.mqtt_host,
+            .client_id = config.mqtt_client_id,
+            .username = config.mqtt_username,
+            .password = config.mqtt_password,
+            .ca_certificate = config.mqtt_ca_certificate,
+            .port = config.mqtt_port,
+            .reconnect_interval_ms = config.mqtt_reconnect_interval_ms,
+            .keep_alive_seconds = config.mqtt_keep_alive_seconds,
+            .tls_enabled = config.mqtt_tls_enabled,
+        },
+        this);
 
-    mqtt_client_ = new MqttClient({ .host = config.mqtt_host,
-                                    .client_id = config.mqtt_client_id,
-                                    .username = config.mqtt_username,
-                                    .password = config.mqtt_password,
-                                    .port = config.mqtt_port,
-                                    .reconnect_interval_ms = config.mqtt_reconnect_interval_ms,
-                                    .keep_alive_seconds = config.mqtt_keep_alive_seconds },
-                                  this);
     connect(mqtt_client_, &MqttClient::connectionStateChanged, this,
             [this](MqttClient::ConnectionState state, const QString& detail) {
                 mqtt_status_label_->setToolTip(detail);

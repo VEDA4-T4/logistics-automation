@@ -1,14 +1,16 @@
 [device]
-device_id=PI-TEST
+device_id=PI-VISION-01
 node_name=vision-node-01
-ip_address=192.168.0.21
+ip_address=192.0.2.21
 
 [mqtt]
-host=127.0.0.1
-port=1883
-client_id=PI-TEST
-username=
-password=
+host=mqtt.logistics.local
+port=8883
+client_id=PI-VISION-01
+username=PI-VISION-01
+password=replace-with-vision-mqtt-password
+tls_enabled=true
+ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
@@ -16,7 +18,7 @@ clean_session=true
 
 [log_upload]
 enabled=true
-endpoint_url=http://127.0.0.1:8080/api/v1/uploads/logs
+endpoint_url=http://central-server.logistics.local:8080/api/v1/uploads/logs
 bearer_token=replace-with-a-device-upload-token
 ca_certificate=/etc/logistics/tls/ca.crt
 spool_directory=/var/lib/logistics/log-spool
@@ -31,7 +33,7 @@ allow_insecure_http=true
 
 [image_upload]
 enabled=true
-endpoint_url=http://127.0.0.1:8080/api/v1/uploads/images
+endpoint_url=http://central-server.logistics.local:8080/api/v1/uploads/images
 bearer_token=replace-with-a-device-upload-token
 ca_certificate=/etc/logistics/tls/ca.crt
 request_timeout_seconds=30

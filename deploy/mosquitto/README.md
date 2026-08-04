@@ -8,14 +8,13 @@
 | 구성 요소 | 사용자/비밀번호 | MQTT TLS |
 | --- | --- | --- |
 | Mosquitto broker | 지원 | 지원 |
-| Central Server libmosquitto client | 지원 | **미구현** |
-| Device Node libmosquitto client | 지원 | **미구현** |
-| Qt Control Center `QMqttClient` | 지원 | **미구현** |
+| Central Server libmosquitto client | 지원 | 지원 |
+| Device Node libmosquitto client | 지원 | 지원 |
+| Qt Control Center `QMqttClient` | 지원 | 지원 |
 | 중앙서버 HTTP upload | bearer token | HTTPS 지원 |
 
-현재 중앙서버와 Device 노드는 `mosquitto_username_pw_set()`만 호출하고, CA를 적용하는
-`mosquitto_tls_set()`은 호출하지 않습니다. Control Center도 현재 `connectToHost()`를 사용합니다. 따라서 broker를
-TLS 전용 `8883`으로 바꾸기 전에 [애플리케이션 TLS 구현](#애플리케이션-tls-구현-필수)을 먼저 완료해야 합니다.
+중앙서버와 Device Node는 libmosquitto에 CA를 적용하며, Control Center는 `QSslConfiguration`과
+`connectToHostEncrypted()`를 사용합니다. 세 클라이언트 모두 서버 인증서를 검증하고 TLS 1.2 이상을 사용합니다.
 
 ## 권장 보안 단계
 
@@ -290,52 +289,9 @@ mosquitto_pub \
 
 이 검사는 broker TLS와 ACL만 확인합니다. 애플리케이션 메시지 JSON 계약 검증은 중앙서버에서 별도로 수행합니다.
 
-## 애플리케이션 TLS 구현 필수
+## 애플리케이션 MQTT TLS 설정
 
-다음 작업이 병합되기 전에는 실제 애플리케이션 INI의 MQTT port를 `8883`으로 바꾸지 않습니다.
-
-### Central Server
-
-대상:
-
-- `central-server-rpi/include/logistics/central_server/mqtt_config.hpp`
-- `central-server-rpi/src/mqtt_broker/mqtt_config.cpp`
-- `central-server-rpi/include/logistics/central_server/mqtt_transport.hpp`
-- `central-server-rpi/src/mqtt_broker/mosquitto_transport.cpp`
-
-필요 작업:
-
-1. `tls_enabled`, `ca_certificate`, 선택적 `client_certificate/client_private_key` 설정 추가
-2. 연결 전에 `mosquitto_tls_set()` 적용
-3. TLS 최소 버전과 서버 인증서 hostname 검증 유지
-4. 누락·읽기 불가 CA 경로를 시작 오류로 처리
-5. 단위 테스트와 TLS broker 통합 테스트 추가
-
-### Device Node
-
-대상:
-
-- `device-rpi/common/include/logistics/device/mqtt_node_config.hpp`
-- `device-rpi/common/config/mqtt_node_config.cpp`
-- `device-rpi/common/mqtt_client/mqtt_node_client.cpp`
-
-Central Server와 동일한 CA 및 검증 정책을 적용합니다. 각 장치의 `client_id`와 사용자 이름은 고유하게 유지합니다.
-
-### Qt Control Center
-
-대상:
-
-- `control-center/include/logistics/control_center/mqtt_client.hpp`
-- `control-center/src/mqtt_client.cpp`
-- `control-center/src/main_window.cpp`
-
-CA를 `QSslConfiguration`에 넣고 TLS 사용 시 `QMqttClient::connectToHostEncrypted()`를 호출합니다. 인증서 오류를
-무시하는 우회 옵션은 운영 빌드에 넣지 않습니다. Qt의 공식
-[QMqttClient 문서](https://doc.qt.io/qt-6/qmqttclient.html)에 암호화 연결 API가 설명되어 있습니다.
-
-### 제안 INI 키
-
-아래 키는 **아직 구현되지 않은 목표 형식**입니다.
+세 클라이언트는 다음 키를 지원합니다.
 
 ```ini
 [mqtt]
@@ -343,25 +299,27 @@ host=mqtt.logistics.local
 port=8883
 tls_enabled=true
 ca_certificate=/etc/logistics/tls/ca.crt
-client_certificate=
-client_private_key=
 ```
 
-Windows Control Center의 CA 경로는 Windows 절대 경로를 사용합니다.
+`tls_enabled=true`이면 CA 경로가 필수입니다. Linux는 `/etc/logistics/tls/ca.crt`, Windows Control Center는
+`C:\ProgramData\Logistics\tls\ca.crt` 같은 운영체제별 절대 경로를 사용합니다. 실제 비밀번호는 추적하는 예제 파일이
+아니라 런타임 INI에만 기록합니다. 설치 스크립트의 환경변수와 비밀번호 입력 방법은
+[설치 스크립트 가이드](../scripts/README.md)를 참고합니다.
 
 ## TLS 적용 순서
 
 1. 사용자/비밀번호와 ACL을 `1883`에서 먼저 검증합니다.
 2. CA와 서버 인증서를 만들고 `8883` listener를 추가합니다.
 3. `mosquitto_sub/pub`와 `openssl s_client`로 `8883`을 검증합니다.
-4. Central Server TLS 구현과 테스트를 완료하고 `8883`으로 전환합니다.
-5. 모든 Device Node를 하나씩 전환합니다.
-6. Control Center를 전환합니다.
+4. Central Server를 `8883`으로 전환합니다.
+5. Device Node를 하나씩 `8883`으로 전환합니다.
+6. Control Center를 `8883`으로 전환합니다.
 7. heartbeat, 명령, 작업 이벤트, 이미지 화면을 전체 시나리오로 검증합니다.
 8. 방화벽에서 `1883` 접근을 차단합니다.
 9. Mosquitto의 `1883` listener를 제거하고 재시작합니다.
 
-전환 중 `1883`은 필요한 장치 IP에서만 접근하도록 방화벽으로 제한합니다.
+전환 중 `1883`도 `allow_anonymous false`, password file, ACL을 그대로 사용하며 필요한 장치 IP에서만 접근하도록
+방화벽으로 제한합니다. 평문 listener는 비밀번호를 암호화하지 않으므로 전환이 끝나면 반드시 제거합니다.
 
 ```sh
 sudo ufw delete allow from 192.168.0.10 to any port 1883 proto tcp

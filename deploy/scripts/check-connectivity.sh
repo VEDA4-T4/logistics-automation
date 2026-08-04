@@ -4,6 +4,7 @@ set -euo pipefail
 
 central_host="${LOGISTICS_CENTRAL_HOST:-}"
 mqtt_host="${LOGISTICS_MQTT_HOST:-${central_host}}"
+mqtt_port="${LOGISTICS_MQTT_PORT:-8883}"
 
 if [[ -z "${central_host}" ]]; then
     echo "LOGISTICS_CENTRAL_HOST must be set." >&2
@@ -22,7 +23,7 @@ check_tcp() {
     fi
 }
 
-check_tcp "${mqtt_host}" 1883 "MQTT"
+check_tcp "${mqtt_host}" "${mqtt_port}" "MQTT"
 check_tcp "${central_host}" 8080 "HTTP upload"
 
 http_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
