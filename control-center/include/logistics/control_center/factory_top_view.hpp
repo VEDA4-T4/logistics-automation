@@ -70,6 +70,9 @@ public:
     [[nodiscard]] QColor nodeColor(const QString& process_key) const;
     [[nodiscard]] QString sensorText(const QString& process_key, int sensor_id) const;
     [[nodiscard]] QPointF boxPosition(const QString& process_key) const;
+    [[nodiscard]] QPointF lineTracerPickupPosition(int route) const;
+    [[nodiscard]] QPointF lineTracerJunctionPosition(int route) const;
+    [[nodiscard]] QPointF lineTracerDestinationPosition(int route) const;
     [[nodiscard]] qreal gripperAngle() const;
     [[nodiscard]] bool gripperProductVisible() const;
     [[nodiscard]] QPointF gripperProductPosition() const;

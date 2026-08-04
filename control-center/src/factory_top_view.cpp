@@ -166,11 +166,13 @@ FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
 namespace {
 
 constexpr QRectF kFactoryScene{ 0, 0, 700, 500 };
-constexpr QPointF kInputPositions[]{ { 78, 69 }, { 174, 69 }, { 270, 69 }, { 375, 81 } };
-constexpr QPointF kSortingPositions[]{ { 525, 250 }, { 525, 345 }, { 525, 442 } };
+constexpr QPointF kInputPositions[]{ { 143, 81 }, { 242, 81 }, { 341, 81 }, { 440, 81 } };
 constexpr QPointF kGripperPivot{ 440, 145 };
+constexpr qreal kGripperReach = 64.0;
+constexpr QPointF kSortingFeed{ 504, 145 };
+constexpr QPointF kSortingPositions[]{ { 504, 250 }, { 504, 345 }, { 504, 442 } };
 constexpr QPointF kLineIntersections[]{ { 292, 250 }, { 292, 345 }, { 292, 442 } };
-constexpr QPointF kLineDestinations[]{ { 58, 250 }, { 58, 345 }, { 58, 442 } };
+constexpr QPointF kLineDestinations[]{ { 80, 250 }, { 80, 345 }, { 80, 442 } };
 
 class ProcessGraphicsGroup final : public QGraphicsObject {
 public:
@@ -331,10 +333,10 @@ struct FactoryTopViewWidget::Impl {
         finalizeNode(input);
 
         auto& vision = addNode(QString::fromLatin1(kVisionProcessKey), QStringLiteral("Vision"), QPointF(335, 35));
-        auto* camera = new QGraphicsRectItem(QRectF(360, 66, 30, 30), vision.group);
+        auto* camera = new QGraphicsRectItem(QRectF(kInputPositions[3] - QPointF(15, 15), QSizeF(30, 30)), vision.group);
         camera->setBrush(QColor(QStringLiteral("#2d2d30")));
         camera->setPen(QPen(vision.color, 3));
-        addStateLine(vision, QLineF(366, 74, 384, 88), 3);
+        addStateLine(vision, QLineF(kInputPositions[3] - QPointF(9, 7), kInputPositions[3] + QPointF(9, 7)), 3);
         scene->addItem(vision.group);
         finalizeNode(vision);
 
@@ -343,19 +345,19 @@ struct FactoryTopViewWidget::Impl {
             new QGraphicsEllipseItem(QRectF(kGripperPivot.x() - 8, kGripperPivot.y() - 8, 16, 16), gripper.group);
         pivot->setBrush(QColor(QStringLiteral("#2d2d30")));
         pivot->setPen(QPen(gripper.color, 3));
-        gripper_arm = addStateLine(gripper, QLineF(kGripperPivot, kGripperPivot - QPointF(0, 42)), 7);
-        gripper_jaw_left = addStateLine(gripper, QLineF(432, 103, 440, 103), 3);
-        gripper_jaw_right = addStateLine(gripper, QLineF(440, 103, 448, 103), 3);
+        gripper_arm = addStateLine(gripper, QLineF(kGripperPivot, kGripperPivot - QPointF(0, kGripperReach)), 7);
+        gripper_jaw_left = addStateLine(gripper, QLineF(432, 81, 440, 81), 3);
+        gripper_jaw_right = addStateLine(gripper, QLineF(440, 81, 448, 81), 3);
         gripper_product = new QGraphicsRectItem(QRectF(-8, -8, 16, 16), gripper.group);
         gripper_product->setBrush(QColor(QStringLiteral("#ce9178")));
         gripper_product->setPen(QPen(QColor(QStringLiteral("#f0f0f0")), 1));
-        gripper_product->setPos(kGripperPivot - QPointF(0, 42));
+        gripper_product->setPos(kInputPositions[3]);
         gripper_product->hide();
         scene->addItem(gripper.group);
         finalizeNode(gripper);
 
         auto& sorting = addNode(QString::fromLatin1(kSortingProcessKey), QStringLiteral("Sorting"), QPointF(530, 85));
-        addStateLine(sorting, QLineF(kSortingPositions[0], kSortingPositions[2]), 6);
+        addStateLine(sorting, QLineF(kSortingFeed, kSortingPositions[2]), 6);
         addBox(sorting, kSortingPositions[0]);
         for (int sensor_id = 1; sensor_id <= 3; ++sensor_id) {
             auto* sensor = new QGraphicsSimpleTextItem(QStringLiteral("US%1 -- cm").arg(sensor_id + 1), sorting.group);
@@ -370,9 +372,10 @@ struct FactoryTopViewWidget::Impl {
         auto& line_tracer =
             addNode(QString::fromLatin1(kLineTracerProcessKey), QStringLiteral("Line tracer"), QPointF(525, 280));
         for (int route = 0; route < 3; ++route) {
-            addStateLine(line_tracer, QLineF(kSortingPositions[route], kLineIntersections[route]), 3);
             addStateLine(line_tracer, QLineF(kLineIntersections[route], kLineDestinations[route]), 3);
+            addStateLine(line_tracer, QLineF(kLineIntersections[route], kSortingPositions[route]), 3);
         }
+        addStateLine(line_tracer, QLineF(kLineIntersections[0], kLineIntersections[2]), 3);
         auto* tracer = new QGraphicsEllipseItem(QRectF(-7, -7, 14, 14), line_tracer.group);
         tracer->setBrush(QColor(QStringLiteral("#dcdcaa")));
         tracer->setPen(QPen(QColor(QStringLiteral("#f0f0f0")), 1));
@@ -424,7 +427,8 @@ struct FactoryTopViewWidget::Impl {
         }
         gripper_angle = phase == FactoryMotionPhase::GripperPick ? 0.0 : 90.0;
         const bool open = phase == FactoryMotionPhase::GripperPlaced;
-        const QPointF end = gripper_angle == 0.0 ? kGripperPivot - QPointF(0, 42) : kGripperPivot + QPointF(42, 0);
+        const QPointF end = gripper_angle == 0.0 ? kGripperPivot - QPointF(0, kGripperReach)
+                                                  : kGripperPivot + QPointF(kGripperReach, 0);
         gripper_arm->setLine(QLineF(kGripperPivot, end));
         if (gripper_angle == 0.0) {
             const qreal spread = open ? 8.0 : 3.0;
@@ -443,9 +447,9 @@ struct FactoryTopViewWidget::Impl {
             return;
         }
         if (phase == FactoryMotionPhase::GripperPick) {
-            gripper_product->setPos(kGripperPivot - QPointF(0, 42));
+            gripper_product->setPos(kInputPositions[3]);
         } else if (phase == FactoryMotionPhase::GripperTransfer) {
-            gripper_product->setPos(kGripperPivot + QPointF(42, 0));
+            gripper_product->setPos(kSortingFeed);
         } else {
             gripper_product->setPos(kSortingPositions[0]);
         }
@@ -688,6 +692,18 @@ QPointF FactoryTopViewWidget::boxPosition(const QString& process_key) const {
     const auto iterator = impl_->nodes.constFind(process_key);
     return iterator == impl_->nodes.cend() || iterator->moving_item == nullptr ? QPointF{}
                                                                                : iterator->moving_item->pos();
+}
+
+QPointF FactoryTopViewWidget::lineTracerPickupPosition(int route) const {
+    return route >= 1 && route <= 3 ? kSortingPositions[route - 1] : QPointF{};
+}
+
+QPointF FactoryTopViewWidget::lineTracerJunctionPosition(int route) const {
+    return route >= 1 && route <= 3 ? kLineIntersections[route - 1] : QPointF{};
+}
+
+QPointF FactoryTopViewWidget::lineTracerDestinationPosition(int route) const {
+    return route >= 1 && route <= 3 ? kLineDestinations[route - 1] : QPointF{};
 }
 
 qreal FactoryTopViewWidget::gripperAngle() const {

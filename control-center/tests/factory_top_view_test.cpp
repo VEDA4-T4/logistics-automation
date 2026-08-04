@@ -2,7 +2,9 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QGraphicsLineItem>
 #include <QGraphicsScene>
+#include <QLineF>
 #include <QPointF>
 #include <QRectF>
 #include <cassert>
@@ -176,12 +178,12 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.nodeOpacity(QStringLiteral("gripper")) == 1.0);
     assert(concurrent_view.nodeOpacity(QStringLiteral("sorting")) == 1.0);
     assert(concurrent_view.nodeOpacity(QStringLiteral("linetracer")) == 1.0);
-    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(78, 69));
+    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(143, 81));
     assert(concurrent_view.boxPosition(QStringLiteral("sorting")) ==
            concurrent_view.boxPosition(QStringLiteral("linetracer")));
     assert(concurrent_view.gripperAngle() == 90.0);
     assert(concurrent_view.gripperProductVisible());
-    assert(concurrent_view.gripperProductPosition() == QPointF(482, 145));
+    assert(concurrent_view.gripperProductPosition() == QPointF(504, 145));
     assert(concurrent_view.sortingServoAngle() == 45.0);
     assert(concurrent_view.sensorText(QStringLiteral("input"), 1) == QStringLiteral("8 cm"));
     assert(concurrent_view.sensorText(QStringLiteral("sorting"), 1) == QStringLiteral("17 cm"));
@@ -189,8 +191,8 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.sensorText(QStringLiteral("sorting"), 3) == QStringLiteral("29 cm"));
 
     concurrent_view.advanceAnimationsForTest();
-    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(174, 69));
-    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(525, 345));
+    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(242, 81));
+    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(504, 345));
     assert(concurrent_view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
 
     concurrent_vision.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
@@ -206,8 +208,8 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.nodeOpacity(QStringLiteral("gripper")) == 1.0);
     assert(concurrent_view.nodeOpacity(QStringLiteral("sorting")) == 1.0);
     assert(concurrent_view.nodeOpacity(QStringLiteral("linetracer")) == 1.0);
-    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(174, 69));
-    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(525, 345));
+    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(242, 81));
+    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(504, 345));
     assert(concurrent_view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
     assert(concurrent_view.gripperAngle() == 90.0);
     assert(concurrent_view.gripperProductVisible());
@@ -235,6 +237,26 @@ int main(int argc, char* argv[]) {
     const auto scene_item_count = view.scene()->items().size();
 
     assert(view.sceneRect() == QRectF(0, 0, 700, 500));
+    for (int route = 1; route <= 3; ++route) {
+        assert(view.lineTracerPickupPosition(route).x() == view.boxPosition(QStringLiteral("sorting")).x());
+        assert(view.lineTracerJunctionPosition(route).x() == view.lineTracerJunctionPosition(1).x());
+    }
+    assert(view.lineTracerJunctionPosition(1).y() < view.lineTracerJunctionPosition(3).y());
+    assert(view.lineTracerPickupPosition(0).isNull());
+    assert(view.lineTracerJunctionPosition(4).isNull());
+    assert(view.lineTracerDestinationPosition(-1).isNull());
+    const QLineF common_line(view.lineTracerJunctionPosition(1), view.lineTracerJunctionPosition(3));
+    bool has_common_line = false;
+    for (auto* item : view.scene()->items()) {
+        const auto* line = dynamic_cast<QGraphicsLineItem*>(item);
+        if (line != nullptr &&
+            ((line->line().p1() == common_line.p1() && line->line().p2() == common_line.p2()) ||
+             (line->line().p1() == common_line.p2() && line->line().p2() == common_line.p1()))) {
+            has_common_line = true;
+            break;
+        }
+    }
+    assert(has_common_line);
     assert(view.nodeOpacity(QStringLiteral("input")) == 1.0);
     assert(view.nodeOpacity(QStringLiteral("linetracer")) == 0.15);
     assert(view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#89d185")));
@@ -246,16 +268,16 @@ int main(int argc, char* argv[]) {
     gripper.current_state = QStringLiteral("PICKING");
     view.setProcesses({ input, gripper });
     assert(view.gripperProductVisible());
-    assert(view.gripperProductPosition() == QPointF(440, 103));
+    assert(view.gripperProductPosition() == QPointF(440, 81));
     gripper.current_state = QStringLiteral("TRANSFERRING");
     view.setProcesses({ input, gripper });
     assert(view.gripperProductVisible());
-    assert(view.gripperProductPosition() == QPointF(482, 145));
+    assert(view.gripperProductPosition() == QPointF(504, 145));
     gripper.current_state = QStringLiteral("PLACED");
     sorting.work_id = QStringLiteral("WORK-GRIPPER");
     view.setProcesses({ input, gripper, sorting });
     assert(view.gripperProductVisible());
-    assert(view.gripperProductPosition() == QPointF(525, 250));
+    assert(view.gripperProductPosition() == QPointF(504, 250));
 
     gripper.work_id = QStringLiteral("WORK-MISMATCH");
     view.setProcesses({ input, gripper, sorting });
@@ -315,7 +337,7 @@ int main(int argc, char* argv[]) {
 
     const auto input_before = view.boxPosition(QStringLiteral("input"));
     const auto sorting_pinned = view.boxPosition(QStringLiteral("sorting"));
-    assert(sorting_pinned == QPointF(525, 345));
+    assert(sorting_pinned == QPointF(504, 345));
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("input")) != input_before);
     assert(view.boxPosition(QStringLiteral("sorting")) == sorting_pinned);
@@ -337,16 +359,16 @@ int main(int argc, char* argv[]) {
     sorting.work_id = QStringLiteral("WORK-LT");
     sorting.destination = QStringLiteral("2");
     view.setProcesses({ sorting, line_tracer });
-    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(525, 345));
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(504, 345));
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
     line_tracer.current_state = QStringLiteral("COMPLETED");
     line_tracer.work_completed = true;
     view.setProcesses({ sorting, line_tracer });
-    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 345));
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(80, 345));
     view.advanceAnimationsForTest();
     view.advanceAnimationsForTest();
-    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 345));
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(80, 345));
 
     sorting.work_id = QStringLiteral("WORK-B");
     sorting.destination = QStringLiteral("3");
@@ -361,7 +383,7 @@ int main(int argc, char* argv[]) {
     assert(visual.motion_phase == FactoryMotionPhase::LineCompleted);
     view.setProcesses({ sorting, line_tracer });
     assert(view.sortingServoAngle() == 90.0);
-    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 250));
+    assert(view.boxPosition(QStringLiteral("linetracer")) == QPointF(80, 250));
 
     line_tracer.work_id = QStringLiteral("WORK-C");
     line_tracer.destination.clear();
@@ -420,9 +442,9 @@ int main(int argc, char* argv[]) {
                                 QStringLiteral("FOLLOWING_LINE"), QStringLiteral("WORK-REDUCED"));
     reduced_line.destination = QStringLiteral("3");
     reduced_motion_view.setProcesses({ reduced_input, vision, reduced_sorting, reduced_line });
-    assert(reduced_motion_view.boxPosition(QStringLiteral("input")) == QPointF(270, 69));
-    assert(reduced_motion_view.boxPosition(QStringLiteral("sorting")) == QPointF(525, 442));
-    assert(reduced_motion_view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 442));
+    assert(reduced_motion_view.boxPosition(QStringLiteral("input")) == QPointF(341, 81));
+    assert(reduced_motion_view.boxPosition(QStringLiteral("sorting")) == QPointF(504, 442));
+    assert(reduced_motion_view.boxPosition(QStringLiteral("linetracer")) == QPointF(80, 442));
     const auto reduced_input_position = reduced_motion_view.boxPosition(QStringLiteral("input"));
     const auto reduced_sorting_position = reduced_motion_view.boxPosition(QStringLiteral("sorting"));
     const auto reduced_line_position = reduced_motion_view.boxPosition(QStringLiteral("linetracer"));
