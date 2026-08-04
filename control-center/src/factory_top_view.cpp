@@ -244,6 +244,10 @@ bool HasLiveTelemetry(const FactoryNodeVisual& visual) {
            visual.state != FactoryNodeVisualState::EmergencyStop;
 }
 
+bool HasStaleSensorWarning(const ProcessUnitStatus& process) {
+    return process.has_warning && IsSensorStaleErrorCode(process.error_code);
+}
+
 std::optional<int> DetectedSensor(const FactoryNodeVisual& visual) {
     for (const auto& sensor : visual.sensors) {
         if (sensor.detected) {
@@ -352,6 +356,7 @@ struct FactoryTopViewWidget::Impl {
         camera->setPen(QPen(vision.color, 3));
         vision.state_shapes.append(camera);
         addStateLine(vision, QLineF(kInputPositions[3] - QPointF(9, 7), kInputPositions[3] + QPointF(9, 7)), 3);
+        addBox(vision, kInputPositions[3]);
         scene->addItem(vision.group);
         finalizeNode(vision);
 
@@ -539,6 +544,7 @@ struct FactoryTopViewWidget::Impl {
             return visual;
         };
         QString input_work_id;
+        QString vision_work_id;
         QString sorting_work_id;
         for (const auto& process : processes) {
             const auto visual = visual_for(process);
@@ -547,6 +553,8 @@ struct FactoryTopViewWidget::Impl {
             }
             if (process.key == QString::fromLatin1(kInputProcessKey)) {
                 input_work_id = process.work_id;
+            } else if (process.key == QString::fromLatin1(kVisionProcessKey)) {
+                vision_work_id = process.work_id;
             } else if (process.key == QString::fromLatin1(kSortingProcessKey)) {
                 sorting_work_id = process.work_id;
             }
@@ -561,6 +569,10 @@ struct FactoryTopViewWidget::Impl {
             const auto previous_sensor = DetectedSensor(node.visual);
             node.visual = visual_for(process);
             node.motion_enabled = AllowsMotion(process.key, node.visual);
+            const bool stale_motion_telemetry = (process.key == QString::fromLatin1(kInputProcessKey) ||
+                                                 process.key == QString::fromLatin1(kSortingProcessKey)) &&
+                                                HasStaleSensorWarning(process);
+            node.motion_enabled = node.motion_enabled && !stale_motion_telemetry;
             if (process.key == QString::fromLatin1(kLineTracerProcessKey) &&
                 node.visual.motion_phase == FactoryMotionPhase::LineCompleted) {
                 node.motion_enabled = false;
@@ -571,9 +583,10 @@ struct FactoryTopViewWidget::Impl {
             updateSensors(node);
             applyVisual(node);
             const bool telemetry_live = HasLiveTelemetry(node.visual);
+            const bool motion_telemetry_live = telemetry_live && !stale_motion_telemetry;
 
             if (process.key == QString::fromLatin1(kInputProcessKey)) {
-                if (telemetry_live && DetectedSensor(node.visual).has_value()) {
+                if (motion_telemetry_live && DetectedSensor(node.visual).has_value()) {
                     node.moving_item->setPos(kInputPositions[3]);
                 }
             } else if (process.key == QString::fromLatin1(kGripperProcessKey)) {
@@ -586,14 +599,14 @@ struct FactoryTopViewWidget::Impl {
                                            node.visual.motion_phase == FactoryMotionPhase::GripperTransfer || placed;
                 applyGripperProduct(node.visual.motion_phase, telemetry_live && product_phase && trusted_work);
             } else if (process.key == QString::fromLatin1(kSortingProcessKey)) {
-                sorting_target_route = FactoryRouteIndex(process.destination);
-                if (const auto sensor = DetectedSensor(node.visual);
-                    telemetry_live && sensor.has_value() && *sensor >= 1 && *sensor <= 3) {
-                    node.moving_item->setPos(kSortingPositions[*sensor - 1]);
-                } else if (previous_sensor.has_value() && *previous_sensor >= 1 && *previous_sensor <= 3) {
-                    node.animation_phase = *previous_sensor - 1;
-                }
-                if (telemetry_live) {
+                if (motion_telemetry_live) {
+                    sorting_target_route = FactoryRouteIndex(process.destination);
+                    if (const auto sensor = DetectedSensor(node.visual);
+                        sensor.has_value() && *sensor >= 1 && *sensor <= 3) {
+                        node.moving_item->setPos(kSortingPositions[*sensor - 1]);
+                    } else if (previous_sensor.has_value() && *previous_sensor >= 1 && *previous_sensor <= 3) {
+                        node.animation_phase = *previous_sensor - 1;
+                    }
                     applySortingRoute(process);
                 }
             } else if (process.key == QString::fromLatin1(kLineTracerProcessKey)) {
@@ -650,6 +663,52 @@ struct FactoryTopViewWidget::Impl {
             if (!QApplication::isEffectEnabled(Qt::UI_AnimateCombo)) {
                 snapToFinalGeometry(process.key, node);
             }
+        }
+
+        nodes[QString::fromLatin1(kInputProcessKey)].moving_item->hide();
+        nodes[QString::fromLatin1(kVisionProcessKey)].moving_item->hide();
+        nodes[QString::fromLatin1(kSortingProcessKey)].moving_item->hide();
+        gripper_product->hide();
+        QHash<QString, QPair<int, QGraphicsItem*>> product_owners;
+        const auto claim_product = [&product_owners](const QString& work_id, int priority, QGraphicsItem* product) {
+            if (work_id.isEmpty()) {
+                return;
+            }
+            const auto owner = product_owners.constFind(work_id);
+            if (owner == product_owners.cend() || owner->first < priority) {
+                product_owners.insert(work_id, { priority, product });
+            }
+        };
+        for (const auto& process : processes) {
+            const auto node = nodes.constFind(process.key);
+            if (node == nodes.cend() || !HasLiveTelemetry(node->visual) || process.work_id.isEmpty()) {
+                continue;
+            }
+            if (process.key == QString::fromLatin1(kInputProcessKey) &&
+                (node->visual.state == FactoryNodeVisualState::Running || DetectedSensor(node->visual).has_value())) {
+                claim_product(process.work_id, 0, node->moving_item);
+            } else if (process.key == QString::fromLatin1(kVisionProcessKey) &&
+                       node->visual.motion_phase == FactoryMotionPhase::VisionProcessing) {
+                claim_product(process.work_id, 10, node->moving_item);
+            } else if (process.key == QString::fromLatin1(kGripperProcessKey)) {
+                const bool prior_stage_matches = process.work_id == input_work_id || process.work_id == vision_work_id;
+                const bool sorting_matches = process.work_id == sorting_work_id;
+                if (node->visual.motion_phase == FactoryMotionPhase::GripperPick && prior_stage_matches) {
+                    claim_product(process.work_id, 20, gripper_product);
+                } else if (node->visual.motion_phase == FactoryMotionPhase::GripperTransfer && prior_stage_matches) {
+                    claim_product(process.work_id, 30, gripper_product);
+                } else if (node->visual.motion_phase == FactoryMotionPhase::GripperPlaced &&
+                           (sorting_work_id.isEmpty() ? prior_stage_matches : sorting_matches)) {
+                    claim_product(process.work_id, 40, gripper_product);
+                }
+            } else if (process.key == QString::fromLatin1(kSortingProcessKey) &&
+                       (node->visual.state == FactoryNodeVisualState::Working ||
+                        node->visual.state == FactoryNodeVisualState::Running)) {
+                claim_product(process.work_id, 50, node->moving_item);
+            }
+        }
+        for (const auto& owner : product_owners) {
+            owner.second->show();
         }
         updateSelection();
     }

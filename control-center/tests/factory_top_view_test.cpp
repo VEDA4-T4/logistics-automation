@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QGraphicsLineItem>
+#include <QGraphicsRectItem>
 #include <QGraphicsScene>
 #include <QGraphicsSimpleTextItem>
 #include <QLineF>
@@ -17,6 +18,22 @@ using logistics::control_center::FactoryMotionPhase;
 using logistics::control_center::FactoryNodeVisualState;
 using logistics::control_center::FactoryRouteIndex;
 using logistics::control_center::ProcessUnitStatus;
+
+namespace {
+
+QList<QGraphicsRectItem*> VisibleProducts(const logistics::control_center::FactoryTopViewWidget& view) {
+    QList<QGraphicsRectItem*> products;
+    for (auto* item : view.scene()->items()) {
+        auto* rectangle = dynamic_cast<QGraphicsRectItem*>(item);
+        if (rectangle != nullptr && rectangle->rect() == QRectF(-8, -8, 16, 16) &&
+            rectangle->brush().color() == QColor(QStringLiteral("#ce9178")) && rectangle->isVisible()) {
+            products.append(rectangle);
+        }
+    }
+    return products;
+}
+
+}  // namespace
 
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -194,8 +211,9 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.boxPosition(QStringLiteral("linetracer")) ==
            concurrent_view.lineTracerDestinationPosition(2));
     assert(concurrent_view.gripperAngle() == 90.0);
-    assert(concurrent_view.gripperProductVisible());
-    assert(concurrent_view.gripperProductPosition() == QPointF(504, 145));
+    assert(!concurrent_view.gripperProductVisible());
+    assert(VisibleProducts(concurrent_view).size() == 1);
+    assert(VisibleProducts(concurrent_view).front()->pos() == QPointF(504, 345));
     assert(concurrent_view.sortingServoAngle() == 45.0);
     assert(concurrent_view.sensorText(QStringLiteral("input"), 1) == QStringLiteral("8 cm"));
     assert(concurrent_view.sensorText(QStringLiteral("sorting"), 1) == QStringLiteral("17 cm"));
@@ -227,7 +245,8 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(504, 345));
     assert(concurrent_view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
     assert(concurrent_view.gripperAngle() == 90.0);
-    assert(concurrent_view.gripperProductVisible());
+    assert(!concurrent_view.gripperProductVisible());
+    assert(VisibleProducts(concurrent_view).size() == 1);
     assert(concurrent_view.sortingServoAngle() == 45.0);
 
     auto emergency_input = concurrent_input;
@@ -397,19 +416,46 @@ int main(int argc, char* argv[]) {
            isolated_route_view.lineTracerPickupPosition(2));
 
     input.work_id = QStringLiteral("WORK-GRIPPER");
+    vision.work_id = QStringLiteral("WORK-GRIPPER");
+    sorting.work_id = QStringLiteral("WORK-GRIPPER");
+    sorting.current_state = QStringLiteral("STOPPED");
+    sorting.sensors.clear();
+
+    view.setProcesses({ input });
+    assert(VisibleProducts(view).size() == 1);
+
+    view.setProcesses({ input, vision });
+    assert(VisibleProducts(view).size() == 1);
+    assert(VisibleProducts(view).front()->pos() == QPointF(440, 81));
+    view.advanceAnimationsForTest();
+    assert(VisibleProducts(view).front()->effectiveOpacity() < 1.0);
+
     gripper.current_state = QStringLiteral("PICKING");
-    view.setProcesses({ input, gripper });
+    view.setProcesses({ input, vision, gripper, sorting });
+    assert(VisibleProducts(view).size() == 1);
     assert(view.gripperProductVisible());
     assert(view.gripperProductPosition() == QPointF(440, 81));
     gripper.current_state = QStringLiteral("TRANSFERRING");
-    view.setProcesses({ input, gripper });
+    view.setProcesses({ input, vision, gripper, sorting });
+    assert(VisibleProducts(view).size() == 1);
     assert(view.gripperProductVisible());
     assert(view.gripperProductPosition() == QPointF(504, 145));
     gripper.current_state = QStringLiteral("PLACED");
-    sorting.work_id = QStringLiteral("WORK-GRIPPER");
     view.setProcesses({ input, gripper, sorting });
+    assert(VisibleProducts(view).size() == 1);
     assert(view.gripperProductVisible());
     assert(view.gripperProductPosition() == QPointF(504, 250));
+
+    sorting.current_state = QStringLiteral("SORTING");
+    sorting.sensors = { { .sensor_id = 2,
+                          .display_name = QStringLiteral("S2"),
+                          .measurement_status = QStringLiteral("DETECTED"),
+                          .distance_cm = 11,
+                          .updated_at = {} } };
+    view.setProcesses({ input, vision, gripper, sorting });
+    assert(VisibleProducts(view).size() == 1);
+    assert(VisibleProducts(view).front()->pos() == QPointF(504, 345));
+    assert(!view.gripperProductVisible());
 
     gripper.work_id = QStringLiteral("WORK-MISMATCH");
     view.setProcesses({ input, gripper, sorting });
@@ -419,6 +465,11 @@ int main(int argc, char* argv[]) {
     view.setProcesses({ input, gripper, sorting });
     assert(!view.gripperProductVisible());
     gripper.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
+
+    auto other_input = input;
+    other_input.work_id = QStringLiteral("WORK-INPUT-NEXT");
+    view.setProcesses({ other_input, sorting });
+    assert(VisibleProducts(view).size() == 2);
 
     line_tracer.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
     line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
@@ -601,6 +652,43 @@ int main(int argc, char* argv[]) {
     assert(safety_view.boxPosition(QStringLiteral("input")) == stopped_input_position);
     assert(safety_view.boxPosition(QStringLiteral("sorting")) == stopped_sorting_position);
     assert(safety_view.boxPosition(QStringLiteral("linetracer")) == stopped_line_position);
+
+    logistics::control_center::FactoryTopViewWidget sensor_stale_view;
+    auto sensor_stale_input = Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-STALE"),
+                                      QStringLiteral("RUNNING"), QStringLiteral("WORK-STALE"));
+    auto sensor_stale_sorting = Process(QStringLiteral("sorting"), QStringLiteral("PI-SORTING-STALE"),
+                                        QStringLiteral("SORTING"), QStringLiteral("WORK-STALE"));
+    sensor_stale_sorting.destination = QStringLiteral("2");
+    sensor_stale_view.setProcesses({ sensor_stale_input, sensor_stale_sorting });
+    sensor_stale_view.advanceAnimationsForTest();
+    const auto trusted_input_position = sensor_stale_view.boxPosition(QStringLiteral("input"));
+    const auto trusted_sorting_position = sensor_stale_view.boxPosition(QStringLiteral("sorting"));
+    sensor_stale_input.has_warning = true;
+    sensor_stale_input.error_code = QStringLiteral("ERR-HEALTH-SENSOR-STALE");
+    sensor_stale_input.sensors = { { .sensor_id = 1,
+                                     .display_name = QStringLiteral("US1"),
+                                     .measurement_status = QStringLiteral("DETECTED"),
+                                     .distance_cm = 4,
+                                     .updated_at = {} } };
+    sensor_stale_sorting.has_warning = true;
+    sensor_stale_sorting.error_code = QStringLiteral("ERR-HEALTH-SENSOR-STALE");
+    sensor_stale_sorting.destination = QStringLiteral("3");
+    sensor_stale_sorting.sensors = { { .sensor_id = 3,
+                                       .display_name = QStringLiteral("US4"),
+                                       .measurement_status = QStringLiteral("DETECTED"),
+                                       .distance_cm = 6,
+                                       .updated_at = {} } };
+    sensor_stale_view.setProcesses({ sensor_stale_input, sensor_stale_sorting });
+    assert(sensor_stale_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#89d185")));
+    assert(sensor_stale_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#75beff")));
+    assert(sensor_stale_view.sensorText(QStringLiteral("input"), 1) == QStringLiteral("4 cm"));
+    assert(sensor_stale_view.sensorText(QStringLiteral("sorting"), 3) == QStringLiteral("6 cm"));
+    assert(sensor_stale_view.boxPosition(QStringLiteral("input")) == trusted_input_position);
+    assert(sensor_stale_view.boxPosition(QStringLiteral("sorting")) == trusted_sorting_position);
+    sensor_stale_view.advanceAnimationsForTest();
+    sensor_stale_view.advanceAnimationsForTest();
+    assert(sensor_stale_view.boxPosition(QStringLiteral("input")) == trusted_input_position);
+    assert(sensor_stale_view.boxPosition(QStringLiteral("sorting")) == trusted_sorting_position);
 
     logistics::control_center::FactoryTopViewWidget waiting_sensor_view;
     auto waiting_input =
