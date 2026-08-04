@@ -1,6 +1,8 @@
 #include "logistics/control_center/mqtt_client.hpp"
 
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QEventLoop>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -80,6 +82,9 @@ MqttClient::MqttClient(MqttClientConfig config, QObject* parent)
 
     connect(client_, &QMqttClient::messageReceived, this,
             [this](const QByteArray& payload, const QMqttTopicName& topic) { handleMessage(payload, topic.name()); });
+    if (auto* application = QCoreApplication::instance(); application != nullptr) {
+        connect(application, &QCoreApplication::aboutToQuit, this, &MqttClient::stop);
+    }
 }
 
 void MqttClient::start() {
@@ -90,8 +95,27 @@ void MqttClient::start() {
 void MqttClient::stop() {
     stopping_ = true;
     reconnect_timer_->stop();
+    if (client_->state() == QMqttClient::Disconnected) {
+        return;
+    }
+
+    client_->disconnectFromHost();
+    if (QCoreApplication::instance() == nullptr) {
+        return;
+    }
+
+    QEventLoop disconnect_loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    connect(client_, &QMqttClient::stateChanged, &disconnect_loop, [&disconnect_loop](QMqttClient::ClientState state) {
+        if (state == QMqttClient::Disconnected) {
+            disconnect_loop.quit();
+        }
+    });
+    connect(&timeout, &QTimer::timeout, &disconnect_loop, &QEventLoop::quit);
+    timeout.start(500);
     if (client_->state() != QMqttClient::Disconnected) {
-        client_->disconnectFromHost();
+        disconnect_loop.exec(QEventLoop::ExcludeUserInputEvents);
     }
 }
 
