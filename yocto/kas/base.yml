@@ -19,6 +19,14 @@ repos:
     url: https://github.com/agherzan/meta-raspberrypi.git
     branch: scarthgap
 
+  meta-openembedded:
+    url: https://github.com/openembedded/meta-openembedded.git
+    branch: scarthgap
+    layers:
+      meta-oe:
+      meta-python:
+      meta-networking:
+
   logistics-automation:
     layers:
       yocto/meta-logistics:
