@@ -472,10 +472,32 @@ int main() {
     assert(result.applied);
     assert(!clock_skew_state.expireStaleProcesses(received_at.addMSecs(14999)));
     assert(clock_skew_state.expireStaleProcesses(received_at.addSecs(15)));
+    result = clock_skew_state.applyEnvelope(Envelope("VISION-SKEWED-STALE-ERROR", "ERROR_OCCURRED",
+                                                     { { QStringLiteral("errorCode"), QStringLiteral("ERR-OLD") },
+                                                       { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                     "PI-VISION-01", "2026-07-23T01:54:59.000Z"),
+                                            received_at.addSecs(16));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).error_code ==
+           QStringLiteral("ERR-HEARTBEAT-TIMEOUT"));
+    result = clock_skew_state.applyEnvelope(
+        Envelope("VISION-SKEWED-STALE-STATUS", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"),
+                 "PI-VISION-01", "2026-07-23T01:54:58.000Z"),
+        received_at.addSecs(17));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOffline);
+    result = clock_skew_state.applyEnvelope(
+        Envelope("VISION-SKEWED-STALE-HEARTBEAT", "HEARTBEAT", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"),
+                 "PI-VISION-01", "2026-07-23T01:54:57.000Z"),
+        received_at.addSecs(18));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOffline);
     result = clock_skew_state.applyEnvelope(
         Envelope("VISION-SKEWED-RECOVERED", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"),
                  "PI-VISION-01", "2026-07-23T01:55:05.000Z"),
-        received_at.addSecs(16));
+        received_at.addSecs(19));
     assert(result.applied);
     assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).connection_state ==
            logistics::contracts::mqtt::ConnectionState::kOnline);

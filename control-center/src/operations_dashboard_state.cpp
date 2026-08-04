@@ -428,9 +428,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             return result;
         }
 
-        if (process.last_received_at.isValid() &&
-            process.status.error_code != QStringLiteral("ERR-HEARTBEAT-TIMEOUT") &&
-            process.status.updated_at.isValid() && timestamp < process.status.updated_at) {
+        if (process.last_device_message_at.isValid() && timestamp < process.last_device_message_at) {
             return result;
         }
 
@@ -504,6 +502,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             }
             process.status.updated_at = timestamp;
         }
+        process.last_device_message_at = timestamp;
         process.last_received_at = effective_received_at;
 
         updateOverall(timestamp);

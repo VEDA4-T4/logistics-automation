@@ -115,6 +115,7 @@ private:
     struct ProcessRuntime {
         ProcessUnitStatus status;
         QDateTime last_received_at;
+        QDateTime last_device_message_at;
         QDateTime last_event_at;
         QSet<QString> retired_work_ids;
         QQueue<QString> retired_work_order;
