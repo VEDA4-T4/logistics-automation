@@ -112,13 +112,19 @@ public:
     [[nodiscard]] const ProcessDashboardStatus& overall() const noexcept;
 
 private:
+    struct DeviceMessageOrdering {
+        QString session_id;
+        quint64 last_sequence{ 0 };
+        int last_phase{ -1 };
+        QQueue<QString> retired_sessions;
+    };
+
     struct ProcessRuntime {
         ProcessUnitStatus status;
         QDateTime last_received_at;
         QDateTime last_device_message_at;
-        QString device_message_session_id;
-        quint64 last_device_message_sequence{ 0 };
-        QQueue<QString> retired_device_message_sessions;
+        DeviceMessageOrdering application_messages;
+        DeviceMessageOrdering transport_messages;
         QDateTime last_event_at;
         QSet<QString> retired_work_ids;
         QQueue<QString> retired_work_order;

@@ -58,14 +58,46 @@ bool IsDeviceMessage(mqtt::MessageType type) {
 }
 
 struct DeviceMessageOrder {
+    enum class Stream {
+        kApplication,
+        kTransport,
+        kWill,
+    };
+
+    Stream stream;
     QString session_id;
     quint64 sequence;
+    int phase;
 };
 
-std::optional<DeviceMessageOrder> ParseDeviceMessageOrder(const QString& message_id, const QString& source_id) {
-    const auto prefix = source_id + QStringLiteral("-MSG-");
+std::optional<DeviceMessageOrder> ParseDeviceMessageOrder(const QString& message_id, const QString& source_id,
+                                                          mqtt::MessageType type) {
+    const auto application_prefix = source_id + QStringLiteral("-MSG-");
+    const auto status_prefix = QStringLiteral("STATUS-") + application_prefix;
+    const auto offline_prefix = QStringLiteral("OFFLINE-") + application_prefix;
+    const auto will_prefix = QStringLiteral("WILL-") + application_prefix;
+    QString prefix;
+    DeviceMessageOrder::Stream stream;
+    int phase = 0;
+    if (message_id.startsWith(application_prefix)) {
+        prefix = application_prefix;
+        stream = DeviceMessageOrder::Stream::kApplication;
+    } else if (type == mqtt::MessageType::kDeviceStatus && message_id.startsWith(status_prefix)) {
+        prefix = status_prefix;
+        stream = DeviceMessageOrder::Stream::kTransport;
+    } else if (type == mqtt::MessageType::kDeviceStatus && message_id.startsWith(offline_prefix)) {
+        prefix = offline_prefix;
+        stream = DeviceMessageOrder::Stream::kTransport;
+        phase = 1;
+    } else if (type == mqtt::MessageType::kDeviceStatus && message_id.startsWith(will_prefix)) {
+        prefix = will_prefix;
+        stream = DeviceMessageOrder::Stream::kWill;
+    } else {
+        return std::nullopt;
+    }
+
     const auto separator = message_id.lastIndexOf(QLatin1Char('-'));
-    if (!message_id.startsWith(prefix) || separator <= prefix.size()) {
+    if (separator <= prefix.size()) {
         return std::nullopt;
     }
 
@@ -79,9 +111,10 @@ std::optional<DeviceMessageOrder> ParseDeviceMessageOrder(const QString& message
 
     bool valid = false;
     const auto sequence = sequence_text.toULongLong(&valid);
-    return valid ? std::optional<DeviceMessageOrder>{ { message_id.mid(prefix.size(), separator - prefix.size()),
-                                                        sequence } }
-                 : std::nullopt;
+    return valid
+               ? std::optional<DeviceMessageOrder>{ { stream, message_id.mid(prefix.size(), separator - prefix.size()),
+                                                      sequence, phase } }
+               : std::nullopt;
 }
 
 bool IsConnectionError(mqtt::ConnectionState state) {
@@ -456,14 +489,23 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             return result;
         }
 
-        const auto device_order = ParseDeviceMessageOrder(message_id, source_id);
-        if (device_order.has_value()) {
-            if (process.retired_device_message_sessions.contains(device_order->session_id) ||
-                (process.device_message_session_id == device_order->session_id &&
-                 device_order->sequence <= process.last_device_message_sequence)) {
+        const auto device_order = ParseDeviceMessageOrder(message_id, source_id, type);
+        DeviceMessageOrdering* device_ordering = nullptr;
+        if (device_order.has_value() && device_order->stream != DeviceMessageOrder::Stream::kWill) {
+            device_ordering = device_order->stream == DeviceMessageOrder::Stream::kApplication
+                                  ? &process.application_messages
+                                  : &process.transport_messages;
+            const bool same_session = device_ordering->session_id == device_order->session_id;
+            const bool stale_sequence =
+                same_session && (device_order->sequence < device_ordering->last_sequence ||
+                                 (device_order->sequence == device_ordering->last_sequence &&
+                                  (device_order->stream == DeviceMessageOrder::Stream::kApplication ||
+                                   device_order->phase <= device_ordering->last_phase)));
+            if (device_ordering->retired_sessions.contains(device_order->session_id) || stale_sequence) {
                 return result;
             }
-        } else if (process.last_device_message_at.isValid() && timestamp < process.last_device_message_at) {
+        } else if (!device_order.has_value() && process.last_device_message_at.isValid() &&
+                   timestamp < process.last_device_message_at) {
             return result;
         }
 
@@ -537,24 +579,26 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             }
             process.status.updated_at = timestamp;
         }
-        if (device_order.has_value()) {
-            if (!process.device_message_session_id.isEmpty() &&
-                process.device_message_session_id != device_order->session_id) {
-                process.retired_device_message_sessions.enqueue(process.device_message_session_id);
+        if (device_ordering != nullptr) {
+            if (!device_ordering->session_id.isEmpty() && device_ordering->session_id != device_order->session_id) {
+                device_ordering->retired_sessions.enqueue(device_ordering->session_id);
                 // ponytail: 512 sessions bounds malformed-device memory; persist epochs for longer replay protection.
-                while (process.retired_device_message_sessions.size() > kMaximumRetiredDeviceSessions) {
-                    process.retired_device_message_sessions.dequeue();
+                while (device_ordering->retired_sessions.size() > kMaximumRetiredDeviceSessions) {
+                    device_ordering->retired_sessions.dequeue();
                 }
             }
-            process.device_message_session_id = device_order->session_id;
-            process.last_device_message_sequence = device_order->sequence;
+            device_ordering->session_id = device_order->session_id;
+            device_ordering->last_sequence = device_order->sequence;
+            device_ordering->last_phase = device_order->phase;
         }
         process.last_device_message_at = timestamp;
         process.last_received_at = effective_received_at;
 
         updateOverall(timestamp);
         publishProcessSnapshots();
-        rememberMessage(message_id);
+        if (!device_order.has_value() || device_order->stream != DeviceMessageOrder::Stream::kWill) {
+            rememberMessage(message_id);
+        }
         result.applied = true;
         return result;
     }
@@ -902,9 +946,8 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         ResetSensors(process.status);
         process.last_received_at = {};
         process.last_device_message_at = {};
-        process.device_message_session_id.clear();
-        process.last_device_message_sequence = 0;
-        process.retired_device_message_sessions.clear();
+        process.application_messages = {};
+        process.transport_messages = {};
         process.last_event_at = {};
     }
 
