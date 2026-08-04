@@ -173,7 +173,9 @@ FactoryNodeVisual RunningVisual(const ProcessUnitStatus& process) {
 }
 
 FactoryNodeVisual WaitingVisual(const ProcessUnitStatus& process) {
-    return BaseVisual(process);
+    auto visual = BaseVisual(process);
+    visual.opacity = 1.0;
+    return visual;
 }
 
 }  // namespace
@@ -260,7 +262,7 @@ QColor ColorFor(FactoryNodeVisualState state) {
         case FactoryNodeVisualState::Running:
             return QColor(QStringLiteral("#89d185"));
         case FactoryNodeVisualState::Waiting:
-            return QColor(QStringLiteral("#f0f0f0"));
+            return QColor(QStringLiteral("#ffffff"));
     }
     return QColor(QStringLiteral("#9d9d9d"));
 }
