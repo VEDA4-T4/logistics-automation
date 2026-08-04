@@ -25,13 +25,16 @@ journalctl -u mosquitto -n 200 --no-pager
 ## 포트는 열리지만 MQTT 연결이 안 됨
 
 ```sh
-nc -vz 192.168.0.10 1883
-mosquitto_sub -h 192.168.0.10 -p 1883 \
-  -u test-user -P 'test-password' -t 'test/connectivity' -d
+nc -vz mqtt.logistics.local 8883
+mosquitto_sub -h mqtt.logistics.local -p 8883 \
+  --cafile /etc/logistics/tls/ca.crt \
+  -u PI-VISION-01 -P '해당-장치에-발급한-비밀번호' \
+  -t 'device/PI-VISION-01/status' -d
 ```
 
-TCP 성공 후 MQTT가 실패하면 사용자/비밀번호, ACL, client ID 중복, TLS 포트 혼동을 확인합니다. TLS listener
-`8883`에는 `--cafile` 없이 평문 클라이언트로 접속할 수 없습니다.
+TCP 성공 후 MQTT가 실패하면 사용자/비밀번호, ACL, client ID 중복, CA 경로, 인증서 SAN과 host 일치를 확인합니다.
+TLS listener `8883`에는 `--cafile` 없이 평문 클라이언트로 접속할 수 없습니다. 마이그레이션용 `1883`도 익명 접근은
+거부하므로 사용자명과 비밀번호가 필요합니다.
 
 ## `nlohmann/json.hpp was not found`
 

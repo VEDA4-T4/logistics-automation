@@ -36,4 +36,20 @@ grep -Fqx 'image_base_url=http://central-server.logistics.local:8080/' \
 grep -Fqx 'endpoint_url=http://central-server.logistics.local:8080/api/v1/uploads/images' \
     "${script_dir}/../../device-rpi/config/node.ini.example"
 
+documentation=(
+    "${script_dir}/../../README.md"
+    "${script_dir}/../mosquitto/README.md"
+    "${script_dir}/README.md"
+    "${script_dir}/../../docs/guides/integration-runbook.md"
+)
+for obsolete_text in \
+    'TLS 연결 옵션을 아직 지원하지 않습니다' \
+    '애플리케이션 TLS 구현 필수' \
+    '아직 구현되지 않은 목표 형식'; do
+    if grep -Fq "${obsolete_text}" "${documentation[@]}"; then
+        echo "Obsolete MQTT TLS documentation remains: ${obsolete_text}" >&2
+        exit 1
+    fi
+done
+
 echo 'MQTT setup security self-checks passed.'
