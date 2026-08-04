@@ -69,8 +69,42 @@ int main() {
     assert(ProcessByKey(state, QStringLiteral("input")).sensors.size() == 1);
     assert(ProcessByKey(state, QStringLiteral("sorting")).sensors.size() == 3);
 
+    OperationsDashboardState ordered_device_state;
+    auto result = ordered_device_state.applyEnvelope(Envelope("SORTING-NORMAL-NEWER", "DEVICE_STATUS",
+                                                              DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                              "2026-07-23T01:00:00.300Z"));
+    assert(result.applied);
+    result =
+        ordered_device_state.applyEnvelope(Envelope("SORTING-ERROR-OLDER", "ERROR_OCCURRED",
+                                                    { { QStringLiteral("errorCode"), QStringLiteral("ERR-OLD") },
+                                                      { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                    "PI-SORTING-01", "2026-07-23T01:00:00.200Z"));
+    assert(result.handled && !result.applied);
+    assert(!ProcessByKey(ordered_device_state, QStringLiteral("sorting")).has_error);
+    assert(ProcessByKey(ordered_device_state, QStringLiteral("sorting")).current_state == QStringLiteral("SORTING"));
+
+    result =
+        ordered_device_state.applyEnvelope(Envelope("SORTING-ERROR-NEWER", "ERROR_OCCURRED",
+                                                    { { QStringLiteral("errorCode"), QStringLiteral("ERR-NEW") },
+                                                      { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                    "PI-SORTING-01", "2026-07-23T01:00:00.400Z"));
+    assert(result.applied);
+    result = ordered_device_state.applyEnvelope(Envelope("SORTING-NORMAL-OLDER", "DEVICE_STATUS",
+                                                         DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                         "2026-07-23T01:00:00.350Z"));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(ordered_device_state, QStringLiteral("sorting")).has_error);
+    assert(ProcessByKey(ordered_device_state, QStringLiteral("sorting")).error_code == QStringLiteral("ERR-NEW"));
+
+    result = ordered_device_state.applyEnvelope(Envelope("SORTING-NORMAL-NEWEST", "DEVICE_STATUS",
+                                                         DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                         "2026-07-23T01:00:00.500Z"));
+    assert(result.applied);
+    assert(!ProcessByKey(ordered_device_state, QStringLiteral("sorting")).has_error);
+    assert(ProcessByKey(ordered_device_state, QStringLiteral("sorting")).error_code.isEmpty());
+
     OperationsDashboardState stopped_sensor_state;
-    auto result = stopped_sensor_state.applyEnvelope(
+    result = stopped_sensor_state.applyEnvelope(
         Envelope("SORTING-STOPPED", "DEVICE_STATUS", DeviceStatus("ONLINE", "STOPPED"), "PI-SORTING-01"));
     assert(result.applied);
     result = stopped_sensor_state.applyEnvelope(

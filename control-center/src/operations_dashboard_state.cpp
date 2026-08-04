@@ -428,6 +428,12 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             return result;
         }
 
+        if (process.last_received_at.isValid() &&
+            process.status.error_code != QStringLiteral("ERR-HEARTBEAT-TIMEOUT") &&
+            process.status.updated_at.isValid() && timestamp < process.status.updated_at) {
+            return result;
+        }
+
         if (type == mqtt::MessageType::kErrorOccurred) {
             const auto error_code = StringValue(data, "errorCode");
             if (error_code.isEmpty()) {
