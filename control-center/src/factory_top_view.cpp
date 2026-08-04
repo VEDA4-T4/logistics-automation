@@ -462,6 +462,21 @@ struct FactoryTopViewWidget::Impl {
         sorting_servo->setLine(servo);
     }
 
+    void snapToFinalGeometry(const QString& process_key, NodeItems& node) {
+        if (!node.motion_enabled) {
+            return;
+        }
+        if (process_key == QString::fromLatin1(kInputProcessKey)) {
+            node.moving_item->setPos(DetectedSensor(node.visual).has_value() ? kInputPositions[3] : kInputPositions[2]);
+        } else if (process_key == QString::fromLatin1(kSortingProcessKey)) {
+            const auto sensor = DetectedSensor(node.visual);
+            node.moving_item->setPos(sensor.has_value() && *sensor >= 1 && *sensor <= 3 ? kSortingPositions[*sensor - 1]
+                                                                                        : kSortingPositions[2]);
+        } else if (process_key == QString::fromLatin1(kLineTracerProcessKey) && line_route.has_value()) {
+            node.moving_item->setPos(kLineDestinations[*line_route - 1]);
+        }
+    }
+
     void setProcesses(const QList<ProcessUnitStatus>& processes, OverallProcessState overall_state) {
         const auto visual_for = [overall_state](const ProcessUnitStatus& process) {
             auto visual = BuildFactoryNodeVisual(process);
@@ -544,6 +559,9 @@ struct FactoryTopViewWidget::Impl {
                     node.moving_item->setPos(kLineDestinations[*route - 1]);
                 }
             }
+            if (!QApplication::isEffectEnabled(Qt::UI_AnimateCombo)) {
+                snapToFinalGeometry(process.key, node);
+            }
         }
         updateSelection();
     }
@@ -555,19 +573,23 @@ struct FactoryTopViewWidget::Impl {
     }
 
     void tick() {
-        const bool pulse_enabled = QApplication::isEffectEnabled(Qt::UI_AnimateCombo);
+        const bool animation_enabled = QApplication::isEffectEnabled(Qt::UI_AnimateCombo);
         for (auto iterator = nodes.begin(); iterator != nodes.end(); ++iterator) {
             auto& node = iterator.value();
             ++node.pulse_phase;
-            if (pulse_enabled && node.visual.state == FactoryNodeVisualState::Working) {
+            if (animation_enabled && node.visual.state == FactoryNodeVisualState::Working) {
                 node.group->setOpacity(pulseOpacity(node.pulse_phase, 0.65));
-            } else if (pulse_enabled && node.visual.state == FactoryNodeVisualState::EmergencyStop) {
+            } else if (animation_enabled && node.visual.state == FactoryNodeVisualState::EmergencyStop) {
                 node.group->setOpacity(pulseOpacity(node.pulse_phase, 0.55));
             } else {
                 node.group->setOpacity(node.visual.opacity);
             }
 
             if (!node.motion_enabled) {
+                continue;
+            }
+            if (!animation_enabled) {
+                snapToFinalGeometry(iterator.key(), node);
                 continue;
             }
             if (iterator.key() == QString::fromLatin1(kInputProcessKey)) {

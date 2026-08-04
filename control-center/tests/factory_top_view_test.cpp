@@ -17,7 +17,9 @@ using logistics::control_center::ProcessUnitStatus;
 
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    QApplication::setDesktopSettingsAware(false);
     QApplication application(argc, argv);
+    QApplication::setEffectEnabled(Qt::UI_AnimateCombo, true);
 
     ProcessUnitStatus disconnected;
     disconnected.key = QStringLiteral("input");
@@ -409,10 +411,27 @@ int main(int argc, char* argv[]) {
     const bool animation_preference = QApplication::isEffectEnabled(Qt::UI_AnimateCombo);
     QApplication::setEffectEnabled(Qt::UI_AnimateCombo, false);
     logistics::control_center::FactoryTopViewWidget reduced_motion_view;
-    reduced_motion_view.setProcesses({ vision });
+    auto reduced_input = Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-REDUCED"), QStringLiteral("RUNNING"),
+                                 QStringLiteral("WORK-REDUCED"));
+    auto reduced_sorting = Process(QStringLiteral("sorting"), QStringLiteral("PI-SORTING-REDUCED"),
+                                   QStringLiteral("SORTING"), QStringLiteral("WORK-REDUCED"));
+    reduced_sorting.destination = QStringLiteral("3");
+    auto reduced_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-REDUCED"),
+                                QStringLiteral("FOLLOWING_LINE"), QStringLiteral("WORK-REDUCED"));
+    reduced_line.destination = QStringLiteral("3");
+    reduced_motion_view.setProcesses({ reduced_input, vision, reduced_sorting, reduced_line });
+    assert(reduced_motion_view.boxPosition(QStringLiteral("input")) == QPointF(270, 69));
+    assert(reduced_motion_view.boxPosition(QStringLiteral("sorting")) == QPointF(525, 442));
+    assert(reduced_motion_view.boxPosition(QStringLiteral("linetracer")) == QPointF(58, 442));
+    const auto reduced_input_position = reduced_motion_view.boxPosition(QStringLiteral("input"));
+    const auto reduced_sorting_position = reduced_motion_view.boxPosition(QStringLiteral("sorting"));
+    const auto reduced_line_position = reduced_motion_view.boxPosition(QStringLiteral("linetracer"));
     reduced_motion_view.advanceAnimationsForTest();
     reduced_motion_view.advanceAnimationsForTest();
     assert(reduced_motion_view.nodeOpacity(QStringLiteral("vision")) == 1.0);
+    assert(reduced_motion_view.boxPosition(QStringLiteral("input")) == reduced_input_position);
+    assert(reduced_motion_view.boxPosition(QStringLiteral("sorting")) == reduced_sorting_position);
+    assert(reduced_motion_view.boxPosition(QStringLiteral("linetracer")) == reduced_line_position);
     QApplication::setEffectEnabled(Qt::UI_AnimateCombo, animation_preference);
 
     QString selected;

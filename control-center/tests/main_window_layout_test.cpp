@@ -154,7 +154,9 @@ int main(int argc, char* argv[]) {
     };
 
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    QApplication::setDesktopSettingsAware(false);
     QApplication application(argc, argv);
+    QApplication::setEffectEnabled(Qt::UI_AnimateCombo, true);
     QTemporaryDir directory;
     if (!check(directory.isValid(), "temporary directory is invalid")) {
         return 1;
