@@ -45,6 +45,8 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
     }
     assert(image_rect.right() < metadata_rect.left());
     assert(image_rect.width() > metadata_rect.width());
+    const auto ratio_error = image_rect.width() * 2 - metadata_rect.width() * 3;
+    assert(ratio_error >= -3 && ratio_error <= 3);
 }
 
 }  // namespace
