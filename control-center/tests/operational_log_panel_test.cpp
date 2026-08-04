@@ -52,8 +52,9 @@ int main(int argc, char* argv[]) {
     auto* query = panel.findChild<QLineEdit*>(QStringLiteral("logQueryFilter"));
     auto* unacknowledged = panel.findChild<QCheckBox*>(QStringLiteral("logUnacknowledgedOnly"));
     auto* acknowledge_all = panel.findChild<QPushButton*>(QStringLiteral("acknowledgeAllLogsButton"));
+    auto* empty_state = panel.findChild<QLabel*>(QStringLiteral("operationalLogEmptyState"));
     assert(table != nullptr && severity != nullptr && query != nullptr && unacknowledged != nullptr &&
-           acknowledge_all != nullptr);
+           acknowledge_all != nullptr && empty_state != nullptr);
     assert(panel.findChild<QPushButton*>(QStringLiteral("acknowledgeLogButton")) == nullptr);
     assert(table->rowCount() == 4);
     assert(table->columnCount() == 4);
@@ -74,6 +75,16 @@ int main(int argc, char* argv[]) {
     assert(table->item(0, 3)->text().contains(QStringLiteral("바코드 인식 실패")));
 
     query->clear();
+    query->setText(QStringLiteral("NO-SUCH-OPERATIONAL-LOG"));
+    application.processEvents();
+    assert(table->rowCount() == 0);
+    assert(empty_state->isVisible());
+    assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
+    query->clear();
+    application.processEvents();
+    assert(table->rowCount() == 4);
+    assert(!empty_state->isVisible());
+
     table->cellDoubleClicked(0, 3);
     application.processEvents();
     assert(state.activeAlertCount() == 1);
@@ -113,7 +124,6 @@ int main(int argc, char* argv[]) {
 
     panel.setState(OperationalLogState{});
     application.processEvents();
-    auto* empty_state = panel.findChild<QLabel*>(QStringLiteral("operationalLogEmptyState"));
     assert(empty_state != nullptr && empty_state->isVisible());
     assert(empty_state->text() == QStringLiteral("표시할 운영 로그가 없습니다"));
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
