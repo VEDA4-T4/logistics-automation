@@ -1,0 +1,12 @@
+header:
+  version: 23
+  includes:
+    - yocto/kas/base.yml
+
+target:
+  - logistics-sorting-image
+
+
+local_conf_header:
+  sorting-vedauart: |
+    RPI_EXTRA_CONFIG:append = "\n# Enable VEDAUART\ndtoverlay=vedauart\n"
