@@ -10,6 +10,8 @@ Type=simple
 User=logistics
 Group=logistics
 SupplementaryGroups=dialout
+StateDirectory=logistics
+StateDirectoryMode=0750
 WorkingDirectory=/var/lib/logistics
 
 ExecStart=/opt/logistics-automation/bin/logistics_input_node /etc/logistics/input-node.ini /dev/vedauart

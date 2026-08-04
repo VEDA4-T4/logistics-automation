@@ -401,22 +401,48 @@ if(LOGISTICS_BUILD_VISION_NODE)
         )
     endif()
 endif()
+
 # ------------------------------------------------------------------------------
 # Runtime installation
 # ------------------------------------------------------------------------------
 
-foreach(
-    node_target
-    IN ITEMS
-        logistics_input_node
-        logistics_vision_node
-        logistics_sorting_node
-        logistics_linetracer_node
+function(
+    logistics_install_device_node
+    target_name
+    service_file
 )
-    if(TARGET ${node_target})
+    if(TARGET ${target_name})
         install(
-            TARGETS ${node_target}
+            TARGETS ${target_name}
             RUNTIME DESTINATION bin
         )
+
+        if(UNIX)
+            install(
+                FILES
+                    "${CMAKE_CURRENT_LIST_DIR}/../deploy/systemd/${service_file}"
+                DESTINATION lib/systemd/system
+            )
+        endif()
     endif()
-endforeach()
+endfunction()
+
+logistics_install_device_node(
+    logistics_input_node
+    logistics-input-node.service
+)
+
+logistics_install_device_node(
+    logistics_vision_node
+    logistics-vision-node.service
+)
+
+logistics_install_device_node(
+    logistics_sorting_node
+    logistics-sorting-node.service
+)
+
+logistics_install_device_node(
+    logistics_linetracer_node
+    logistics-linetracer-node.service
+)

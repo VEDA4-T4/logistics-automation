@@ -10,6 +10,8 @@ StartLimitBurst=5
 Type=simple
 User=logistics
 Group=logistics
+StateDirectory=logistics
+StateDirectoryMode=0750
 WorkingDirectory=/var/lib/logistics
 ExecStart=/opt/logistics-automation/bin/logistics_central_server --config /etc/logistics/server.ini
 

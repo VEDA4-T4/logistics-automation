@@ -5,8 +5,10 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 build_dir="${LOGISTICS_BUILD_DIR:-${repo_root}/build-central}"
-runtime_dir="${LOGISTICS_RUNTIME_DIR:-${repo_root}/runtime/central-server}"
-config_path="${LOGISTICS_CONFIG_PATH:-${runtime_dir}/server.ini}"
+install_prefix="${LOGISTICS_INSTALL_PREFIX:-/opt/logistics-automation}"
+runtime_dir="${LOGISTICS_RUNTIME_DIR:-/var/lib/logistics}"
+config_path="${LOGISTICS_CONFIG_PATH:-/etc/logistics/server.ini}"
+service_name="logistics-central-server.service"
 mqtt_host="${LOGISTICS_MQTT_HOST:-127.0.0.1}"
 mqtt_port="${LOGISTICS_MQTT_PORT:-8883}"
 mqtt_username="${LOGISTICS_MQTT_USERNAME:-central-server}"
@@ -16,6 +18,11 @@ mqtt_ca_certificate="${LOGISTICS_MQTT_CA_CERTIFICATE:-/etc/logistics/tls/ca.crt}
 upload_token="${LOGISTICS_UPLOAD_TOKEN:-}"
 force_config="${LOGISTICS_FORCE_CONFIG:-0}"
 install_dependencies="${LOGISTICS_INSTALL_DEPENDENCIES:-0}"
+
+sudo_command=()
+if [[ "${EUID}" -ne 0 ]]; then
+    sudo_command=(sudo)
+fi
 
 reject_line_breaks() {
     [[ "$1" != *$'\n'* && "$1" != *$'\r'* ]]
@@ -67,18 +74,35 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     echo "This script must run on the central Linux/Raspberry Pi host." >&2
     exit 2
 fi
-if [[ (! -e "${config_path}" || "${force_config}" == "1") && -z "${upload_token}" ]]; then
-    echo "LOGISTICS_UPLOAD_TOKEN must be set." >&2
-    exit 2
-fi
-if [[ ! -e "${config_path}" || "${force_config}" == "1" ]]; then
-    validate_mqtt_settings "${mqtt_host}" "${mqtt_port}" "${mqtt_username}" "${mqtt_password}" \
-        "${mqtt_tls_enabled}" "${mqtt_ca_certificate}" || exit 2
-fi
 
 sudo_command=()
 if [[ "${EUID}" -ne 0 ]]; then
     sudo_command=(sudo)
+fi
+
+config_exists=0
+if "${sudo_command[@]}" test -e "${config_path}"; then
+    config_exists=1
+fi
+
+write_config=0
+if [[ "${config_exists}" == "0" || "${force_config}" == "1" ]]; then
+    write_config=1
+fi
+
+if [[ "${write_config}" == "1" && -z "${upload_token}" ]]; then
+    echo "LOGISTICS_UPLOAD_TOKEN must be set." >&2
+    exit 2
+fi
+
+if [[ "${write_config}" == "1" ]]; then
+    validate_mqtt_settings \
+        "${mqtt_host}" \
+        "${mqtt_port}" \
+        "${mqtt_username}" \
+        "${mqtt_password}" \
+        "${mqtt_tls_enabled}" \
+        "${mqtt_ca_certificate}" || exit 2
 fi
 
 if [[ "${install_dependencies}" == "1" ]]; then
@@ -88,10 +112,29 @@ if [[ "${install_dependencies}" == "1" ]]; then
         libmosquitto-dev nlohmann-json3-dev libsqlite3-dev libssl-dev libmicrohttpd-dev
 fi
 
-install -d -m 0750 "${runtime_dir}" "${runtime_dir}/images" "${runtime_dir}/logs" \
-    "${runtime_dir}/uploads/images" "${runtime_dir}/uploads/logs" "$(dirname -- "${config_path}")"
+if ! getent group logistics >/dev/null; then
+    "${sudo_command[@]}" groupadd \
+        --system \
+        logistics
+fi
 
-if [[ -e "${config_path}" && "${force_config}" != "1" ]]; then
+if ! getent passwd logistics >/dev/null; then
+    "${sudo_command[@]}" useradd \
+        --system \
+        --gid logistics \
+        --home-dir /var/lib/logistics \
+        --shell /usr/sbin/nologin \
+        logistics
+fi
+
+"${sudo_command[@]}" install \
+    -d \
+    -o root \
+    -g logistics \
+    -m 0750 \
+    "$(dirname -- "${config_path}")"
+
+if [[ "${write_config}" == "1" ]]; then
     echo "Keeping existing config: ${config_path}"
 else
     temporary_config="$(mktemp)"
@@ -115,7 +158,7 @@ path=${runtime_dir}/devices.json
 
 [database]
 path=${runtime_dir}/logistics.db
-migration_dir=${repo_root}/central-server-rpi/db/migrations
+migration_dir=${install_prefix}/share/logistics/migrations
 busy_timeout_ms=5000
 
 [storage]
@@ -139,9 +182,22 @@ upload_root=${runtime_dir}/uploads
 [routing]
 qt_client_id=control-center
 EOF
-    install -m 0600 "${temporary_config}" "${config_path}"
+"${sudo_command[@]}" install \
+    -o root \
+    -g logistics \
+    -m 0640 \
+    "${temporary_config}" \
+    "${config_path}"
     echo "Created config: ${config_path}"
 fi
+
+"${sudo_command[@]}" chown \
+    root:logistics \
+    "${config_path}"
+
+"${sudo_command[@]}" chmod \
+    0640 \
+    "${config_path}"
 
 cmake -S "${repo_root}" -B "${build_dir}" -G Ninja \
     -DLOGISTICS_BUILD_CONTROL_CENTER=OFF \
@@ -150,6 +206,27 @@ cmake -S "${repo_root}" -B "${build_dir}" -G Ninja \
     -DLOGISTICS_ENABLE_MOSQUITTO_TRANSPORT=ON
 cmake --build "${build_dir}"
 ctest --test-dir "${build_dir}" --output-on-failure
+
+"${sudo_command[@]}" cmake --install "${build_dir}" \
+    --prefix "${install_prefix}"
+
+installed_unit="${install_prefix}/lib/systemd/system/${service_name}"
+
+if ! "${sudo_command[@]}" test -f "${installed_unit}"; then
+    echo "Installed systemd unit was not found: ${installed_unit}" >&2
+    exit 4
+fi
+
+"${sudo_command[@]}" install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "${installed_unit}" \
+    "/etc/systemd/system/${service_name}"
+
+"${sudo_command[@]}" systemctl daemon-reload
+"${sudo_command[@]}" systemctl enable "${service_name}"
+"${sudo_command[@]}" systemctl restart "${service_name}"
 
 echo
 echo "Central server setup complete."

@@ -4,22 +4,28 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
-build_dir="${LOGISTICS_BUILD_DIR:-${repo_root}/build-input}"
+
+build_dir="${LOGISTICS_BUILD_DIR:-${repo_root}/build-sorting}"
 install_prefix="${LOGISTICS_INSTALL_PREFIX:-/opt/logistics-automation}"
 runtime_dir="${LOGISTICS_RUNTIME_DIR:-/var/lib/logistics}"
-config_path="${LOGISTICS_CONFIG_PATH:-/etc/logistics/input-node.ini}"
-service_name="logistics-input-node.service"
+config_path="${LOGISTICS_CONFIG_PATH:-/etc/logistics/sorting-node.ini}"
+service_name="logistics-sorting-node.service"
+
 central_host="${LOGISTICS_CENTRAL_HOST:-}"
 mqtt_host="${LOGISTICS_MQTT_HOST:-${central_host}}"
-device_id="${LOGISTICS_DEVICE_ID:-PI-INPUT-01}"
+device_id="${LOGISTICS_DEVICE_ID:-PI-SORTING-01}"
+node_name="${LOGISTICS_NODE_NAME:-sorting-node-01}"
+device_ip="${LOGISTICS_DEVICE_IP:-}"
+
 mqtt_port="${LOGISTICS_MQTT_PORT:-8883}"
 mqtt_username="${LOGISTICS_MQTT_USERNAME:-${device_id}}"
 mqtt_password="${LOGISTICS_MQTT_PASSWORD:-}"
 mqtt_tls_enabled="${LOGISTICS_MQTT_TLS_ENABLED:-true}"
 mqtt_ca_certificate="${LOGISTICS_MQTT_CA_CERTIFICATE:-/etc/logistics/tls/ca.crt}"
-node_name="${LOGISTICS_NODE_NAME:-input-node-01}"
-device_ip="${LOGISTICS_DEVICE_IP:-}"
+
 uart_device="${LOGISTICS_UART_DEVICE:-/dev/vedauart}"
+sorting_default_speed="${LOGISTICS_SORTING_DEFAULT_SPEED:-50}"
+
 force_config="${LOGISTICS_FORCE_CONFIG:-0}"
 install_dependencies="${LOGISTICS_INSTALL_DEPENDENCIES:-0}"
 
@@ -28,41 +34,96 @@ reject_line_breaks() {
 }
 
 validate_mqtt_settings() {
-    local host=$1 port=$2 username=$3 password=$4 tls_enabled=$5 ca_certificate=$6
+    local host=$1
+    local port=$2
+    local username=$3
+    local password=$4
+    local tls_enabled=$5
+    local ca_certificate=$6
 
     if [[ -z "${host}" || -z "${username}" || -z "${password}" ]]; then
         echo "MQTT host, username, and password must be set." >&2
         return 1
     fi
-    if ! reject_line_breaks "${host}" || ! reject_line_breaks "${username}" ||
-        ! reject_line_breaks "${password}" || ! reject_line_breaks "${ca_certificate}"; then
+
+    if ! reject_line_breaks "${host}" ||
+        ! reject_line_breaks "${username}" ||
+        ! reject_line_breaks "${password}" ||
+        ! reject_line_breaks "${ca_certificate}"; then
         echo "MQTT settings must not contain line breaks." >&2
         return 1
     fi
-    if [[ ! "${port}" =~ ^[1-9][0-9]{0,4}$ ]] || ((port > 65535)); then
+
+    if [[ ! "${port}" =~ ^[1-9][0-9]{0,4}$ ]] ||
+        ((port > 65535)); then
         echo "LOGISTICS_MQTT_PORT must be an integer from 1 to 65535." >&2
         return 1
     fi
-    if [[ "${tls_enabled}" != true && "${tls_enabled}" != false ]]; then
+
+    if [[ "${tls_enabled}" != "true" &&
+          "${tls_enabled}" != "false" ]]; then
         echo "LOGISTICS_MQTT_TLS_ENABLED must be true or false." >&2
         return 1
     fi
-    if [[ "${tls_enabled}" == true && -z "${ca_certificate}" ]]; then
+
+    if [[ "${tls_enabled}" == "true" &&
+          -z "${ca_certificate}" ]]; then
         echo "LOGISTICS_MQTT_CA_CERTIFICATE is required when MQTT TLS is enabled." >&2
         return 1
     fi
 }
 
+validate_sorting_speed() {
+    local speed=$1
+
+    if [[ ! "${speed}" =~ ^[0-9]+$ ]] ||
+        ((speed < 1 || speed > 100)); then
+        echo "LOGISTICS_SORTING_DEFAULT_SPEED must be an integer from 1 to 100." >&2
+        return 1
+    fi
+}
+
 run_self_check() {
-    validate_mqtt_settings mqtt.example 8883 PI-INPUT-01 secret true /etc/logistics/tls/ca.crt
-    validate_mqtt_settings mqtt.example 1883 PI-INPUT-01 secret false ""
-    ! validate_mqtt_settings mqtt.example 65536 PI-INPUT-01 secret true /etc/logistics/tls/ca.crt 2>/dev/null
-    ! validate_mqtt_settings mqtt.example 8883 PI-INPUT-01 "" true /etc/logistics/tls/ca.crt 2>/dev/null
-    ! validate_mqtt_settings mqtt.example 8883 PI-INPUT-01 secret 1 /etc/logistics/tls/ca.crt 2>/dev/null
-    ! validate_mqtt_settings mqtt.example 8883 PI-INPUT-01 secret true "" 2>/dev/null
-    ! validate_mqtt_settings mqtt.example 8883 $'PI-INPUT-01\ninvalid' secret true /etc/logistics/tls/ca.crt \
+    validate_mqtt_settings \
+        mqtt.example \
+        8883 \
+        PI-SORTING-01 \
+        secret \
+        true \
+        /etc/logistics/tls/ca.crt
+
+    validate_mqtt_settings \
+        mqtt.example \
+        1883 \
+        PI-SORTING-01 \
+        secret \
+        false \
+        ""
+
+    validate_sorting_speed 50
+
+    ! validate_mqtt_settings \
+        mqtt.example \
+        65536 \
+        PI-SORTING-01 \
+        secret \
+        true \
+        /etc/logistics/tls/ca.crt \
         2>/dev/null
-    echo "$(basename -- "${BASH_SOURCE[0]}") MQTT security self-check passed."
+
+    ! validate_mqtt_settings \
+        mqtt.example \
+        8883 \
+        PI-SORTING-01 \
+        "" \
+        true \
+        /etc/logistics/tls/ca.crt \
+        2>/dev/null
+
+    ! validate_sorting_speed 0 2>/dev/null
+    ! validate_sorting_speed 101 2>/dev/null
+
+    echo "$(basename -- "${BASH_SOURCE[0]}") self-check passed."
 }
 
 if [[ "${1:-}" == "--self-check" ]]; then
@@ -71,7 +132,7 @@ if [[ "${1:-}" == "--self-check" ]]; then
 fi
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-    echo "This script must run on the input Linux/Raspberry Pi host." >&2
+    echo "This script must run on the sorting Linux/Raspberry Pi host." >&2
     exit 2
 fi
 
@@ -86,11 +147,13 @@ if "${sudo_command[@]}" test -e "${config_path}"; then
 fi
 
 write_config=0
-if [[ "${config_exists}" == "0" || "${force_config}" == "1" ]]; then
+if [[ "${config_exists}" == "0" ||
+      "${force_config}" == "1" ]]; then
     write_config=1
 fi
 
-if [[ "${write_config}" == "1" && -z "${mqtt_host}" ]]; then
+if [[ "${write_config}" == "1" &&
+      -z "${mqtt_host}" ]]; then
     echo "LOGISTICS_CENTRAL_HOST (or LOGISTICS_MQTT_HOST) must be set." >&2
     exit 2
 fi
@@ -102,23 +165,42 @@ if [[ "${write_config}" == "1" ]]; then
         "${mqtt_username}" \
         "${mqtt_password}" \
         "${mqtt_tls_enabled}" \
-        "${mqtt_ca_certificate}" || exit 2
+        "${mqtt_ca_certificate}" ||
+        exit 2
+
+    validate_sorting_speed "${sorting_default_speed}" ||
+        exit 2
 fi
 
-if [[ "${write_config}" == "1" && -z "${device_ip}" ]]; then
+if [[ "${write_config}" == "1" &&
+      -z "${device_ip}" ]]; then
     device_ip="$(hostname -I | awk '{print $1}')"
 fi
 
-if [[ "${write_config}" == "1" && -z "${device_ip}" ]]; then
-    echo "Could not detect the input node IP; set LOGISTICS_DEVICE_IP." >&2
+if [[ "${write_config}" == "1" &&
+      -z "${device_ip}" ]]; then
+    echo "Could not detect the sorting node IP; set LOGISTICS_DEVICE_IP." >&2
+    exit 2
+fi
+
+if [[ "${uart_device}" != "/dev/vedauart" ]]; then
+    echo "The systemd unit currently requires /dev/vedauart." >&2
     exit 2
 fi
 
 if [[ "${install_dependencies}" == "1" ]]; then
     "${sudo_command[@]}" apt-get update
+
     "${sudo_command[@]}" apt-get install -y \
-        build-essential cmake ninja-build pkg-config curl \
-        libmosquitto-dev libcurl4-openssl-dev libssl-dev nlohmann-json3-dev
+        build-essential \
+        cmake \
+        ninja-build \
+        pkg-config \
+        curl \
+        libmosquitto-dev \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        nlohmann-json3-dev
 fi
 
 if ! getent group logistics >/dev/null; then
@@ -148,6 +230,7 @@ if [[ "${write_config}" != "1" ]]; then
 else
     temporary_config="$(mktemp)"
     trap 'rm -f -- "${temporary_config:-}"' EXIT
+
     cat >"${temporary_config}" <<EOF
 [device]
 device_id=${device_id}
@@ -169,6 +252,9 @@ clean_session=true
 
 [log_upload]
 enabled=false
+
+[sorting]
+default_speed=${sorting_default_speed}
 EOF
 
     "${sudo_command[@]}" install \
@@ -193,12 +279,14 @@ cmake -S "${repo_root}" -B "${build_dir}" -G Ninja \
     -DLOGISTICS_BUILD_CONTROL_CENTER=OFF \
     -DLOGISTICS_BUILD_CENTRAL_SERVER=OFF \
     -DLOGISTICS_BUILD_DEVICE_NODES=ON \
-    -DLOGISTICS_BUILD_INPUT_NODE=ON \
+    -DLOGISTICS_BUILD_INPUT_NODE=OFF \
     -DLOGISTICS_BUILD_VISION_NODE=OFF \
-    -DLOGISTICS_BUILD_SORTING_NODE=OFF \
+    -DLOGISTICS_BUILD_SORTING_NODE=ON \
     -DLOGISTICS_BUILD_LINETRACER_NODE=OFF \
     -DLOGISTICS_ENABLE_MOSQUITTO_TRANSPORT=ON
-cmake --build "${build_dir}" --target logistics_input_node
+
+cmake --build "${build_dir}" \
+    --target logistics_sorting_node
 
 "${sudo_command[@]}" cmake --install "${build_dir}" \
     --prefix "${install_prefix}"
@@ -222,7 +310,11 @@ fi
 "${sudo_command[@]}" systemctl restart "${service_name}"
 
 echo
-echo "Input node setup complete."
-echo "The STM32 UART character device defaults to ${uart_device}."
-echo "Run: LOGISTICS_UART_DEVICE=${uart_device} \\"
-echo "     ${build_dir}/device-rpi/logistics_input_node ${config_path}"
+echo "Sorting node setup complete."
+echo "Binary: ${install_prefix}/bin/logistics_sorting_node"
+echo "Config: ${config_path}"
+echo "UART: ${uart_device}"
+echo "Service: ${service_name}"
+
+systemctl is-enabled "${service_name}"
+systemctl is-active "${service_name}"

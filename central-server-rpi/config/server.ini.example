@@ -18,7 +18,7 @@ path=devices.json
 
 [database]
 path=/var/lib/logistics/logistics.db
-migration_dir=/usr/share/logistics/migrations
+migration_dir=/opt/logistics-automation/share/logistics/migrations
 busy_timeout_ms=5000
 
 [storage]
