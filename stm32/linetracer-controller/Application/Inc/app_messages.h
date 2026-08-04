@@ -142,7 +142,8 @@ typedef enum {
 typedef struct {
     app_control_safety_event_type_t type;
     uint32_t occurred_at_ms;
-    uint32_t inhibit_generation;
+    /* Kept distinct from the unload-servo gate when both features are integrated. */
+    uint32_t motor_inhibit_generation;
     linetracer_stop_reason_t reason;
     uint16_t original_payload_crc;
     uint8_t error_code;

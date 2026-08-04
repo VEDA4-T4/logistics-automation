@@ -271,7 +271,7 @@ static uint8_t SafetyTask_PublishControlEvent(const app_control_safety_event_t* 
     }
 
     queued_event = *event;
-    queued_event.inhibit_generation = MotorControl_GetSafetyInhibitGeneration();
+    queued_event.motor_inhibit_generation = MotorControl_GetSafetyInhibitGeneration();
     if (osMessageQueuePut(controlSafetyQueue, &queued_event, 0U, 0U) != osOK) {
         ++s_control_event_drop_count;
         SafetyTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)event->type, event->occurred_at_ms);
@@ -378,13 +378,8 @@ static void SafetyTask_ActivateHazard(const app_safety_event_t* event) {
         return;
     }
 
-    /*
-     * This high-priority task owns the safety gate. The inhibit is asserted
-     * before an event is queued so
-     * motor shutdown does not depend on
-     * ControlTask scheduling or queue availability.
-     */
-    MotorControl_SetSafetyInhibit(1U);
+    /* Stop hardware immediately; a new hazard asserts a new inhibit generation below. */
+    MotorControl_ForceStop();
 
     if ((s_safety_context.active_hazard_mask & hazard_mask) != 0U) {
         if ((reason == LINETRACER_STOP_REASON_HEALTH_FAULT) &&
@@ -400,6 +395,12 @@ static void SafetyTask_ActivateHazard(const app_safety_event_t* event) {
         return;
     }
 
+    /*
+     * This high-priority task owns the safety gate. Assert it before queueing
+     * so motor shutdown does not depend on ControlTask scheduling or capacity.
+     * Duplicate reports do not create artificial generations.
+     */
+    MotorControl_SetSafetyInhibit(1U);
     was_latched = s_safety_context.latched;
     s_safety_context.active_hazard_mask |= hazard_mask;
     s_safety_context.latched_hazard_mask |= hazard_mask;

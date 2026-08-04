@@ -213,19 +213,33 @@ static void ControlTask_ProcessSafetyEvents(void) {
     while (processed < APP_CONTROL_SAFETY_QUEUE_DEPTH &&
            osMessageQueueGet(controlSafetyQueue, &event, NULL, 0U) == osOK) {
         uint32_t now_ms = osKernelGetTickCount();
+        uint8_t recovery_approved = (event.type == APP_CONTROL_SAFETY_RESET_APPROVED ||
+                                     event.type == APP_CONTROL_SAFETY_RECOVERY_APPROVED ||
+                                     event.type == APP_CONTROL_SAFETY_AUTO_RECOVERY_APPROVED)
+                                        ? 1U
+                                        : 0U;
 
         MotorControl_ForceStop();
+        if (recovery_approved != 0U &&
+            MotorControl_ReleaseSafetyInhibit(event.motor_inhibit_generation) == 0U) {
+            if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
+                event.type = APP_CONTROL_SAFETY_RESET_REJECTED;
+            } else if (event.type == APP_CONTROL_SAFETY_RECOVERY_APPROVED) {
+                event.type = APP_CONTROL_SAFETY_RECOVERY_REJECTED;
+            } else {
+                event.type = APP_CONTROL_SAFETY_AUTO_RECOVERY_FAILED;
+            }
+            if (event.reason == LINETRACER_STOP_REASON_NONE) {
+                event.reason = controlTaskContext.stop_reason;
+            }
+            event.error_code = UART_ERROR_BUSY;
+            recovery_approved = 0U;
+            ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR,
+                                           CONTROL_HEALTH_MOTOR_INHIBIT_RELEASE_FAILED, now_ms);
+        }
+
         if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
             app_tx_event_t fault_event;
-            uint8_t recovery_approved = (event.type == APP_CONTROL_SAFETY_RESET_APPROVED ||
-                                         event.type == APP_CONTROL_SAFETY_RECOVERY_APPROVED ||
-                                         event.type == APP_CONTROL_SAFETY_AUTO_RECOVERY_APPROVED)
-                                            ? 1U
-                                            : 0U;
-
-            if (recovery_approved != 0U) {
-                (void)MotorControl_ReleaseSafetyInhibit(event.inhibit_generation);
-            }
 
             if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
                                                    &fault_event) != 0U) {
