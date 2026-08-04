@@ -129,6 +129,7 @@ typedef struct {
     linetracer_line_state_t marker_entry_state;
     sensor_marker_state_t marker_state;
     uint8_t ultrasonic_failure_count[SENSOR_LOGIC_ULTRASONIC_COUNT];
+    uint8_t ultrasonic_recovery_count[SENSOR_LOGIC_ULTRASONIC_COUNT];
     uint8_t ultrasonic_started_mask;
     uint8_t line_white_active;
     uint8_t line_lost_active;
