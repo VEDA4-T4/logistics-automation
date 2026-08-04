@@ -182,6 +182,30 @@ int main(int argc, char* argv[]) {
             return 4;
         }
     }
+    auto* channel_one = window.findChild<QWidget*>(QStringLiteral("videoChannel1"));
+    auto* channel_two = window.findChild<QWidget*>(QStringLiteral("videoChannel2"));
+    auto* channel_three = window.findChild<QWidget*>(QStringLiteral("videoChannel3"));
+    auto* channel_four = window.findChild<QWidget*>(QStringLiteral("videoChannel4"));
+    if (!check(channel_one != nullptr && channel_two != nullptr && channel_three != nullptr && channel_four != nullptr,
+               "named video channel cells are missing")) {
+        return 4;
+    }
+    QMouseEvent focus(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
+                      Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(channel_two, &focus);
+    application.processEvents();
+    if (!check(channel_two->isVisible(), "focused channel is not visible") ||
+        !check(!channel_one->isVisible() && !channel_three->isVisible() && !channel_four->isVisible(),
+               "unfocused channels remain visible") ||
+        !check(factory->isVisible(), "factoryTopView is hidden while a channel is focused")) {
+        return 4;
+    }
+    QApplication::sendEvent(channel_two, &focus);
+    application.processEvents();
+    if (!check(channel_one->isVisible() && channel_three->isVisible() && channel_four->isVisible(),
+               "all channels do not return after toggling focus")) {
+        return 4;
+    }
     const auto overlaps_vertically = [](const QRect& left, const QRect& right) {
         return left.top() <= right.bottom() && right.top() <= left.bottom();
     };

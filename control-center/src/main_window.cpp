@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
@@ -10,6 +11,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QMediaPlayer>
+#include <QMouseEvent>
 #include <QPlaybackOptions>
 #include <QSettings>
 #include <QSplitter>
@@ -497,10 +499,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operations_workspace->setHandleWidth(7);
     auto* video_container = new QWidget(operations_workspace);
     video_container->setObjectName(QStringLiteral("videoWorkspace"));
-    auto* video_grid = new QGridLayout(video_container);
-    video_grid->setContentsMargins(10, 0, 0, 0);
-    video_grid->setHorizontalSpacing(8);
-    video_grid->setVerticalSpacing(0);
+    video_grid_ = new QGridLayout(video_container);
+    video_grid_->setContentsMargins(10, 0, 0, 0);
+    video_grid_->setHorizontalSpacing(8);
+    video_grid_->setVerticalSpacing(0);
     factory_top_view_ = new FactoryTopViewWidget(operations_workspace);
     factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
     operations_workspace->addWidget(video_container);
@@ -676,7 +678,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_ERROR"), detail);
     });
 
-    const auto grid_column_count = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(channel_count_))));
+    grid_column_count_ = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(channel_count_))));
+    grid_row_count_ = static_cast<int>(std::ceil(static_cast<double>(channel_count_) / grid_column_count_));
+    channel_panels_.reserve(channel_count_);
 
     for (std::size_t channel = 0; channel < channel_count_; ++channel) {
         players_[channel] = new QMediaPlayer(this);
@@ -690,6 +694,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         playback_options.setProbeSize(rtsp_probe_size_bytes_);
         players_[channel]->setPlaybackOptions(playback_options);
         auto* channel_panel = new QWidget(central_widget);
+        channel_panel->setObjectName(QStringLiteral("videoChannel%1").arg(channel + 1));
+        channel_panel->setProperty("channelIndex", static_cast<qulonglong>(channel));
+        channel_panel->installEventFilter(this);
+        channel_panels_.push_back(channel_panel);
         channel_stacks_[channel] = new QStackedLayout(channel_panel);
         video_layers_[channel] = new QWidget(channel_panel);
         auto* video_layout = new QGridLayout(video_layers_[channel]);
@@ -918,7 +926,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         }
 
         const auto grid_index = static_cast<int>(channel);
-        video_grid->addWidget(channel_panel, grid_index / grid_column_count, grid_index % grid_column_count);
+        video_grid_->addWidget(channel_panel, grid_index / grid_column_count_, grid_index % grid_column_count_);
     }
 
     if (!config.warnings.isEmpty()) {
@@ -1171,6 +1179,36 @@ void MainWindow::refreshOperationalLogPanel() {
         return;
     }
     operational_log_panel_->setState(operational_log_state_);
+}
+
+void MainWindow::setFocusedChannel(std::optional<std::size_t> channel) {
+    focused_channel_ = channel;
+    for (std::size_t index = 0; index < channel_panels_.size(); ++index) {
+        video_grid_->removeWidget(channel_panels_[index]);
+        channel_panels_[index]->setVisible(!channel || index == *channel);
+    }
+    if (channel) {
+        video_grid_->addWidget(channel_panels_[*channel], 0, 0, grid_row_count_, grid_column_count_);
+        return;
+    }
+    for (std::size_t index = 0; index < channel_panels_.size(); ++index) {
+        video_grid_->addWidget(channel_panels_[index], static_cast<int>(index) / grid_column_count_,
+                               static_cast<int>(index) % grid_column_count_);
+    }
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonRelease) {
+        const auto* mouse_event = static_cast<QMouseEvent*>(event);
+        const auto channel = watched->property("channelIndex").toULongLong();
+        if (mouse_event->button() == Qt::LeftButton && channel < channel_panels_.size() &&
+            watched == channel_panels_[channel]) {
+            setFocusedChannel(focused_channel_ && *focused_channel_ == channel ? std::nullopt
+                                                                                : std::optional{ channel });
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 }  // namespace logistics::control_center
