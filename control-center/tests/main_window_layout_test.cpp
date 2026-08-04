@@ -1,9 +1,11 @@
 #include <QApplication>
 #include <QColor>
 #include <QComboBox>
+#include <QDateTime>
 #include <QDialog>
 #include <QFile>
 #include <QFrame>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPalette>
@@ -19,6 +21,7 @@
 
 #include "logistics/control_center/factory_top_view.hpp"
 #include "logistics/control_center/main_window.hpp"
+#include "logistics/control_center/mqtt_client.hpp"
 #include "logistics/control_center/operational_log_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
 
@@ -146,6 +149,30 @@ int main(int argc, char* argv[]) {
                "processControlPanel is not contained by appHeader") ||
         !check(app_header->minimumHeight() == 76 && app_header->maximumHeight() == 92,
                "appHeader height range is not 76-92")) {
+        return 2;
+    }
+
+    auto* mqtt_client = window.findChild<logistics::control_center::MqttClient*>();
+    if (!check(mqtt_client != nullptr, "MqttClient is missing")) {
+        return 2;
+    }
+    const auto vision_color_before = factory->nodeColor(QStringLiteral("vision"));
+    const auto vision_opacity_before = factory->nodeOpacity(QStringLiteral("vision"));
+    mqtt_client->messageReceived(
+        QStringLiteral("device/PI-VISION-01/status"),
+        { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+          { QStringLiteral("messageId"), QStringLiteral("LAYOUT-VISION-LIVE") },
+          { QStringLiteral("messageType"), QStringLiteral("DEVICE_STATUS") },
+          { QStringLiteral("sourceId"), QStringLiteral("PI-VISION-01") },
+          { QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) },
+          { QStringLiteral("data"),
+            QJsonObject{ { QStringLiteral("status"), QStringLiteral("ONLINE") },
+                         { QStringLiteral("currentState"), QStringLiteral("VISION_PROCESSING") },
+                         { QStringLiteral("jobId"), QStringLiteral("WORK-LAYOUT-LIVE") } } } });
+    application.processEvents();
+    if (!check(factory->nodeColor(QStringLiteral("vision")) != vision_color_before ||
+                   factory->nodeOpacity(QStringLiteral("vision")) != vision_opacity_before,
+               "live MQTT device status did not refresh factoryTopView")) {
         return 2;
     }
 

@@ -167,7 +167,7 @@ namespace {
 
 constexpr QRectF kFactoryScene{ 0, 0, 700, 500 };
 constexpr QPointF kInputPositions[]{ { 78, 69 }, { 174, 69 }, { 270, 69 }, { 375, 81 } };
-constexpr QPointF kSortingPositions[]{ { 525, 126 }, { 525, 178 }, { 525, 230 } };
+constexpr QPointF kSortingPositions[]{ { 525, 250 }, { 525, 345 }, { 525, 442 } };
 constexpr QPointF kGripperPivot{ 440, 145 };
 constexpr QPointF kLineStarts[]{ { 500, 250 }, { 500, 345 }, { 500, 442 } };
 constexpr QPointF kLineIntersections[]{ { 292, 250 }, { 292, 345 }, { 292, 442 } };

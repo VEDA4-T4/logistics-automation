@@ -124,6 +124,107 @@ int main(int argc, char* argv[]) {
     auto line_tracer = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-01"), QStringLiteral("DISCONNECTED"),
                                QStringLiteral("WORK-LT"));
 
+    auto concurrent_input = input;
+    concurrent_input.work_id = QStringLiteral("WORK-CONCURRENT");
+    concurrent_input.sensors.append({ .sensor_id = 1,
+                                      .display_name = QStringLiteral("US1"),
+                                      .measurement_status = QStringLiteral("CLEAR"),
+                                      .distance_cm = 8,
+                                      .updated_at = {} });
+    auto concurrent_vision = vision;
+    concurrent_vision.work_id = QStringLiteral("WORK-CONCURRENT");
+    auto concurrent_gripper = gripper;
+    concurrent_gripper.work_id = QStringLiteral("WORK-CONCURRENT");
+    auto concurrent_sorting = sorting;
+    concurrent_sorting.work_id = QStringLiteral("WORK-CONCURRENT");
+    concurrent_sorting.destination = QStringLiteral("2");
+    concurrent_sorting.sensors = {
+        { .sensor_id = 1,
+          .display_name = QStringLiteral("US2"),
+          .measurement_status = QStringLiteral("CLEAR"),
+          .distance_cm = 17,
+          .updated_at = {} },
+        { .sensor_id = 2,
+          .display_name = QStringLiteral("US3"),
+          .measurement_status = QStringLiteral("DETECTED"),
+          .distance_cm = 11,
+          .updated_at = {} },
+        { .sensor_id = 3,
+          .display_name = QStringLiteral("US4"),
+          .measurement_status = QStringLiteral("CLEAR"),
+          .distance_cm = 29,
+          .updated_at = {} },
+    };
+    auto concurrent_line_tracer = line_tracer;
+    concurrent_line_tracer.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
+    concurrent_line_tracer.current_state = QStringLiteral("DELIVERING");
+    concurrent_line_tracer.work_id = QStringLiteral("WORK-CONCURRENT");
+    concurrent_line_tracer.destination = QStringLiteral("2");
+
+    logistics::control_center::FactoryTopViewWidget concurrent_view;
+    concurrent_view.setProcesses(
+        { concurrent_input, concurrent_vision, concurrent_gripper, concurrent_sorting, concurrent_line_tracer });
+    assert(concurrent_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#89d185")));
+    assert(concurrent_view.nodeColor(QStringLiteral("vision")) == QColor(QStringLiteral("#75beff")));
+    assert(concurrent_view.nodeColor(QStringLiteral("gripper")) == QColor(QStringLiteral("#75beff")));
+    assert(concurrent_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#75beff")));
+    assert(concurrent_view.nodeColor(QStringLiteral("linetracer")) == QColor(QStringLiteral("#75beff")));
+    assert(concurrent_view.nodeOpacity(QStringLiteral("input")) == 1.0);
+    assert(concurrent_view.nodeOpacity(QStringLiteral("vision")) == 1.0);
+    assert(concurrent_view.nodeOpacity(QStringLiteral("gripper")) == 1.0);
+    assert(concurrent_view.nodeOpacity(QStringLiteral("sorting")) == 1.0);
+    assert(concurrent_view.nodeOpacity(QStringLiteral("linetracer")) == 1.0);
+    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(78, 69));
+    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(525, 345));
+    assert(concurrent_view.boxPosition(QStringLiteral("linetracer")) == QPointF(500, 345));
+    assert(concurrent_view.gripperAngle() == 90.0);
+    assert(concurrent_view.gripperProductVisible());
+    assert(concurrent_view.gripperProductPosition() == QPointF(482, 145));
+    assert(concurrent_view.sortingServoAngle() == 45.0);
+    assert(concurrent_view.sensorText(QStringLiteral("input"), 1) == QStringLiteral("8 cm"));
+    assert(concurrent_view.sensorText(QStringLiteral("sorting"), 1) == QStringLiteral("17 cm"));
+    assert(concurrent_view.sensorText(QStringLiteral("sorting"), 2) == QStringLiteral("11 cm"));
+    assert(concurrent_view.sensorText(QStringLiteral("sorting"), 3) == QStringLiteral("29 cm"));
+
+    concurrent_view.advanceAnimationsForTest();
+    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(174, 69));
+    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(525, 345));
+    assert(concurrent_view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
+
+    concurrent_vision.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
+    concurrent_view.setProcesses(
+        { concurrent_input, concurrent_vision, concurrent_gripper, concurrent_sorting, concurrent_line_tracer });
+    assert(concurrent_view.nodeColor(QStringLiteral("vision")) == QColor(QStringLiteral("#777777")));
+    assert(concurrent_view.nodeOpacity(QStringLiteral("vision")) == 0.15);
+    assert(concurrent_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#89d185")));
+    assert(concurrent_view.nodeColor(QStringLiteral("gripper")) == QColor(QStringLiteral("#75beff")));
+    assert(concurrent_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#75beff")));
+    assert(concurrent_view.nodeColor(QStringLiteral("linetracer")) == QColor(QStringLiteral("#75beff")));
+    assert(concurrent_view.nodeOpacity(QStringLiteral("input")) == 1.0);
+    assert(concurrent_view.nodeOpacity(QStringLiteral("gripper")) == 1.0);
+    assert(concurrent_view.nodeOpacity(QStringLiteral("sorting")) == 1.0);
+    assert(concurrent_view.nodeOpacity(QStringLiteral("linetracer")) == 1.0);
+    assert(concurrent_view.boxPosition(QStringLiteral("input")) == QPointF(174, 69));
+    assert(concurrent_view.boxPosition(QStringLiteral("sorting")) == QPointF(525, 345));
+    assert(concurrent_view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
+    assert(concurrent_view.gripperAngle() == 90.0);
+    assert(concurrent_view.gripperProductVisible());
+    assert(concurrent_view.sortingServoAngle() == 45.0);
+
+    auto emergency_input = concurrent_input;
+    emergency_input.current_state = QStringLiteral("EMERGENCY_STOP");
+    emergency_input.has_error = false;
+    const auto emergency_visual = BuildFactoryNodeVisual(emergency_input);
+    assert(emergency_visual.state == FactoryNodeVisualState::EmergencyStop);
+    assert(emergency_visual.state != FactoryNodeVisualState::Error);
+    concurrent_view.setProcesses(
+        { emergency_input, concurrent_vision, concurrent_gripper, concurrent_sorting, concurrent_line_tracer });
+    assert(concurrent_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#f14c4c")));
+    assert(concurrent_view.nodeOpacity(QStringLiteral("input")) == 1.0);
+    const auto emergency_input_position = concurrent_view.boxPosition(QStringLiteral("input"));
+    concurrent_view.advanceAnimationsForTest();
+    assert(concurrent_view.boxPosition(QStringLiteral("input")) == emergency_input_position);
+
     logistics::control_center::FactoryTopViewWidget view;
     view.resize(700, 500);
     view.setProcesses({ input, vision, gripper, sorting, line_tracer });
@@ -152,7 +253,7 @@ int main(int argc, char* argv[]) {
     sorting.work_id = QStringLiteral("WORK-GRIPPER");
     view.setProcesses({ input, gripper, sorting });
     assert(view.gripperProductVisible());
-    assert(view.gripperProductPosition() == QPointF(525, 126));
+    assert(view.gripperProductPosition() == QPointF(525, 250));
 
     gripper.work_id = QStringLiteral("WORK-MISMATCH");
     view.setProcesses({ input, gripper, sorting });
@@ -205,7 +306,7 @@ int main(int argc, char* argv[]) {
 
     const auto input_before = view.boxPosition(QStringLiteral("input"));
     const auto sorting_pinned = view.boxPosition(QStringLiteral("sorting"));
-    assert(sorting_pinned == QPointF(525, 178));
+    assert(sorting_pinned == QPointF(525, 345));
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("input")) != input_before);
     assert(view.boxPosition(QStringLiteral("sorting")) == sorting_pinned);
