@@ -58,6 +58,7 @@ int main(int argc, char* argv[]) {
     assert(!visual.motion_enabled);
 
     ProcessUnitStatus active = emergency;
+    active.key = QStringLiteral("gripper");
     active.current_state = QStringLiteral("  transferring  ");
     active.has_error = false;
     visual = BuildFactoryNodeVisual(active);
@@ -168,6 +169,48 @@ int main(int argc, char* argv[]) {
     auto actual_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-01"), QStringLiteral("CORRECTING"),
                                QStringLiteral("WORK-LINE"));
     assert(BuildFactoryNodeVisual(actual_line).state == FactoryNodeVisualState::Working);
+
+    for (const auto& wrong_key : { QStringLiteral("input"), QStringLiteral("sorting"), QStringLiteral("gripper"),
+                                   QStringLiteral("linetracer") }) {
+        for (const auto& vision_state : { QStringLiteral("WORK_ASSIGNED"), QStringLiteral("AWAITING_WORK_ID"),
+                                          QStringLiteral("WAITING_FOR_PRODUCT") }) {
+            const auto wrong_process =
+                Process(wrong_key, QStringLiteral("WRONG-NODE"), vision_state, QStringLiteral("WORK-WRONG"));
+            const auto wrong_visual = BuildFactoryNodeVisual(wrong_process);
+            assert(wrong_visual.state == FactoryNodeVisualState::Waiting);
+            assert(!wrong_visual.motion_enabled);
+        }
+    }
+
+    auto busy_input =
+        Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-BUSY"), QStringLiteral("BUSY"), QStringLiteral("W"));
+    assert(BuildFactoryNodeVisual(busy_input).state == FactoryNodeVisualState::Working);
+    actual_sorting.current_state = QStringLiteral("BUSY");
+    assert(BuildFactoryNodeVisual(actual_sorting).state == FactoryNodeVisualState::Working);
+    actual_sorting.current_state = QStringLiteral("GATE_MOVING_DEST_2");
+
+    logistics::control_center::FactoryTopViewWidget cross_process_view;
+    auto wrong_input = Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-WRONG"),
+                               QStringLiteral("WORK_ASSIGNED"), QStringLiteral("WORK-WRONG-INPUT"));
+    auto wrong_sorting = Process(QStringLiteral("sorting"), QStringLiteral("PI-SORTING-WRONG"),
+                                 QStringLiteral("WORK_ASSIGNED"), QStringLiteral("WORK-WRONG-SORTING"));
+    auto wrong_gripper = Process(QStringLiteral("gripper"), QStringLiteral("PI-GRIPPER-WRONG"),
+                                 QStringLiteral("WORK_ASSIGNED"), QStringLiteral("WORK-WRONG-GRIPPER"));
+    auto wrong_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-WRONG"),
+                              QStringLiteral("WORK_ASSIGNED"), QStringLiteral("WORK-WRONG-LINE"));
+    cross_process_view.setProcesses({ wrong_input, wrong_sorting, wrong_gripper, wrong_line });
+    const auto wrong_input_position = cross_process_view.boxPosition(QStringLiteral("input"));
+    const auto wrong_sorting_position = cross_process_view.boxPosition(QStringLiteral("sorting"));
+    const auto wrong_line_position = cross_process_view.boxPosition(QStringLiteral("linetracer"));
+    cross_process_view.advanceAnimationsForTest();
+    assert(cross_process_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#9d9d9d")));
+    assert(cross_process_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#9d9d9d")));
+    assert(cross_process_view.nodeColor(QStringLiteral("gripper")) == QColor(QStringLiteral("#9d9d9d")));
+    assert(cross_process_view.nodeColor(QStringLiteral("linetracer")) == QColor(QStringLiteral("#9d9d9d")));
+    assert(cross_process_view.boxPosition(QStringLiteral("input")) == wrong_input_position);
+    assert(cross_process_view.boxPosition(QStringLiteral("sorting")) == wrong_sorting_position);
+    assert(cross_process_view.boxPosition(QStringLiteral("linetracer")) == wrong_line_position);
+    assert(VisibleProducts(cross_process_view).isEmpty());
 
     logistics::control_center::FactoryTopViewWidget no_work_view;
     auto no_work_input =
