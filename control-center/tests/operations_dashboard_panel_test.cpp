@@ -7,6 +7,8 @@
 #include <QMouseEvent>
 #include <cassert>
 
+#include "logistics/control_center/factory_top_view.hpp"
+
 namespace {
 
 QJsonObject DeviceEnvelope(const QString& message_id, const QString& source_id, const QString& state,
@@ -61,15 +63,28 @@ int main(int argc, char* argv[]) {
     assert(state.applyEnvelope(DeviceEnvelope("LINE", "PI-LT-01", "DELIVERING", "WORK-101", 4)).applied);
 
     logistics::control_center::OperationsDashboardPanel panel;
-    panel.resize(1280, 112);
+    panel.resize(1280, 300);
     panel.setState(state);
     panel.setMqttConnected(true);
     panel.show();
     application.processEvents();
 
-    assert(panel.minimumHeight() == 112);
-    assert(panel.maximumHeight() == 112);
+    auto* top_view =
+        panel.findChild<logistics::control_center::FactoryTopViewWidget*>(QStringLiteral("factoryTopView"));
+    assert(top_view != nullptr);
+    assert(panel.minimumHeight() == 250);
+    assert(panel.maximumHeight() == QWIDGETSIZE_MAX);
     assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
+    assert(panel.findChild<QWidget*>(QStringLiteral("processCardGrid")) != nullptr);
+    const auto assert_scene_fits = [&application, top_view, &panel](const QSize& panel_size) {
+        panel.resize(panel_size);
+        application.processEvents();
+        assert(top_view->viewport()->rect().contains(top_view->mapFromScene(top_view->sceneRect().topLeft())));
+        assert(top_view->viewport()->rect().contains(top_view->mapFromScene(top_view->sceneRect().bottomRight())));
+        assert(qFuzzyCompare(qAbs(top_view->transform().m11()), qAbs(top_view->transform().m22())));
+    };
+    assert_scene_fits(QSize(1280, 250));
+    assert_scene_fits(QSize(1600, 300));
     assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
     assert(panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator")).size() == 4);
     QLabel* sorting_sensor_2 = nullptr;
@@ -197,6 +212,7 @@ int main(int argc, char* argv[]) {
     QApplication::sendEvent(vision_card, &select_vision);
     assert(selected_target == QStringLiteral("PI-VISION-01"));
     assert(vision_card->property("selectedControlTarget").toBool());
+    assert(top_view->selectedDeviceId() == QStringLiteral("PI-VISION-01"));
 
     QFrame* input_card = nullptr;
     for (auto* card : panel.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
@@ -206,9 +222,7 @@ int main(int argc, char* argv[]) {
         }
     }
     assert(input_card != nullptr);
-    QMouseEvent select_input(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
-                             Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(input_card, &select_input);
+    top_view->selectProcessForTest(QStringLiteral("input"));
     assert(selected_target == QStringLiteral("PI-INPUT-01"));
     assert(input_card->property("selectedControlTarget").toBool());
 

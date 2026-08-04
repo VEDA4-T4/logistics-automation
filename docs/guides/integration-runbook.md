@@ -12,32 +12,36 @@
 | Vision Raspberry Pi | `192.168.0.21` |
 | Control Center PC | `192.168.0.30` |
 
-개발 단계 포트:
+기본 통합 포트:
 
-- MQTT: TCP `1883`
+- MQTT over TLS: TCP `8883`
 - HTTP 이미지 업로드/다운로드: TCP `8080`
-- RTSP: 카메라 설정에 따른 포트, 일반적으로 TCP `554`
+- RTSP Relay: TCP `8554` (`feature/rtsp-relay` 통합 후)
 
-운영 TLS 전환 후 MQTT는 `8883`, HTTP는 별도의 HTTPS 포트를 사용합니다. 현재 MQTT 클라이언트 TLS 지원 상태는
-[Mosquitto 보안 및 TLS](../../deploy/mosquitto/README.md)를 먼저 확인하세요.
+마이그레이션용 MQTT `1883` listener도 사용자 인증과 ACL을 적용하며 익명 접근을 허용하지 않습니다. MQTT broker
+DNS 이름 또는 IP는 서버 인증서 SAN과 일치해야 합니다. 상세 설정은
+[Mosquitto 보안 및 TLS](../../deploy/mosquitto/README.md)를 확인하세요.
 
 ## 2. Mosquitto 시작
 
 ```sh
 sudo systemctl enable --now mosquitto
 sudo systemctl status mosquitto --no-pager
-ss -lnt | grep ':1883'
+ss -lnt | grep -E ':(1883|8883)\b'
 ```
 
 인증과 ACL은 [Mosquitto 보안 가이드](../../deploy/mosquitto/README.md)에 따라 설정합니다.
 
 ## 3. 중앙서버 빌드와 설정
 
-```sh
+```bash
+read -rsp 'central-server MQTT password: ' LOGISTICS_MQTT_PASSWORD; printf '\n'
+export LOGISTICS_MQTT_PASSWORD
 export LOGISTICS_UPLOAD_TOKEN='충분히-긴-임의의-토큰'
-export LOGISTICS_MQTT_HOST='127.0.0.1'
+export LOGISTICS_MQTT_HOST='mqtt.logistics.local'
 export LOGISTICS_INSTALL_DEPENDENCIES=1
 ./deploy/scripts/setup-central-server.sh
+unset LOGISTICS_MQTT_PASSWORD
 ```
 
 실행:
@@ -59,14 +63,17 @@ export LOGISTICS_INSTALL_DEPENDENCIES=1
 
 Vision Raspberry Pi에서 실행합니다.
 
-```sh
+```bash
+read -rsp 'PI-VISION-01 MQTT password: ' LOGISTICS_MQTT_PASSWORD; printf '\n'
+export LOGISTICS_MQTT_PASSWORD
 export LOGISTICS_CENTRAL_HOST='192.168.0.10'
-export LOGISTICS_MQTT_HOST='192.168.0.10'
+export LOGISTICS_MQTT_HOST='mqtt.logistics.local'
 export LOGISTICS_UPLOAD_TOKEN='중앙서버와-동일한-토큰'
 export LOGISTICS_DEVICE_ID='PI-VISION-01'
 export LOGISTICS_DEVICE_IP='192.168.0.21'
 export LOGISTICS_INSTALL_DEPENDENCIES=1
 ./deploy/scripts/setup-vision-node.sh
+unset LOGISTICS_MQTT_PASSWORD
 ```
 
 SSH나 systemd 환경에서는 headless로 실행합니다.
@@ -86,8 +93,12 @@ SSH나 systemd 환경에서는 headless로 실행합니다.
 
 ```ini
 [mqtt]
-host=192.168.0.10
-port=1883
+host=mqtt.logistics.local
+port=8883
+username=control-center
+password=각-계정에-발급한-비밀번호
+tls_enabled=true
+ca_certificate=C:/ProgramData/Logistics/tls/ca.crt
 
 [http]
 image_base_url=http://192.168.0.10:8080/
@@ -108,7 +119,7 @@ export LOGISTICS_CENTRAL_HOST='192.168.0.10'
 Windows Control Center PC에서:
 
 ```powershell
-Test-NetConnection 192.168.0.10 -Port 1883
+Test-NetConnection 192.168.0.10 -Port 8883
 Test-NetConnection 192.168.0.10 -Port 8080
 ```
 

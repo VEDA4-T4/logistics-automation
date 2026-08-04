@@ -13,6 +13,7 @@ namespace mqtt = logistics::contracts::mqtt;
 
 constexpr qsizetype kMaximumRememberedMessages = 2048;
 constexpr qsizetype kMaximumRetiredWorksPerProcess = 512;
+constexpr qsizetype kMaximumRememberedDestinations = 512;
 
 QString StringValue(const QJsonObject& object, const char* key) {
     const auto value = object.value(QString::fromLatin1(key));
@@ -259,6 +260,8 @@ void OperationsDashboardState::configureProcesses(const QList<ProcessDefinition>
     process_snapshots_.clear();
     process_index_by_device_.clear();
     process_index_by_key_.clear();
+    destination_by_work_id_.clear();
+    destination_work_order_.clear();
 
     for (const auto& definition : definitions) {
         ProcessRuntime runtime;
@@ -330,6 +333,8 @@ bool OperationsDashboardState::expireStaleProcesses(const QDateTime& timestamp) 
         process.connection_state = mqtt::ConnectionState::kOffline;
         process.current_state = QStringLiteral("DISCONNECTED");
         process.work_id.clear();
+        process.destination.clear();
+        process.work_completed = false;
         process.error_code = QStringLiteral("ERR-HEARTBEAT-TIMEOUT");
         process.updated_at = timestamp;
         process.has_error = true;
@@ -442,6 +447,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             if (!process.status.has_warning && SensorMeasurementForCurrentState(current_state).isEmpty()) {
                 process.status.current_state = current_state;
             }
+            process.status.work_completed = false;
             process.status.updated_at = timestamp;
         } else {
             const auto state_text = StringValue(data, "status");
@@ -453,6 +459,13 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             const auto work_id = StringValue(data, "jobId");
             if (!updateProcessWork(process, work_id)) {
                 return result;
+            }
+            process.status.work_completed = false;
+            if (process.status.key == QString::fromLatin1(kLineTracerProcessKey)) {
+                const auto destination = destination_by_work_id_.constFind(work_id);
+                if (destination != destination_by_work_id_.cend()) {
+                    process.status.destination = destination.value();
+                }
             }
             const auto error_code = StringValue(data, "errorCode");
             const bool sensor_stale = IsSensorStaleErrorCode(error_code);
@@ -480,6 +493,9 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             process.status.has_error =
                 !sensor_stale && (IsConnectionError(connection_state) || !process.status.error_code.isEmpty() ||
                                   (!sensor_telemetry && IsProcessErrorState(current_state)));
+            if (IsConnectionError(process.status.connection_state)) {
+                process.status.destination.clear();
+            }
             process.status.updated_at = timestamp;
         }
         process.last_received_at = effective_received_at;
@@ -523,6 +539,11 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         result.error = QStringLiteral("공정 메시지에 유효한 workId가 필요합니다.");
         return result;
     }
+    const auto destination = type == mqtt::MessageType::kDestinationSet ? StringValue(data, "destination") : QString{};
+    if (type == mqtt::MessageType::kDestinationSet && !DestinationRouteIndex(destination).has_value()) {
+        result.error = QStringLiteral("목적지는 1, 2, 3 중 하나여야 합니다.");
+        return result;
+    }
     if (type == mqtt::MessageType::kWorkCompleted) {
         const auto completed_result = StringValue(data, "result").toUpper();
         if (completed_result != QStringLiteral("SUCCESS") && completed_result != QStringLiteral("FAILED")) {
@@ -547,6 +568,22 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         }
         if (work_updated) {
             process.status.current_state = StageFor(type);
+            if (type == mqtt::MessageType::kDestinationSet) {
+                process.status.destination = destination;
+                if (!destination_by_work_id_.contains(work_id)) {
+                    destination_work_order_.enqueue(work_id);
+                }
+                destination_by_work_id_.insert(work_id, destination);
+                while (destination_work_order_.size() > kMaximumRememberedDestinations) {
+                    destination_by_work_id_.remove(destination_work_order_.dequeue());
+                }
+            } else if (type == mqtt::MessageType::kWorkCompleted) {
+                const auto cached_destination = destination_by_work_id_.constFind(work_id);
+                if (cached_destination != destination_by_work_id_.cend()) {
+                    process.status.destination = cached_destination.value();
+                }
+                process.status.work_completed = true;
+            }
             process.status.updated_at = timestamp;
             if (type == mqtt::MessageType::kWorkCompleted &&
                 StringValue(data, "result").toUpper() == QStringLiteral("FAILED")) {
@@ -761,6 +798,8 @@ bool OperationsDashboardState::updateProcessWork(ProcessRuntime& process, const 
     if (work_id.isEmpty()) {
         retireProcessWork(process, process.status.work_id);
         process.status.work_id.clear();
+        process.status.destination.clear();
+        process.status.work_completed = false;
         return true;
     }
     if (!mqtt::IsValidTopicLevel(work_id.toStdString()) || process.retired_work_ids.contains(work_id)) {
@@ -768,6 +807,10 @@ bool OperationsDashboardState::updateProcessWork(ProcessRuntime& process, const 
     }
     if (!process.status.work_id.isEmpty() && process.status.work_id != work_id) {
         retireProcessWork(process, process.status.work_id);
+    }
+    if (process.status.work_id != work_id) {
+        process.status.destination.clear();
+        process.status.work_completed = false;
     }
     process.status.work_id = work_id;
     return true;
@@ -798,6 +841,8 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         process.status.connection_state = mqtt::ConnectionState::kUnknown;
         process.status.current_state = current_state;
         process.status.work_id.clear();
+        process.status.destination.clear();
+        process.status.work_completed = false;
         process.status.error_code.clear();
         process.status.has_error = false;
         process.status.has_warning = false;
@@ -818,6 +863,8 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
     command_override_.reset();
     command_override_stage_.clear();
     command_override_detail_.clear();
+    destination_by_work_id_.clear();
+    destination_work_order_.clear();
     publishProcessSnapshots();
 }
 

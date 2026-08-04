@@ -2,6 +2,7 @@
 
 #include <QJsonObject>
 #include <QObject>
+#include <QSslConfiguration>
 #include <QString>
 
 #include "logistics/contracts/mqtt_message.hpp"
@@ -16,9 +17,11 @@ struct MqttClientConfig {
     QString client_id;
     QString username;
     QString password;
+    QString ca_certificate;
     int port{ 1883 };
     int reconnect_interval_ms{ 3000 };
     int keep_alive_seconds{ 30 };
+    bool tls_enabled{ false };
 };
 
 class MqttClient final : public QObject {

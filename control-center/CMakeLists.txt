@@ -19,13 +19,14 @@ find_package(Qt6 6.10 REQUIRED COMPONENTS Mqtt Multimedia Network Widgets)
 
 qt_standard_project_setup()
 
-qt_add_executable(
-    logistics_control_center
-    src/main.cpp
+set(
+    CONTROL_CENTER_APP_SOURCES
     src/main_window.cpp
+    src/control_center_theme.cpp
     src/command_response.cpp
     src/current_product_state.cpp
     src/detection_overlay.cpp
+    src/factory_top_view.cpp
     src/mqtt_client.cpp
     src/mqtt_message_validator.cpp
     src/operational_log_panel.cpp
@@ -37,11 +38,14 @@ qt_add_executable(
     src/product_result_panel.cpp
     src/process_control_panel.cpp
     src/rtsp_h264_stream.cpp
+    src/rtsp_stream_worker.cpp
     src/ui_dialog.cpp
     include/logistics/control_center/main_window.hpp
+    include/logistics/control_center/control_center_theme.hpp
     include/logistics/control_center/command_response.hpp
     include/logistics/control_center/current_product_state.hpp
     include/logistics/control_center/detection_overlay.hpp
+    include/logistics/control_center/factory_top_view.hpp
     include/logistics/control_center/mqtt_client.hpp
     include/logistics/control_center/mqtt_message_validator.hpp
     include/logistics/control_center/operational_log_panel.hpp
@@ -54,7 +58,14 @@ qt_add_executable(
     include/logistics/control_center/process_control_panel.hpp
     include/logistics/control_center/process_control_state.hpp
     include/logistics/control_center/rtsp_h264_stream.hpp
+    include/logistics/control_center/rtsp_stream_worker.hpp
     include/logistics/control_center/ui_dialog.hpp
+)
+
+qt_add_executable(
+    logistics_control_center
+    src/main.cpp
+    ${CONTROL_CENTER_APP_SOURCES}
 )
 
 add_custom_target(
@@ -84,6 +95,24 @@ include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ProjectWarnings.cmake")
 logistics_enable_warnings(logistics_control_center)
 
 if(BUILD_TESTING)
+    add_executable(
+        control_center_main_window_layout_test
+        tests/main_window_layout_test.cpp
+        ${CONTROL_CENTER_APP_SOURCES}
+    )
+    target_include_directories(control_center_main_window_layout_test PRIVATE include)
+    target_link_libraries(
+        control_center_main_window_layout_test
+        PRIVATE
+            Qt6::Mqtt
+            Qt6::Multimedia
+            Qt6::Network
+            Qt6::Widgets
+            logistics::contracts
+    )
+    logistics_enable_warnings(control_center_main_window_layout_test)
+    add_test(NAME control_center_main_window_layout_test COMMAND control_center_main_window_layout_test)
+
     add_executable(
         control_center_mqtt_validator_test
         tests/mqtt_message_validator_test.cpp
@@ -160,12 +189,33 @@ if(BUILD_TESTING)
         control_center_rtsp_h264_stream_test
         tests/rtsp_h264_stream_test.cpp
         src/rtsp_h264_stream.cpp
+        src/rtsp_stream_worker.cpp
         include/logistics/control_center/rtsp_h264_stream.hpp
+        include/logistics/control_center/rtsp_stream_worker.hpp
     )
     target_include_directories(control_center_rtsp_h264_stream_test PRIVATE include)
     target_link_libraries(control_center_rtsp_h264_stream_test PRIVATE Qt6::Core Qt6::Network)
     logistics_enable_warnings(control_center_rtsp_h264_stream_test)
     add_test(NAME control_center_rtsp_h264_stream_test COMMAND control_center_rtsp_h264_stream_test)
+
+    add_executable(
+        control_center_rtsp_stream_worker_player_test
+        tests/rtsp_stream_worker_player_test.cpp
+        src/rtsp_h264_stream.cpp
+        src/rtsp_stream_worker.cpp
+        include/logistics/control_center/rtsp_h264_stream.hpp
+        include/logistics/control_center/rtsp_stream_worker.hpp
+    )
+    target_include_directories(control_center_rtsp_stream_worker_player_test PRIVATE include)
+    target_link_libraries(
+        control_center_rtsp_stream_worker_player_test
+        PRIVATE Qt6::Core Qt6::Multimedia Qt6::Network Qt6::Widgets
+    )
+    logistics_enable_warnings(control_center_rtsp_stream_worker_player_test)
+    add_test(
+        NAME control_center_rtsp_stream_worker_player_test
+        COMMAND control_center_rtsp_stream_worker_player_test
+    )
 
     add_executable(
         control_center_process_control_state_test
@@ -232,10 +282,23 @@ if(BUILD_TESTING)
     )
 
     add_executable(
+        control_center_factory_top_view_test
+        tests/factory_top_view_test.cpp
+        src/factory_top_view.cpp
+        include/logistics/control_center/factory_top_view.hpp
+    )
+    target_include_directories(control_center_factory_top_view_test PRIVATE include)
+    target_link_libraries(control_center_factory_top_view_test PRIVATE Qt6::Widgets logistics::contracts)
+    logistics_enable_warnings(control_center_factory_top_view_test)
+    add_test(NAME control_center_factory_top_view_test COMMAND control_center_factory_top_view_test)
+
+    add_executable(
         control_center_operations_dashboard_panel_test
         tests/operations_dashboard_panel_test.cpp
+        src/factory_top_view.cpp
         src/operations_dashboard_panel.cpp
         src/operations_dashboard_state.cpp
+        include/logistics/control_center/factory_top_view.hpp
         include/logistics/control_center/operations_dashboard_panel.hpp
         include/logistics/control_center/operations_dashboard_state.hpp
     )
@@ -291,4 +354,12 @@ if(BUILD_TESTING)
         PRIVATE Qt6::Core Qt6::Mqtt logistics::contracts
     )
     logistics_enable_warnings(control_center_mqtt_integration_test)
+
+    get_property(control_center_tests DIRECTORY PROPERTY TESTS)
+    set_tests_properties(
+        ${control_center_tests}
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
 endif()

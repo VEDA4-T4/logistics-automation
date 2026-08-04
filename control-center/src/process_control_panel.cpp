@@ -123,13 +123,9 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setMinimumHeight(170);
     setMaximumHeight(190);
     setStyleSheet(
-        "#processControlPanel{background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
-        "QLabel{color:#cccccc;}"
-        "QPushButton{min-height:27px;border:1px solid #3c3c3c;border-radius:5px;background-color:#2d2d2d;"
-        "color:#f0f0f0;font-size:12px;font-weight:600;padding:3px 8px;}"
-        "QPushButton:hover:enabled{background-color:#3c3c3c;border-color:#4d4d4d;}"
+        "#processControlPanel{background-color:#181818;border:1px solid #303030;border-radius:6px;}"
+        "QPushButton{min-height:27px;font-size:12px;font-weight:600;padding:3px 8px;}"
         "QPushButton:pressed:enabled{background-color:#252526;}"
-        "QPushButton:disabled{background-color:#1f1f1f;color:#6e6e6e;border-color:#2b2b2b;}"
         "QPushButton#startButton{background-color:#0e639c;border-color:#1177bb;}"
         "QPushButton#startButton:hover:enabled{background-color:#1177bb;}"
         "QPushButton#stopButton{color:#cca700;}"
@@ -139,8 +135,8 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 8, 12, 8);
-    layout->setSpacing(4);
+    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setSpacing(8);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
     title->setStyleSheet("color:#f0f0f0;font-size:14px;font-weight:700;");
@@ -194,7 +190,7 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(command_status_);
     auto* normal_commands = new QHBoxLayout();
     normal_commands->setContentsMargins(0, 0, 0, 0);
-    normal_commands->setSpacing(6);
+    normal_commands->setSpacing(8);
     normal_commands->addWidget(start_button_);
     normal_commands->addWidget(stop_button_);
     normal_commands->addWidget(recovery_button_);
@@ -202,7 +198,7 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
 
     auto* divider = new QFrame(this);
     divider->setFrameShape(QFrame::HLine);
-    divider->setStyleSheet("color:#2b2b2b;");
+    divider->setStyleSheet("color:#303030;");
     layout->addWidget(divider);
     layout->addWidget(emergency_stop_button_);
 

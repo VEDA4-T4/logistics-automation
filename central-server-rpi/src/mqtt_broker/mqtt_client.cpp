@@ -126,6 +126,8 @@ bool MqttClient::Start() {
         .reconnect_min_delay_seconds = config_.reconnect_min_delay_seconds,
         .reconnect_max_delay_seconds = config_.reconnect_max_delay_seconds,
         .clean_session = config_.clean_session,
+        .tls_enabled = config_.tls_enabled,
+        .ca_certificate = config_.ca_certificate,
         .will = will_,
     };
     const auto result = transport_->Start(options);
