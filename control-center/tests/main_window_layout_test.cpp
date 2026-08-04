@@ -142,13 +142,18 @@ int main(int argc, char* argv[]) {
     auto* log = window.findChild<QWidget*>(QStringLiteral("operationalLogPanel"));
     auto* process_control =
         window.findChild<logistics::control_center::ProcessControlPanel*>(QStringLiteral("processControlPanel"));
+    auto* app_header = window.findChild<QWidget*>(QStringLiteral("appHeader"));
     if (!check(window.size() == QSize(1280, 720), "offscreen window did not keep 1280x720") ||
         !check(factory != nullptr && factory->isVisible(), "factoryTopView is not visible") ||
         !check(video != nullptr && video->isVisible(), "videoWorkspace is not visible") ||
         !check(process_status != nullptr && process_status->isVisible(), "processStatusSection is not visible") ||
         !check(product != nullptr && product->isVisible(), "productResultPanel is not visible") ||
         !check(log != nullptr && log->isVisible(), "operationalLogPanel is not visible") ||
-        !check(process_control != nullptr && process_control->isVisible(), "processControlPanel is not visible")) {
+        !check(process_control != nullptr && process_control->isVisible(), "processControlPanel is not visible") ||
+        !check(app_header != nullptr && app_header->isAncestorOf(process_control),
+               "processControlPanel is not contained by appHeader") ||
+        !check(app_header->minimumHeight() == 76 && app_header->maximumHeight() == 92,
+               "appHeader height range is not 76-92")) {
         return 2;
     }
 

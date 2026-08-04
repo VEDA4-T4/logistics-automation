@@ -468,7 +468,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* app_header = new QFrame(central_widget);
     app_header->setObjectName(QStringLiteral("appHeader"));
-    app_header->setMinimumHeight(92);
+    app_header->setMinimumHeight(76);
     app_header->setMaximumHeight(92);
     auto* app_header_layout = new QHBoxLayout(app_header);
     app_header_layout->setContentsMargins(16, 7, 16, 7);

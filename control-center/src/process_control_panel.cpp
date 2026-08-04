@@ -120,23 +120,23 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
 ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("processControlPanel"));
     setMinimumWidth(0);
-    setMinimumHeight(76);
+    setMinimumHeight(72);
     setMaximumHeight(92);
     setStyleSheet(
         "#processControlPanel{background-color:#181818;border:1px solid #303030;border-radius:6px;}"
-        "QPushButton{min-height:27px;font-size:12px;font-weight:600;padding:3px 8px;}"
+        "QPushButton{font-size:12px;font-weight:600;padding:0 8px;}"
         "QPushButton:pressed:enabled{background-color:#252526;}"
         "QPushButton#startButton{background-color:#0e639c;border-color:#1177bb;}"
         "QPushButton#startButton:hover:enabled{background-color:#1177bb;}"
         "QPushButton#stopButton{color:#cca700;}"
         "QPushButton#recoveryButton{color:#75beff;}"
-        "QPushButton#emergencyStopButton{min-height:34px;background-color:#a1260d;color:#ffffff;"
+        "QPushButton#emergencyStopButton{background-color:#a1260d;color:#ffffff;"
         "font-size:13px;border:1px solid #c42b1c;}"
         "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
 
-    auto* layout = new QHBoxLayout(this);
+    auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(8);
+    layout->setSpacing(4);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
     title->setStyleSheet("color:#f0f0f0;font-size:14px;font-weight:700;");
@@ -147,20 +147,15 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "font-size:10px;font-weight:700;padding:4px 8px;");
     target_label_->setToolTip(
         QStringLiteral("상단 공정 카드를 클릭하여 대상을 변경합니다. 비상정지는 항상 전체 공정에 적용됩니다."));
-    auto* title_column = new QVBoxLayout();
-    title_column->setContentsMargins(0, 0, 0, 0);
-    title_column->setSpacing(4);
-    title_column->addWidget(title);
-    title_column->addWidget(target_label_);
     connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
     connection_hint_->setWordWrap(false);
     connection_hint_->setStyleSheet("color:#9d9d9d;font-size:10px;");
 
     command_status_ = new QLabel(QStringLiteral("대기 중"), this);
     command_status_->setObjectName(QStringLiteral("commandStatus"));
-    command_status_->setMinimumHeight(28);
+    command_status_->setFixedHeight(28);
     command_status_->setAlignment(Qt::AlignCenter);
-    command_status_->setWordWrap(true);
+    command_status_->setWordWrap(false);
     command_status_->setStyleSheet(IdleCommandStyle());
 
     start_button_ = new QPushButton(QStringLiteral("시작"), this);
@@ -169,8 +164,12 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     stop_button_->setObjectName(QStringLiteral("stopButton"));
     recovery_button_ = new QPushButton(QStringLiteral("복구"), this);
     recovery_button_->setObjectName(QStringLiteral("recoveryButton"));
-    emergency_stop_button_ = new QPushButton(QStringLiteral("비상정지\nEMERGENCY STOP"), this);
+    emergency_stop_button_ = new QPushButton(QStringLiteral("비상 정지"), this);
     emergency_stop_button_->setObjectName(QStringLiteral("emergencyStopButton"));
+    for (auto* button : { start_button_, stop_button_, recovery_button_ }) {
+        button->setFixedHeight(28);
+    }
+    emergency_stop_button_->setFixedHeight(32);
 
     connect(start_button_, &QPushButton::clicked, this,
             [this]() { requestCommand(mqtt::ControlCommand::kStart, QStringLiteral("공정을 시작하시겠습니까?")); });
@@ -184,26 +183,29 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         emit commandRequested(mqtt::ControlCommand::kEmergencyStop, command_target_device_id_);
     });
 
-    auto* status_column = new QVBoxLayout();
-    status_column->setContentsMargins(0, 0, 0, 0);
-    status_column->setSpacing(4);
-    status_column->addWidget(connection_hint_);
-    status_column->addWidget(command_status_);
-    auto* normal_commands = new QHBoxLayout();
-    normal_commands->setContentsMargins(0, 0, 0, 0);
-    normal_commands->setSpacing(8);
-    normal_commands->addWidget(start_button_);
-    normal_commands->addWidget(stop_button_);
-    normal_commands->addWidget(recovery_button_);
+    auto* information_row = new QHBoxLayout();
+    information_row->setContentsMargins(0, 0, 0, 0);
+    information_row->setSpacing(8);
+    information_row->addWidget(title);
+    information_row->addWidget(target_label_);
+    information_row->addWidget(command_status_, 1);
+    information_row->addWidget(connection_hint_);
+
+    auto* command_row = new QHBoxLayout();
+    command_row->setContentsMargins(0, 0, 0, 0);
+    command_row->setSpacing(8);
+    command_row->addStretch(1);
+    command_row->addWidget(start_button_);
+    command_row->addWidget(stop_button_);
+    command_row->addWidget(recovery_button_);
 
     auto* divider = new QFrame(this);
     divider->setFrameShape(QFrame::VLine);
     divider->setStyleSheet("color:#303030;");
-    layout->addLayout(title_column);
-    layout->addLayout(status_column, 1);
-    layout->addLayout(normal_commands);
-    layout->addWidget(divider);
-    layout->addWidget(emergency_stop_button_);
+    command_row->addWidget(divider);
+    command_row->addWidget(emergency_stop_button_);
+    layout->addLayout(information_row);
+    layout->addLayout(command_row);
 
     updateTargetPresentation();
     updateButtonStates();
@@ -387,10 +389,14 @@ void ProcessControlPanel::updateCommandPresentation() {
     const auto presentation = command_presentations_.constFind(selectedTargetDeviceId());
     if (presentation == command_presentations_.cend()) {
         command_status_->setText(QStringLiteral("대기 중"));
+        command_status_->setToolTip({});
         command_status_->setStyleSheet(IdleCommandStyle());
         return;
     }
-    command_status_->setText(presentation->text);
+    auto compact_text = presentation->text;
+    compact_text.replace(QLatin1Char('\n'), QStringLiteral(" · "));
+    command_status_->setText(compact_text);
+    command_status_->setToolTip(presentation->text);
     command_status_->setStyleSheet(presentation->style);
 }
 
