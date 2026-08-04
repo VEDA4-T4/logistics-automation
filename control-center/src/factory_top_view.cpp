@@ -323,7 +323,7 @@ struct FactoryTopViewWidget::Impl {
 
     void buildScene() {
         auto& input = addNode(QString::fromLatin1(kInputProcessKey), QStringLiteral("Input"), QPointF(32, 35));
-        addStateLine(input, QLineF(kInputPositions[0], kInputPositions[2]), 6);
+        addStateLine(input, QLineF(kInputPositions[0], kInputPositions[3]), 6);
         addBox(input, kInputPositions[0]);
         auto* input_sensor = new QGraphicsSimpleTextItem(QStringLiteral("US1 -- cm"), input.group);
         input_sensor->setBrush(QColor(QStringLiteral("#cccccc")));

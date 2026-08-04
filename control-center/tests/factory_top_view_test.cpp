@@ -237,8 +237,9 @@ int main(int argc, char* argv[]) {
     const auto scene_item_count = view.scene()->items().size();
 
     assert(view.sceneRect() == QRectF(0, 0, 700, 500));
+    const QPointF sorting_drop_positions[]{ { 504, 250 }, { 504, 345 }, { 504, 442 } };
     for (int route = 1; route <= 3; ++route) {
-        assert(view.lineTracerPickupPosition(route).x() == view.boxPosition(QStringLiteral("sorting")).x());
+        assert(view.lineTracerPickupPosition(route) == sorting_drop_positions[route - 1]);
         assert(view.lineTracerJunctionPosition(route).x() == view.lineTracerJunctionPosition(1).x());
     }
     assert(view.lineTracerJunctionPosition(1).y() < view.lineTracerJunctionPosition(3).y());
@@ -247,16 +248,23 @@ int main(int argc, char* argv[]) {
     assert(view.lineTracerDestinationPosition(-1).isNull());
     const QLineF common_line(view.lineTracerJunctionPosition(1), view.lineTracerJunctionPosition(3));
     bool has_common_line = false;
+    const QLineF input_line(QPointF(143, 81), QPointF(440, 81));
+    bool has_input_line = false;
     for (auto* item : view.scene()->items()) {
         const auto* line = dynamic_cast<QGraphicsLineItem*>(item);
         if (line != nullptr &&
             ((line->line().p1() == common_line.p1() && line->line().p2() == common_line.p2()) ||
              (line->line().p1() == common_line.p2() && line->line().p2() == common_line.p1()))) {
             has_common_line = true;
-            break;
+        }
+        if (line != nullptr &&
+            ((line->line().p1() == input_line.p1() && line->line().p2() == input_line.p2()) ||
+             (line->line().p1() == input_line.p2() && line->line().p2() == input_line.p1()))) {
+            has_input_line = true;
         }
     }
     assert(has_common_line);
+    assert(has_input_line);
     assert(view.nodeOpacity(QStringLiteral("input")) == 1.0);
     assert(view.nodeOpacity(QStringLiteral("linetracer")) == 0.15);
     assert(view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#89d185")));
@@ -312,7 +320,7 @@ int main(int argc, char* argv[]) {
         line_tracer.destination = route_case.destination;
         view.setProcesses({ sorting, line_tracer });
         assert(view.sortingServoAngle() == route_case.servo_angle);
-        assert(view.boxPosition(QStringLiteral("sorting")) == view.boxPosition(QStringLiteral("linetracer")));
+        assert(view.boxPosition(QStringLiteral("sorting")) == view.lineTracerPickupPosition(route_case.sensor_id));
     }
     sorting.sensors = sorting_sensors;
     sorting.destination.clear();
