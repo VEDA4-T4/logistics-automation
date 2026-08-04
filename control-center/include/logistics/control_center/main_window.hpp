@@ -18,13 +18,13 @@ class QJsonObject;
 class QLabel;
 class QMediaPlayer;
 class QStackedLayout;
-class QTabWidget;
 class QTimer;
 class QWidget;
 
 namespace logistics::control_center {
 
 class MqttClient;
+class FactoryTopViewWidget;
 class OperationalLogPanel;
 class OperationsDashboardPanel;
 class ProductResultPanel;
@@ -56,8 +56,9 @@ private:
     void clearPendingCommand();
     void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,
                               const QString& code, const QString& message);
+    void refreshOperationsPresentation();
+    void selectControlTarget(const QString& device_id, const QString& display_name);
     void refreshOperationalLogPanel();
-    void refreshOperationalLogBadge();
 
     std::vector<QMediaPlayer*> players_{};
     std::vector<std::unique_ptr<RtspStreamWorker>> video_stream_workers_{};
@@ -75,7 +76,7 @@ private:
     std::vector<bool> reconnecting_{};
     MqttClient* mqtt_client_{ nullptr };
     QLabel* mqtt_status_label_{ nullptr };
-    QTabWidget* detail_tabs_{ nullptr };
+    FactoryTopViewWidget* factory_top_view_{ nullptr };
     OperationalLogPanel* operational_log_panel_{ nullptr };
     OperationsDashboardPanel* operations_dashboard_panel_{ nullptr };
     ProductResultPanel* product_result_panel_{ nullptr };

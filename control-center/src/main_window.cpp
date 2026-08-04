@@ -16,7 +16,6 @@
 #include <QStackedLayout>
 #include <QStatusBar>
 #include <QStringList>
-#include <QTabWidget>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -32,6 +31,7 @@
 #include "logistics/control_center/command_response.hpp"
 #include "logistics/control_center/control_center_theme.hpp"
 #include "logistics/control_center/detection_overlay.hpp"
+#include "logistics/control_center/factory_top_view.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
 #include "logistics/control_center/onvif_metadata.hpp"
 #include "logistics/control_center/onvif_rtsp_metadata_client.hpp"
@@ -490,40 +490,37 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     root_layout->addWidget(app_header);
 
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
-    operations_dashboard_panel_->setState(operations_dashboard_state_);
-    operations_dashboard_panel_->setControlTarget(config.control_target_device_id);
-
-    auto* content = new QWidget(central_widget);
-    auto* content_layout = new QHBoxLayout(content);
-    content_layout->setContentsMargins(10, 0, 10, 0);
-    content_layout->setSpacing(0);
-
-    auto* content_splitter = new QSplitter(Qt::Horizontal, content);
-    content_splitter->setObjectName(QStringLiteral("contentSplitter"));
-    content_splitter->setChildrenCollapsible(false);
-    content_splitter->setHandleWidth(7);
-
-    auto* video_container = new QWidget(content_splitter);
+    auto* operations_workspace = new QSplitter(Qt::Horizontal, central_widget);
+    operations_workspace->setObjectName(QStringLiteral("operationsWorkspaceSplitter"));
+    operations_workspace->setChildrenCollapsible(false);
+    operations_workspace->setHandleWidth(7);
+    auto* video_container = new QWidget(operations_workspace);
+    video_container->setObjectName(QStringLiteral("videoWorkspace"));
     auto* video_grid = new QGridLayout(video_container);
-    video_grid->setContentsMargins(0, 0, 0, 0);
+    video_grid->setContentsMargins(10, 0, 0, 0);
     video_grid->setHorizontalSpacing(8);
     video_grid->setVerticalSpacing(0);
+    factory_top_view_ = new FactoryTopViewWidget(operations_workspace);
+    factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
+    operations_workspace->addWidget(video_container);
+    operations_workspace->addWidget(factory_top_view_);
+    operations_workspace->setStretchFactor(0, 1);
+    operations_workspace->setStretchFactor(1, 1);
+    operations_workspace->setSizes({ 640, 640 });
 
-    auto* side_panel = new QWidget(content_splitter);
-    side_panel->setObjectName(QStringLiteral("sidePanel"));
-    side_panel->setMinimumWidth(450);
-    side_panel->setStyleSheet("#sidePanel{background:transparent;}");
-    auto* side_layout = new QVBoxLayout(side_panel);
-    side_layout->setContentsMargins(0, 0, 0, 0);
-    side_layout->setSpacing(8);
-    detail_tabs_ = new QTabWidget(side_panel);
-    detail_tabs_->setObjectName(QStringLiteral("detailTabs"));
-    detail_tabs_->setDocumentMode(false);
-    product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_tabs_);
-    operational_log_panel_ = new OperationalLogPanel(detail_tabs_);
-    detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));
-    detail_tabs_->addTab(operational_log_panel_, QStringLiteral("운영 로그"));
-    process_control_panel_ = new ProcessControlPanel(side_panel);
+    auto* detail_splitter = new QSplitter(Qt::Horizontal, central_widget);
+    detail_splitter->setObjectName(QStringLiteral("detailSplitter"));
+    detail_splitter->setChildrenCollapsible(false);
+    detail_splitter->setHandleWidth(7);
+    product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_splitter);
+    operational_log_panel_ = new OperationalLogPanel(detail_splitter);
+    detail_splitter->addWidget(product_result_panel_);
+    detail_splitter->addWidget(operational_log_panel_);
+    detail_splitter->setStretchFactor(0, 2);
+    detail_splitter->setStretchFactor(1, 3);
+    detail_splitter->setSizes({ 480, 720 });
+
+    process_control_panel_ = new ProcessControlPanel(central_widget);
     QString initial_control_target_name = QStringLiteral("전체 공정");
     for (const auto& process : config.process_definitions) {
         if (process.device_id == config.control_target_device_id) {
@@ -531,30 +528,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             break;
         }
     }
-    process_control_panel_->setControlTarget(config.control_target_device_id, initial_control_target_name);
-    process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                             operations_dashboard_state_.processes());
-    side_layout->addWidget(detail_tabs_, 1);
-    side_layout->addWidget(process_control_panel_, 0);
-    content_splitter->addWidget(video_container);
-    content_splitter->addWidget(side_panel);
-    content_splitter->setStretchFactor(0, 3);
-    content_splitter->setStretchFactor(1, 2);
-    content_splitter->setSizes({ 740, 500 });
-    content_layout->addWidget(content_splitter);
+    refreshOperationsPresentation();
+    selectControlTarget(config.control_target_device_id, initial_control_target_name);
 
-    auto* workspace_splitter = new QSplitter(Qt::Vertical, central_widget);
-    workspace_splitter->setObjectName(QStringLiteral("workspaceSplitter"));
-    workspace_splitter->setChildrenCollapsible(false);
-    workspace_splitter->setHandleWidth(7);
-    operations_dashboard_panel_->setMinimumHeight(250);
-    content->setMinimumHeight(360);
-    workspace_splitter->addWidget(operations_dashboard_panel_);
-    workspace_splitter->addWidget(content);
-    workspace_splitter->setStretchFactor(0, 0);
-    workspace_splitter->setStretchFactor(1, 1);
-    workspace_splitter->setSizes({ 300, 520 });
-    root_layout->addWidget(workspace_splitter, 1);
+    root_layout->addWidget(operations_workspace, 1);
+    root_layout->addWidget(operations_dashboard_panel_);
+    root_layout->addWidget(detail_splitter, 1);
+    root_layout->addWidget(process_control_panel_);
     setCentralWidget(central_widget);
 
     mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
@@ -572,21 +552,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         if (!operations_dashboard_state_.expireStaleProcesses(QDateTime::currentDateTimeUtc())) {
             return;
         }
-        operations_dashboard_panel_->setState(operations_dashboard_state_);
-        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                 operations_dashboard_state_.processes());
+        refreshOperationsPresentation();
     });
     node_status_timer_->start();
     connect(process_control_panel_, &ProcessControlPanel::commandRequested, this, &MainWindow::sendControlCommand);
     connect(operations_dashboard_panel_, &OperationsDashboardPanel::controlTargetSelected, this,
             [this](const QString& target_device_id, const QString& display_name) {
-                control_target_device_id_ = target_device_id;
-                process_control_panel_->setControlTarget(target_device_id, display_name);
+                selectControlTarget(target_device_id, display_name);
+            });
+    connect(factory_top_view_, &FactoryTopViewWidget::controlTargetSelected, this,
+            [this](const QString& target_device_id, const QString& display_name) {
+                selectControlTarget(target_device_id, display_name);
             });
     operational_log_panel_->setAcknowledgeHandler([this](const QString& id) {
         if (operational_log_state_.acknowledge(id)) {
             operational_log_panel_->setEntryAcknowledged(id);
-            refreshOperationalLogBadge();
         }
     });
     operational_log_panel_->setAcknowledgeAllHandler([this]() {
@@ -617,9 +597,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     case MqttClient::ConnectionState::Connected:
                         process_control_panel_->setMqttConnected(true);
                         operations_dashboard_state_.markMqttConnectedAwaitingStatus(QDateTime::currentDateTimeUtc());
-                        operations_dashboard_panel_->setState(operations_dashboard_state_);
-                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                                 operations_dashboard_state_.processes());
+                        refreshOperationsPresentation();
                         operations_dashboard_panel_->setMqttConnected(true);
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
                         mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
@@ -636,9 +614,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     case MqttClient::ConnectionState::Reconnecting:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
-                        operations_dashboard_panel_->setState(operations_dashboard_state_);
-                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                                 operations_dashboard_state_.processes());
+                        refreshOperationsPresentation();
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
@@ -649,9 +625,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     case MqttClient::ConnectionState::Error:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
-                        operations_dashboard_panel_->setState(operations_dashboard_state_);
-                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                                 operations_dashboard_state_.processes());
+                        refreshOperationsPresentation();
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
@@ -660,9 +634,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     case MqttClient::ConnectionState::Disconnected:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
-                        operations_dashboard_panel_->setState(operations_dashboard_state_);
-                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                                 operations_dashboard_state_.processes());
+                        refreshOperationsPresentation();
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
@@ -1078,9 +1050,7 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
     const auto dashboard_update =
         operations_dashboard_state_.applyEnvelope(envelope, QDateTime::currentDateTimeUtc(), !is_individual_response);
     if (dashboard_update.applied) {
-        operations_dashboard_panel_->setState(operations_dashboard_state_);
-        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                 operations_dashboard_state_.processes());
+        refreshOperationsPresentation();
         completePendingRecoveryFromDeviceState();
     } else if (dashboard_update.handled && !dashboard_update.error.isEmpty()) {
         statusBar()->showMessage(dashboard_update.error, 4000);
@@ -1183,21 +1153,25 @@ void MainWindow::appendOperationalLog(OperationalLogSeverity severity, const QSt
     refreshOperationalLogPanel();
 }
 
+void MainWindow::refreshOperationsPresentation() {
+    operations_dashboard_panel_->setState(operations_dashboard_state_);
+    factory_top_view_->setProcesses(operations_dashboard_state_.processes());
+    process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                             operations_dashboard_state_.processes());
+}
+
+void MainWindow::selectControlTarget(const QString& device_id, const QString& display_name) {
+    control_target_device_id_ = device_id.isEmpty() ? QStringLiteral("SYSTEM") : device_id;
+    operations_dashboard_panel_->setControlTarget(control_target_device_id_);
+    factory_top_view_->setSelectedDeviceId(control_target_device_id_);
+    process_control_panel_->setControlTarget(control_target_device_id_, display_name);
+}
+
 void MainWindow::refreshOperationalLogPanel() {
-    if (operational_log_panel_ == nullptr || detail_tabs_ == nullptr) {
+    if (operational_log_panel_ == nullptr) {
         return;
     }
     operational_log_panel_->setState(operational_log_state_);
-    refreshOperationalLogBadge();
-}
-
-void MainWindow::refreshOperationalLogBadge() {
-    if (detail_tabs_ == nullptr) {
-        return;
-    }
-    const auto alert_count = operational_log_state_.activeAlertCount();
-    detail_tabs_->setTabText(
-        1, alert_count > 0 ? QStringLiteral("운영 로그 (%1)").arg(alert_count) : QStringLiteral("운영 로그"));
 }
 
 }  // namespace logistics::control_center

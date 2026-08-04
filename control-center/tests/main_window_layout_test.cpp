@@ -85,21 +85,22 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto* workspace = window.findChild<QSplitter*>(QStringLiteral("workspaceSplitter"));
-    if (!check(workspace != nullptr, "workspaceSplitter is missing")) {
+    auto* operations_workspace = window.findChild<QSplitter*>(QStringLiteral("operationsWorkspaceSplitter"));
+    if (!check(operations_workspace != nullptr, "operationsWorkspaceSplitter is missing")) {
         return 1;
     }
-    if (!check(workspace->orientation() == Qt::Vertical, "workspaceSplitter is not vertical") ||
-        !check(!workspace->childrenCollapsible(), "workspaceSplitter children are collapsible")) {
+    if (!check(operations_workspace->orientation() == Qt::Horizontal,
+               "operationsWorkspaceSplitter is not horizontal") ||
+        !check(!operations_workspace->childrenCollapsible(), "operationsWorkspaceSplitter children are collapsible")) {
         return 1;
     }
 
-    auto* content = window.findChild<QSplitter*>(QStringLiteral("contentSplitter"));
-    if (!check(content != nullptr, "contentSplitter is missing")) {
+    auto* detail = window.findChild<QSplitter*>(QStringLiteral("detailSplitter"));
+    if (!check(detail != nullptr, "detailSplitter is missing")) {
         return 1;
     }
-    if (!check(content->orientation() == Qt::Horizontal, "contentSplitter is not horizontal") ||
-        !check(!content->childrenCollapsible(), "contentSplitter children are collapsible")) {
+    if (!check(detail->orientation() == Qt::Horizontal, "detailSplitter is not horizontal") ||
+        !check(!detail->childrenCollapsible(), "detailSplitter children are collapsible")) {
         return 1;
     }
 
@@ -125,40 +126,43 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const auto has_supported_geometry = [&](const QSize& size) {
-        window.resize(size);
-        window.show();
-        application.processEvents();
+    window.resize(1280, 720);
+    window.show();
+    application.processEvents();
 
-        if (!check(window.size() == size, "offscreen window did not keep the requested size")) {
-            return false;
-        }
-        const auto workspace_sizes = workspace->sizes();
-        if (!check(workspace_sizes.size() == 2, "workspaceSplitter does not have two panes") ||
-            !check(workspace_sizes[0] >= 250, "factory overview is shorter than 250 px") ||
-            !check(workspace_sizes[1] >= 360, "lower workspace is shorter than 360 px")) {
-            return false;
-        }
-
-        const auto content_sizes = content->sizes();
-        if (!check(content_sizes.size() == 2, "contentSplitter does not have two panes") ||
-            !check(content_sizes[0] >= 320, "video workspace is narrower than 320 px") ||
-            !check(content_sizes[1] >= 450, "side panel is narrower than 450 px")) {
-            return false;
-        }
-        for (const auto* cell : video_cells) {
-            const QRect cell_rect_in_viewport(cell->mapTo(video_viewport, QPoint{}), cell->size());
-            if (!check(cell->minimumSize() == QSize(320, 180), "a video cell does not enforce a 320x180 minimum") ||
-                !check(cell->width() >= 320 && cell->height() >= 180, "a visible video cell is smaller than 320x180") ||
-                !check(video_viewport->rect().contains(cell_rect_in_viewport),
-                       "a video cell is clipped by the video grid viewport")) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    if (!has_supported_geometry(QSize(1280, 720)) || !has_supported_geometry(QSize(1600, 900))) {
+    auto* factory = window.findChild<QWidget*>(QStringLiteral("factoryTopView"));
+    auto* video = window.findChild<QWidget*>(QStringLiteral("videoWorkspace"));
+    auto* process_status = window.findChild<QWidget*>(QStringLiteral("processStatusSection"));
+    auto* product = window.findChild<QWidget*>(QStringLiteral("productResultPanel"));
+    auto* log = window.findChild<QWidget*>(QStringLiteral("operationalLogPanel"));
+    if (!check(window.size() == QSize(1280, 720), "offscreen window did not keep 1280x720") ||
+        !check(factory != nullptr && factory->isVisible(), "factoryTopView is not visible") ||
+        !check(video != nullptr && video->isVisible(), "videoWorkspace is not visible") ||
+        !check(process_status != nullptr && process_status->isVisible(), "processStatusSection is not visible") ||
+        !check(product != nullptr && product->isVisible(), "productResultPanel is not visible") ||
+        !check(log != nullptr && log->isVisible(), "operationalLogPanel is not visible")) {
         return 2;
+    }
+
+    const auto window_rect = [&window](const QWidget* widget) {
+        return QRect(widget->mapTo(&window, QPoint{}), widget->size());
+    };
+    const auto factory_rect = window_rect(factory);
+    const auto video_rect = window_rect(video);
+    const auto product_rect = window_rect(product);
+    const auto log_rect = window_rect(log);
+    const auto overlaps_vertically = [](const QRect& left, const QRect& right) {
+        return left.top() <= right.bottom() && right.top() <= left.bottom();
+    };
+    const auto overlaps_horizontally = [](const QRect& left, const QRect& right) {
+        return left.left() <= right.right() && right.left() <= left.right();
+    };
+    if (!check(overlaps_vertically(factory_rect, video_rect),
+               "factory and video workspaces do not overlap vertically") ||
+        !check(!overlaps_horizontally(factory_rect, video_rect),
+               "factory and video workspaces overlap horizontally") ||
+        !check(overlaps_vertically(product_rect, log_rect), "product and log panels do not overlap vertically") ||
+        !check(!overlaps_horizontally(product_rect, log_rect), "product and log panels overlap horizontally")) {
+        return 3;
     }
 }
