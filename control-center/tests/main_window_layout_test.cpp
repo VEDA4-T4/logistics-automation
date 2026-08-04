@@ -176,6 +176,82 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    const auto now = QDateTime::currentDateTimeUtc();
+    const auto emit_device_status = [&](const QString& message_id, const QString& source_id,
+                                        const QString& current_state, int timestamp_offset_ms) {
+        mqtt_client->messageReceived(
+            QStringLiteral("device/%1/status").arg(source_id),
+            { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+              { QStringLiteral("messageId"), message_id },
+              { QStringLiteral("messageType"), QStringLiteral("DEVICE_STATUS") },
+              { QStringLiteral("sourceId"), source_id },
+              { QStringLiteral("timestamp"), now.addMSecs(timestamp_offset_ms).toString(Qt::ISODateWithMs) },
+              { QStringLiteral("data"),
+                QJsonObject{ { QStringLiteral("status"), QStringLiteral("ONLINE") },
+                             { QStringLiteral("currentState"), current_state },
+                             { QStringLiteral("jobId"), QStringLiteral("WORK-LAYOUT-LIVE") } } } });
+    };
+    emit_device_status(QStringLiteral("LAYOUT-INPUT-LIVE"), QStringLiteral("PI-INPUT-01"), QStringLiteral("RUNNING"),
+                       1);
+    emit_device_status(QStringLiteral("LAYOUT-GRIPPER-LIVE"), QStringLiteral("PI-GRIPPER-01"),
+                       QStringLiteral("TRANSFERRING"), 2);
+    mqtt_client->messageReceived(
+        QStringLiteral("logistics/event"),
+        { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+          { QStringLiteral("messageId"), QStringLiteral("LAYOUT-DESTINATION-LIVE") },
+          { QStringLiteral("messageType"), QStringLiteral("DESTINATION_SET") },
+          { QStringLiteral("sourceId"), QStringLiteral("central-server") },
+          { QStringLiteral("timestamp"), now.addMSecs(3).toString(Qt::ISODateWithMs) },
+          { QStringLiteral("data"), QJsonObject{ { QStringLiteral("workId"), QStringLiteral("WORK-LAYOUT-LIVE") },
+                                                 { QStringLiteral("destination"), QStringLiteral("2") } } } });
+    emit_device_status(QStringLiteral("LAYOUT-SORTING-LIVE"), QStringLiteral("PI-SORTING-01"),
+                       QStringLiteral("SORTING"), 4);
+    emit_device_status(QStringLiteral("LAYOUT-LINETRACER-LIVE"), QStringLiteral("PI-LT-01"),
+                       QStringLiteral("DELIVERING"), 5);
+    application.processEvents();
+
+    const auto input_before_tick = factory->boxPosition(QStringLiteral("input"));
+    const auto sorting_before_tick = factory->boxPosition(QStringLiteral("sorting"));
+    const auto line_before_tick = factory->boxPosition(QStringLiteral("linetracer"));
+    factory->advanceAnimationsForTest();
+    if (!check(factory->boxPosition(QStringLiteral("input")) != input_before_tick,
+               "input node was not moving before global emergency stop") ||
+        !check(factory->boxPosition(QStringLiteral("sorting")) != sorting_before_tick,
+               "sorting node was not moving before global emergency stop") ||
+        !check(factory->boxPosition(QStringLiteral("linetracer")) != line_before_tick,
+               "line-tracer node was not moving before global emergency stop")) {
+        return 2;
+    }
+
+    mqtt_client->messageReceived(QStringLiteral("logistics/emergency-stop"),
+                                 { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+                                   { QStringLiteral("messageId"), QStringLiteral("LAYOUT-GLOBAL-EMERGENCY-STOP") },
+                                   { QStringLiteral("messageType"), QStringLiteral("EMERGENCY_STOP") },
+                                   { QStringLiteral("sourceId"), QStringLiteral("central-server") },
+                                   { QStringLiteral("timestamp"), now.addMSecs(100).toString(Qt::ISODateWithMs) },
+                                   { QStringLiteral("data"), QJsonObject{} } });
+    application.processEvents();
+    const auto stopped_input_position = factory->boxPosition(QStringLiteral("input"));
+    const auto stopped_sorting_position = factory->boxPosition(QStringLiteral("sorting"));
+    const auto stopped_line_position = factory->boxPosition(QStringLiteral("linetracer"));
+    factory->advanceAnimationsForTest();
+    factory->advanceAnimationsForTest();
+    for (const auto& key : { QStringLiteral("input"), QStringLiteral("vision"), QStringLiteral("gripper"),
+                             QStringLiteral("sorting"), QStringLiteral("linetracer") }) {
+        if (!check(factory->nodeColor(key) == QColor(QStringLiteral("#f14c4c")),
+                   "global emergency stop did not turn a connected factory node red")) {
+            return 2;
+        }
+    }
+    if (!check(factory->boxPosition(QStringLiteral("input")) == stopped_input_position,
+               "input node moved after global emergency stop") ||
+        !check(factory->boxPosition(QStringLiteral("sorting")) == stopped_sorting_position,
+               "sorting node moved after global emergency stop") ||
+        !check(factory->boxPosition(QStringLiteral("linetracer")) == stopped_line_position,
+               "line-tracer node moved after global emergency stop")) {
+        return 2;
+    }
+
     auto* central = window.centralWidget();
     const auto central_rect = [central](const QWidget* widget) {
         return QRect(widget->mapTo(central, QPoint{}), widget->size());

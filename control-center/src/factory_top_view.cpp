@@ -462,11 +462,19 @@ struct FactoryTopViewWidget::Impl {
         sorting_servo->setLine(servo);
     }
 
-    void setProcesses(const QList<ProcessUnitStatus>& processes) {
+    void setProcesses(const QList<ProcessUnitStatus>& processes, OverallProcessState overall_state) {
+        const auto visual_for = [overall_state](const ProcessUnitStatus& process) {
+            auto visual = BuildFactoryNodeVisual(process);
+            if (overall_state == OverallProcessState::EmergencyStop &&
+                visual.state != FactoryNodeVisualState::Disconnected) {
+                visual = EmergencyVisual(process);
+            }
+            return visual;
+        };
         QString input_work_id;
         QString sorting_work_id;
         for (const auto& process : processes) {
-            const auto visual = BuildFactoryNodeVisual(process);
+            const auto visual = visual_for(process);
             if (!HasLiveTelemetry(visual) || process.work_id.isEmpty()) {
                 continue;
             }
@@ -484,7 +492,7 @@ struct FactoryTopViewWidget::Impl {
             }
             auto& node = iterator.value();
             const auto previous_sensor = DetectedSensor(node.visual);
-            node.visual = BuildFactoryNodeVisual(process);
+            node.visual = visual_for(process);
             node.motion_enabled = AllowsMotion(process.key, node.visual);
             if (process.key == QString::fromLatin1(kLineTracerProcessKey) &&
                 node.visual.motion_phase == FactoryMotionPhase::LineCompleted) {
@@ -626,8 +634,8 @@ void FactoryTopViewWidget::resizeEvent(QResizeEvent* event) {
     fitInView(sceneRect(), Qt::KeepAspectRatio);
 }
 
-void FactoryTopViewWidget::setProcesses(const QList<ProcessUnitStatus>& processes) {
-    impl_->setProcesses(processes);
+void FactoryTopViewWidget::setProcesses(const QList<ProcessUnitStatus>& processes, OverallProcessState overall_state) {
+    impl_->setProcesses(processes, overall_state);
 }
 
 void FactoryTopViewWidget::setSelectedDeviceId(const QString& device_id) {

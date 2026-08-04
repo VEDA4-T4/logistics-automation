@@ -62,7 +62,8 @@ public:
     explicit FactoryTopViewWidget(QWidget* parent = nullptr);
     ~FactoryTopViewWidget() override;
 
-    void setProcesses(const QList<ProcessUnitStatus>& processes);
+    void setProcesses(const QList<ProcessUnitStatus>& processes,
+                      OverallProcessState overall_state = OverallProcessState::Idle);
     void setSelectedDeviceId(const QString& device_id);
     [[nodiscard]] QString selectedDeviceId() const;
     [[nodiscard]] qreal nodeOpacity(const QString& process_key) const;

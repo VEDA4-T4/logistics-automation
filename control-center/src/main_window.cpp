@@ -1162,7 +1162,8 @@ void MainWindow::appendOperationalLog(OperationalLogSeverity severity, const QSt
 
 void MainWindow::refreshOperationsPresentation() {
     operations_dashboard_panel_->setState(operations_dashboard_state_);
-    factory_top_view_->setProcesses(operations_dashboard_state_.processes());
+    factory_top_view_->setProcesses(operations_dashboard_state_.processes(),
+                                    operations_dashboard_state_.overall().state);
     process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
                                              operations_dashboard_state_.processes());
 }
@@ -1204,7 +1205,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         if (mouse_event->button() == Qt::LeftButton && channel < channel_panels_.size() &&
             watched == channel_panels_[channel]) {
             setFocusedChannel(focused_channel_ && *focused_channel_ == channel ? std::nullopt
-                                                                                : std::optional{ channel });
+                                                                               : std::optional{ channel });
             return true;
         }
     }
