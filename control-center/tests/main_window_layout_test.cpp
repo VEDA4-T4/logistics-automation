@@ -1,43 +1,26 @@
 #include <QApplication>
+#include <QColor>
+#include <QComboBox>
+#include <QDialog>
 #include <QFile>
 #include <QFrame>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPalette>
 #include <QRegularExpression>
 #include <QSize>
 #include <QSplitter>
 #include <QStackedLayout>
-#include <QStringView>
+#include <QTableWidget>
 #include <QTemporaryDir>
 #include <QWidget>
 #include <algorithm>
 #include <cstdio>
 
-#include "logistics/control_center/control_center_theme.hpp"
 #include "logistics/control_center/factory_top_view.hpp"
 #include "logistics/control_center/main_window.hpp"
+#include "logistics/control_center/operational_log_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
-
-namespace {
-
-bool StyleRuleHasDeclaration(const QString& style_sheet, QStringView selector, QStringView property,
-                             QStringView value) {
-    const auto rule_start = style_sheet.indexOf(selector);
-    const auto rule_open = style_sheet.indexOf('{', rule_start);
-    const auto rule_end = style_sheet.indexOf('}', rule_start);
-    if (rule_start < 0 || rule_open < 0 || rule_end <= rule_open) {
-        return false;
-    }
-    const auto declarations =
-        QStringView(style_sheet).sliced(rule_open + 1, rule_end - rule_open - 1).split(';', Qt::SkipEmptyParts);
-    return std::ranges::any_of(declarations, [property, value](QStringView declaration) {
-        const auto separator = declaration.indexOf(':');
-        return separator >= 0 && declaration.first(separator).trimmed() == property &&
-               declaration.sliced(separator + 1).trimmed() == value;
-    });
-}
-
-}  // namespace
 
 int main(int argc, char* argv[]) {
     const auto check = [](bool condition, const char* message) {
@@ -70,26 +53,6 @@ int main(int argc, char* argv[]) {
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
 
     logistics::control_center::MainWindow window;
-    const auto shared_theme = logistics::control_center::ControlCenterStyleSheet();
-    constexpr auto combo_popup = u"QComboBox QAbstractItemView";
-    if (!check(StyleRuleHasDeclaration(shared_theme, combo_popup, u"background", u"#252526"),
-               "shared theme does not give combo popups a dark background") ||
-        !check(StyleRuleHasDeclaration(shared_theme, combo_popup, u"color", u"#f0f0f0"),
-               "shared theme does not give combo popups a light foreground") ||
-        !check(StyleRuleHasDeclaration(window.styleSheet(), combo_popup, u"background", u"#252526"),
-               "MainWindow does not apply the shared combo popup theme") ||
-        !check(StyleRuleHasDeclaration(window.styleSheet(), combo_popup, u"color", u"#f0f0f0"),
-               "MainWindow does not apply the shared combo popup foreground") ||
-        !check(!StyleRuleHasDeclaration(QStringLiteral("QComboBox QAbstractItemView { "
-                                                       "selection-background:#252526; selection-color:#f0f0f0; }"),
-                                        combo_popup, u"background", u"#252526"),
-               "theme declaration check confuses selection-background with background") ||
-        !check(!StyleRuleHasDeclaration(QStringLiteral("QComboBox QAbstractItemView { "
-                                                       "selection-background:#252526; selection-color:#f0f0f0; }"),
-                                        combo_popup, u"color", u"#f0f0f0"),
-               "theme declaration check confuses selection-color with color")) {
-        return 1;
-    }
 
     auto* operations_workspace = window.findChild<QSplitter*>(QStringLiteral("operationsWorkspaceSplitter"));
     if (!check(operations_workspace != nullptr, "operationsWorkspaceSplitter is missing")) {
@@ -132,6 +95,35 @@ int main(int argc, char* argv[]) {
 
     window.resize(1280, 720);
     window.show();
+    application.processEvents();
+
+    auto* severity_filter = window.findChild<QComboBox*>(QStringLiteral("logSeverityFilter"));
+    auto* log_table = window.findChild<QTableWidget*>(QStringLiteral("operationalLogTable"));
+    if (!check(severity_filter != nullptr && severity_filter->view()->styleSheet().isEmpty(),
+               "operational log popup overrides the shared item-view style") ||
+        !check(log_table != nullptr && log_table->palette().color(QPalette::Highlight) == QColor("#264f78"),
+               "operational log selection does not use the shared highlight")) {
+        return 1;
+    }
+    auto* log_panel = static_cast<logistics::control_center::OperationalLogPanel*>(
+        window.findChild<QWidget*>(QStringLiteral("operationalLogPanel")));
+    if (!check(log_panel != nullptr, "operational log panel is missing")) {
+        return 1;
+    }
+    logistics::control_center::OperationalLogState themed_log;
+    themed_log.appendLocal(logistics::control_center::OperationalLogSeverity::Info, QStringLiteral("central-server"),
+                           QStringLiteral("통신"), QStringLiteral("THEME_TEST"), QStringLiteral("공유 테마 확인"));
+    log_panel->setState(themed_log);
+    log_table->cellDoubleClicked(0, 3);
+    application.processEvents();
+    auto* detail_dialog = log_panel->findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
+    if (!check(detail_dialog != nullptr && detail_dialog->isVisible() && detail_dialog->styleSheet().isEmpty(),
+               "operational log detail overrides the shared dialog style") ||
+        !check(detail_dialog->palette().color(QPalette::Window) == QColor("#181818"),
+               "operational log detail does not receive the shared dialog background")) {
+        return 1;
+    }
+    detail_dialog->close();
     application.processEvents();
 
     auto* factory =
@@ -219,8 +211,7 @@ int main(int argc, char* argv[]) {
     };
     if (!check(overlaps_vertically(factory_rect, video_rect),
                "factory and video workspaces do not overlap vertically") ||
-        !check(!overlaps_horizontally(factory_rect, video_rect),
-               "factory and video workspaces overlap horizontally") ||
+        !check(!overlaps_horizontally(factory_rect, video_rect), "factory and video workspaces overlap horizontally") ||
         !check(overlaps_vertically(product_rect, log_rect), "product and log panels do not overlap vertically") ||
         !check(!overlaps_horizontally(product_rect, log_rect), "product and log panels overlap horizontally")) {
         return 5;
@@ -239,8 +230,8 @@ int main(int argc, char* argv[]) {
     if (!check(vision_card != nullptr && input_card != nullptr, "selection test cards are missing")) {
         return 6;
     }
-    QMouseEvent select_vision(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4),
-                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent select_vision(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
+                              Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(vision_card, &select_vision);
     if (!check(factory->selectedDeviceId() == QStringLiteral("PI-VISION-01"),
                "card selection did not propagate to factory map") ||

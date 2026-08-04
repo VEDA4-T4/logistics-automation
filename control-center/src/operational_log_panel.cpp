@@ -15,6 +15,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStackedLayout>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
@@ -52,16 +53,15 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("operationalLogPanel"));
     setStyleSheet(
         "#operationalLogPanel{background:#181818;}"
-        "QLineEdit{background:#202020;color:#d4d4d4;border:1px solid #303030;border-radius:6px;padding:7px;}"
+        "QLineEdit{background:#202020;color:#d4d4d4;border:1px solid #303030;border-radius:6px;padding:5px;}"
         "QLineEdit:hover{border-color:#454545;}"
         "QCheckBox{color:#a8a8a8;spacing:6px;}"
         "QPushButton#acknowledgeAllLogsButton{color:#ff938a;border-color:#5d3235;background:#2a2021;}"
         "QTableWidget{background:#181818;color:#cccccc;border:0;gridline-color:transparent;outline:0;}"
         "QHeaderView::section{background:#181818;color:#777777;border:0;border-bottom:1px solid #303030;"
-        "font-size:10px;font-weight:600;padding:7px;}"
-        "QTableWidget::item{border-bottom:1px solid #303030;padding:8px;}"
-        "QTableWidget::item:hover{background:#202a33;}"
-        "QTableWidget::item:selected{background:#21364a;color:#f0f0f0;}");
+        "font-size:10px;font-weight:600;padding:4px 6px;}"
+        "QTableWidget::item{border-bottom:1px solid #303030;padding:4px 6px;}"
+        "QTableWidget::item:hover{background:#202a33;}");
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(10, 10, 10, 10);
@@ -95,11 +95,6 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     severity_filter_->addItem(QStringLiteral("경고"), static_cast<int>(OperationalLogSeverity::Warning));
     severity_filter_->addItem(QStringLiteral("오류"), static_cast<int>(OperationalLogSeverity::Error));
     severity_filter_->addItem(QStringLiteral("심각"), static_cast<int>(OperationalLogSeverity::Critical));
-    severity_filter_->view()->setStyleSheet(
-        "QAbstractItemView{background:#252526;color:#d4d4d4;border:1px solid #454545;outline:0;"
-        "selection-background-color:#094771;selection-color:#ffffff;padding:3px;}"
-        "QAbstractItemView::item{min-height:28px;padding:2px 8px;}"
-        "QAbstractItemView::item:hover{background:#2a3f52;color:#ffffff;}");
     query_filter_ = new QLineEdit(this);
     query_filter_->setObjectName(QStringLiteral("logQueryFilter"));
     query_filter_->setPlaceholderText(QStringLiteral("장치·코드·내용 검색"));
@@ -126,7 +121,11 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     secondary_filters->addWidget(acknowledge_all_button_);
     layout->addLayout(secondary_filters);
 
-    table_ = new QTableWidget(this);
+    auto* table_surface = new QWidget(this);
+    auto* table_stack = new QStackedLayout(table_surface);
+    table_stack->setContentsMargins(0, 0, 0, 0);
+    table_stack->setStackingMode(QStackedLayout::StackAll);
+    table_ = new QTableWidget(table_surface);
     table_->setObjectName(QStringLiteral("operationalLogTable"));
     table_->setColumnCount(4);
     table_->setHorizontalHeaderLabels(
@@ -139,12 +138,19 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     table_->setWordWrap(false);
     table_->viewport()->setCursor(Qt::PointingHandCursor);
     table_->verticalHeader()->setVisible(false);
-    table_->verticalHeader()->setDefaultSectionSize(46);
+    table_->verticalHeader()->setDefaultSectionSize(34);
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-    layout->addWidget(table_, 1);
+    table_stack->addWidget(table_);
+    auto* empty_state = new QLabel(QStringLiteral("표시할 운영 로그가 없습니다"), table_surface);
+    empty_state->setObjectName(QStringLiteral("operationalLogEmptyState"));
+    empty_state->setAlignment(Qt::AlignCenter);
+    empty_state->setAttribute(Qt::WA_TransparentForMouseEvents);
+    empty_state->setStyleSheet("color:#777777;font-size:11px;");
+    table_stack->addWidget(empty_state);
+    layout->addWidget(table_surface, 1);
 
     connect(severity_filter_, &QComboBox::currentIndexChanged, this, [this]() { refresh(); });
     connect(query_filter_, &QLineEdit::textChanged, this, [this]() { refresh(); });
@@ -258,6 +264,9 @@ void OperationalLogPanel::refresh() {
     alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(state_.activeAlertCount()));
     alert_count_->setVisible(state_.activeAlertCount() > 0);
     acknowledge_all_button_->setEnabled(state_.activeAlertCount() > 0);
+    if (auto* empty_state = findChild<QLabel*>(QStringLiteral("operationalLogEmptyState")); empty_state != nullptr) {
+        empty_state->setVisible(visible_count == 0);
+    }
 }
 
 QString OperationalLogPanel::entryIdAtRow(int row) const {
@@ -299,15 +308,6 @@ void OperationalLogPanel::showDetails(const QString& id) {
     dialog->setWindowTitle(QStringLiteral("운영 로그 상세"));
     dialog->resize(620, 430);
     dialog->setMinimumSize(520, 360);
-    dialog->setStyleSheet(
-        "QDialog{background:#181818;}"
-        "QLabel{color:#cccccc;}"
-        "QLabel#detailTitle{color:#f0f0f0;font-size:18px;font-weight:700;}"
-        "QLabel#detailMetaLabel{color:#777777;font-size:10px;}"
-        "QLabel#detailMetaValue{color:#d4d4d4;font-size:11px;}"
-        "QPlainTextEdit{background:#202020;color:#e5e5e5;border:1px solid #303030;border-radius:8px;padding:10px;}"
-        "QPushButton{background:#2d2d30;color:#f0f0f0;border:1px solid #454545;border-radius:6px;padding:7px 18px;}"
-        "QPushButton:hover{background:#3a3a3d;}");
     auto* dialog_layout = new QVBoxLayout(dialog);
     dialog_layout->setContentsMargins(20, 18, 20, 18);
     dialog_layout->setSpacing(13);

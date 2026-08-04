@@ -3,8 +3,11 @@
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QDialog>
+#include <QHeaderView>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -53,8 +56,11 @@ int main(int argc, char* argv[]) {
            acknowledge_all != nullptr);
     assert(panel.findChild<QPushButton*>(QStringLiteral("acknowledgeLogButton")) == nullptr);
     assert(table->rowCount() == 4);
-    assert(severity->view()->styleSheet().contains(QStringLiteral("color:#d4d4d4")));
-    assert(severity->view()->styleSheet().contains(QStringLiteral("selection-background-color:#094771")));
+    assert(table->columnCount() == 4);
+    assert(table->verticalHeader()->defaultSectionSize() == 34);
+    assert(table->rowHeight(0) == 34);
+    assert(table->horizontalHeader()->sectionResizeMode(3) == QHeaderView::Stretch);
+    assert(severity->view()->styleSheet().isEmpty());
 
     severity->setCurrentIndex(severity->findData(static_cast<int>(OperationalLogSeverity::Error)));
     application.processEvents();
@@ -73,6 +79,7 @@ int main(int argc, char* argv[]) {
     assert(state.activeAlertCount() == 1);
     auto* detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
     assert(detail_dialog != nullptr && detail_dialog->isVisible());
+    assert(detail_dialog->styleSheet().isEmpty());
     auto* detail_message = detail_dialog->findChild<QPlainTextEdit*>(QStringLiteral("operationalLogDetailMessage"));
     assert(detail_message != nullptr && detail_message->toPlainText().contains(QStringLiteral("인증 정보")));
     detail_dialog->close();
@@ -82,6 +89,7 @@ int main(int argc, char* argv[]) {
     application.processEvents();
     assert(state.activeAlertCount() == 0);
     assert(!acknowledge_all->isEnabled());
+    assert(table->item(1, 3)->foreground().color() == QColor(QStringLiteral("#777777")));
 
     unacknowledged->setChecked(true);
     application.processEvents();
@@ -102,5 +110,12 @@ int main(int argc, char* argv[]) {
     application.processEvents();
     detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
     assert(detail_dialog != nullptr && detail_dialog->isVisible());
+
+    panel.setState(OperationalLogState{});
+    application.processEvents();
+    auto* empty_state = panel.findChild<QLabel*>(QStringLiteral("operationalLogEmptyState"));
+    assert(empty_state != nullptr && empty_state->isVisible());
+    assert(empty_state->text() == QStringLiteral("표시할 운영 로그가 없습니다"));
+    assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
     return 0;
 }
