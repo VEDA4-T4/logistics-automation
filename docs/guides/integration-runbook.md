@@ -16,6 +16,10 @@
 
 - MQTT over TLS: TCP `8883`
 - HTTP 이미지 업로드/다운로드: TCP `8080`
+- CCTV 직접 RTSP: 카메라 설정 포트(현재 TCP `8554`)
+
+Control Center와 CCTV 사이의 RTSP 연결은 암호화되지 않습니다. 카메라 계정과 영상이 외부망에 노출되지 않도록 신뢰할 수
+있는 LAN 또는 VPN에서만 직접 RTSP 경로를 사용합니다.
 
 마이그레이션용 MQTT `1883` listener도 사용자 인증과 ACL을 적용하며 익명 접근을 허용하지 않습니다. MQTT broker
 DNS 이름 또는 IP는 서버 인증서 SAN과 일치해야 합니다. 상세 설정은

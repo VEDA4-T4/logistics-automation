@@ -53,7 +53,8 @@ onvif_log_payload=false
 ; Remove boxes when no newer metadata frame arrives within this time.
 metadata_stale_timeout_ms=1500
 
-; Qt connects directly to each CCTV RTSP stream. Keep real credentials only in control-centor.ini.
+; Qt connects directly to each CCTV RTSP stream. RTSP is not encrypted; use a trusted LAN or VPN.
+; Keep real credentials only in control-centor.ini.
 ; Replace cctv-user/cctv-password and percent-encode reserved password characters.
 channel_1_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/0/profile2/media.smp
 channel_2_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/1/profile2/media.smp
