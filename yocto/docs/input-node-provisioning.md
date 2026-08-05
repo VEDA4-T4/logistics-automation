@@ -429,4 +429,4 @@ root password: LOCKED
 
 ## 15. 알려진 제약
 
-- `input-node.ini.example`은 `device-rpi/config/`가 아니라 recipe의 `files/`에서 온다. recipe가 고정한 `SRCREV`(`7a579c5`) 시점에는 저장소에 이 예제 파일이 없었기 때문이다. `SRCREV`가 그 이후 커밋으로 갱신되면 `logistics-input-node.bb`의 `do_install`을 `${S}/device-rpi/config/input-node.ini.example` 참조로 바꾸고 recipe 내부 사본은 제거한다.
+- `logistics-input-node.bb`의 `SRCREV`는 `feature/yocto-bsp-poc`의 커밋을 가리킨다. 이 브랜치가 `main`에 병합되면 병합 커밋으로 다시 고정한다. sorting recipe와 SRCREV가 다르지만 두 리비전 사이에 `device-rpi/`, `shared/`, 빌드 설정 변경이 없어 산출 바이너리는 동일하다.

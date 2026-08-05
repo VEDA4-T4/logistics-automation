@@ -6,10 +6,9 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=5fade8d5ca2f983f62c28fb123891a52"
 SRC_URI = " \
     git://github.com/VEDA4-T4/logistics-automation.git;protocol=https;nobranch=1 \
     file://logistics-input-node.service \
-    file://input-node.ini.example \
 "
 
-SRCREV = "7a579c5216971ca19a89a401cf7b919f05d86b7f"
+SRCREV = "24f87327dde8e21730fc340160f26a2b385aaca9"
 
 S = "${WORKDIR}/git"
 
@@ -61,11 +60,8 @@ do_install() {
 
     install -d ${D}${sysconfdir}/logistics
 
-    # SRCREV predates device-rpi/config/input-node.ini.example, so the template
-    # ships with this recipe instead of coming from ${S}. Move it to ${S} once
-    # SRCREV advances past the commit that adds the repository copy.
     install -m 0600 \
-        ${WORKDIR}/input-node.ini.example \
+        ${S}/device-rpi/config/input-node.ini.example \
         ${D}${sysconfdir}/logistics/input-node.ini.example
 
     install -d ${D}${systemd_system_unitdir}
