@@ -1,11 +1,14 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <numeric>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <optional>
@@ -16,6 +19,10 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#if defined(__linux__)
+#include <unistd.h>
+#endif
 
 #include "detection.hpp"
 
@@ -42,7 +49,10 @@ struct BenchmarkResult final {
     std::size_t correct{};
     std::size_t super_resolution_failures{};
     double elapsed_ms{};
+    double wall_ms{};
+    double cpu_ms{};
     std::vector<double> sample_latencies_ms;
+    std::vector<double> rss_samples_kb;
     vision::DetectionDiagnostics diagnostics;
 };
 
@@ -53,7 +63,10 @@ struct Arguments final {
     std::filesystem::path fsrcnn_model_path;
     std::filesystem::path visual_output_directory;
     int iterations{ 1 };
+    int warmup_iterations{ 1 };
+    int duration_seconds{};
     int visual_limit{ 10 };
+    std::optional<std::string> profile;
 };
 
 std::string_view Trim(std::string_view value) {
@@ -75,6 +88,15 @@ int ParsePositiveInteger(const std::string_view value) {
     return parsed;
 }
 
+int ParseNonNegativeInteger(const std::string_view value) {
+    int parsed{};
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (error != std::errc{} || end != value.data() + value.size() || parsed < 0) {
+        throw std::invalid_argument("value must be a non-negative integer");
+    }
+    return parsed;
+}
+
 Arguments ParseArguments(const int argc, char* argv[]) {
     Arguments arguments;
     for (int index = 1; index < argc; ++index) {
@@ -82,6 +104,7 @@ Arguments ParseArguments(const int argc, char* argv[]) {
         if (option == "--help" || option == "-h") {
             std::cout << "Usage: " << argv[0]
                       << " --dataset DIR --manifest FILE [--output FILE] [--iterations N] [--fsrcnn-model FILE]"
+                         " [--warmup N] [--duration-seconds N] [--profile NAME]"
                          " [--visual-output DIR] [--visual-limit N]\n";
             std::exit(0);
         }
@@ -97,6 +120,12 @@ Arguments ParseArguments(const int argc, char* argv[]) {
             arguments.output_path = value;
         } else if (option == "--iterations") {
             arguments.iterations = ParsePositiveInteger(value);
+        } else if (option == "--warmup") {
+            arguments.warmup_iterations = ParseNonNegativeInteger(value);
+        } else if (option == "--duration-seconds") {
+            arguments.duration_seconds = ParseNonNegativeInteger(value);
+        } else if (option == "--profile") {
+            arguments.profile = value;
         } else if (option == "--fsrcnn-model") {
             arguments.fsrcnn_model_path = value;
         } else if (option == "--visual-output") {
@@ -205,11 +234,34 @@ void AddDiagnostics(vision::DetectionDiagnostics& target, const vision::Detectio
     target.super_resolution_ms += source.super_resolution_ms;
 }
 
+double CurrentResidentSetKb() {
+#if defined(__linux__)
+    std::ifstream statm("/proc/self/statm");
+    long total_pages{};
+    long resident_pages{};
+    const long page_size = ::sysconf(_SC_PAGESIZE);
+    if (page_size > 0 && statm >> total_pages >> resident_pages) {
+        return static_cast<double>(resident_pages) * static_cast<double>(page_size) / 1024.0;
+    }
+#endif
+    return 0.0;
+}
+
 BenchmarkResult RunProfile(const BenchmarkProfile& profile, const std::vector<DatasetSample>& samples,
-                           const int iterations) {
+                           const Arguments& arguments) {
     vision::DetectionModule detector(profile.config);
+    for (int iteration = 0; iteration < arguments.warmup_iterations; ++iteration) {
+        for (const DatasetSample& sample : samples) {
+            static_cast<void>(detector.Process(sample.image, true));
+        }
+    }
+
     BenchmarkResult benchmark;
-    for (int iteration = 0; iteration < iterations; ++iteration) {
+    benchmark.rss_samples_kb.push_back(CurrentResidentSetKb());
+    const auto benchmark_started = std::chrono::steady_clock::now();
+    const std::clock_t cpu_started = std::clock();
+    int iteration{};
+    do {
         for (const DatasetSample& sample : samples) {
             const auto started = std::chrono::steady_clock::now();
             const vision::DetectionResult result = detector.Process(sample.image, true);
@@ -229,6 +281,17 @@ BenchmarkResult RunProfile(const BenchmarkProfile& profile, const std::vector<Da
             }
             AddDiagnostics(benchmark.diagnostics, result.diagnostics);
         }
+        benchmark.rss_samples_kb.push_back(CurrentResidentSetKb());
+        ++iteration;
+    } while (iteration < arguments.iterations ||
+             (arguments.duration_seconds > 0 &&
+              std::chrono::steady_clock::now() - benchmark_started < std::chrono::seconds(arguments.duration_seconds)));
+    benchmark.wall_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - benchmark_started).count();
+    const std::clock_t cpu_finished = std::clock();
+    if (cpu_started != static_cast<std::clock_t>(-1) && cpu_finished != static_cast<std::clock_t>(-1)) {
+        benchmark.cpu_ms =
+            static_cast<double>(cpu_finished - cpu_started) * 1000.0 / static_cast<double>(CLOCKS_PER_SEC);
     }
     return benchmark;
 }
@@ -246,27 +309,59 @@ double Percentile(std::vector<double> values, const double percentile) {
         return 0.0;
     }
     std::sort(values.begin(), values.end());
-    const auto index = static_cast<std::size_t>(
-        std::min(static_cast<double>(values.size() - 1), percentile * static_cast<double>(values.size() - 1)));
+    const auto rank = static_cast<std::size_t>(std::ceil(percentile * static_cast<double>(values.size())));
+    const std::size_t index = std::clamp(rank, std::size_t{ 1 }, values.size()) - 1;
     return values[index];
+}
+
+double AverageRange(const std::vector<double>& values, const std::size_t begin, const std::size_t end) {
+    if (begin >= end || end > values.size()) {
+        return 0.0;
+    }
+    const double sum = std::accumulate(values.begin() + begin, values.begin() + end, 0.0);
+    return sum / static_cast<double>(end - begin);
+}
+
+double ThroughputRange(const std::vector<double>& latencies, const std::size_t begin, const std::size_t end) {
+    const double average_ms = AverageRange(latencies, begin, end);
+    return average_ms <= 0.0 ? 0.0 : 1000.0 / average_ms;
+}
+
+double ChangePercent(const double first, const double last) {
+    return first <= 0.0 ? 0.0 : (last - first) * 100.0 / first;
 }
 
 void WriteHeader(std::ostream& output) {
     output << "profile,samples,box_rate_percent,barcode_region_rate_percent,decode_rate_percent,"
-              "accuracy_percent,sr_failure_rate_percent,average_total_ms,p50_total_ms,p95_total_ms,throughput_fps,"
-              "box_ms,barcode_detection_ms,rectification_ms,contrast_ms,super_resolution_ms,barcode_decode_ms\n";
+              "accuracy_percent,sr_failure_rate_percent,average_total_ms,p50_total_ms,p95_total_ms,p99_total_ms,"
+              "throughput_fps,cpu_percent,average_rss_kb,peak_rss_kb,first_half_fps,last_half_fps,"
+              "throughput_change_percent,rss_growth_kb,box_ms,barcode_detection_ms,rectification_ms,contrast_ms,"
+              "super_resolution_ms,barcode_decode_ms\n";
 }
 
 void WriteResult(std::ostream& output, const std::string_view name, const BenchmarkResult& result) {
+    const std::size_t latency_midpoint = result.sample_latencies_ms.size() / 2;
+    const std::size_t rss_midpoint = result.rss_samples_kb.size() / 2;
+    const double first_half_fps = ThroughputRange(result.sample_latencies_ms, 0, latency_midpoint);
+    const double last_half_fps =
+        ThroughputRange(result.sample_latencies_ms, latency_midpoint, result.sample_latencies_ms.size());
+    const double first_half_rss = AverageRange(result.rss_samples_kb, 0, rss_midpoint);
+    const double last_half_rss = AverageRange(result.rss_samples_kb, rss_midpoint, result.rss_samples_kb.size());
+    const double peak_rss = result.rss_samples_kb.empty()
+                                ? 0.0
+                                : *std::max_element(result.rss_samples_kb.begin(), result.rss_samples_kb.end());
     output << name << ',' << result.samples << ',' << Percentage(result.boxes, result.samples) << ','
            << Percentage(result.barcode_regions, result.samples) << ',' << Percentage(result.decoded, result.samples)
            << ',' << Percentage(result.correct, result.samples) << ','
            << Percentage(result.super_resolution_failures, result.samples) << ','
            << Average(result.elapsed_ms, result.samples) << ',' << Percentile(result.sample_latencies_ms, 0.50) << ','
-           << Percentile(result.sample_latencies_ms, 0.95) << ','
-           << (result.elapsed_ms <= 0.0 ? 0.0 : static_cast<double>(result.samples) * 1000.0 / result.elapsed_ms) << ','
-           << Average(result.diagnostics.box_detection_ms, result.samples) << ','
-           << Average(result.diagnostics.barcode_detection_ms, result.samples) << ','
+           << Percentile(result.sample_latencies_ms, 0.95) << ',' << Percentile(result.sample_latencies_ms, 0.99) << ','
+           << (result.wall_ms <= 0.0 ? 0.0 : static_cast<double>(result.samples) * 1000.0 / result.wall_ms) << ','
+           << (result.wall_ms <= 0.0 ? 0.0 : result.cpu_ms * 100.0 / result.wall_ms) << ','
+           << AverageRange(result.rss_samples_kb, 0, result.rss_samples_kb.size()) << ',' << peak_rss << ','
+           << first_half_fps << ',' << last_half_fps << ',' << ChangePercent(first_half_fps, last_half_fps) << ','
+           << (last_half_rss - first_half_rss) << ',' << Average(result.diagnostics.box_detection_ms, result.samples)
+           << ',' << Average(result.diagnostics.barcode_detection_ms, result.samples) << ','
            << Average(result.diagnostics.perspective_rectification_ms, result.samples) << ','
            << Average(result.diagnostics.contrast_enhancement_ms, result.samples) << ','
            << Average(result.diagnostics.super_resolution_ms, result.samples) << ','
@@ -379,13 +474,20 @@ int main(const int argc, char* argv[]) {
     try {
         const Arguments arguments = ParseArguments(argc, argv);
         const std::vector<DatasetSample> samples = LoadDataset(arguments);
-        const std::vector<BenchmarkProfile> profiles = MakeProfiles(arguments.fsrcnn_model_path);
+        std::vector<BenchmarkProfile> profiles = MakeProfiles(arguments.fsrcnn_model_path);
+        if (arguments.profile.has_value()) {
+            std::erase_if(profiles,
+                          [&](const BenchmarkProfile& profile) { return profile.name != *arguments.profile; });
+            if (profiles.empty()) {
+                throw std::invalid_argument("unknown profile: " + *arguments.profile);
+            }
+        }
 
         std::ostringstream results;
         results << std::fixed << std::setprecision(3);
         WriteHeader(results);
         for (const BenchmarkProfile& profile : profiles) {
-            WriteResult(results, profile.name, RunProfile(profile, samples, arguments.iterations));
+            WriteResult(results, profile.name, RunProfile(profile, samples, arguments));
         }
         std::cout << results.str();
         if (!arguments.output_path.empty()) {

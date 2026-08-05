@@ -71,7 +71,8 @@ The runtime sequence is:
 4. The vision node reads the barcode attached to the product's top face and publishes `POSITION_DETECTED` and
    `BARCODE_DETECTED` for that work.
 5. If image upload is enabled, it uploads the JPEG over HTTP(S), verifies the response, and publishes `PRODUCT_IMAGE`.
-6. Camera, encoding, upload, and MQTT publication failures are reported with `ERROR_OCCURRED`.
+6. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. MQTT publication failures keep the
+   assigned result in `RESULT_PENDING` and resume from the first unsent message after reconnecting.
 
 The central server must therefore be running with its MQTT subscriptions and image upload endpoint enabled before the
 complete scenario can finish. The vision node will not invent a work ID locally; it waits for `WORK_CREATED` so all
@@ -99,6 +100,25 @@ missing, the node waits for `failure_frames_before_super_resolution` consecutive
 When final barcode recognition fails for an assigned work, the unannotated camera frame is saved separately under
 `failure_frame_directory`. Only `maximum_failure_frames` JPEG files are retained, so this temporary benchmark input
 cannot grow without bound. A storage failure is logged as a warning and does not replace the MQTT recognition result.
+
+Failure results include enough metadata to identify the failed stage:
+
+| Failure | `errorCode` | `failureStage` |
+| --- | --- | --- |
+| Barcode region missing | `ERR-VISION-BARCODE-REGION-NOT-DETECTED` | `BARCODE_DETECTION` |
+| Region found but EAN-13 decode failed | `ERR-VISION-BARCODE-DECODE-FAILED` | `BARCODE_DECODE` |
+| Camera cannot open | `ERR-VISION-CAMERA-OPEN-FAILED` | `ERROR_OCCURRED` event |
+| Camera frame stream lost | `ERR-VISION-CAMERA-FRAME-UNAVAILABLE` | `ERROR_OCCURRED` event |
+| JPEG encode, capture, or HTTP upload failure | `ERR-VISION-IMAGE-*` | `ERROR_OCCURRED` event |
+
+For an MQTT recovery check, start a work, stop the broker before the vision result is published, and restart it. The
+node must remain in `RESULT_PENDING` while disconnected, publish only the unsent result messages after reconnect, and
+then return to `WAITING_FOR_PRODUCT`. Replaying the same `WORK_CREATED` after completion must not produce a second
+result for that `workId`.
+
+No-box frames before `BOX_DETECTED` are not reported as a work failure because the server has not assigned a `workId`
+yet. The node keeps scanning without raising a system error. A box-arrival timeout requires an upstream sensor event
+that creates an expected work before vision processing; it must not be inferred from ordinary empty camera frames.
 
 ## Vision ablation benchmark
 
@@ -149,6 +169,61 @@ comparison PNGs were created:
 
 Pass `--fsrcnn-model /opt/logistics/models/FSRCNN_x2.pb` to include the learned SR panel. Use `--skip-build` when the
 benchmark has already been built in `build-vision-benchmark`.
+
+For a Pi 4 reproduction, this single command builds, runs the preview checks, records the warm-up-excluded metrics, and
+writes the SR comparison images, CSV, and summary under `/tmp/vision-sr-pi4`:
+
+```sh
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images \
+  --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-pi4 \
+  --iterations 5 --warmup 5 --label baseline
+```
+
+The CSV reports accuracy, p50/p95/p99 total latency, FPS, CPU, average/peak RSS, and per-stage timings. The summary keeps
+the comparison metrics and selects the highest-accuracy profile, breaking ties by p95 latency.
+For a long-run FPS/RSS check, use a production-sized capture set and keep each profile active for at least 30 minutes:
+
+```sh
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images \
+  --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-soak \
+  --profile full_bicubic_sr_x2 --iterations 5 --warmup 20 \
+  --duration-seconds 1800 --label soak
+```
+
+Compare `first_half_fps`, `last_half_fps`, `throughput_change_percent`, and `rss_growth_kb` in the soak CSV before
+accepting the profile.
+
+For the transport-load comparison, first run the recommended profile without the live node:
+
+```sh
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-operational --profile full_bicubic_sr_x2 --label baseline
+```
+
+Then start the configured node in another terminal, keep the central server, broker, and upload endpoint running, and
+feed products through the camera so MQTT results and HTTP images are actually sent:
+
+```sh
+./logistics_vision_node --headless --config runtime/vision-node/vision-node.ini \
+  2>&1 | tee /tmp/vision-operational.log
+```
+
+```sh
+vision_pid="$(pgrep -n logistics_vision_node)"
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-operational --profile full_bicubic_sr_x2 \
+  --label operational --load-pid "${vision_pid}" --load-log /tmp/vision-operational.log
+```
+
+The operational run succeeds only when the real node stays alive and the measurement window adds both an MQTT result
+publication and a confirmed HTTP image upload to the log. Compare `benchmark-baseline.csv` with
+`benchmark-operational.csv` and retain the separate `visuals-baseline/` and `visuals-operational/` directories.
 
 To include learned SR:
 
