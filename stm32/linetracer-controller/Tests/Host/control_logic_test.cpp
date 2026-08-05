@@ -332,20 +332,22 @@ void TestRouteTimeouts() {
 
 #if CONTROL_ROUTE_TIMEOUTS_ENABLED == 0U
     StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_B, 401U, 0U);
-    assert(ControlLogic_CheckRouteTimeout(&context, CONTROL_MARKER_TIMEOUT_MS + 60000U) ==
+    assert(ControlLogic_CheckRouteTimeout(
+               &context, CONTROL_MARKER_TIMEOUT_MS + 60000U) ==
            LINETRACER_STOP_REASON_NONE);
     assert(context.state != LINETRACER_CONTROL_ERROR);
 
     assert(HandleExpectedMarker(context, CONTROL_MARKER_TIMEOUT_MS + 60100U) == ROUTE_ACTION_TURN_RIGHT);
-    assert(ControlLogic_CheckRouteTimeout(&context,
-                                          CONTROL_MARKER_TIMEOUT_MS + CONTROL_TURN_TIMEOUT_MS + 120000U) ==
+    assert(ControlLogic_CheckRouteTimeout(
+               &context, CONTROL_MARKER_TIMEOUT_MS + CONTROL_TURN_TIMEOUT_MS + 120000U) ==
            LINETRACER_STOP_REASON_NONE);
     assert(context.state != LINETRACER_CONTROL_ERROR);
 
     context.state = LINETRACER_CONTROL_TURNING_AT_PICKUP;
     context.pending_route_action = ROUTE_ACTION_TURN_AROUND;
     context.state_entered_at_ms = 200000U;
-    assert(ControlLogic_CheckRouteTimeout(&context, 200000U + CONTROL_UTURN_TIMEOUT_MS + 120000U) ==
+    assert(ControlLogic_CheckRouteTimeout(
+               &context, 200000U + CONTROL_UTURN_TIMEOUT_MS + 120000U) ==
            LINETRACER_STOP_REASON_NONE);
     assert(context.state != LINETRACER_CONTROL_ERROR);
     return;
