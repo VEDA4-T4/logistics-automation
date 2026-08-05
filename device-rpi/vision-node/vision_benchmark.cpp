@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <numeric>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <optional>
@@ -224,20 +225,6 @@ std::vector<BenchmarkProfile> MakeProfiles(const std::filesystem::path& fsrcnn_m
     return profiles;
 }
 
-std::vector<BenchmarkProfile> SelectProfiles(std::vector<BenchmarkProfile> profiles,
-                                             const std::optional<std::string>& selected_profile) {
-    if (!selected_profile.has_value()) {
-        return profiles;
-    }
-    const auto profile = std::find_if(profiles.begin(), profiles.end(), [&](const BenchmarkProfile& candidate) {
-        return candidate.name == *selected_profile;
-    });
-    if (profile == profiles.end()) {
-        throw std::invalid_argument("unknown profile: " + *selected_profile);
-    }
-    return { *profile };
-}
-
 void AddDiagnostics(vision::DetectionDiagnostics& target, const vision::DetectionDiagnostics& source) {
     target.box_detection_ms += source.box_detection_ms;
     target.barcode_detection_ms += source.barcode_detection_ms;
@@ -331,10 +318,7 @@ double AverageRange(const std::vector<double>& values, const std::size_t begin, 
     if (begin >= end || end > values.size()) {
         return 0.0;
     }
-    double sum{};
-    for (std::size_t index = begin; index < end; ++index) {
-        sum += values[index];
-    }
+    const double sum = std::accumulate(values.begin() + begin, values.begin() + end, 0.0);
     return sum / static_cast<double>(end - begin);
 }
 
@@ -490,8 +474,14 @@ int main(const int argc, char* argv[]) {
     try {
         const Arguments arguments = ParseArguments(argc, argv);
         const std::vector<DatasetSample> samples = LoadDataset(arguments);
-        const std::vector<BenchmarkProfile> profiles =
-            SelectProfiles(MakeProfiles(arguments.fsrcnn_model_path), arguments.profile);
+        std::vector<BenchmarkProfile> profiles = MakeProfiles(arguments.fsrcnn_model_path);
+        if (arguments.profile.has_value()) {
+            std::erase_if(profiles,
+                          [&](const BenchmarkProfile& profile) { return profile.name != *arguments.profile; });
+            if (profiles.empty()) {
+                throw std::invalid_argument("unknown profile: " + *arguments.profile);
+            }
+        }
 
         std::ostringstream results;
         results << std::fixed << std::setprecision(3);

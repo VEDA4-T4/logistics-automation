@@ -537,8 +537,7 @@ int main(const int argc, char* argv[]) {
                 logistics::device::CurrentIso8601Timestamp()));
             next_heartbeat = loop_now + logistics::contracts::mqtt::kHeartbeatInterval;
         }
-        if (result_outbox.HasPending()) {
-            const auto pending_work_id = result_outbox.PendingWorkId();
+        if (const auto pending_work_id = result_outbox.PendingWorkId(); pending_work_id.has_value()) {
             if (!mqtt_client.IsConnected()) {
                 device_status->SetCurrentState("MQTT_DISCONNECTED");
             } else if (result_outbox.Flush(
@@ -548,11 +547,9 @@ int main(const int argc, char* argv[]) {
                            [&mqtt_client](const logistics::contracts::mqtt::MqttMessage& message) {
                                return mqtt_client.PublishError(message);
                            })) {
-                if (pending_work_id.has_value()) {
-                    std::clog << "[vision][transport][INFO] MQTT result publication completed; work_id="
-                              << *pending_work_id << '\n'
-                              << std::flush;
-                }
+                std::clog << "[vision][transport][INFO] MQTT result publication completed; work_id=" << *pending_work_id
+                          << '\n'
+                          << std::flush;
                 mqtt_workflow.CompleteWork();
                 pending_capture.Reset();
                 device_status->SetJobId(std::nullopt);
@@ -688,7 +685,6 @@ int main(const int argc, char* argv[]) {
                         timestamp),
                 });
             }
-            bool result_ready = !barcode_detected;
             if (barcode_detected && image_uploader != nullptr && !pending_capture.Empty()) {
                 std::vector<std::uint8_t> jpeg;
                 if (cv::imencode(".jpg", pending_capture.Frame(), jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 })) {
@@ -716,7 +712,6 @@ int main(const int argc, char* argv[]) {
                                                              mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
                             captured_at);
                         publications.push_back({ logistics::vision::VisionPublicationChannel::kEvent, image });
-                        result_ready = true;
                     } else {
                         std::cerr << "[vision][ERROR] image upload failed: " << uploaded.error << '\n';
                         publications.push_back({
@@ -728,7 +723,6 @@ int main(const int argc, char* argv[]) {
                                 captured_at, "ERR-VISION-IMAGE-UPLOAD-FAILED", "UPLOAD_ERROR", uploaded.error,
                                 work->work_id),
                         });
-                        result_ready = true;
                     }
                 } else {
                     publications.push_back({
@@ -740,7 +734,6 @@ int main(const int argc, char* argv[]) {
                             logistics::device::CurrentIso8601Timestamp(), "ERR-VISION-IMAGE-ENCODING-FAILED",
                             "VISION_ERROR", "failed to encode the captured frame as JPEG", work->work_id),
                     });
-                    result_ready = true;
                 }
             } else if (barcode_detected && image_uploader != nullptr) {
                 std::cerr << "[vision][ERROR] barcode was detected without a captured frame\n";
@@ -753,7 +746,6 @@ int main(const int argc, char* argv[]) {
                         logistics::device::CurrentIso8601Timestamp(), "ERR-VISION-IMAGE-CAPTURE-MISSING",
                         "VISION_ERROR", "barcode was detected without a captured frame", work->work_id),
                 });
-                result_ready = true;
             } else if (barcode_detected) {
                 publications.push_back({
                     logistics::vision::VisionPublicationChannel::kEvent,
@@ -763,10 +755,8 @@ int main(const int argc, char* argv[]) {
                                                          mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
                         timestamp),
                 });
-                result_ready = true;
             }
-            if (result_ready && control_state.IsOperational() &&
-                result_outbox.Enqueue(work->work_id, std::move(publications))) {
+            if (control_state.IsOperational() && result_outbox.Enqueue(work->work_id, std::move(publications))) {
                 pending_capture.Reset();
                 device_status->SetCurrentState("RESULT_PENDING");
                 device_status->SetErrorCode(std::nullopt);

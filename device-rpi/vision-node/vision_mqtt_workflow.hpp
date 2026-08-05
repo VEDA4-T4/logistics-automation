@@ -75,7 +75,6 @@ public:
 
     [[nodiscard]] bool Enqueue(std::string work_id, std::vector<VisionPublication> publications);
     [[nodiscard]] bool Flush(const Publisher& event_publisher, const Publisher& error_publisher);
-    [[nodiscard]] bool HasPending() const;
     [[nodiscard]] std::optional<std::string> PendingWorkId() const;
     void Reset();
 

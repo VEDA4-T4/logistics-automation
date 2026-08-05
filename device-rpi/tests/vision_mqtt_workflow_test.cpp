@@ -202,12 +202,11 @@ void TestResultOutboxRetriesFromFirstUnsentPublication() {
         return error_attempts > 1;
     };
     assert(!outbox.Flush(event_publisher, error_publisher));
-    assert(outbox.HasPending());
+    assert(outbox.PendingWorkId() == kWorkId);
     assert(event_attempts == 1);
     assert(error_attempts == 1);
 
     assert(outbox.Flush(event_publisher, error_publisher));
-    assert(!outbox.HasPending());
     assert(!outbox.PendingWorkId().has_value());
     assert(event_attempts == 1);
     assert(error_attempts == 2);

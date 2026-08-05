@@ -169,11 +169,6 @@ bool VisionResultOutbox::Flush(const Publisher& event_publisher, const Publisher
     }
 }
 
-bool VisionResultOutbox::HasPending() const {
-    std::lock_guard lock(mutex_);
-    return !publications_.empty();
-}
-
 std::optional<std::string> VisionResultOutbox::PendingWorkId() const {
     std::lock_guard lock(mutex_);
     return work_id_.empty() ? std::nullopt : std::optional<std::string>(work_id_);
