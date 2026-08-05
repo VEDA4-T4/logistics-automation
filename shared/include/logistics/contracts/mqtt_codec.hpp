@@ -54,6 +54,7 @@ inline constexpr std::string_view kYField = "y";
 inline constexpr std::string_view kBarcodeField = "barcode";
 inline constexpr std::string_view kRecognitionStatusField = "recognitionStatus";
 inline constexpr std::string_view kConfidenceField = "confidence";
+inline constexpr std::string_view kFailureStageField = "failureStage";
 inline constexpr std::string_view kResultField = "result";
 inline constexpr std::string_view kProcessingResultField = "processingResult";
 inline constexpr std::string_view kProductIdField = "productId";
@@ -233,12 +234,18 @@ struct BarcodeDetectedPayload {
     std::string barcode;
     std::optional<double> confidence;
     std::optional<std::string> message;
+    std::optional<std::string> error_code;
+    std::optional<std::string> failure_stage;
 
     [[nodiscard]] bool IsValid() const noexcept {
+        const bool has_failure_metadata = error_code.has_value() || failure_stage.has_value();
+        const bool failure_metadata_valid =
+            !has_failure_metadata || (recognition_status != "SUCCESS" && error_code.has_value() &&
+                                      failure_stage.has_value() && !error_code->empty() && !failure_stage->empty());
         return IsValidUuid(work_id) && IsValidRecognitionStatus(recognition_status) &&
                (recognition_status != "SUCCESS" || !barcode.empty()) &&
                (!confidence.has_value() || (*confidence >= 0.0 && *confidence <= 1.0)) &&
-               (!message.has_value() || !message->empty());
+               (!message.has_value() || !message->empty()) && failure_metadata_valid;
     }
 };
 
@@ -1099,6 +1106,8 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
         data[std::string(kBarcodeField)] = payload.barcode;
     WriteOptionalDouble(data, kConfidenceField, payload.confidence);
     WriteOptionalString(data, kMessageField, payload.message);
+    WriteOptionalString(data, kErrorCodeField, payload.error_code);
+    WriteOptionalString(data, kFailureStageField, payload.failure_stage);
     return data;
 }
 
@@ -1289,7 +1298,9 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
            ReadRequiredString(data, kRecognitionStatusField, payload.recognition_status, status) &&
            ReadOptionalStringValue(data, kBarcodeField, payload.barcode, status) &&
            ReadOptionalDouble(data, kConfidenceField, payload.confidence, status) &&
-           ReadOptionalString(data, kMessageField, payload.message, status);
+           ReadOptionalString(data, kMessageField, payload.message, status) &&
+           ReadOptionalString(data, kErrorCodeField, payload.error_code, status) &&
+           ReadOptionalString(data, kFailureStageField, payload.failure_stage, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ProductImagePayload& payload, CodecStatus& status) {
