@@ -71,7 +71,8 @@ The runtime sequence is:
 4. The vision node reads the barcode attached to the product's top face and publishes `POSITION_DETECTED` and
    `BARCODE_DETECTED` for that work.
 5. If image upload is enabled, it uploads the JPEG over HTTP(S), verifies the response, and publishes `PRODUCT_IMAGE`.
-6. Camera, encoding, upload, and MQTT publication failures are reported with `ERROR_OCCURRED`.
+6. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. MQTT publication failures keep the
+   assigned result in `RESULT_PENDING` and resume from the first unsent message after reconnecting.
 
 The central server must therefore be running with its MQTT subscriptions and image upload endpoint enabled before the
 complete scenario can finish. The vision node will not invent a work ID locally; it waits for `WORK_CREATED` so all
@@ -99,6 +100,25 @@ missing, the node waits for `failure_frames_before_super_resolution` consecutive
 When final barcode recognition fails for an assigned work, the unannotated camera frame is saved separately under
 `failure_frame_directory`. Only `maximum_failure_frames` JPEG files are retained, so this temporary benchmark input
 cannot grow without bound. A storage failure is logged as a warning and does not replace the MQTT recognition result.
+
+Failure results include enough metadata to identify the failed stage:
+
+| Failure | `errorCode` | `failureStage` |
+| --- | --- | --- |
+| Barcode region missing | `ERR-VISION-BARCODE-REGION-NOT-DETECTED` | `BARCODE_DETECTION` |
+| Region found but EAN-13 decode failed | `ERR-VISION-BARCODE-DECODE-FAILED` | `BARCODE_DECODE` |
+| Camera cannot open | `ERR-VISION-CAMERA-OPEN-FAILED` | `ERROR_OCCURRED` event |
+| Camera frame stream lost | `ERR-VISION-CAMERA-FRAME-UNAVAILABLE` | `ERROR_OCCURRED` event |
+| JPEG encode, capture, or HTTP upload failure | `ERR-VISION-IMAGE-*` | `ERROR_OCCURRED` event |
+
+For an MQTT recovery check, start a work, stop the broker before the vision result is published, and restart it. The
+node must remain in `RESULT_PENDING` while disconnected, publish only the unsent result messages after reconnect, and
+then return to `WAITING_FOR_PRODUCT`. Replaying the same `WORK_CREATED` after completion must not produce a second
+result for that `workId`.
+
+No-box frames before `BOX_DETECTED` are not reported as a work failure because the server has not assigned a `workId`
+yet. The node keeps scanning without raising a system error. A box-arrival timeout requires an upstream sensor event
+that creates an expected work before vision processing; it must not be inferred from ordinary empty camera frames.
 
 ## Vision ablation benchmark
 

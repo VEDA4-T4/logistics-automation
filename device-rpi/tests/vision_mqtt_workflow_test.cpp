@@ -15,7 +15,8 @@ namespace vision = logistics::vision;
 
 constexpr std::string_view kWorkId = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
 
-vision::VisionObservation Observation(std::optional<std::string> barcode = std::nullopt) {
+vision::VisionObservation Observation(std::optional<std::string> barcode = std::nullopt,
+                                      const bool barcode_region_detected = false) {
     return {
         .image_name = "capture-01.jpg",
         .box_x = 100,
@@ -32,6 +33,7 @@ vision::VisionObservation Observation(std::optional<std::string> barcode = std::
                 mqtt::PixelPoint{ .x = 100.0, .y = 150.0 },
             },
         .barcode = std::move(barcode),
+        .barcode_region_detected = barcode_region_detected,
     };
 }
 
@@ -133,6 +135,7 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(!workflow.Observe(std::nullopt, "IGNORED", "2026-07-21T11:00:04Z").has_value());
     assert(!workflow.Observe(Observation(), "MSG-BOX-02", "2026-07-21T11:00:05Z").has_value());
     assert(workflow.Observe(Observation(), "MSG-BOX-03", "2026-07-21T11:00:06Z").has_value());
+    assert(!workflow.AssignWork(WorkCreated()));
 }
 
 void TestMissingBarcodeProducesFailedResult() {
@@ -153,6 +156,59 @@ void TestMissingBarcodeProducesFailedResult() {
     assert(payload->recognition_status == "FAILED");
     assert(payload->barcode.empty());
     assert(payload->message.has_value());
+    assert(payload->error_code == "ERR-VISION-BARCODE-REGION-NOT-DETECTED");
+    assert(payload->failure_stage == "BARCODE_DETECTION");
+}
+
+void TestBarcodeDecodeFailureIdentifiesStage() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1, 1);
+    assert(workflow.Observe(Observation(std::nullopt, true), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
+    assert(workflow.AssignWork(WorkCreated()));
+    assert(!workflow.Observe(Observation(std::nullopt, true), "IGNORED", "2026-07-21T11:00:01Z").has_value());
+    const auto work = workflow.TakeAssignedWork();
+    assert(work.has_value());
+
+    const auto barcode =
+        vision::MakeBarcodeDetectedMessage("PI-VISION-01", *work, "MSG-BARCODE-FAIL", "2026-07-21T11:00:02Z");
+    const auto* payload = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(barcode);
+    assert(payload != nullptr);
+    assert(payload->recognition_status == "FAILED");
+    assert(payload->error_code == "ERR-VISION-BARCODE-DECODE-FAILED");
+    assert(payload->failure_stage == "BARCODE_DECODE");
+}
+
+void TestResultOutboxRetriesFromFirstUnsentPublication() {
+    const auto work = vision::AssignedVisionWork{ .work_id = std::string(kWorkId),
+                                                  .observation = Observation("8801234567893", true) };
+    const auto position =
+        vision::MakePositionDetectedMessage("PI-VISION-01", work, "MSG-POSITION-01", "2026-07-21T11:00:02Z");
+    const auto barcode =
+        vision::MakeBarcodeDetectedMessage("PI-VISION-01", work, "MSG-BARCODE-01", "2026-07-21T11:00:02Z");
+    vision::VisionResultOutbox outbox;
+    assert(outbox.Enqueue(std::string(kWorkId), {
+                                                    { vision::VisionPublicationChannel::kEvent, position },
+                                                    { vision::VisionPublicationChannel::kError, barcode },
+                                                }));
+
+    int event_attempts = 0;
+    int error_attempts = 0;
+    const auto event_publisher = [&event_attempts](const mqtt::MqttMessage&) {
+        ++event_attempts;
+        return true;
+    };
+    const auto error_publisher = [&error_attempts](const mqtt::MqttMessage&) {
+        ++error_attempts;
+        return error_attempts > 1;
+    };
+    assert(!outbox.Flush(event_publisher, error_publisher));
+    assert(outbox.HasPending());
+    assert(event_attempts == 1);
+    assert(error_attempts == 1);
+
+    assert(outbox.Flush(event_publisher, error_publisher));
+    assert(!outbox.HasPending());
+    assert(event_attempts == 1);
+    assert(error_attempts == 2);
 }
 
 void TestVisionControlLifecycle() {
@@ -270,6 +326,8 @@ void TestStopClearsPendingVisionWork() {
 int main() {
     TestDetectionAssignmentAndResultMessages();
     TestMissingBarcodeProducesFailedResult();
+    TestBarcodeDecodeFailureIdentifiesStage();
+    TestResultOutboxRetriesFromFirstUnsentPublication();
     TestVisionControlLifecycle();
     TestStopClearsPendingVisionWork();
     return 0;
