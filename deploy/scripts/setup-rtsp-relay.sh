@@ -118,7 +118,7 @@ run_self_check() {
     should_keep_config
     force_config=1
     ! should_keep_config
-    expected_directory_install='install -d -m 0750 -o root -g logistics /etc/logistics'
+    expected_directory_install='install -d -m 0755 -o root -g logistics /etc/logistics'
     grep -Fq "\"\${sudo_command[@]}\" ${expected_directory_install}" "${BASH_SOURCE[0]}"
 
     binary_checksum_fixture=$'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef *mediamtx_v1.19.3_linux_amd64.tar.gz\n9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e *mediamtx_v1.19.3_linux_arm64.tar.gz\nabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789 *mediamtx_v1.19.3_linux_arm64.tar.gz.bak'
@@ -226,7 +226,7 @@ else
     temporary_config="$(mktemp)"
     render_config "${source_1}" "${source_2}" "${source_3}" "${source_4}" \
         "${relay_user}" "${relay_password}" >"${temporary_config}"
-    "${sudo_command[@]}" install -d -m 0750 -o root -g logistics /etc/logistics
+    "${sudo_command[@]}" install -d -m 0755 -o root -g logistics /etc/logistics
     "${sudo_command[@]}" install -m 0640 -o root -g logistics "${temporary_config}" "${config_path}.new"
     "${sudo_command[@]}" mv -f -- "${config_path}.new" "${config_path}"
 fi
