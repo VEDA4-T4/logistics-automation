@@ -146,7 +146,7 @@ void TestUnknownMessageTypeLogIncludesReceivedTypeAndTopic() {
     assert(logs[0].message.find("topic=device/PI-01/event") != std::string::npos);
 }
 
-void TestBarcodeIsEnrichedFromProductCatalog() {
+void TestBarcodeUsesCatalogOrDefaultDestination() {
     const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path() / ("logistics-handler-test-" + unique);
     std::filesystem::create_directories(root);
@@ -164,7 +164,7 @@ void TestBarcodeIsEnrichedFromProductCatalog() {
         storage.image_root = root / "images";
         central_server::PersistenceService persistence(database, storage);
         central_server::DeviceManager device_manager;
-        central_server::MqttHandler handler(device_manager, {}, &persistence);
+        central_server::MqttHandler handler(device_manager, {}, &persistence, "3");
         std::string work_id;
         std::vector<mqtt::MqttMessage> qt_events;
         handler.SetWorkCreatedHandler([&work_id](std::string_view, std::string_view created_work_id) {
@@ -212,6 +212,39 @@ void TestBarcodeIsEnrichedFromProductCatalog() {
         assert(product->product_id == "VEDA107");
         assert(product->product_name == "VEDA107 기본 상품");
         assert(product->destination == "1");
+
+        const mqtt::MqttMessage unknown_box{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-BOX-UNKNOWN",
+            .message_type = mqtt::MessageType::kBoxDetected,
+            .source_id = "PI-VISION-01",
+            .timestamp = "2026-07-21T01:00:02Z",
+            .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "unknown-box.jpg" },
+        };
+        assert(handler.Handle("device/PI-VISION-01/event", Encode(unknown_box)));
+        const mqtt::MqttMessage unknown_barcode{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-BARCODE-UNKNOWN",
+            .message_type = mqtt::MessageType::kBarcodeDetected,
+            .source_id = "PI-VISION-01",
+            .timestamp = "2026-07-21T01:00:03Z",
+            .data =
+                mqtt::BarcodeDetectedPayload{
+                    .work_id = work_id,
+                    .recognition_status = "SUCCESS",
+                    .barcode = "0000000000000",
+                    .confidence = 0.95,
+                    .message = std::nullopt,
+                    .error_code = std::nullopt,
+                    .failure_stage = std::nullopt,
+                },
+        };
+        assert(handler.Handle("device/PI-VISION-01/event", Encode(unknown_barcode)));
+        assert(qt_events.size() == 4);
+        const auto* unknown_product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events.back());
+        assert(unknown_product != nullptr);
+        assert(unknown_product->product_id == "UNREGISTERED");
+        assert(unknown_product->destination == "3");
     }
     std::filesystem::remove_all(root);
 }
@@ -498,7 +531,7 @@ int main() {
     TestTopicMessageMismatchIsRejected();
     TestUnsupportedVersionAndMissingFieldsAreRejected();
     TestUnknownMessageTypeLogIncludesReceivedTypeAndTopic();
-    TestBarcodeIsEnrichedFromProductCatalog();
+    TestBarcodeUsesCatalogOrDefaultDestination();
     TestHeartbeatIsForwardedToQtAsDeviceStatus();
     TestSensorStatusIsAcceptedAndForwardedToQt();
     TestHeartbeatTimeoutChangesAreForwardedToQt();

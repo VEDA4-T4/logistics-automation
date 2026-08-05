@@ -20,6 +20,7 @@ struct ProcessOrchestratorConfig final {
     std::string sorting_device_id{ "PI-SORTING-01" };
     std::string line_tracer_device_id{ "PI-LT-01" };
     std::string line_tracer_initial_position;
+    std::string default_destination{ "3" };
     HomographyConfig homography;
 
     [[nodiscard]] bool IsValid() const noexcept;

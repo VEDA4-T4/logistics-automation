@@ -168,7 +168,7 @@ int Application::Run(int argc, char* argv[]) {
     }
 
     PersistenceService persistence(database, server_config.storage);
-    MqttHandler mqtt_handler(*device_manager, {}, &persistence);
+    MqttHandler mqtt_handler(*device_manager, {}, &persistence, server_config.process.default_destination);
     CommandManager command_manager;
     ProcessOrchestrator process_orchestrator(server_config.process);
     ProcessStateStore process_state_store(database);

@@ -66,6 +66,7 @@ vision_device_id=PI-VISION-01
 gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
+default_destination=3
 ```
 
 현재 Gripper 전용 Raspberry Pi 실행 파일이 없으므로 전체 실제 공정이 준비되기 전에는 `enabled=false`가 안전합니다.
