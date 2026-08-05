@@ -1,7 +1,18 @@
-# 중앙서버와 Vision 설치 스크립트
+# Raspberry Pi 서비스 설치 스크립트
 
-스크립트는 저장소 루트의 `runtime/` 아래에 설정과 생성 데이터를 만들고 필요한 타깃을 빌드합니다. 기존 INI는
+중앙 서버와 장치 노드 setup 스크립트는 `logistics` 시스템 계정을 준비하고, 필요한 타깃을 빌드한 뒤 아래 고정 배포
+경로에 실행 파일·설정·systemd unit을 설치합니다. unit을 활성화하고 서비스를 재시작하며, 기존 INI는
 `LOGISTICS_FORCE_CONFIG=1`을 지정하지 않는 한 보존합니다.
+
+| 항목 | 경로 |
+| --- | --- |
+| 실행 파일과 migration | `/opt/logistics-automation` |
+| 서비스 설정 | `/etc/logistics` |
+| 영속 데이터 | `/var/lib/logistics` |
+| 활성 systemd unit | `/etc/systemd/system` |
+
+이 경로들은 systemd unit의 `ExecStart`, `WorkingDirectory`, `StateDirectory`와 일치해야 하므로 setup 환경변수로 변경할 수
+없습니다. 빌드 디렉터리만 `LOGISTICS_BUILD_DIR`로 변경할 수 있습니다.
 
 ## 중앙서버
 
@@ -19,15 +30,19 @@ export LOGISTICS_INSTALL_DEPENDENCIES=1
 )
 ```
 
-생성 파일:
+주요 설치 파일:
 
 ```text
-runtime/central-server/server.ini
-runtime/central-server/logistics.db
-runtime/central-server/uploads/
+/opt/logistics-automation/bin/logistics_central_server
+/opt/logistics-automation/share/logistics/migrations/
+/etc/logistics/server.ini
+/etc/systemd/system/logistics-central-server.service
+/var/lib/logistics/logistics.db
+/var/lib/logistics/uploads/
 ```
 
-이 스크립트는 Mosquitto 설정을 수정하거나 서비스를 재시작하지 않습니다.
+이 스크립트는 Mosquitto 설정을 수정하지 않습니다. `mosquitto.service`가 준비된 상태에서
+`logistics-central-server.service`를 활성화하고 재시작합니다.
 
 ## RTSP 릴레이
 
@@ -128,7 +143,8 @@ export LOGISTICS_INSTALL_OPENCV=1
 ./deploy/scripts/setup-vision-node.sh
 ```
 
-생성 설정은 `runtime/vision-node/vision-node.ini`입니다.
+실행 파일은 `/opt/logistics-automation/bin/logistics_vision_node`, 설정은
+`/etc/logistics/vision-node.ini`에 설치됩니다. 스크립트는 `logistics-vision-node.service`를 활성화하고 재시작합니다.
 
 The setup scripts assume build dependencies are already installed. To install the required Ubuntu packages as part of
 the run, explicitly opt in:
@@ -158,10 +174,42 @@ export LOGISTICS_UART_DEVICE='/dev/vedauart'
 )
 ```
 
-The generated runtime configuration is `runtime/input-node/input-node.ini`. The daemon is started manually (or by a
-future systemd unit) with the UART device supplied through `LOGISTICS_UART_DEVICE` or as the second argument. The
-script configures with `LOGISTICS_BUILD_VISION_NODE=OFF`, `LOGISTICS_BUILD_SORTING_NODE=OFF`, and
+The binary is installed at `/opt/logistics-automation/bin/logistics_input_node` and the configuration at
+`/etc/logistics/input-node.ini`. The script enables and restarts `logistics-input-node.service`. The unit uses
+`/dev/vedauart`, so the setup script rejects another `LOGISTICS_UART_DEVICE` value. The script configures with
+`LOGISTICS_BUILD_VISION_NODE=OFF`, `LOGISTICS_BUILD_SORTING_NODE=OFF`, and
 `LOGISTICS_BUILD_LINETRACER_NODE=OFF`, so OpenCV is not required to build the input node.
+
+## Sorting 및 Line Tracer Raspberry Pi
+
+두 UART 노드는 Input Node와 같은 MQTT 환경변수와 `/dev/vedauart`를 사용합니다. MQTT 비밀번호는 위 예제처럼 subshell의
+non-echoing prompt에서 입력한 뒤 해당 setup 스크립트를 실행합니다.
+
+| 노드 | setup 스크립트 | 기본 장치 ID | 설정 | 서비스 |
+| --- | --- | --- | --- | --- |
+| Sorting | `setup-sorting-node.sh` | `PI-SORTING-01` | `/etc/logistics/sorting-node.ini` | `logistics-sorting-node.service` |
+| Line Tracer | `setup-linetracer-node.sh` | `PI-LT-01` | `/etc/logistics/linetracer-node.ini` | `logistics-linetracer-node.service` |
+
+```bash
+(
+cleanup_mqtt_password() { unset LOGISTICS_MQTT_PASSWORD; }
+trap cleanup_mqtt_password EXIT
+trap 'exit 130' HUP INT TERM
+read -rsp 'device MQTT password: ' LOGISTICS_MQTT_PASSWORD; printf '\n'
+export LOGISTICS_MQTT_PASSWORD
+export LOGISTICS_CENTRAL_HOST='192.168.0.10'
+export LOGISTICS_MQTT_HOST='mqtt.logistics.local'
+export LOGISTICS_DEVICE_IP='장치-IP'
+export LOGISTICS_DEVICE_ID='PI-SORTING-01'
+./deploy/scripts/setup-sorting-node.sh
+)
+```
+
+Line Tracer를 설치할 때는 마지막 두 줄의 장치 ID와 스크립트를 각각 `PI-LT-01`,
+`setup-linetracer-node.sh`로 바꿉니다.
+
+두 스크립트는 해당 실행 파일과 unit을 설치하고 서비스를 활성화·재시작합니다. 하나의 Raspberry Pi에서 UART를 공유하는
+서비스를 검증할 때는 동시에 활성화하지 않습니다.
 
 ## 연결 검사
 
@@ -179,9 +227,7 @@ export LOGISTICS_CENTRAL_HOST='192.168.0.10'
 
 | 변수 | 용도 |
 | --- | --- |
-| `LOGISTICS_CONFIG_PATH` | 생성·사용할 INI 경로 |
 | `LOGISTICS_BUILD_DIR` | CMake 빌드 경로 |
-| `LOGISTICS_RUNTIME_DIR` | 런타임 데이터 경로 |
 | `LOGISTICS_NODE_NAME` | 장치 등록 이름 |
 | `LOGISTICS_MQTT_HOST` | 서버 인증서 SAN과 일치하는 broker DNS 이름 또는 IP |
 | `LOGISTICS_MQTT_PORT` | MQTT listener, 기본값 `8883` |
@@ -189,6 +235,9 @@ export LOGISTICS_CENTRAL_HOST='192.168.0.10'
 | `LOGISTICS_MQTT_PASSWORD` | MQTT 비밀번호, 새 INI 생성 시 필수 |
 | `LOGISTICS_MQTT_TLS_ENABLED` | `true` 또는 `false`, 기본값 `true` |
 | `LOGISTICS_MQTT_CA_CERTIFICATE` | 공개 CA 경로, 기본값 `/etc/logistics/tls/ca.crt` |
+| `LOGISTICS_UPLOAD_TOKEN` | 중앙 서버 업로드 bearer token, 중앙 서버와 Vision의 새 INI 생성 시 필수 |
+| `LOGISTICS_UART_DEVICE` | UART 장치, systemd 배포에서는 `/dev/vedauart`만 지원 |
+| `LOGISTICS_SORTING_DEFAULT_SPEED` | Sorting 기본 속도, `1`부터 `100`까지 |
 | `LOGISTICS_FORCE_CONFIG=1` | 기존 INI 덮어쓰기 |
 | `LOGISTICS_INSTALL_DEPENDENCIES=1` | apt 의존성 설치 |
 | `LOGISTICS_INSTALL_OPENCV=1` | OpenCV 4.10.0 소스 설치 |

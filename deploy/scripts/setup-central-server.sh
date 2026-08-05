@@ -5,9 +5,9 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 build_dir="${LOGISTICS_BUILD_DIR:-${repo_root}/build-central}"
-install_prefix="${LOGISTICS_INSTALL_PREFIX:-/opt/logistics-automation}"
-runtime_dir="${LOGISTICS_RUNTIME_DIR:-/var/lib/logistics}"
-config_path="${LOGISTICS_CONFIG_PATH:-/etc/logistics/server.ini}"
+install_prefix="/opt/logistics-automation"
+runtime_dir="/var/lib/logistics"
+config_path="/etc/logistics/server.ini"
 service_name="logistics-central-server.service"
 mqtt_host="${LOGISTICS_MQTT_HOST:-127.0.0.1}"
 mqtt_port="${LOGISTICS_MQTT_PORT:-8883}"
@@ -54,6 +54,13 @@ validate_mqtt_settings() {
     fi
 }
 
+should_write_config() {
+    local config_exists=$1
+    local force_write=$2
+
+    [[ "${config_exists}" == "0" || "${force_write}" == "1" ]]
+}
+
 run_self_check() {
     validate_mqtt_settings mqtt.example 8883 central-server secret true /etc/logistics/tls/ca.crt
     validate_mqtt_settings mqtt.example 1883 central-server secret false ""
@@ -62,7 +69,10 @@ run_self_check() {
     ! validate_mqtt_settings mqtt.example 8883 central-server secret yes /etc/logistics/tls/ca.crt 2>/dev/null
     ! validate_mqtt_settings mqtt.example 8883 central-server secret true "" 2>/dev/null
     ! validate_mqtt_settings $'mqtt.example\ninvalid' 8883 central-server secret true /etc/logistics/tls/ca.crt 2>/dev/null
-    echo "$(basename -- "${BASH_SOURCE[0]}") MQTT security self-check passed."
+    should_write_config 0 0
+    ! should_write_config 1 0
+    should_write_config 1 1
+    echo "$(basename -- "${BASH_SOURCE[0]}") self-check passed."
 }
 
 if [[ "${1:-}" == "--self-check" ]]; then
@@ -86,7 +96,7 @@ if "${sudo_command[@]}" test -e "${config_path}"; then
 fi
 
 write_config=0
-if [[ "${config_exists}" == "0" || "${force_config}" == "1" ]]; then
+if should_write_config "${config_exists}" "${force_config}"; then
     write_config=1
 fi
 
@@ -134,7 +144,7 @@ fi
     -m 0750 \
     "$(dirname -- "${config_path}")"
 
-if [[ "${write_config}" == "1" ]]; then
+if [[ "${write_config}" != "1" ]]; then
     echo "Keeping existing config: ${config_path}"
 else
     temporary_config="$(mktemp)"

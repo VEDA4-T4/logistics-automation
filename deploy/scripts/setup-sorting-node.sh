@@ -6,9 +6,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 
 build_dir="${LOGISTICS_BUILD_DIR:-${repo_root}/build-sorting}"
-install_prefix="${LOGISTICS_INSTALL_PREFIX:-/opt/logistics-automation}"
-runtime_dir="${LOGISTICS_RUNTIME_DIR:-/var/lib/logistics}"
-config_path="${LOGISTICS_CONFIG_PATH:-/etc/logistics/sorting-node.ini}"
+install_prefix="/opt/logistics-automation"
+config_path="/etc/logistics/sorting-node.ini"
 service_name="logistics-sorting-node.service"
 
 central_host="${LOGISTICS_CENTRAL_HOST:-}"
