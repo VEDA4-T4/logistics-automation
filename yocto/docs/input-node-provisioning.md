@@ -139,6 +139,12 @@ scp -o IdentitiesOnly=yes \
   root@장치_IP:/tmp/veda-mqtt-test-ca.crt
 ```
 
+Input Pi가 중앙 서버에 직접 접근할 수 있는 망 구성이라면, WSL을 경유하지 않고 Input Pi에서 한 번에 내려받아도 된다. 이 경우에도 7절의 지문 대조는 그대로 수행한다.
+
+```bash
+scp server@서버_IP:/etc/logistics/tls/ca.crt /tmp/veda-mqtt-test-ca.crt
+```
+
 ## 7. CA 인증서 설치
 
 Input Pi에서 실행한다.
@@ -301,7 +307,23 @@ online status and registration published
 
 ## 11. MQTT 상태 검증
 
-중앙 서버에서 실행한다.
+중앙 서버 또는 `central-server` 계정을 사용할 수 있는 관리 호스트에서 실행한다. Input Pi에서는 실행하지 않는다. `PI-INPUT-01` 계정은 ACL상 자신의 status/heartbeat 토픽에 write 권한만 있어 구독해도 메시지가 오지 않으며, `central-server` 계정은 모든 장치 토픽에 접근할 수 있으므로 노드 장비에 두지 않는다.
+
+WSL에서 실행하는 경우 클라이언트와 CA를 먼저 준비한다.
+
+```bash
+sudo apt install -y mosquitto-clients
+```
+
+```bash
+mkdir -p ~/.config/logistics
+```
+
+```bash
+scp server@서버_IP:/etc/logistics/tls/ca.crt ~/.config/logistics/ca.crt
+```
+
+이때 아래 `--cafile` 경로를 `~/.config/logistics/ca.crt`로 바꿔서 실행한다.
 
 ```bash
 read -rsp "central-server MQTT password: " MQTT_PASSWORD
