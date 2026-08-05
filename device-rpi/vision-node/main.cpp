@@ -538,6 +538,7 @@ int main(const int argc, char* argv[]) {
             next_heartbeat = loop_now + logistics::contracts::mqtt::kHeartbeatInterval;
         }
         if (result_outbox.HasPending()) {
+            const auto pending_work_id = result_outbox.PendingWorkId();
             if (!mqtt_client.IsConnected()) {
                 device_status->SetCurrentState("MQTT_DISCONNECTED");
             } else if (result_outbox.Flush(
@@ -547,6 +548,11 @@ int main(const int argc, char* argv[]) {
                            [&mqtt_client](const logistics::contracts::mqtt::MqttMessage& message) {
                                return mqtt_client.PublishError(message);
                            })) {
+                if (pending_work_id.has_value()) {
+                    std::clog << "[vision][transport][INFO] MQTT result publication completed; work_id="
+                              << *pending_work_id << '\n'
+                              << std::flush;
+                }
                 mqtt_workflow.CompleteWork();
                 pending_capture.Reset();
                 device_status->SetJobId(std::nullopt);
@@ -693,6 +699,9 @@ int main(const int argc, char* argv[]) {
                         image_uploader->Upload(device_id, work->work_id, upload_message_id, captured_at,
                                                work->observation.image_name, "image/jpeg", jpeg);
                     if (uploaded.IsConfirmed()) {
+                        std::clog << "[vision][transport][INFO] HTTP image upload confirmed; work_id=" << work->work_id
+                                  << '\n'
+                                  << std::flush;
                         publications.push_back({
                             logistics::vision::VisionPublicationChannel::kEvent,
                             logistics::vision::MakeBarcodeDetectedMessage(

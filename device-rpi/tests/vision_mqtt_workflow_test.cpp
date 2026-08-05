@@ -189,6 +189,7 @@ void TestResultOutboxRetriesFromFirstUnsentPublication() {
                                                     { vision::VisionPublicationChannel::kEvent, position },
                                                     { vision::VisionPublicationChannel::kError, barcode },
                                                 }));
+    assert(outbox.PendingWorkId() == kWorkId);
 
     int event_attempts = 0;
     int error_attempts = 0;
@@ -207,6 +208,7 @@ void TestResultOutboxRetriesFromFirstUnsentPublication() {
 
     assert(outbox.Flush(event_publisher, error_publisher));
     assert(!outbox.HasPending());
+    assert(!outbox.PendingWorkId().has_value());
     assert(event_attempts == 1);
     assert(error_attempts == 2);
 }

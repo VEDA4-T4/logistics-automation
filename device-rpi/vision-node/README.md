@@ -170,6 +170,61 @@ comparison PNGs were created:
 Pass `--fsrcnn-model /opt/logistics/models/FSRCNN_x2.pb` to include the learned SR panel. Use `--skip-build` when the
 benchmark has already been built in `build-vision-benchmark`.
 
+For a Pi 4 reproduction, this single command builds, runs the preview checks, records the warm-up-excluded metrics, and
+writes the SR comparison images, CSV, and summary under `/tmp/vision-sr-pi4`:
+
+```sh
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images \
+  --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-pi4 \
+  --iterations 5 --warmup 5 --label baseline
+```
+
+The CSV reports accuracy, p50/p95/p99 total latency, FPS, CPU, average/peak RSS, and per-stage timings. The summary keeps
+the comparison metrics and selects the highest-accuracy profile, breaking ties by p95 latency.
+For a long-run FPS/RSS check, use a production-sized capture set and keep each profile active for at least 30 minutes:
+
+```sh
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images \
+  --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-soak \
+  --profile full_bicubic_sr_x2 --iterations 5 --warmup 20 \
+  --duration-seconds 1800 --label soak
+```
+
+Compare `first_half_fps`, `last_half_fps`, `throughput_change_percent`, and `rss_growth_kb` in the soak CSV before
+accepting the profile.
+
+For the transport-load comparison, first run the recommended profile without the live node:
+
+```sh
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-operational --profile full_bicubic_sr_x2 --label baseline
+```
+
+Then start the configured node in another terminal, keep the central server, broker, and upload endpoint running, and
+feed products through the camera so MQTT results and HTTP images are actually sent:
+
+```sh
+./logistics_vision_node --headless --config runtime/vision-node/vision-node.ini \
+  2>&1 | tee /tmp/vision-operational.log
+```
+
+```sh
+vision_pid="$(pgrep -n logistics_vision_node)"
+./device-rpi/vision-node/benchmark/run_visual_comparison.sh \
+  --dataset /data/vision-benchmark/images --manifest /data/vision-benchmark/manifest.csv \
+  --output-dir /tmp/vision-sr-operational --profile full_bicubic_sr_x2 \
+  --label operational --load-pid "${vision_pid}" --load-log /tmp/vision-operational.log
+```
+
+The operational run succeeds only when the real node stays alive and the measurement window adds both an MQTT result
+publication and a confirmed HTTP image upload to the log. Compare `benchmark-baseline.csv` with
+`benchmark-operational.csv` and retain the separate `visuals-baseline/` and `visuals-operational/` directories.
+
 To include learned SR:
 
 ```sh
