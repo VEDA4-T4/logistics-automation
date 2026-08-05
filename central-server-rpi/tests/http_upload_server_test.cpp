@@ -53,7 +53,7 @@ int main() {
     assert(connect(socket_fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0);
 
     const std::string request =
-        "POST /v1/uploads/images HTTP/1.1\r\n"
+        "POST /api/v1/uploads/images HTTP/1.1\r\n"
         "Host: 127.0.0.1\r\n"
         "Authorization: Bearer invalid-token\r\n"
         "Content-Type: multipart/form-data; boundary=test\r\n"
