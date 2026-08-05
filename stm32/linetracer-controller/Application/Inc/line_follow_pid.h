@@ -4,17 +4,19 @@
 #include <stdint.h>
 
 #include "app_timing.h"
+#include "motor_control_config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define LINE_FOLLOW_PID_UPDATE_PERIOD_MS 10U
-#define LINE_FOLLOW_PID_BASE_PWM 300U
+#define LINE_FOLLOW_PID_LEFT_BASE_PWM MOTOR_CONTROL_LEFT_BASE_PWM
+#define LINE_FOLLOW_PID_RIGHT_BASE_PWM MOTOR_CONTROL_RIGHT_BASE_PWM
 #define LINE_FOLLOW_PID_KP 0.25F
 #define LINE_FOLLOW_PID_KI 0.0F
 #define LINE_FOLLOW_PID_KD 0.05F
-#define LINE_FOLLOW_PID_CORRECTION_LIMIT 250.0F
+#define LINE_FOLLOW_PID_CORRECTION_LIMIT 150.0F
 #define LINE_FOLLOW_PID_INTEGRAL_LIMIT 250.0F
 
 #if (APP_TIMING_CONTROL_PERIOD_MS != LINE_FOLLOW_PID_UPDATE_PERIOD_MS)
@@ -28,11 +30,9 @@ typedef struct {
     uint8_t initialized;
 } line_follow_pid_t;
 
-void LineFollowPid_Init(line_follow_pid_t *pid);
-void LineFollowPid_Reset(line_follow_pid_t *pid);
-int16_t LineFollowPid_Update(line_follow_pid_t *pid,
-                             int16_t error,
-                             uint32_t now_ms);
+void LineFollowPid_Init(line_follow_pid_t* pid);
+void LineFollowPid_Reset(line_follow_pid_t* pid);
+int16_t LineFollowPid_Update(line_follow_pid_t* pid, int16_t error, uint32_t now_ms);
 
 #ifdef __cplusplus
 }

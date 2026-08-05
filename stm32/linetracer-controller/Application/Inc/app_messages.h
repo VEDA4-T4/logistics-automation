@@ -87,6 +87,7 @@ typedef struct {
     uint32_t marker_detected_at_ms;
     uint16_t fsr_raw;
     uint16_t line_left_raw;
+    uint16_t line_center_raw;
     uint16_t line_right_raw;
     int16_t line_error;
     uint16_t ultrasonic_front_mm;
@@ -97,8 +98,10 @@ typedef struct {
     uart_linetracer_load_state_t load_state;
     app_marker_code_t marker_code;
     uint8_t line_left;
+    uint8_t line_center;
     uint8_t line_right;
     uint8_t marker_count;
+    uint8_t marker_active;
 } app_sensor_snapshot_t;
 
 typedef enum {

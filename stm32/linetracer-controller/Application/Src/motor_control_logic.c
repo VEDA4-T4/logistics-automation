@@ -5,20 +5,29 @@
 #include "motor_control_config.h"
 
 static void MotorControlLogic_MakeForward(int32_t left_pwm, int32_t right_pwm, motor_output_t* output) {
-    output->left_pwm = MotorControlLogic_ClampPwm(left_pwm + MOTOR_CONTROL_LEFT_TRIM);
-    output->right_pwm = MotorControlLogic_ClampPwm(right_pwm + MOTOR_CONTROL_RIGHT_TRIM);
+    /* A zero wheel command must remain stopped even when a trim is configured. */
+    output->left_pwm = (left_pwm > 0) ? MotorControlLogic_ClampPwm(left_pwm + MOTOR_CONTROL_LEFT_TRIM) : 0U;
+    output->right_pwm = (right_pwm > 0) ? MotorControlLogic_ClampPwm(right_pwm + MOTOR_CONTROL_RIGHT_TRIM) : 0U;
     output->left_direction = MOTOR_DIRECTION_FORWARD;
     output->right_direction = MOTOR_DIRECTION_FORWARD;
     output->standby = 1U;
 }
 
 static void MotorControlLogic_MakePivot(motor_direction_t left_direction, motor_direction_t right_direction,
-                                        motor_output_t* output) {
-    output->left_pwm = MotorControlLogic_ClampPwm(MOTOR_CONTROL_PIVOT_PWM + MOTOR_CONTROL_LEFT_TRIM);
-    output->right_pwm = MotorControlLogic_ClampPwm(MOTOR_CONTROL_PIVOT_PWM + MOTOR_CONTROL_RIGHT_TRIM);
+                                        uint16_t left_pwm, uint16_t right_pwm, motor_output_t* output) {
+    output->left_pwm = MotorControlLogic_ClampPwm((int32_t)left_pwm + MOTOR_CONTROL_LEFT_TRIM);
+    output->right_pwm = MotorControlLogic_ClampPwm((int32_t)right_pwm + MOTOR_CONTROL_RIGHT_TRIM);
     output->left_direction = left_direction;
     output->right_direction = right_direction;
     output->standby = 1U;
+}
+
+static int32_t MotorControlLogic_ClampTrackingPwm(int32_t pwm) {
+    if (pwm < (int32_t)MOTOR_CONTROL_TRACKING_MIN_PWM) {
+        return (int32_t)MOTOR_CONTROL_TRACKING_MIN_PWM;
+    }
+
+    return pwm;
 }
 
 uint16_t MotorControlLogic_ClampPwm(int32_t pwm) {
@@ -45,14 +54,23 @@ void MotorControlLogic_MakeSafeStop(motor_output_t* output) {
     output->standby = 0U;
 }
 
-uint8_t MotorControlLogic_ComputeDifferentialForward(uint16_t base_pwm, int16_t correction,
-                                                     motor_output_t* output) {
+uint8_t MotorControlLogic_ComputeDifferentialForward(uint16_t left_base_pwm, uint16_t right_base_pwm,
+                                                     int16_t correction, motor_output_t* output) {
     if (output == NULL) {
         return 0U;
     }
 
-    MotorControlLogic_MakeForward((int32_t)base_pwm - (int32_t)correction,
-                                  (int32_t)base_pwm + (int32_t)correction, output);
+    /* Slow the detected-line side and give the opposite wheel a small, bounded boost. */
+    if (correction > 0) {
+        MotorControlLogic_MakeForward(MotorControlLogic_ClampTrackingPwm((int32_t)left_base_pwm - (int32_t)correction),
+                                      (int32_t)right_base_pwm + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM, output);
+    } else if (correction < 0) {
+        MotorControlLogic_MakeForward((int32_t)left_base_pwm + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM,
+                                      MotorControlLogic_ClampTrackingPwm((int32_t)right_base_pwm + (int32_t)correction),
+                                      output);
+    } else {
+        MotorControlLogic_MakeForward(left_base_pwm, right_base_pwm, output);
+    }
     return 1U;
 }
 
@@ -63,18 +81,18 @@ uint8_t MotorControlLogic_ComputeLineFollow(linetracer_line_state_t line_state, 
 
     switch (line_state) {
         case LINETRACER_LINE_CENTERED:
-            MotorControlLogic_MakeForward(MOTOR_CONTROL_BASE_PWM, MOTOR_CONTROL_BASE_PWM, output);
+            MotorControlLogic_MakeForward(MOTOR_CONTROL_LEFT_BASE_PWM, MOTOR_CONTROL_RIGHT_BASE_PWM, output);
             return 1U;
 
         case LINETRACER_LINE_LEFT_ONLY:
-            MotorControlLogic_MakeForward(MOTOR_CONTROL_BASE_PWM - MOTOR_CONTROL_CORRECTION_PWM,
-                                          MOTOR_CONTROL_BASE_PWM + MOTOR_CONTROL_CORRECTION_PWM, output);
-            return 1U;
+            return MotorControlLogic_ComputeDifferentialForward(
+                MOTOR_CONTROL_LEFT_BASE_PWM, MOTOR_CONTROL_RIGHT_BASE_PWM,
+                (int16_t)MOTOR_CONTROL_LINE_RECOVERY_CORRECTION_PWM, output);
 
         case LINETRACER_LINE_RIGHT_ONLY:
-            MotorControlLogic_MakeForward(MOTOR_CONTROL_BASE_PWM + MOTOR_CONTROL_CORRECTION_PWM,
-                                          MOTOR_CONTROL_BASE_PWM - MOTOR_CONTROL_CORRECTION_PWM, output);
-            return 1U;
+            return MotorControlLogic_ComputeDifferentialForward(
+                MOTOR_CONTROL_LEFT_BASE_PWM, MOTOR_CONTROL_RIGHT_BASE_PWM,
+                -(int16_t)MOTOR_CONTROL_LINE_RECOVERY_CORRECTION_PWM, output);
 
         case LINETRACER_LINE_UNKNOWN:
         case LINETRACER_LINE_WHITE_GAP:
@@ -91,19 +109,26 @@ uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output
 
     switch (action) {
         case ROUTE_ACTION_GO_STRAIGHT:
-            MotorControlLogic_MakeForward(MOTOR_CONTROL_BASE_PWM, MOTOR_CONTROL_BASE_PWM, output);
+            MotorControlLogic_MakeForward(MOTOR_CONTROL_LEFT_BASE_PWM, MOTOR_CONTROL_RIGHT_BASE_PWM, output);
             return 1U;
 
         case ROUTE_ACTION_TURN_LEFT:
-            MotorControlLogic_MakePivot(MOTOR_DIRECTION_REVERSE, MOTOR_DIRECTION_FORWARD, output);
+            MotorControlLogic_MakePivot(
+                MOTOR_DIRECTION_REVERSE,
+                MOTOR_DIRECTION_FORWARD,
+                MOTOR_CONTROL_LEFT_PIVOT_PWM,
+                MOTOR_CONTROL_LEFT_TURN_RIGHT_PWM,
+                output);
             return 1U;
 
         case ROUTE_ACTION_TURN_RIGHT:
-            MotorControlLogic_MakePivot(MOTOR_DIRECTION_FORWARD, MOTOR_DIRECTION_REVERSE, output);
+            MotorControlLogic_MakePivot(MOTOR_DIRECTION_FORWARD, MOTOR_DIRECTION_REVERSE, MOTOR_CONTROL_LEFT_PIVOT_PWM,
+                                        MOTOR_CONTROL_RIGHT_PIVOT_PWM, output);
             return 1U;
 
         case ROUTE_ACTION_TURN_AROUND:
-            MotorControlLogic_MakePivot(MOTOR_DIRECTION_FORWARD, MOTOR_DIRECTION_REVERSE, output);
+            MotorControlLogic_MakePivot(MOTOR_DIRECTION_FORWARD, MOTOR_DIRECTION_REVERSE, MOTOR_CONTROL_LEFT_UTURN_PWM,
+                                        MOTOR_CONTROL_RIGHT_UTURN_PWM, output);
             return 1U;
 
         case ROUTE_ACTION_STOP_AT_PICKUP:

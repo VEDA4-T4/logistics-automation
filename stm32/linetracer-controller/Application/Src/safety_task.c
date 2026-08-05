@@ -408,6 +408,10 @@ static void SafetyTask_HandleReset(const app_safety_event_t* request) {
 static uint8_t SafetyTask_LineLossApplies(void) {
     app_control_snapshot_t snapshot;
 
+    if (ControlTask_IsTurning()) {
+        return 0U;
+    }
+
     if (!ControlTask_GetLatest(&snapshot)) {
         return 0U;
     }
@@ -452,8 +456,7 @@ static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
 static void SafetyTask_ReconcileLineLoss(uint32_t now_ms) {
     app_safety_event_t event = { 0 };
 
-    if (s_line_lost_sensor_active == 0U ||
-        (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) != 0U ||
+    if (s_line_lost_sensor_active == 0U || (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) != 0U ||
         SafetyTask_LineLossApplies() == 0U) {
         return;
     }

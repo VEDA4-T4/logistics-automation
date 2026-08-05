@@ -21,6 +21,33 @@ endif()
 
 add_test(NAME sensor_logic_test COMMAND sensor_logic_test)
 
+add_executable(sensor_logic_route_test_mode_test
+    sensor_logic_test.cpp
+    ../../Application/Src/sensor_logic.c
+)
+
+target_include_directories(sensor_logic_route_test_mode_test PRIVATE
+    ../../Application/Inc
+    ../../../../shared/include
+)
+
+target_compile_definitions(sensor_logic_route_test_mode_test PRIVATE
+    LINETRACER_ROUTE_TEST_MODE=1
+)
+
+if(MSVC)
+    target_compile_options(sensor_logic_route_test_mode_test PRIVATE /utf-8 /W4 /WX /wd4310)
+else()
+    target_compile_options(sensor_logic_route_test_mode_test PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+    )
+endif()
+
+add_test(NAME sensor_logic_route_test_mode_test COMMAND sensor_logic_route_test_mode_test)
+
 add_executable(
     line_follow_pid_test
     line_follow_pid_test.cpp

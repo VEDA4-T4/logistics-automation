@@ -35,19 +35,21 @@ void TestDerivativeAndPeriodScaling() {
 
 void TestCorrectionClamp() {
     line_follow_pid_t pid{};
+    constexpr auto kCorrectionLimit = static_cast<int16_t>(LINE_FOLLOW_PID_CORRECTION_LIMIT);
 
     LineFollowPid_Init(&pid);
-    assert(LineFollowPid_Update(&pid, 1000, 100U) == 250);
-    assert(LineFollowPid_Update(&pid, -1000, 110U) == -250);
+    assert(LineFollowPid_Update(&pid, 1000, 100U) == kCorrectionLimit);
+    assert(LineFollowPid_Update(&pid, -1000, 110U) == -kCorrectionLimit);
     assert(pid.integral <= LINE_FOLLOW_PID_INTEGRAL_LIMIT);
     assert(pid.integral >= -LINE_FOLLOW_PID_INTEGRAL_LIMIT);
 }
 
 void TestResetClearsDerivativeHistory() {
     line_follow_pid_t pid{};
+    constexpr auto kCorrectionLimit = static_cast<int16_t>(LINE_FOLLOW_PID_CORRECTION_LIMIT);
 
     LineFollowPid_Init(&pid);
-    assert(LineFollowPid_Update(&pid, 1000, 100U) == 250);
+    assert(LineFollowPid_Update(&pid, 1000, 100U) == kCorrectionLimit);
 
     LineFollowPid_Reset(&pid);
     assert(pid.initialized == 0U);
