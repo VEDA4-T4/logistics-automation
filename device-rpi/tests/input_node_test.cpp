@@ -165,6 +165,58 @@ void TestControllerStatusKeepAliveHasNoCommandResponse() {
     assert(status != nullptr && status->current_state == "STOPPED");
 }
 
+// The keepalive runs every two seconds purely to prove the UART answers. Without
+// change detection each reply published an identical DEVICE_STATUS, so the bus
+// carried one redundant status every two seconds for as long as the node idled.
+void TestControllerStatusKeepAliveReportsOnlyOnChange() {
+    Fixture fixture;
+    std::uint8_t conveyor_state = UART_INPUT_CONVEYOR_STOPPED;
+    fixture.backend->responder = [&conveyor_state](const uart_frame_t& request) {
+        return std::vector<uart_frame_t>{ MakeStatusResponse(request.sequence, conveyor_state, 50U) };
+    };
+
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    assert(fixture.reports.size() == 1U);
+
+    // Same state on the next three polls: nothing new to say.
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    assert(fixture.reports.size() == 1U);
+
+    conveyor_state = UART_INPUT_CONVEYOR_RUNNING;
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    assert(fixture.reports.size() == 2U);
+    const auto* running = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
+    assert(running != nullptr && running->current_state == "RUNNING");
+
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    assert(fixture.reports.size() == 2U);
+}
+
+// An MQTT status request is an answer owed to the server, so it always reports
+// even when the state is unchanged, and it refreshes what the keepalive knows.
+void TestStatusRequestAlwaysReportsAndSyncsKeepAlive() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t& request) {
+        return std::vector<uart_frame_t>{ MakeStatusResponse(request.sequence, UART_INPUT_CONVEYOR_STOPPED, 50U) };
+    };
+
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    const std::size_t after_keepalive = fixture.reports.size();
+
+    assert(fixture.node
+               ->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStatusRequest, std::string(kDeviceId)))
+               .Succeeded());
+    // Status report plus the command response the server is waiting on.
+    assert(fixture.reports.size() > after_keepalive);
+    const std::size_t after_request = fixture.reports.size();
+
+    // The request refreshed the record, so the next keepalive stays quiet.
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    assert(fixture.reports.size() == after_request);
+}
+
 void TestReset() {
     Fixture fixture;
     fixture.backend->responder = AlwaysSucceed();
@@ -647,6 +699,8 @@ int main() {
     TestStop();
     TestStatusRequest();
     TestControllerStatusKeepAliveHasNoCommandResponse();
+    TestControllerStatusKeepAliveReportsOnlyOnChange();
+    TestStatusRequestAlwaysReportsAndSyncsKeepAlive();
     TestReset();
     TestRecoveryReleasesLatchFireAndForget();
     TestControllerFailure();

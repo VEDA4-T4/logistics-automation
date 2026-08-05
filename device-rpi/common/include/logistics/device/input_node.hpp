@@ -88,6 +88,11 @@ private:
     [[nodiscard]] InputCommandResult ExecuteAsync(InputCommandResult result, std::uint8_t command,
                                                   std::span<const std::uint8_t> payload);
     void EmitConveyorStatus(const uart_frame_t& response) const;
+    // Records the conveyor state carried by a GET_STATUS reply and reports whether
+    // it differs from the previous one. The 2 s UART keepalive uses this to stay
+    // silent while nothing moves; an MQTT status request calls it only to keep the
+    // record current, because the server asked and must always get an answer.
+    [[nodiscard]] bool RecordConveyorState(const uart_frame_t& response) noexcept;
     void EmitCommandResponse(const InputCommandResult& result, std::string message) const;
     void EmitCommandResponse(std::string request_id, contracts::mqtt::ControlCommand command,
                              contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
@@ -125,6 +130,7 @@ private:
     InputUartSession& uart_session_;
     InputReportHandler report_handler_;
     std::optional<std::uint8_t> last_sensor_state_;
+    std::optional<std::uint8_t> last_conveyor_state_;
     std::optional<std::uint32_t> last_controller_event_signature_;
     std::optional<HeartbeatState> last_heartbeat_state_;
     PendingSafetyCommand pending_safety_{};
