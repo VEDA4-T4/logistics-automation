@@ -543,10 +543,10 @@ void TestReturnHomeAndCycleCompletePublishCompletion() {
 
     assert(!fixture.node->HasActiveCycle());
     assert(fixture.reports.size() == 2U);
-    assert(fixture.reports[0].channel == SortingReportChannel::kEvent);
-    const auto& completed = ReportPayload<mqtt::WorkCompletedPayload>(fixture.reports[0]);
-    assert(completed.work_id == kWorkId);
-    assert(completed.result == "SUCCESS");
+    assert(fixture.reports[0].channel == SortingReportChannel::kStatus);
+    const auto& completed = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[0]);
+    assert(completed.current_state == "CYCLE_COMPLETE");
+    assert(completed.job_id == std::optional<std::string>(kWorkId));
     const auto& idle = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
     assert(idle.current_state == "IDLE");
     assert(!idle.job_id.has_value());
