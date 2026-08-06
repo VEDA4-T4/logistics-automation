@@ -505,7 +505,15 @@ int Application::Run(int argc, char* argv[]) {
     };
     bool recalibration_notifications_pending = !work_invalidations.empty();
 
-    HttpUploadServer upload_server(database, server_config.http);
+    Database upload_database;
+    database_status = upload_database.Open(server_config.database);
+    if (!database_status.ok()) {
+        mqtt_client.Stop();
+        std::cerr << "[server][ERROR] HTTP upload database open failed: " << database_status.message << '\n';
+        return 7;
+    }
+
+    HttpUploadServer upload_server(upload_database, server_config.http);
     database_status = upload_server.Start();
     if (!database_status.ok()) {
         mqtt_client.Stop();
@@ -543,6 +551,12 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_client.Stop();
 
     bool shutdown_ok = persist_process_state();
+    database_status = upload_database.Close();
+    if (!database_status.ok()) {
+        std::cerr << "[server][ERROR] HTTP upload database close failed during shutdown: " << database_status.message
+                  << '\n';
+        shutdown_ok = false;
+    }
     database_status = database.Checkpoint();
     if (!database_status.ok()) {
         std::cerr << "[server][ERROR] database checkpoint failed during shutdown: " << database_status.message << '\n';
