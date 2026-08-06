@@ -9,8 +9,8 @@
 namespace {
 
 namespace mqtt = logistics::contracts::mqtt;
-using logistics::device::MakeTerminalCommandResponse;
 using logistics::device::MakeRoomInBoundedQueue;
+using logistics::device::MakeTerminalCommandResponse;
 using logistics::device::NodeCommandQueue;
 
 mqtt::MqttMessage Control(const std::string& message_id, const mqtt::ControlCommand command) {

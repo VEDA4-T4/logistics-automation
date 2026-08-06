@@ -556,8 +556,8 @@ int main(const int argc, char* argv[]) {
                         logistics::vision::VisionPublicationChannel::kError,
                         MakeVisionError(
                             device_id,
-                            logistics::device::MakeMessageId(
-                                device_id, mqtt_session_id, mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                            logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                             mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
                             completion.captured_at, "ERR-VISION-IMAGE-ENCODING-FAILED", "VISION_ERROR",
                             completion.result.error.empty() ? "failed to encode the captured frame as JPEG"
                                                             : completion.result.error,
@@ -571,8 +571,8 @@ int main(const int argc, char* argv[]) {
                         logistics::vision::VisionPublicationChannel::kEvent,
                         logistics::vision::MakeBarcodeDetectedMessage(
                             device_id, completion.work,
-                            logistics::device::MakeMessageId(
-                                device_id, mqtt_session_id, mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                            logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                             mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
                             completion.timestamp),
                     });
                     completion.publications.push_back({
@@ -580,8 +580,8 @@ int main(const int argc, char* argv[]) {
                         logistics::vision::MakeProductImageMessage(
                             device_id, completion.work.work_id, completion.result.upload_id, completion.result.path,
                             completion.result.checksum,
-                            logistics::device::MakeMessageId(
-                                device_id, mqtt_session_id, mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                            logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                             mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
                             completion.captured_at),
                     });
                 } else {
@@ -590,8 +590,8 @@ int main(const int argc, char* argv[]) {
                         logistics::vision::VisionPublicationChannel::kError,
                         MakeVisionError(
                             device_id,
-                            logistics::device::MakeMessageId(
-                                device_id, mqtt_session_id, mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                            logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                             mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
                             completion.captured_at, "ERR-VISION-IMAGE-UPLOAD-FAILED", "UPLOAD_ERROR",
                             completion.result.error, completion.work.work_id),
                     });
@@ -800,8 +800,8 @@ int main(const int argc, char* argv[]) {
                             };
                             try {
                                 std::vector<std::uint8_t> jpeg;
-                                completion.encoded = cv::imencode(
-                                    ".jpg", frame, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 });
+                                completion.encoded =
+                                    cv::imencode(".jpg", frame, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 });
                                 if (completion.encoded) {
                                     completion.result = uploader->Upload(
                                         device_id, completion.work.work_id, upload_message_id, captured_at,

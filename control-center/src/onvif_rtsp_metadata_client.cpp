@@ -57,9 +57,8 @@ OnvifRtspMetadataClient::OnvifRtspMetadataClient(QObject* parent)
 
     connect(reconnect_timer_, &QTimer::timeout, this, &OnvifRtspMetadataClient::connectToCamera);
     connect(keep_alive_timer_, &QTimer::timeout, this, &OnvifRtspMetadataClient::sendKeepAlive);
-    connect(response_timeout_timer_, &QTimer::timeout, this, [this]() {
-        scheduleReconnect(QStringLiteral("ONVIF RTSP response deadline exceeded"));
-    });
+    connect(response_timeout_timer_, &QTimer::timeout, this,
+            [this]() { scheduleReconnect(QStringLiteral("ONVIF RTSP response deadline exceeded")); });
     connect(socket_, &QTcpSocket::connected, this, [this]() {
         emit diagnosticMessage(QStringLiteral("TCP 연결 성공 · DESCRIBE 요청"));
         sendDescribe();

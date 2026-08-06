@@ -1,11 +1,11 @@
-#include "logistics/control_center/onvif_rtsp_metadata_client.hpp"
-#include "logistics/control_center/rtsp_h264_stream.hpp"
-
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
+
+#include "logistics/control_center/onvif_rtsp_metadata_client.hpp"
+#include "logistics/control_center/rtsp_h264_stream.hpp"
 
 namespace {
 
@@ -40,11 +40,10 @@ bool RejectsIncompleteHeaderByDeadline() {
     logistics::control_center::RtspH264Stream client;
     client.setNetworkTimeout(150);
     bool rejected = false;
-    QObject::connect(&client, &logistics::control_center::RtspH264Stream::streamError, &loop,
-                     [&](const QString&) {
-                         rejected = true;
-                         loop.quit();
-                     });
+    QObject::connect(&client, &logistics::control_center::RtspH264Stream::streamError, &loop, [&](const QString&) {
+        rejected = true;
+        loop.quit();
+    });
     QTimer::singleShot(1000, &loop, &QEventLoop::quit);
     client.start(LocalRtspUrl(server));
     loop.exec();

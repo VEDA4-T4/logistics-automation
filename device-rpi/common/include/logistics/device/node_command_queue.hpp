@@ -16,8 +16,7 @@
 namespace logistics::device {
 
 template <typename Value, typename Predicate>
-[[nodiscard]] bool MakeRoomInBoundedQueue(std::deque<Value>& queue, const std::size_t capacity,
-                                          Predicate can_replace) {
+[[nodiscard]] bool MakeRoomInBoundedQueue(std::deque<Value>& queue, const std::size_t capacity, Predicate can_replace) {
     if (queue.size() < capacity) {
         return true;
     }

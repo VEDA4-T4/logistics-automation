@@ -522,8 +522,8 @@ int Application::Run(int argc, char* argv[]) {
         return 7;
     }
     RetentionService scheduled_retention(maintenance_database, server_config.storage);
-    auto next_retention_cleanup = std::chrono::steady_clock::now() +
-                                  std::chrono::hours(server_config.storage.cleanup_interval_hours);
+    auto next_retention_cleanup =
+        std::chrono::steady_clock::now() + std::chrono::hours(server_config.storage.cleanup_interval_hours);
 
     HttpUploadServer upload_server(upload_database, server_config.http);
     database_status = upload_server.Start();
@@ -546,8 +546,7 @@ int Application::Run(int argc, char* argv[]) {
             next_retention_cleanup = loop_now + std::chrono::hours(server_config.storage.cleanup_interval_hours);
             const auto retention_status = scheduled_retention.RunOnce(CurrentUnixTimeMilliseconds());
             if (!retention_status.ok()) {
-                std::cerr << "[server][ERROR] scheduled retention cleanup failed: " << retention_status.message
-                          << '\n';
+                std::cerr << "[server][ERROR] scheduled retention cleanup failed: " << retention_status.message << '\n';
             }
         }
         if (recalibration_notifications_pending && mqtt_client.IsConnected()) {
