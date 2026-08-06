@@ -8,10 +8,16 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QLabel>
 #include <QMediaPlayer>
 #include <QMouseEvent>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPlaybackOptions>
 #include <QSettings>
 #include <QSplitter>
@@ -19,10 +25,13 @@
 #include <QStatusBar>
 #include <QStringList>
 #include <QTimer>
+#include <QTimeZone>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QVBoxLayout>
 #include <QVideoSink>
 #include <QWidget>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -62,6 +71,9 @@ constexpr int kDefaultChannelCount = 4;
 constexpr int kMaximumChannelCount = 16;
 constexpr int kDefaultVideoGridMinimumWidth = 480;
 constexpr int kDefaultMqttPort = 1883;
+constexpr int kOperationalLogBatchIntervalMs = 100;
+constexpr qsizetype kOperationalLogBatchSize = 200;
+constexpr int kOperationalLogHistoryPageSize = 500;
 
 struct ControlCenterConfig {
     QString path;
@@ -74,6 +86,7 @@ struct ControlCenterConfig {
     int mqtt_reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     int mqtt_keep_alive_seconds{ 30 };
     QUrl image_base_url{ QStringLiteral("http://127.0.0.1:8080/") };
+    QString history_bearer_token;
     QString control_target_device_id{ "SYSTEM" };
     QList<ProcessDefinition> process_definitions{ DefaultProcessDefinitions() };
     int channel_count{ kDefaultChannelCount };
@@ -280,6 +293,7 @@ ControlCenterConfig loadControlCenterConfig() {
         }
         config.image_base_url = image_base_url;
     }
+    config.history_bearer_token = settings.value(QStringLiteral("http/bearer_token")).toString().trimmed();
 
     bool channel_count_is_valid = false;
     const auto channel_count =
@@ -446,6 +460,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     onvif_metadata_enabled_ = config.onvif_metadata_enabled;
     onvif_log_payload_ = config.onvif_log_payload;
     metadata_stale_timeout_ms_ = config.metadata_stale_timeout_ms;
+    history_base_url_ = config.image_base_url;
+    history_bearer_token_ = config.history_bearer_token;
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
     players_.resize(channel_count_);
@@ -518,6 +534,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_splitter->setHandleWidth(7);
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_splitter);
     operational_log_panel_ = new OperationalLogPanel(detail_splitter);
+    operational_log_panel_->setEntryPageProvider([this](qsizetype offset, qsizetype limit) {
+        return operational_log_state_.entries().mid(offset, limit);
+    });
+    history_network_manager_ = new QNetworkAccessManager(this);
+    if (!history_bearer_token_.isEmpty()) {
+        operational_log_panel_->setOlderEntriesRequestHandler([this]() { requestOlderOperationalLogs(); });
+    }
     detail_splitter->addWidget(product_result_panel_);
     detail_splitter->addWidget(operational_log_panel_);
     detail_splitter->setStretchFactor(0, 2);
@@ -557,6 +580,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         refreshOperationsPresentation();
     });
     node_status_timer_->start();
+    operational_log_flush_timer_ = new QTimer(this);
+    operational_log_flush_timer_->setObjectName(QStringLiteral("operationalLogFlushTimer"));
+    operational_log_flush_timer_->setInterval(kOperationalLogBatchIntervalMs);
+    connect(operational_log_flush_timer_, &QTimer::timeout, this, &MainWindow::flushPendingOperationalLogs);
     connect(process_control_panel_, &ProcessControlPanel::commandRequested, this, &MainWindow::sendControlCommand);
     connect(operations_dashboard_panel_, &OperationsDashboardPanel::controlTargetSelected, this,
             [this](const QString& target_device_id, const QString& display_name) {
@@ -568,13 +595,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             });
     operational_log_panel_->setAcknowledgeHandler([this](const QString& id) {
         if (operational_log_state_.acknowledge(id)) {
-            operational_log_panel_->setEntryAcknowledged(id);
+            operational_log_panel_->setEntryAcknowledged(id, operational_log_state_.activeAlertCount());
         }
     });
     operational_log_panel_->setAcknowledgeAllHandler([this]() {
         const auto count = operational_log_state_.acknowledgeAllAlerts();
         if (count > 0) {
-            refreshOperationalLogPanel();
+            operational_log_panel_->setAllAlertsAcknowledged(operational_log_state_.activeAlertCount());
             statusBar()->showMessage(QStringLiteral("오류 로그 %1건을 확인 처리했습니다.").arg(count), 3000);
         }
     });
@@ -946,7 +973,162 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         });
     }
 
+    if (!history_bearer_token_.isEmpty()) {
+        requestOlderOperationalLogs();
+    }
     mqtt_client_->start();
+}
+
+namespace {
+
+OperationalLogSeverity HistorySeverity(const QString& severity, const QString& state) {
+    const auto normalized = severity.trimmed().toUpper();
+    if (normalized == QStringLiteral("CRITICAL"))
+        return OperationalLogSeverity::Critical;
+    if (normalized == QStringLiteral("ERROR"))
+        return OperationalLogSeverity::Error;
+    if (normalized == QStringLiteral("WARNING"))
+        return OperationalLogSeverity::Warning;
+    return state.trimmed().compare(QStringLiteral("REJECTED"), Qt::CaseInsensitive) == 0
+               ? OperationalLogSeverity::Warning
+               : OperationalLogSeverity::Info;
+}
+
+QString HistoryCategory(const QString& event_type) {
+    const auto normalized = event_type.trimmed().toUpper();
+    if (normalized == QStringLiteral("ERROR_OCCURRED"))
+        return QStringLiteral("장치 오류");
+    if (normalized == QStringLiteral("EMERGENCY_STOP"))
+        return QStringLiteral("비상정지");
+    if (normalized == QStringLiteral("DEVICE_STATUS"))
+        return QStringLiteral("장치 상태");
+    if (normalized == QStringLiteral("COMMAND_RESPONSE"))
+        return QStringLiteral("관제 명령");
+    if (normalized.contains(QStringLiteral("WORK")))
+        return QStringLiteral("작업");
+    return QStringLiteral("서버 이력");
+}
+
+std::optional<OperationalLogEntry> ParseHistoryEntry(const QJsonValue& value) {
+    if (!value.isObject()) {
+        return std::nullopt;
+    }
+    const auto object = value.toObject();
+    const auto history_id = object.value(QStringLiteral("historyId")).toString().trimmed();
+    const auto occurred_at_value = object.value(QStringLiteral("occurredAtMs"));
+    if (history_id.isEmpty() || !occurred_at_value.isDouble() || occurred_at_value.toDouble() < 0) {
+        return std::nullopt;
+    }
+
+    const auto event_type = object.value(QStringLiteral("eventType")).toString().trimmed();
+    const auto state = object.value(QStringLiteral("state")).toString().trimmed();
+    const auto server_message = object.value(QStringLiteral("message")).toString().trimmed();
+    auto message_id = object.value(QStringLiteral("messageId")).toString().trimmed();
+    if (message_id.isEmpty()) {
+        message_id = QStringLiteral("HISTORY-%1").arg(history_id);
+    }
+    const auto message = !server_message.isEmpty()
+                             ? server_message
+                             : (!state.isEmpty() ? QStringLiteral("%1 · 상태 %2").arg(event_type, state)
+                                                 : QStringLiteral("%1 이력").arg(event_type));
+    return OperationalLogEntry{
+        .id = message_id,
+        .occurred_at =
+            QDateTime::fromMSecsSinceEpoch(static_cast<qint64>(occurred_at_value.toDouble()), QTimeZone::UTC),
+        .severity = HistorySeverity(object.value(QStringLiteral("severity")).toString(), state),
+        .device_id = object.value(QStringLiteral("sourceId")).toString().trimmed(),
+        .category = HistoryCategory(event_type),
+        .code = object.value(QStringLiteral("errorCode")).toString().trimmed().isEmpty()
+                    ? event_type
+                    : object.value(QStringLiteral("errorCode")).toString().trimmed(),
+        .message = message,
+        .topic = QStringLiteral("server-history"),
+        .acknowledged = false,
+    };
+}
+
+}  // namespace
+
+void MainWindow::requestOlderOperationalLogs() {
+    if (history_request_in_flight_ || history_bearer_token_.isEmpty() || history_network_manager_ == nullptr) {
+        return;
+    }
+    QUrl history_url = history_base_url_.resolved(QUrl(QStringLiteral("api/v1/history")));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("limit"), QString::number(kOperationalLogHistoryPageSize));
+    const auto requested_cursor = history_next_cursor_;
+    if (!requested_cursor.isEmpty()) {
+        query.addQueryItem(QStringLiteral("cursor"), requested_cursor);
+    }
+    history_url.setQuery(query);
+
+    QNetworkRequest request(history_url);
+    request.setRawHeader("Accept", "application/json");
+    request.setRawHeader("Authorization", QByteArray("Bearer ") + history_bearer_token_.toUtf8());
+    request.setTransferTimeout(10000);
+    history_request_in_flight_ = true;
+    operational_log_panel_->setOlderEntriesLoading(true);
+    auto* reply = history_network_manager_->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requested_cursor]() {
+        const auto body = reply->readAll();
+        const auto fail = [this, reply](const QString& reason) {
+            history_request_in_flight_ = false;
+            operational_log_panel_->appendOlderEntries({}, true, operational_log_state_.activeAlertCount());
+            statusBar()->showMessage(QStringLiteral("서버 과거 로그를 불러오지 못했습니다: %1").arg(reason), 6000);
+            qWarning().noquote() << QStringLiteral("[HISTORY] %1").arg(reason);
+            reply->deleteLater();
+        };
+        if (reply->error() != QNetworkReply::NoError) {
+            const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            fail(status > 0 ? QStringLiteral("HTTP %1 · %2").arg(status).arg(reply->errorString())
+                            : reply->errorString());
+            return;
+        }
+
+        QJsonParseError parse_error;
+        const auto document = QJsonDocument::fromJson(body, &parse_error);
+        if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+            fail(QStringLiteral("응답 JSON 형식이 올바르지 않습니다."));
+            return;
+        }
+        const auto response = document.object();
+        const auto items_value = response.value(QStringLiteral("items"));
+        const auto next_cursor_value = response.value(QStringLiteral("nextCursor"));
+        if (!items_value.isArray() || (!next_cursor_value.isUndefined() && !next_cursor_value.isNull() &&
+                                      !next_cursor_value.isString())) {
+            fail(QStringLiteral("응답 페이지 형식이 올바르지 않습니다."));
+            return;
+        }
+
+        QList<OperationalLogEntry> entries;
+        const auto items = items_value.toArray();
+        entries.reserve(items.size());
+        for (const auto& item : items) {
+            if (auto entry = ParseHistoryEntry(item)) {
+                entries.append(std::move(*entry));
+            }
+        }
+        if (!items.isEmpty() && entries.isEmpty()) {
+            fail(QStringLiteral("유효한 이력 항목이 없습니다."));
+            return;
+        }
+
+        const auto next_cursor = next_cursor_value.isString() ? next_cursor_value.toString().trimmed() : QString{};
+        if (!next_cursor.isEmpty() && next_cursor == requested_cursor) {
+            fail(QStringLiteral("서버가 동일한 cursor를 반환했습니다."));
+            return;
+        }
+        history_next_cursor_ = next_cursor;
+        history_request_in_flight_ = false;
+        const auto inserted = operational_log_state_.appendOlderEntries(std::move(entries));
+        const bool has_more = !history_next_cursor_.isEmpty();
+        operational_log_panel_->appendOlderEntries(inserted, has_more, operational_log_state_.activeAlertCount());
+        reply->deleteLater();
+
+        if (inserted.isEmpty() && has_more) {
+            QTimer::singleShot(0, this, [this]() { requestOlderOperationalLogs(); });
+        }
+    });
 }
 
 MainWindow::~MainWindow() {
@@ -1054,7 +1236,7 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
                                         individual_command_request_ids_.contains(response_request_id);
     const auto log_update = operational_log_state_.applyEnvelope(topic, envelope);
     if (log_update.applied) {
-        refreshOperationalLogPanel();
+        queueOperationalLogEntry(operational_log_state_.entries().front().id);
     } else if (log_update.handled && !log_update.error.isEmpty()) {
         statusBar()->showMessage(log_update.error, 4000);
     }
@@ -1161,7 +1343,38 @@ void MainWindow::clearPendingCommand() {
 void MainWindow::appendOperationalLog(OperationalLogSeverity severity, const QString& device_id,
                                       const QString& category, const QString& code, const QString& message) {
     operational_log_state_.appendLocal(severity, device_id, category, code, message);
-    refreshOperationalLogPanel();
+    queueOperationalLogEntry(operational_log_state_.entries().front().id);
+}
+
+void MainWindow::queueOperationalLogEntry(const QString& id) {
+    pending_operational_log_ids_.enqueue(id);
+    while (pending_operational_log_ids_.size() > OperationalLogState::kPageSize) {
+        pending_operational_log_ids_.dequeue();
+    }
+    if (!operational_log_flush_timer_->isActive()) {
+        operational_log_flush_timer_->start();
+    }
+}
+
+void MainWindow::flushPendingOperationalLogs() {
+    const auto count = std::min(kOperationalLogBatchSize, pending_operational_log_ids_.size());
+    QList<OperationalLogEntry> entries;
+    entries.reserve(count);
+    const auto& current_entries = operational_log_state_.entries();
+    for (qsizetype index = 0; index < count; ++index) {
+        const auto id = pending_operational_log_ids_.dequeue();
+        const auto entry = std::find_if(current_entries.cbegin(), current_entries.cend(),
+                                        [&id](const OperationalLogEntry& candidate) { return candidate.id == id; });
+        if (entry != current_entries.cend()) {
+            entries.prepend(*entry);
+        }
+    }
+    if (!entries.isEmpty()) {
+        operational_log_panel_->prependEntries(entries, operational_log_state_.activeAlertCount());
+    }
+    if (pending_operational_log_ids_.isEmpty()) {
+        operational_log_flush_timer_->stop();
+    }
 }
 
 void MainWindow::refreshOperationsPresentation() {
@@ -1177,13 +1390,6 @@ void MainWindow::selectControlTarget(const QString& device_id, const QString& di
     operations_dashboard_panel_->setControlTarget(control_target_device_id_);
     factory_top_view_->setSelectedDeviceId(control_target_device_id_);
     process_control_panel_->setControlTarget(control_target_device_id_, display_name);
-}
-
-void MainWindow::refreshOperationalLogPanel() {
-    if (operational_log_panel_ == nullptr) {
-        return;
-    }
-    operational_log_panel_->setState(operational_log_state_);
 }
 
 void MainWindow::setFocusedChannel(std::optional<std::size_t> channel) {

@@ -121,9 +121,12 @@ password=replace-me
 
 [http]
 image_base_url=http://192.168.0.10:8080/
+bearer_token=중앙서버-http-bearer-token과-동일한-값
 ```
 
-`dashboard/*_device_id` 값은 각 노드가 MQTT `sourceId`로 보내는 ID와 정확히 같아야 합니다.
+`http/bearer_token`을 설정하면 운영 로그가 중앙 서버의 과거 이력을 최대 500건씩 추가로 조회합니다. 비워 두면
+실시간 MQTT 로그만 표시합니다. `dashboard/*_device_id` 값은 각 노드가 MQTT `sourceId`로 보내는 ID와
+정확히 같아야 합니다.
 
 ## 환경 변수로 설정 경로 지정
 

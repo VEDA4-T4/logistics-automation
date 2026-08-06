@@ -43,11 +43,12 @@ struct OperationalLogUpdateResult {
 
 class OperationalLogState final {
 public:
-    static constexpr qsizetype kMaximumEntries = 500;
+    static constexpr qsizetype kPageSize = 500;
 
     [[nodiscard]] OperationalLogUpdateResult applyEnvelope(const QString& topic, const QJsonObject& envelope);
     void appendLocal(OperationalLogSeverity severity, const QString& device_id, const QString& category,
                      const QString& code, const QString& message, const QDateTime& occurred_at = {});
+    [[nodiscard]] QList<OperationalLogEntry> appendOlderEntries(QList<OperationalLogEntry> entries);
     [[nodiscard]] bool acknowledge(const QString& id);
     [[nodiscard]] int acknowledgeAllAlerts();
     [[nodiscard]] QList<OperationalLogEntry> filteredEntries(const OperationalLogFilter& filter) const;

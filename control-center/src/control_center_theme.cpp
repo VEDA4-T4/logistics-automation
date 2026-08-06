@@ -14,7 +14,7 @@ QTabBar::tab:selected { background:#181818; color:#f0f0f0; border-top:2px solid 
 QComboBox, QAbstractSpinBox { background:#252526; color:#f0f0f0; border:1px solid #454545; padding:5px; }
 QAbstractItemView { background:#252526; color:#f0f0f0; selection-background-color:#264f78; selection-color:#ffffff; }
 QAbstractItemView::item:hover { background:#2a3f52; color:#ffffff; }
-QTableWidget::item:selected { background:#264f78; color:#ffffff; }
+QTableView::item:selected, QTableWidget::item:selected { background:#264f78; color:#ffffff; }
 QDialog { background:#181818; color:#cccccc; }
 QDialog QLabel#detailTitle { color:#f0f0f0; font-size:18px; font-weight:700; }
 QDialog QLabel#detailMetaLabel { color:#777777; font-size:10px; }

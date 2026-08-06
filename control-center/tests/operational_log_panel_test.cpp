@@ -11,8 +11,10 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QTableWidget>
+#include <QScrollBar>
+#include <QTableView>
 #include <cassert>
+#include <utility>
 
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -35,57 +37,62 @@ int main(int argc, char* argv[]) {
 
     OperationalLogPanel panel;
     panel.resize(390, 500);
-    panel.setState(state);
+    panel.setEntryPageProvider(
+        [&state](qsizetype offset, qsizetype limit) { return state.entries().mid(offset, limit); });
+    panel.reloadEntries(state.activeAlertCount());
     panel.setAcknowledgeHandler([&state, &panel](const QString& id) {
         assert(state.acknowledge(id));
-        panel.setEntryAcknowledged(id);
+        panel.setEntryAcknowledged(id, state.activeAlertCount());
     });
     panel.setAcknowledgeAllHandler([&state, &panel]() {
         assert(state.acknowledgeAllAlerts() > 0);
-        panel.setState(state);
+        panel.setAllAlertsAcknowledged(state.activeAlertCount());
     });
     panel.show();
     application.processEvents();
 
-    auto* table = panel.findChild<QTableWidget*>(QStringLiteral("operationalLogTable"));
+    auto* table = panel.findChild<QTableView*>(QStringLiteral("operationalLogTable"));
     auto* severity = panel.findChild<QComboBox*>(QStringLiteral("logSeverityFilter"));
     auto* query = panel.findChild<QLineEdit*>(QStringLiteral("logQueryFilter"));
     auto* unacknowledged = panel.findChild<QCheckBox*>(QStringLiteral("logUnacknowledgedOnly"));
     auto* acknowledge_all = panel.findChild<QPushButton*>(QStringLiteral("acknowledgeAllLogsButton"));
     auto* empty_state = panel.findChild<QLabel*>(QStringLiteral("operationalLogEmptyState"));
+    auto* result_count = panel.findChild<QLabel*>(QStringLiteral("operationalLogResultCount"));
     assert(table != nullptr && severity != nullptr && query != nullptr && unacknowledged != nullptr &&
-           acknowledge_all != nullptr && empty_state != nullptr);
+           acknowledge_all != nullptr && empty_state != nullptr && result_count != nullptr);
     assert(panel.findChild<QPushButton*>(QStringLiteral("acknowledgeLogButton")) == nullptr);
-    assert(table->rowCount() == 4);
-    assert(table->columnCount() == 4);
+    assert(panel.findChild<QPushButton*>(QStringLiteral("showAllUnacknowledgedLogsButton")) == nullptr);
+    assert(table->model()->rowCount() == 4);
+    assert(table->model()->columnCount() == 4);
     assert(table->verticalHeader()->defaultSectionSize() == 34);
+    assert(table->verticalScrollMode() == QAbstractItemView::ScrollPerPixel);
     assert(table->rowHeight(0) == 34);
     assert(table->horizontalHeader()->sectionResizeMode(3) == QHeaderView::Stretch);
     assert(severity->view()->styleSheet().isEmpty());
 
     severity->setCurrentIndex(severity->findData(static_cast<int>(OperationalLogSeverity::Error)));
     application.processEvents();
-    assert(table->rowCount() == 1);
-    assert(table->item(0, 2)->text() == QStringLiteral("PI-SORTING-01"));
+    assert(table->model()->rowCount() == 1);
+    assert(table->model()->index(0, 2).data().toString() == QStringLiteral("PI-SORTING-01"));
 
     severity->setCurrentIndex(0);
     query->setText(QStringLiteral("VISION"));
     application.processEvents();
-    assert(table->rowCount() == 1);
-    assert(table->item(0, 3)->text().contains(QStringLiteral("바코드 인식 실패")));
+    assert(table->model()->rowCount() == 1);
+    assert(table->model()->index(0, 3).data().toString().contains(QStringLiteral("바코드 인식 실패")));
 
     query->clear();
     query->setText(QStringLiteral("NO-SUCH-OPERATIONAL-LOG"));
     application.processEvents();
-    assert(table->rowCount() == 0);
+    assert(table->model()->rowCount() == 0);
     assert(empty_state->isVisible());
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
     query->clear();
     application.processEvents();
-    assert(table->rowCount() == 4);
+    assert(table->model()->rowCount() == 4);
     assert(!empty_state->isVisible());
 
-    table->cellDoubleClicked(0, 3);
+    table->doubleClicked(table->model()->index(0, 3));
     application.processEvents();
     assert(state.activeAlertCount() == 1);
     auto* detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
@@ -96,36 +103,149 @@ int main(int argc, char* argv[]) {
     detail_dialog->close();
     application.processEvents();
 
-    table->cellClicked(1, 3);
+    table->clicked(table->model()->index(1, 3));
     application.processEvents();
     assert(state.activeAlertCount() == 0);
     assert(!acknowledge_all->isEnabled());
-    assert(table->item(1, 3)->foreground().color() == QColor(QStringLiteral("#777777")));
+    assert(table->model()->index(1, 3).data(Qt::ForegroundRole).value<QColor>() ==
+           QColor(QStringLiteral("#777777")));
 
     unacknowledged->setChecked(true);
     application.processEvents();
-    assert(table->rowCount() == 2);
-    table->cellClicked(0, 3);
+    assert(table->model()->rowCount() == 2);
+    table->clicked(table->model()->index(0, 3));
     application.processEvents();
-    assert(table->rowCount() == 1);
+    assert(table->model()->rowCount() == 1);
 
     unacknowledged->setChecked(false);
-    for (qsizetype index = 0; index < OperationalLogState::kMaximumEntries; ++index) {
+    for (qsizetype index = 0; index < OperationalLogState::kPageSize; ++index) {
         state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("PI-LOAD-01"), QStringLiteral("부하 테스트"),
                           QStringLiteral("LOAD"), QStringLiteral("로그 %1").arg(index));
     }
-    panel.setState(state);
+    panel.reloadEntries(state.activeAlertCount());
     application.processEvents();
-    assert(table->rowCount() == 200);
-    table->cellDoubleClicked(0, 3);
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize);
+    assert(table->model()->canFetchMore({}));
+    table->model()->fetchMore({});
+    application.processEvents();
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize + 4);
+    assert(!table->model()->canFetchMore({}));
+    table->doubleClicked(table->model()->index(0, 3));
     application.processEvents();
     detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
     assert(detail_dialog != nullptr && detail_dialog->isVisible());
+    detail_dialog->close();
+    application.processEvents();
 
-    panel.setState(OperationalLogState{});
+    table->verticalScrollBar()->setValue(100);
+    const auto previous_scroll_value = table->verticalScrollBar()->value();
+    QList<logistics::control_center::OperationalLogEntry> batch;
+    for (int index = 0; index < 3; ++index) {
+        state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("PI-BATCH-01"), QStringLiteral("배치 테스트"),
+                          QStringLiteral("BATCH"), QStringLiteral("배치 로그 %1").arg(index));
+        batch.prepend(state.entries().front());
+    }
+    panel.prependEntries(batch, state.activeAlertCount());
+    application.processEvents();
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize + 7);
+    assert(table->model()->index(0, 3).data().toString().contains(QStringLiteral("배치 로그 2")));
+    assert(table->verticalScrollBar()->value() == previous_scroll_value + 3 * 34);
+    assert(result_count->text().contains(QStringLiteral("새 로그 3건")));
+
+    table->scrollToTop();
+    application.processEvents();
+    assert(!result_count->text().contains(QStringLiteral("새 로그")));
+
+    QList<logistics::control_center::OperationalLogEntry> overflow_batch;
+    for (int index = 0; index < 600; ++index) {
+        state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("PI-BATCH-02"), QStringLiteral("한도 테스트"),
+                          QStringLiteral("BATCH_LIMIT"), QStringLiteral("한도 로그 %1").arg(index));
+        overflow_batch.prepend(state.entries().front());
+    }
+    panel.prependEntries(overflow_batch, state.activeAlertCount());
+    application.processEvents();
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize * 2);
+    assert(table->model()->index(0, 3).data().toString().contains(QStringLiteral("한도 로그 599")));
+    const auto capped_row_count = table->model()->rowCount();
+    panel.prependEntries({ overflow_batch.front(), overflow_batch.front() }, state.activeAlertCount());
+    application.processEvents();
+    assert(table->model()->rowCount() == capped_row_count);
+
+    state = OperationalLogState{};
+    state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("PI-LIVE-01"), QStringLiteral("실시간"),
+                      QStringLiteral("LIVE"), QStringLiteral("현재 로그"));
+    panel.reloadEntries(state.activeAlertCount());
+    int older_page_request_count = 0;
+    panel.setOlderEntriesRequestHandler([&older_page_request_count]() { ++older_page_request_count; });
+    panel.appendOlderEntries({}, true, state.activeAlertCount());
+    assert(table->model()->canFetchMore({}));
+    table->model()->fetchMore({});
+    assert(older_page_request_count == 1);
+    assert(!table->model()->canFetchMore({}));
+    const auto older_timestamp = QDateTime::fromString(QStringLiteral("2026-07-01T00:00:00.000Z"), Qt::ISODateWithMs);
+    QList<logistics::control_center::OperationalLogEntry> older_entries{
+        { .id = QStringLiteral("HISTORY-1"),
+          .occurred_at = older_timestamp,
+          .severity = OperationalLogSeverity::Info,
+          .device_id = QStringLiteral("PI-HISTORY-01"),
+          .category = QStringLiteral("서버 이력"),
+          .code = QStringLiteral("DEVICE_STATUS"),
+          .message = QStringLiteral("과거 로그 1"),
+          .topic = QStringLiteral("server-history"),
+          .acknowledged = false },
+        { .id = QStringLiteral("HISTORY-2"),
+          .occurred_at = older_timestamp.addMSecs(-1),
+          .severity = OperationalLogSeverity::Warning,
+          .device_id = QStringLiteral("PI-HISTORY-02"),
+          .category = QStringLiteral("서버 이력"),
+          .code = QStringLiteral("REJECTED"),
+          .message = QStringLiteral("과거 로그 2"),
+          .topic = QStringLiteral("server-history"),
+          .acknowledged = false },
+    };
+    const auto inserted_older_entries = state.appendOlderEntries(std::move(older_entries));
+    panel.appendOlderEntries(inserted_older_entries, false, state.activeAlertCount());
+    application.processEvents();
+    assert(table->model()->rowCount() == 3);
+    assert(table->model()->index(2, 3).data().toString().contains(QStringLiteral("과거 로그 2")));
+    assert(!table->model()->canFetchMore({}));
+
+    state = OperationalLogState{};
+    panel.reloadEntries(state.activeAlertCount());
     application.processEvents();
     assert(empty_state != nullptr && empty_state->isVisible());
     assert(empty_state->text() == QStringLiteral("표시할 운영 로그가 없습니다"));
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
+
+    for (qsizetype index = 0; index < OperationalLogState::kPageSize * 2 + 10; ++index) {
+        const auto log_severity = static_cast<OperationalLogSeverity>(index % 4);
+        state.appendLocal(log_severity, QStringLiteral("PI-LOAD-01"), QStringLiteral("부하 로그"),
+                          QStringLiteral("OVERFLOW_ENTRY"), QStringLiteral("미확인 로그 %1").arg(index));
+    }
+    panel.reloadEntries(state.activeAlertCount());
+    application.processEvents();
+    assert(state.unacknowledgedCount() == OperationalLogState::kPageSize * 2 + 10);
+    assert(state.activeAlertCount() == 504);
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize);
+    assert(table->model()->canFetchMore({}));
+    table->model()->fetchMore({});
+    application.processEvents();
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize * 2);
+    assert(table->model()->canFetchMore({}));
+    table->model()->fetchMore({});
+    application.processEvents();
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize * 2 + 10);
+    assert(!table->model()->canFetchMore({}));
+    table->doubleClicked(table->model()->index(0, 3));
+    application.processEvents();
+    assert(state.unacknowledgedCount() == OperationalLogState::kPageSize * 2 + 9);
+    assert(state.activeAlertCount() == 504);
+    detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
+    assert(detail_dialog != nullptr && detail_dialog->isVisible());
+    detail_message = detail_dialog->findChild<QPlainTextEdit*>(QStringLiteral("operationalLogDetailMessage"));
+    assert(detail_message != nullptr && detail_message->toPlainText().contains(QStringLiteral("미확인 로그 1009")));
+    detail_dialog->close();
+    application.processEvents();
+    assert(panel.findChild<QDialog*>(QStringLiteral("unacknowledgedOperationalLogDialog")) == nullptr);
     return 0;
 }

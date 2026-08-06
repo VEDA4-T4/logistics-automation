@@ -1,6 +1,7 @@
 #include "logistics/control_center/operational_log_state.hpp"
 
 #include <QJsonObject>
+#include <algorithm>
 #include <utility>
 
 #include "logistics/contracts/mqtt_codec.hpp"
@@ -279,6 +280,26 @@ void OperationalLogState::appendLocal(OperationalLogSeverity severity, const QSt
              .acknowledged = false });
 }
 
+QList<OperationalLogEntry> OperationalLogState::appendOlderEntries(QList<OperationalLogEntry> entries) {
+    QList<OperationalLogEntry> inserted;
+    inserted.reserve(entries.size());
+    for (auto& entry : entries) {
+        if (entry.id.isEmpty() || !entry.occurred_at.isValid() || processed_message_ids_.contains(entry.id)) {
+            continue;
+        }
+        const auto duplicate = std::find_if(entries_.cbegin(), entries_.cend(), [&entry](const auto& existing) {
+            return existing.id == entry.id;
+        });
+        if (duplicate != entries_.cend()) {
+            continue;
+        }
+        processed_message_ids_.insert(entry.id);
+        entries_.append(entry);
+        inserted.append(std::move(entry));
+    }
+    return inserted;
+}
+
 bool OperationalLogState::acknowledge(const QString& id) {
     for (auto& entry : entries_) {
         if (entry.id == id && !entry.acknowledged) {
@@ -321,31 +342,21 @@ const QList<OperationalLogEntry>& OperationalLogState::entries() const noexcept 
 }
 
 int OperationalLogState::unacknowledgedCount() const noexcept {
-    int count = 0;
-    for (const auto& entry : entries_) {
-        if (!entry.acknowledged)
-            ++count;
-    }
-    return count;
+    return static_cast<int>(std::count_if(entries_.cbegin(), entries_.cend(),
+                                          [](const auto& entry) { return !entry.acknowledged; }));
 }
 
 int OperationalLogState::activeAlertCount() const noexcept {
-    int count = 0;
-    for (const auto& entry : entries_) {
-        if (!entry.acknowledged &&
-            (entry.severity == OperationalLogSeverity::Error || entry.severity == OperationalLogSeverity::Critical)) {
-            ++count;
-        }
-    }
-    return count;
+    return static_cast<int>(std::count_if(entries_.cbegin(), entries_.cend(),
+                                          [](const auto& entry) {
+                                              return !entry.acknowledged &&
+                                                     (entry.severity == OperationalLogSeverity::Error ||
+                                                      entry.severity == OperationalLogSeverity::Critical);
+                                          }));
 }
 
 void OperationalLogState::append(OperationalLogEntry entry) {
     entries_.prepend(std::move(entry));
-    while (entries_.size() > kMaximumEntries) {
-        processed_message_ids_.remove(entries_.last().id);
-        entries_.removeLast();
-    }
 }
 
 QString OperationalSeverityLabel(OperationalLogSeverity severity) {

@@ -4,8 +4,10 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFrame>
+#include <QHostAddress>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMouseEvent>
@@ -14,8 +16,12 @@
 #include <QSize>
 #include <QSplitter>
 #include <QStackedLayout>
-#include <QTableWidget>
+#include <QTableView>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QThread>
+#include <QTimer>
 #include <QWidget>
 #include <algorithm>
 #include <cstdio>
@@ -35,13 +41,157 @@ bool LayoutCheck(bool condition, const char* message) {
     return condition;
 }
 
+template <typename Predicate>
+bool WaitUntil(QApplication& application, Predicate predicate, int timeout_ms = 3000) {
+    QElapsedTimer timeout;
+    timeout.start();
+    while (!predicate() && timeout.elapsed() < timeout_ms) {
+        application.processEvents();
+        QThread::msleep(1);
+    }
+    return predicate();
+}
+
+bool CheckHistoryPaging(QApplication& application) {
+    QTcpServer server;
+    if (!LayoutCheck(server.listen(QHostAddress::LocalHost), "history test server could not listen")) {
+        return false;
+    }
+    QList<QByteArray> requests;
+    QTcpSocket* delayed_error_socket = nullptr;
+    const auto write_response = [](QTcpSocket* socket, const QByteArray& status, const QByteArray& body) {
+        socket->write("HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                      QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+        socket->disconnectFromHost();
+    };
+    QObject::connect(&server, &QTcpServer::newConnection, &application, [&]() {
+        auto* socket = server.nextPendingConnection();
+        QObject::connect(socket, &QTcpSocket::readyRead, &application,
+                         [&, socket, request = QByteArray{}, handled = false]() mutable {
+            if (handled) {
+                return;
+            }
+            request.append(socket->readAll());
+            if (!request.contains("\r\n\r\n")) {
+                return;
+            }
+            handled = true;
+            requests.append(request);
+            switch (requests.size()) {
+                case 1:
+                    write_response(
+                        socket, "200 OK",
+                        R"({"count":2,"items":[{"historyId":"100.2.2","messageId":"HIST-1","eventType":"DEVICE_STATUS","sourceId":"HISTORY-A","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":100},{"historyId":"100.2.1","messageId":"HIST-2","eventType":"ERROR_OCCURRED","sourceId":"HISTORY-B","state":"","errorCode":"ERR-HISTORY","severity":"ERROR","message":"과거 오류","details":{},"occurredAtMs":100}],"nextCursor":"100.2.1"})");
+                    break;
+                case 2:
+                    delayed_error_socket = socket;
+                    break;
+                case 3:
+                    write_response(
+                        socket, "200 OK",
+                        R"({"count":2,"items":[{"historyId":"100.2.2","messageId":"HIST-1","eventType":"DEVICE_STATUS","sourceId":"HISTORY-A","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":100},{"historyId":"100.2.1","messageId":"HIST-2","eventType":"ERROR_OCCURRED","sourceId":"HISTORY-B","state":"","errorCode":"ERR-HISTORY","severity":"ERROR","message":"과거 오류","details":{},"occurredAtMs":100}],"nextCursor":"90.2.5"})");
+                    break;
+                default:
+                    write_response(
+                        socket, "200 OK",
+                        R"({"count":1,"items":[{"historyId":"90.2.4","messageId":"HIST-3","eventType":"WORK_CREATED","sourceId":"HISTORY-C","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":90}],"nextCursor":null})");
+                    break;
+            }
+        });
+    });
+
+    QTemporaryDir directory;
+    if (!LayoutCheck(directory.isValid(), "history config temporary directory is invalid")) {
+        return false;
+    }
+    const auto config_path = directory.filePath(QStringLiteral("control-centor.ini"));
+    QFile config(config_path);
+    if (!LayoutCheck(config.open(QIODevice::WriteOnly | QIODevice::Text), "could not write history test config")) {
+        return false;
+    }
+    const auto contents =
+        QByteArray("[mqtt]\nhost=127.0.0.1\nport=1\n[http]\nimage_base_url=http://127.0.0.1:") +
+        QByteArray::number(server.serverPort()) +
+        "/\nbearer_token=local-history-token\n[rtsp]\nchannel_count=1\n"
+        "channel_1_url=rtsp://127.0.0.1:1/channel1\nonvif_metadata_enabled=false\n";
+    if (!LayoutCheck(config.write(contents) == contents.size(), "history test config write was incomplete")) {
+        return false;
+    }
+    config.close();
+    qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
+    logistics::control_center::MainWindow window;
+    auto* table = window.findChild<QTableView*>(QStringLiteral("operationalLogTable"));
+    if (!LayoutCheck(table != nullptr, "history test log table is missing") ||
+        !LayoutCheck(WaitUntil(application, [&]() { return requests.size() == 1 && table->model()->rowCount() >= 2; }),
+                     "first history page was not loaded") ||
+        !LayoutCheck(requests.front().contains("Authorization: Bearer local-history-token"),
+                     "history authorization header is missing") ||
+        !LayoutCheck(requests.front().contains("GET /api/v1/history?limit=500 HTTP/1.1"),
+                     "initial history request did not use limit=500")) {
+        return false;
+    }
+
+    bool found_first_page = false;
+    for (int row = 0; row < table->model()->rowCount(); ++row) {
+        found_first_page = found_first_page || table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-A");
+    }
+    if (!LayoutCheck(found_first_page && table->model()->canFetchMore({}), "first history page cannot fetch more")) {
+        return false;
+    }
+    table->model()->fetchMore({});
+    if (!LayoutCheck(WaitUntil(application, [&]() { return requests.size() == 2 && delayed_error_socket != nullptr; }),
+                     "second history page was not requested")) {
+        return false;
+    }
+    table->model()->fetchMore({});
+    application.processEvents();
+    if (!LayoutCheck(requests.size() == 2 && !table->model()->canFetchMore({}),
+                     "history request was not kept to one in-flight request")) {
+        return false;
+    }
+    write_response(delayed_error_socket, "503 Service Unavailable",
+                   R"({"error":"TEMPORARY_FAILURE","message":"retry"})");
+    delayed_error_socket = nullptr;
+    if (!LayoutCheck(WaitUntil(application, [&]() { return table->model()->canFetchMore({}); }),
+                     "failed history page did not become retryable")) {
+        return false;
+    }
+    table->model()->fetchMore({});
+    bool found_second_page = false;
+    if (!LayoutCheck(WaitUntil(application, [&]() {
+                         for (int row = 0; row < table->model()->rowCount(); ++row) {
+                             if (table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-C")) {
+                                 return true;
+                             }
+                         }
+                         return false;
+                     }),
+                     "second history page was not appended")) {
+        return false;
+    }
+    if (!LayoutCheck(requests.size() == 4, "duplicate history page was not skipped automatically") ||
+        !LayoutCheck(requests[1].contains("limit=500&cursor=100.2.1") &&
+                         requests[2].contains("limit=500&cursor=100.2.1"),
+                     "history retry did not preserve its cursor") ||
+        !LayoutCheck(requests[3].contains("limit=500&cursor=90.2.5"),
+                     "duplicate history page did not advance to its next cursor")) {
+        return false;
+    }
+    for (int row = 0; row < table->model()->rowCount(); ++row) {
+        found_second_page = found_second_page ||
+                            table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-C");
+    }
+    return LayoutCheck(found_second_page && !table->model()->canFetchMore({}),
+                       "history paging did not stop after null nextCursor");
+}
+
 bool WriteChannelConfig(const QString& path, int channel_count) {
     QFile config(path);
     if (!config.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
     }
     QByteArray contents =
-        "[mqtt]\nhost=127.0.0.1\nport=1883\n"
+        "[mqtt]\nhost=127.0.0.1\nport=1\n"
         "[http]\nimage_base_url=http://127.0.0.1:1/\n"
         "[rtsp]\nchannel_count=" +
         QByteArray::number(channel_count) + "\nonvif_metadata_enabled=false\n";
@@ -167,7 +317,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     config.write(
-        "[mqtt]\nhost=127.0.0.1\nport=1883\n"
+        "[mqtt]\nhost=127.0.0.1\nport=1\n"
         "[rtsp]\nchannel_count=4\n"
         "channel_1_url=rtsp://127.0.0.1:1/channel1\n"
         "channel_2_url=rtsp://127.0.0.1:1/channel2\n"
@@ -176,7 +326,6 @@ int main(int argc, char* argv[]) {
         "onvif_metadata_enabled=false\n");
     config.close();
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
-
     logistics::control_center::MainWindow window;
 
     auto* operations_workspace = window.findChild<QSplitter*>(QStringLiteral("operationsWorkspaceSplitter"));
@@ -223,11 +372,14 @@ int main(int argc, char* argv[]) {
     application.processEvents();
 
     auto* severity_filter = window.findChild<QComboBox*>(QStringLiteral("logSeverityFilter"));
-    auto* log_table = window.findChild<QTableWidget*>(QStringLiteral("operationalLogTable"));
+    auto* log_table = window.findChild<QTableView*>(QStringLiteral("operationalLogTable"));
+    auto* log_flush_timer = window.findChild<QTimer*>(QStringLiteral("operationalLogFlushTimer"));
     if (!check(severity_filter != nullptr && severity_filter->view()->styleSheet().isEmpty(),
                "operational log popup overrides the shared item-view style") ||
         !check(log_table != nullptr && log_table->palette().color(QPalette::Highlight) == QColor("#264f78"),
-               "operational log selection does not use the shared highlight")) {
+               "operational log selection does not use the shared highlight") ||
+        !check(log_flush_timer != nullptr && log_flush_timer->interval() == 100,
+               "operational log batch timer is missing or has the wrong interval")) {
         return 1;
     }
     auto* log_panel = static_cast<logistics::control_center::OperationalLogPanel*>(
@@ -238,8 +390,10 @@ int main(int argc, char* argv[]) {
     logistics::control_center::OperationalLogState themed_log;
     themed_log.appendLocal(logistics::control_center::OperationalLogSeverity::Info, QStringLiteral("central-server"),
                            QStringLiteral("통신"), QStringLiteral("THEME_TEST"), QStringLiteral("공유 테마 확인"));
-    log_panel->setState(themed_log);
-    log_table->cellDoubleClicked(0, 3);
+    log_panel->setEntryPageProvider(
+        [&themed_log](qsizetype offset, qsizetype limit) { return themed_log.entries().mid(offset, limit); });
+    log_panel->reloadEntries(themed_log.activeAlertCount());
+    log_table->doubleClicked(log_table->model()->index(0, 3));
     application.processEvents();
     auto* detail_dialog = log_panel->findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
     if (!check(detail_dialog != nullptr && detail_dialog->isVisible() && detail_dialog->styleSheet().isEmpty(),
@@ -364,6 +518,7 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    const auto log_count_before_emergency = log_table->model()->rowCount();
     mqtt_client->messageReceived(QStringLiteral("logistics/emergency-stop"),
                                  { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
                                    { QStringLiteral("messageId"), QStringLiteral("LAYOUT-GLOBAL-EMERGENCY-STOP") },
@@ -372,6 +527,19 @@ int main(int argc, char* argv[]) {
                                    { QStringLiteral("timestamp"), now.addMSecs(100).toString(Qt::ISODateWithMs) },
                                    { QStringLiteral("data"), QJsonObject{} } });
     application.processEvents();
+    if (!check(log_table->model()->rowCount() == log_count_before_emergency,
+               "operational log was inserted before the batch timer fired")) {
+        return 2;
+    }
+    if (!check(QMetaObject::invokeMethod(log_flush_timer, "timeout", Qt::DirectConnection),
+               "operational log batch timer could not be triggered")) {
+        return 2;
+    }
+    application.processEvents();
+    if (!check(log_table->model()->rowCount() == log_count_before_emergency + 1,
+               "operational log batch was not inserted when the timer fired")) {
+        return 2;
+    }
     const auto stopped_input_position = factory->boxPosition(QStringLiteral("input"));
     const auto stopped_sorting_position = factory->boxPosition(QStringLiteral("sorting"));
     const auto stopped_line_position = factory->boxPosition(QStringLiteral("linetracer"));
@@ -494,9 +662,13 @@ int main(int argc, char* argv[]) {
 
     window.hide();
     application.processEvents();
+    const bool history_paging_ok = CheckHistoryPaging(application);
+    if (!history_paging_ok) {
+        return 9;
+    }
     for (const int channel_count : { 1, 5, 9, 16 }) {
         if (!CheckConfiguredChannelGrid(application, channel_count)) {
-            return 9;
+            return 10;
         }
     }
     return 0;

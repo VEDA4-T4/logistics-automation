@@ -127,10 +127,48 @@ int main() {
     assert(state.activeAlertCount() == 0);
     assert(state.acknowledgeAllAlerts() == 0);
 
-    for (qsizetype index = 0; index < OperationalLogState::kMaximumEntries + 10; ++index) {
+    const auto older_timestamp = QDateTime::fromString(QStringLiteral("2026-07-01T00:00:00.000Z"), Qt::ISODateWithMs);
+    const logistics::control_center::OperationalLogEntry older_entry{
+        .id = QStringLiteral("HISTORY-1"),
+        .occurred_at = older_timestamp,
+        .severity = OperationalLogSeverity::Info,
+        .device_id = QStringLiteral("PI-INPUT-01"),
+        .category = QStringLiteral("서버 이력"),
+        .code = QStringLiteral("DEVICE_STATUS"),
+        .message = QStringLiteral("과거 장치 상태"),
+        .topic = QStringLiteral("server-history"),
+        .acknowledged = false,
+    };
+    const auto inserted_history = state.appendOlderEntries({ older_entry, older_entry });
+    assert(inserted_history.size() == 1);
+    assert(state.entries().back().id == QStringLiteral("HISTORY-1"));
+    assert(state.appendOlderEntries({ older_entry }).isEmpty());
+
+    const auto entry_count_before_bulk_append = state.entries().size();
+    for (qsizetype index = 0; index < OperationalLogState::kPageSize + 10; ++index) {
         state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("test"), QStringLiteral("테스트"),
                           QStringLiteral("ENTRY"), QString::number(index));
     }
-    assert(state.entries().size() == OperationalLogState::kMaximumEntries);
+    assert(state.entries().size() == entry_count_before_bulk_append + OperationalLogState::kPageSize + 10);
+
+    OperationalLogState overflowing_entries;
+    QString oldest_entry_id;
+    for (qsizetype index = 0; index < OperationalLogState::kPageSize + 10; ++index) {
+        const auto severity = static_cast<OperationalLogSeverity>(index % 4);
+        overflowing_entries.appendLocal(severity, QStringLiteral("PI-LOAD-01"), QStringLiteral("부하 로그"),
+                                        QStringLiteral("OVERFLOW_ENTRY"), QString::number(index));
+        if (index == 0) {
+            oldest_entry_id = overflowing_entries.entries().front().id;
+        }
+    }
+    assert(overflowing_entries.entries().size() == OperationalLogState::kPageSize + 10);
+    assert(overflowing_entries.unacknowledgedCount() == OperationalLogState::kPageSize + 10);
+    assert(overflowing_entries.activeAlertCount() == 254);
+    assert(overflowing_entries.entries().back().id == oldest_entry_id);
+    assert(overflowing_entries.acknowledge(oldest_entry_id));
+    assert(overflowing_entries.unacknowledgedCount() == OperationalLogState::kPageSize + 9);
+    assert(overflowing_entries.activeAlertCount() == 254);
+    assert(overflowing_entries.acknowledgeAllAlerts() == 254);
+    assert(overflowing_entries.unacknowledgedCount() == 255);
     return 0;
 }

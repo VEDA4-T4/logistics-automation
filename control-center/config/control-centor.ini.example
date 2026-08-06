@@ -29,6 +29,9 @@ linetracer_device_id=PI-LT-01
 [http]
 ; Relative image paths from MQTT are resolved against this central-server URL.
 image_base_url=http://central-server.logistics.local:8080/
+; Optional. When set, the operations log loads older entries from /api/v1/history.
+; Use the same value as the central server's [http] bearer_token.
+bearer_token=
 
 [rtsp]
 ; Supported channel count: 1-16

@@ -18,6 +18,7 @@
 class QJsonObject;
 class QLabel;
 class QMediaPlayer;
+class QNetworkAccessManager;
 class QGridLayout;
 class QStackedLayout;
 class QTimer;
@@ -56,11 +57,13 @@ private:
     void completePendingRecoveryFromDeviceState();
     void handleCommandTimeout();
     void clearPendingCommand();
+    void queueOperationalLogEntry(const QString& id);
+    void flushPendingOperationalLogs();
+    void requestOlderOperationalLogs();
     void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,
                               const QString& code, const QString& message);
     void refreshOperationsPresentation();
     void selectControlTarget(const QString& device_id, const QString& display_name);
-    void refreshOperationalLogPanel();
     void setFocusedChannel(std::optional<std::size_t> channel);
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -92,11 +95,17 @@ private:
     ProcessControlPanel* process_control_panel_{ nullptr };
     QTimer* command_response_timer_{ nullptr };
     QTimer* node_status_timer_{ nullptr };
+    QTimer* operational_log_flush_timer_{ nullptr };
+    QNetworkAccessManager* history_network_manager_{ nullptr };
     QString control_target_device_id_{ "SYSTEM" };
     QString pending_target_device_id_;
     QString pending_request_id_;
     QSet<QString> individual_command_request_ids_;
     QQueue<QString> individual_command_request_order_;
+    QQueue<QString> pending_operational_log_ids_;
+    QUrl history_base_url_;
+    QString history_bearer_token_;
+    QString history_next_cursor_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
     CurrentProductState current_product_state_;
     OperationalLogState operational_log_state_;
@@ -110,6 +119,7 @@ private:
     bool onvif_metadata_enabled_{ true };
     bool onvif_log_payload_{ false };
     int metadata_stale_timeout_ms_{ 1500 };
+    bool history_request_in_flight_{ false };
 };
 
 }  // namespace logistics::control_center
