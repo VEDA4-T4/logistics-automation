@@ -221,6 +221,54 @@ constexpr QPointF kSortingPositions[]{ { 504, 250 }, { 504, 345 }, { 504, 442 } 
 constexpr QPointF kLineIntersections[]{ { 292, 250 }, { 292, 345 }, { 292, 442 } };
 constexpr QPointF kLineDestinations[]{ { 80, 250 }, { 80, 345 }, { 80, 442 } };
 
+std::optional<int> LineTracerPositionRoute(const LineTracerPositionStatus& position) {
+    const auto location = position.location.trimmed().toUpper();
+    return location.size() == 1 && location.front() >= QLatin1Char('A') && location.front() <= QLatin1Char('C')
+               ? std::optional<int>{ location.front().unicode() - 'A' }
+               : std::nullopt;
+}
+
+std::optional<QPointF> LineTracerPositionPoint(const LineTracerPositionStatus& position) {
+    const auto route = LineTracerPositionRoute(position);
+    const auto area = position.area.trimmed().toUpper();
+    if (!route.has_value()) {
+        return std::nullopt;
+    }
+    if (area == QStringLiteral("DEPARTURE")) {
+        return kLineDestinations[*route];
+    }
+    if (area == QStringLiteral("DESTINATION")) {
+        return kSortingPositions[*route];
+    }
+    return std::nullopt;
+}
+
+QList<QPointF> LineTracerPositionPath(const LineTracerPositionStatus& departure,
+                                      const LineTracerPositionStatus& target) {
+    const auto departure_route = LineTracerPositionRoute(departure);
+    const auto target_route = LineTracerPositionRoute(target);
+    const auto departure_point = LineTracerPositionPoint(departure);
+    const auto target_point = LineTracerPositionPoint(target);
+    if (!departure_route.has_value() || !target_route.has_value() || !departure_point.has_value() ||
+        !target_point.has_value()) {
+        return {};
+    }
+    if (*departure_point == *target_point) {
+        return { *departure_point };
+    }
+
+    QList<QPointF> path{ *departure_point };
+    const int step = *departure_route <= *target_route ? 1 : -1;
+    for (int route = *departure_route;; route += step) {
+        path.append(kLineIntersections[route]);
+        if (route == *target_route) {
+            break;
+        }
+    }
+    path.append(*target_point);
+    return path;
+}
+
 class ProcessGraphicsGroup final : public QGraphicsObject {
 public:
     ProcessGraphicsGroup(QString process_key, std::function<void(const QString&)> selected)
@@ -651,6 +699,45 @@ struct FactoryTopViewWidget::Impl {
                     node.motion_enabled = false;
                     continue;
                 }
+
+                if (process.confirmed_position.has_value()) {
+                    node.moving_item->show();
+                    const auto confirmed_point = LineTracerPositionPoint(*process.confirmed_position);
+                    if (confirmed_point.has_value() && process.movement_state == QStringLiteral("MOVING") &&
+                        process.departure_position.has_value() && process.target_position.has_value()) {
+                        const auto reported_path =
+                            LineTracerPositionPath(*process.departure_position, *process.target_position);
+                        const bool path_changed = reported_path.isEmpty() || line_path.isEmpty() ||
+                                                  line_path.front() != reported_path.front() ||
+                                                  line_path.back() != reported_path.back() ||
+                                                  line_work_id != process.work_id;
+                        if (!reported_path.isEmpty() && path_changed) {
+                            line_path = reported_path;
+                            line_path_index = 0;
+                            line_work_id = process.work_id;
+                            node.moving_item->setPos(*confirmed_point);
+                        }
+                        node.motion_enabled = line_path.size() > 1;
+                        if (!QApplication::isEffectEnabled(Qt::UI_AnimateCombo) && !line_path.isEmpty()) {
+                            line_path_index = line_path.size() - 1;
+                            node.moving_item->setPos(line_path.back());
+                        }
+                    } else if (confirmed_point.has_value()) {
+                        line_travel_leg = LineTravelLeg::Idle;
+                        line_path.clear();
+                        line_path_index = 0;
+                        line_work_id = process.work_id;
+                        node.motion_enabled = false;
+                        node.moving_item->setPos(*confirmed_point);
+                    }
+                    continue;
+                }
+                if (NormalizedState(process.current_state) == QStringLiteral("POSITION_UNKNOWN")) {
+                    node.motion_enabled = false;
+                    node.moving_item->hide();
+                    continue;
+                }
+                node.moving_item->show();
 
                 const auto state = NormalizedState(process.current_state);
                 const auto arrived_route = RouteSuffix(state, u"ARRIVED_");

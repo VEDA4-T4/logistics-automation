@@ -21,6 +21,58 @@ QString StringValue(const QJsonObject& object, const char* key) {
     return value.isString() ? value.toString().trimmed() : QString{};
 }
 
+struct LineTracerPositionSnapshot {
+    std::optional<LineTracerPositionStatus> departure;
+    std::optional<LineTracerPositionStatus> target;
+    std::optional<LineTracerPositionStatus> confirmed;
+    QString movement_state;
+};
+
+bool ParseLineTracerPosition(const QJsonValue& value, LineTracerPositionStatus& output) {
+    if (!value.isObject()) {
+        return false;
+    }
+    const auto position = value.toObject();
+    output.area = StringValue(position, "area").toUpper();
+    output.location = StringValue(position, "location").toUpper();
+    return (output.area == QStringLiteral("DEPARTURE") || output.area == QStringLiteral("DESTINATION")) &&
+           (output.location == QStringLiteral("A") || output.location == QStringLiteral("B") ||
+            output.location == QStringLiteral("C"));
+}
+
+bool ParseLineTracerPositionSnapshot(const QJsonObject& data, std::optional<LineTracerPositionSnapshot>& output,
+                                     QString& error) {
+    const auto departure = data.value(QStringLiteral("departurePosition"));
+    const auto target = data.value(QStringLiteral("targetPosition"));
+    const auto confirmed = data.value(QStringLiteral("confirmedPosition"));
+    const auto movement = data.value(QStringLiteral("movementState"));
+    if (departure.isUndefined() && target.isUndefined() && confirmed.isUndefined() && movement.isUndefined()) {
+        output.reset();
+        return true;
+    }
+    if (departure.isNull() && target.isNull() && confirmed.isNull() && movement.isNull()) {
+        output = LineTracerPositionSnapshot{};
+        return true;
+    }
+
+    LineTracerPositionStatus parsed_departure;
+    LineTracerPositionStatus parsed_target;
+    LineTracerPositionStatus parsed_confirmed;
+    const auto movement_state = movement.isString() ? movement.toString().trimmed().toUpper() : QString{};
+    if (!ParseLineTracerPosition(departure, parsed_departure) || !ParseLineTracerPosition(target, parsed_target) ||
+        !ParseLineTracerPosition(confirmed, parsed_confirmed) ||
+        (movement_state != QStringLiteral("IDLE") && movement_state != QStringLiteral("MOVING") &&
+         movement_state != QStringLiteral("ARRIVED"))) {
+        error = QStringLiteral("라인트레이서 위치 스냅샷이 올바르지 않습니다.");
+        return false;
+    }
+    output = LineTracerPositionSnapshot{ .departure = parsed_departure,
+                                         .target = parsed_target,
+                                         .confirmed = parsed_confirmed,
+                                         .movement_state = movement_state };
+    return true;
+}
+
 QDateTime ParseTimestamp(const QJsonObject& envelope) {
     const auto value = envelope.value(QString::fromLatin1(mqtt::kTimestampField)).toString();
     auto timestamp = QDateTime::fromString(value, Qt::ISODateWithMs);
@@ -488,6 +540,12 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             result.error = QStringLiteral("장치 상태에 currentState가 필요합니다.");
             return result;
         }
+        std::optional<LineTracerPositionSnapshot> position_snapshot;
+        if (type != mqtt::MessageType::kErrorOccurred &&
+            process.status.key == QString::fromLatin1(kLineTracerProcessKey) &&
+            !ParseLineTracerPositionSnapshot(data, position_snapshot, result.error)) {
+            return result;
+        }
 
         const auto device_order = ParseDeviceMessageOrder(message_id, source_id, type);
         DeviceMessageOrdering* device_ordering = nullptr;
@@ -578,6 +636,12 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 process.status.destination.clear();
             }
             process.status.updated_at = timestamp;
+        }
+        if (position_snapshot.has_value()) {
+            process.status.departure_position = position_snapshot->departure;
+            process.status.target_position = position_snapshot->target;
+            process.status.confirmed_position = position_snapshot->confirmed;
+            process.status.movement_state = position_snapshot->movement_state;
         }
         if (device_ordering != nullptr) {
             if (!device_ordering->session_id.isEmpty() && device_ordering->session_id != device_order->session_id) {
@@ -938,6 +1002,10 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         process.status.current_state = current_state;
         process.status.work_id.clear();
         process.status.destination.clear();
+        process.status.departure_position.reset();
+        process.status.target_position.reset();
+        process.status.confirmed_position.reset();
+        process.status.movement_state.clear();
         process.status.work_completed = false;
         process.status.error_code.clear();
         process.status.has_error = false;

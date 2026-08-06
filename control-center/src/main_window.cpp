@@ -691,6 +691,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 command_response_timer_->start(
                     static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
             });
+    connect(mqtt_client_, &MqttClient::subscriptionsReady, this, [this]() {
+        if (mqtt_client_->requestCentralSnapshots() < 0) {
+            statusBar()->showMessage(QStringLiteral("라인트레이서 위치 스냅샷 요청에 실패했습니다."), 5000);
+        }
+    });
     connect(mqtt_client_, &MqttClient::messageReceived, this, &MainWindow::handleMqttMessage);
     connect(mqtt_client_, &MqttClient::messageRejected, this, [this](const QString& topic, const QString& reason) {
         statusBar()->showMessage(QStringLiteral("MQTT 메시지 거부 [%1]: %2").arg(topic, reason), 5000);

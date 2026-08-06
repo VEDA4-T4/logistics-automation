@@ -63,6 +63,13 @@ struct SensorUnitStatus {
     QDateTime updated_at;
 };
 
+struct LineTracerPositionStatus {
+    QString area;
+    QString location;
+
+    [[nodiscard]] bool operator==(const LineTracerPositionStatus&) const = default;
+};
+
 struct ProcessUnitStatus {
     QString key;
     QString display_name;
@@ -73,6 +80,10 @@ struct ProcessUnitStatus {
     QString current_state{ QStringLiteral("상태 수신 대기") };
     QString work_id;
     QString destination;
+    std::optional<LineTracerPositionStatus> departure_position;
+    std::optional<LineTracerPositionStatus> target_position;
+    std::optional<LineTracerPositionStatus> confirmed_position;
+    QString movement_state;
     bool work_completed{ false };
     QString error_code;
     QDateTime updated_at;

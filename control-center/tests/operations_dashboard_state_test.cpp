@@ -33,6 +33,20 @@ QJsonObject DeviceStatus(const QString& status, const QString& current_state, co
     return data;
 }
 
+QJsonObject Position(const QString& area, const QString& location) {
+    return { { QStringLiteral("area"), area }, { QStringLiteral("location"), location } };
+}
+
+QJsonObject PositionStatus(const QString& current_state, const QJsonValue& departure, const QJsonValue& target,
+                           const QJsonValue& confirmed, const QJsonValue& movement) {
+    auto data = DeviceStatus(QStringLiteral("ONLINE"), current_state, QStringLiteral("WORK-LT"));
+    data.insert(QStringLiteral("departurePosition"), departure);
+    data.insert(QStringLiteral("targetPosition"), target);
+    data.insert(QStringLiteral("confirmedPosition"), confirmed);
+    data.insert(QStringLiteral("movementState"), movement);
+    return data;
+}
+
 QJsonObject WorkData(const QString& work_id, QJsonObject data = {}) {
     data.insert(QStringLiteral("workId"), work_id);
     return data;
@@ -69,10 +83,49 @@ int main() {
     assert(ProcessByKey(state, QStringLiteral("input")).sensors.size() == 1);
     assert(ProcessByKey(state, QStringLiteral("sorting")).sensors.size() == 3);
 
+    OperationsDashboardState position_state;
+    auto result = position_state.applyEnvelope(
+        Envelope("SNAPSHOT-PI-LT-01-1", "DEVICE_STATUS",
+                 PositionStatus(QStringLiteral("MOVING"), Position(QStringLiteral("DEPARTURE"), QStringLiteral("A")),
+                                Position(QStringLiteral("DESTINATION"), QStringLiteral("C")),
+                                Position(QStringLiteral("DEPARTURE"), QStringLiteral("A")), QStringLiteral("MOVING")),
+                 QStringLiteral("PI-LT-01")));
+    assert(result.applied);
+    const auto moving_line = ProcessByKey(position_state, QStringLiteral("linetracer"));
+    assert(moving_line.departure_position->location == QStringLiteral("A"));
+    assert(moving_line.target_position->location == QStringLiteral("C"));
+    assert(moving_line.confirmed_position->area == QStringLiteral("DEPARTURE"));
+    assert(moving_line.movement_state == QStringLiteral("MOVING"));
+
+    result = position_state.applyEnvelope(
+        Envelope("SNAPSHOT-PI-LT-01-2", "DEVICE_STATUS", DeviceStatus("ONLINE", "MOVING", "WORK-LT"),
+                 QStringLiteral("PI-LT-01"), QStringLiteral("2026-07-23T01:00:01.000Z")));
+    assert(result.applied);
+    assert(ProcessByKey(position_state, QStringLiteral("linetracer")).confirmed_position->location ==
+           QStringLiteral("A"));
+
+    auto partial_position = DeviceStatus(QStringLiteral("ONLINE"), QStringLiteral("MOVING"), QStringLiteral("WORK-LT"));
+    partial_position.insert(QStringLiteral("departurePosition"),
+                            Position(QStringLiteral("DEPARTURE"), QStringLiteral("B")));
+    result =
+        position_state.applyEnvelope(Envelope("SNAPSHOT-PI-LT-01-3", "DEVICE_STATUS", partial_position,
+                                              QStringLiteral("PI-LT-01"), QStringLiteral("2026-07-23T01:00:02.000Z")));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(position_state, QStringLiteral("linetracer")).confirmed_position->location ==
+           QStringLiteral("A"));
+
+    result =
+        position_state.applyEnvelope(Envelope("SNAPSHOT-PI-LT-01-4", "DEVICE_STATUS",
+                                              PositionStatus(QStringLiteral("POSITION_UNKNOWN"), QJsonValue::Null,
+                                                             QJsonValue::Null, QJsonValue::Null, QJsonValue::Null),
+                                              QStringLiteral("PI-LT-01"), QStringLiteral("2026-07-23T01:00:03.000Z")));
+    assert(result.applied);
+    assert(!ProcessByKey(position_state, QStringLiteral("linetracer")).confirmed_position.has_value());
+
     OperationsDashboardState ordered_device_state;
-    auto result = ordered_device_state.applyEnvelope(Envelope("SORTING-NORMAL-NEWER", "DEVICE_STATUS",
-                                                              DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
-                                                              "2026-07-23T01:00:00.300Z"));
+    result = ordered_device_state.applyEnvelope(Envelope("SORTING-NORMAL-NEWER", "DEVICE_STATUS",
+                                                         DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                         "2026-07-23T01:00:00.300Z"));
     assert(result.applied);
     result =
         ordered_device_state.applyEnvelope(Envelope("SORTING-ERROR-OLDER", "ERROR_OCCURRED",
