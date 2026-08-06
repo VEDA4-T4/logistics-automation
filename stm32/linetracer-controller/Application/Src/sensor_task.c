@@ -7,6 +7,7 @@
 #include "app_queues.h"
 #include "app_timing.h"
 #include "cmsis_os2.h"
+#include "control_task.h"
 #include "main.h"
 #include "sensor_config.h"
 #include "sensor_logic.h"
@@ -57,6 +58,7 @@ typedef struct {
     uint32_t reported_safety_error_flags;
     uint8_t reported_safety_obstacle_mask;
     uint8_t next_ultrasonic_slot;
+    uint8_t ultrasonic_monitoring;
 } sensor_task_context_t;
 
 enum {
@@ -66,16 +68,12 @@ enum {
     SENSOR_ULTRASONIC_RIGHT_INDEX
 };
 
-/*
- * Keep one transmitter active at a time, but sample the front sensor in
- * three-sample bursts so a real obstacle
- * can stop the vehicle promptly.
- */
+/* Keep one transmitter active at a time to prevent echo cross-talk. */
 static const uint8_t s_ultrasonic_measurement_schedule[] = {
-    SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_FRONT_INDEX,
-    SENSOR_ULTRASONIC_REAR_INDEX,  SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_FRONT_INDEX,
-    SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_LEFT_INDEX,  SENSOR_ULTRASONIC_FRONT_INDEX,
-    SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_RIGHT_INDEX,
+    SENSOR_ULTRASONIC_FRONT_INDEX,
+    SENSOR_ULTRASONIC_RIGHT_INDEX,
+    SENSOR_ULTRASONIC_REAR_INDEX,
+    SENSOR_ULTRASONIC_LEFT_INDEX,
 };
 
 static const ultrasonic_sensor_descriptor_t s_ultrasonic_sensors[SENSOR_LOGIC_ULTRASONIC_COUNT] = {
@@ -478,6 +476,16 @@ static void CheckUltrasonicCaptureTimeout(uint32_t now_ms) {
     s_ultrasonic_capture_state = ULTRASONIC_CAPTURE_ERROR;
 }
 
+static void CancelUltrasonicMeasurement(void) {
+    if (s_ultrasonic_active_index < SENSOR_LOGIC_ULTRASONIC_COUNT) {
+        (void)HAL_TIM_IC_Stop_IT(&htim1, s_ultrasonic_sensors[s_ultrasonic_active_index].timer_channel);
+    }
+
+    StopUltrasonicTriggerPulse();
+    s_ultrasonic_capture_state = ULTRASONIC_CAPTURE_IDLE;
+    s_ultrasonic_pulse_width_us = 0U;
+}
+
 static uint8_t TakeUltrasonicResult(ultrasonic_result_t* result) {
     ultrasonic_capture_state_t state = s_ultrasonic_capture_state;
 
@@ -609,23 +617,35 @@ void StartSensorTask(void* argument) {
                                context.logic.line_center_black, NormalizeLineInput(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5)),
                                now_ms, &update);
 
-        CheckUltrasonicCaptureTimeout(now_ms);
-        if (TakeUltrasonicResult(&ultrasonic_result) != 0U) {
-            SensorLogic_UpdateUltrasonic(&context.logic, ultrasonic_result.sensor_index,
-                                         PulseWidthToMillimeters(ultrasonic_result.pulse_width_us),
-                                         ultrasonic_result.valid, now_ms, &update);
-            context.next_ultrasonic_slot =
-                (uint8_t)((context.next_ultrasonic_slot + 1U) % sizeof(s_ultrasonic_measurement_schedule));
-        }
-
-        if ((ultrasonic_timer_ready != 0U) && (s_ultrasonic_capture_state == ULTRASONIC_CAPTURE_IDLE) &&
-            (TimeElapsed(now_ms, context.last_ultrasonic_start_ms, APP_TIMING_ULTRASONIC_PERIOD_MS) != 0U)) {
-            uint8_t sensor_index = s_ultrasonic_measurement_schedule[context.next_ultrasonic_slot];
-
-            context.last_ultrasonic_start_ms = now_ms;
-            if (StartUltrasonicMeasurement(sensor_index, now_ms) != 0U) {
-                SensorLogic_MarkUltrasonicStarted(&context.logic, sensor_index, now_ms);
+        if (ControlTask_ShouldMonitorUltrasonic()) {
+            if (context.ultrasonic_monitoring == 0U) {
+                context.ultrasonic_monitoring = 1U;
+                context.next_ultrasonic_slot = 0U;
+                context.last_ultrasonic_start_ms = now_ms - APP_TIMING_ULTRASONIC_PERIOD_MS;
             }
+
+            CheckUltrasonicCaptureTimeout(now_ms);
+            if (TakeUltrasonicResult(&ultrasonic_result) != 0U) {
+                SensorLogic_UpdateUltrasonic(&context.logic, ultrasonic_result.sensor_index,
+                                             PulseWidthToMillimeters(ultrasonic_result.pulse_width_us),
+                                             ultrasonic_result.valid, now_ms, &update);
+                context.next_ultrasonic_slot =
+                    (uint8_t)((context.next_ultrasonic_slot + 1U) % sizeof(s_ultrasonic_measurement_schedule));
+            }
+
+            if ((ultrasonic_timer_ready != 0U) && (s_ultrasonic_capture_state == ULTRASONIC_CAPTURE_IDLE) &&
+                (TimeElapsed(now_ms, context.last_ultrasonic_start_ms, APP_TIMING_ULTRASONIC_PERIOD_MS) != 0U)) {
+                uint8_t sensor_index = s_ultrasonic_measurement_schedule[context.next_ultrasonic_slot];
+
+                context.last_ultrasonic_start_ms = now_ms;
+                if (StartUltrasonicMeasurement(sensor_index, now_ms) != 0U) {
+                    SensorLogic_MarkUltrasonicStarted(&context.logic, sensor_index, now_ms);
+                }
+            }
+        } else if (context.ultrasonic_monitoring != 0U) {
+            CancelUltrasonicMeasurement();
+            SensorLogic_SuspendUltrasonic(&context.logic, now_ms, &update);
+            context.ultrasonic_monitoring = 0U;
         }
 
         SensorLogic_CheckStaleness(&context.logic, now_ms);

@@ -165,6 +165,7 @@ void SensorLogic_StartFsrBaselineCapture(sensor_logic_context_t* context, sensor
 void SensorLogic_MarkFsrError(sensor_logic_context_t* context, uint32_t error_flag, uint32_t now_ms);
 void SensorLogic_MarkAllUltrasonicUnavailable(sensor_logic_context_t* context, uint32_t now_ms);
 void SensorLogic_MarkUltrasonicStarted(sensor_logic_context_t* context, uint8_t sensor_index, uint32_t now_ms);
+void SensorLogic_SuspendUltrasonic(sensor_logic_context_t* context, uint32_t now_ms, sensor_logic_update_t* update);
 void SensorLogic_UpdateUltrasonic(sensor_logic_context_t* context, uint8_t sensor_index, uint16_t distance_mm,
                                   uint8_t valid, uint32_t now_ms, sensor_logic_update_t* update);
 void SensorLogic_CheckStaleness(sensor_logic_context_t* context, uint32_t now_ms);

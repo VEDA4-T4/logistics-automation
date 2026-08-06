@@ -111,17 +111,24 @@
 /* HC-SR04 operating range and obstacle hysteresis. */
 #define SENSOR_ULTRASONIC_MIN_MM 15U
 #define SENSOR_ULTRASONIC_MAX_MM 4000U
-#define SENSOR_OBSTACLE_ON_MM 35U
-#define SENSOR_OBSTACLE_OFF_MM 80U
-#define SENSOR_OBSTACLE_ACTIVATE_SAMPLES 3U
-#define SENSOR_OBSTACLE_CLEAR_SAMPLES 5U
+#define SENSOR_OBSTACLE_ON_MM 50U
+#define SENSOR_OBSTACLE_OFF_MM 70U
+#define SENSOR_OBSTACLE_ACTIVATE_SAMPLES 1U
+#define SENSOR_OBSTACLE_CLEAR_SAMPLES 1U
 #define SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES 20U
 #define SENSOR_ULTRASONIC_RECOVERY_SUCCESSES 3U
 #define SENSOR_ULTRASONIC_ECHO_TIMEOUT_MS 40U
 #define SENSOR_ULTRASONIC_STALE_MS 3000U
 
-/* Only the front sensor can stop forward route motion. Other directions remain diagnostic. */
-#define SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY 1U
+/* Any valid close obstacle can pause movement, regardless of direction. */
+#define SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY 0U
+
+/*
+ * A missing echo is retained in diagnostics, but must not latch the vehicle
+ * into SENSOR_FAULT. Only a valid,
+ * close distance produces an obstacle stop.
+ */
+#define SENSOR_ULTRASONIC_TIMEOUT_SAFETY_FAULT 0U
 
 /* TIM1 is configured at runtime to count one tick per microsecond. */
 #define SENSOR_ULTRASONIC_TIMER_HZ 1000000U
@@ -133,6 +140,10 @@
 
 #if ((SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY != 0U) && (SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY != 1U))
 #error "SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY must be either 0 or 1"
+#endif
+
+#if ((SENSOR_ULTRASONIC_TIMEOUT_SAFETY_FAULT != 0U) && (SENSOR_ULTRASONIC_TIMEOUT_SAFETY_FAULT != 1U))
+#error "SENSOR_ULTRASONIC_TIMEOUT_SAFETY_FAULT must be either 0 or 1"
 #endif
 
 #if (SENSOR_FSR_FILTER_SAMPLES == 0U)
