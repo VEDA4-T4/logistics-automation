@@ -16,6 +16,7 @@
 #include <QTimer>
 #include <QUuid>
 #include <array>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -121,6 +122,16 @@ void MqttClient::stop() {
 
 qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& target_device_id,
                                   const QString& component_id) {
+    return publishCommand(command, target_device_id, component_id, true);
+}
+
+qint32 MqttClient::requestCentralSnapshots() {
+    return publishCommand(mqtt::ControlCommand::kStatusRequest, QStringLiteral("ALL"),
+                          ToQString(mqtt::kCentralSnapshotComponentId), false);
+}
+
+qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& target_device_id,
+                                  const QString& component_id, const bool track_response) {
     const auto target_text = target_device_id.toStdString();
     const auto component_text = component_id.toStdString();
     if (command == mqtt::ControlCommand::kUnknown || !mqtt::IsValidTopicLevel(target_text) ||
@@ -162,7 +173,9 @@ qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& t
         return -1;
     }
 
-    emit commandPublished(message_id, request_id, command);
+    if (track_response) {
+        emit commandPublished(message_id, request_id, command);
+    }
     return message_id;
 }
 
@@ -221,6 +234,7 @@ void MqttClient::subscribeRequiredTopics() {
         ToQString(mqtt::QtEventTopic(client_id)),    ToQString(mqtt::QtErrorTopic(client_id)),
         ToQString(mqtt::kServerStatusTopic),         ToQString(mqtt::kServerHeartbeatTopic),
     };
+    const auto remaining = std::make_shared<qsizetype>(topics.size());
 
     for (const auto& topic : topics) {
         auto* subscription = client_->subscribe(QMqttTopicFilter(topic), 1);
@@ -229,10 +243,16 @@ void MqttClient::subscribeRequiredTopics() {
             continue;
         }
         connect(subscription, &QMqttSubscription::stateChanged, this,
-                [this, subscription, topic](QMqttSubscription::SubscriptionState state) {
+                [this, subscription, topic, remaining,
+                 subscribed = false](QMqttSubscription::SubscriptionState state) mutable {
                     if (state == QMqttSubscription::Error) {
                         emit errorOccurred(
                             QStringLiteral("MQTT 토픽 구독 실패: %1 (%2)").arg(topic, subscription->reason()));
+                    } else if (state == QMqttSubscription::Subscribed && !subscribed) {
+                        subscribed = true;
+                        if (--*remaining == 0) {
+                            emit subscriptionsReady();
+                        }
                     }
                 });
     }

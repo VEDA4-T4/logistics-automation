@@ -17,6 +17,7 @@ using logistics::control_center::FactoryDistanceText;
 using logistics::control_center::FactoryMotionPhase;
 using logistics::control_center::FactoryNodeVisualState;
 using logistics::control_center::FactoryRouteIndex;
+using logistics::control_center::LineTracerPositionStatus;
 using logistics::control_center::ProcessUnitStatus;
 
 namespace {
@@ -632,6 +633,27 @@ int main(int argc, char* argv[]) {
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("input")) == input_stopped);
     assert(view.boxPosition(QStringLiteral("sorting")) != sorting_before);
+
+    logistics::control_center::FactoryTopViewWidget position_view;
+    auto positioned_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-POSITION"),
+                                   QStringLiteral("MOVING"), QStringLiteral("WORK-POSITION"));
+    positioned_line.departure_position =
+        LineTracerPositionStatus{ .area = QStringLiteral("DEPARTURE"), .location = QStringLiteral("A") };
+    positioned_line.target_position =
+        LineTracerPositionStatus{ .area = QStringLiteral("DESTINATION"), .location = QStringLiteral("C") };
+    positioned_line.confirmed_position = positioned_line.departure_position;
+    positioned_line.movement_state = QStringLiteral("MOVING");
+    position_view.setProcesses({ positioned_line });
+    assert(position_view.boxPosition(QStringLiteral("linetracer")) == QPointF(80, 250));
+    position_view.advanceAnimationsForTest();
+    assert(position_view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 250));
+    position_view.advanceAnimationsForTest();
+    assert(position_view.boxPosition(QStringLiteral("linetracer")) == QPointF(292, 345));
+
+    positioned_line.confirmed_position = positioned_line.target_position;
+    positioned_line.movement_state = QStringLiteral("ARRIVED");
+    position_view.setProcesses({ positioned_line });
+    assert(position_view.boxPosition(QStringLiteral("linetracer")) == QPointF(504, 442));
 
     line_tracer.connection_state = logistics::contracts::mqtt::ConnectionState::kOnline;
     line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");

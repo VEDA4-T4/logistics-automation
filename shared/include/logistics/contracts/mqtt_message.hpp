@@ -54,6 +54,8 @@ enum class ControlCommand : std::uint8_t {
     kDestinationSet,
 };
 
+inline constexpr std::string_view kCentralSnapshotComponentId = "CENTRAL_SNAPSHOT";
+
 enum class CommandResult : std::uint8_t {
     kUnknown,
     kReceived,
