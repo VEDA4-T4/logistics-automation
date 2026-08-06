@@ -513,6 +513,18 @@ int Application::Run(int argc, char* argv[]) {
         return 7;
     }
 
+    Database maintenance_database;
+    database_status = maintenance_database.Open(server_config.database);
+    if (!database_status.ok()) {
+        mqtt_client.Stop();
+        static_cast<void>(upload_database.Close());
+        std::cerr << "[server][ERROR] maintenance database open failed: " << database_status.message << '\n';
+        return 7;
+    }
+    RetentionService scheduled_retention(maintenance_database, server_config.storage);
+    auto next_retention_cleanup = std::chrono::steady_clock::now() +
+                                  std::chrono::hours(server_config.storage.cleanup_interval_hours);
+
     HttpUploadServer upload_server(upload_database, server_config.http);
     database_status = upload_server.Start();
     if (!database_status.ok()) {
@@ -529,6 +541,15 @@ int Application::Run(int argc, char* argv[]) {
 
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        const auto loop_now = std::chrono::steady_clock::now();
+        if (loop_now >= next_retention_cleanup) {
+            next_retention_cleanup = loop_now + std::chrono::hours(server_config.storage.cleanup_interval_hours);
+            const auto retention_status = scheduled_retention.RunOnce(CurrentUnixTimeMilliseconds());
+            if (!retention_status.ok()) {
+                std::cerr << "[server][ERROR] scheduled retention cleanup failed: " << retention_status.message
+                          << '\n';
+            }
+        }
         if (recalibration_notifications_pending && mqtt_client.IsConnected()) {
             recalibration_notifications_pending = !publish_recalibration_notifications();
         }
@@ -551,6 +572,12 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_client.Stop();
 
     bool shutdown_ok = persist_process_state();
+    database_status = maintenance_database.Close();
+    if (!database_status.ok()) {
+        std::cerr << "[server][ERROR] maintenance database close failed during shutdown: " << database_status.message
+                  << '\n';
+        shutdown_ok = false;
+    }
     database_status = upload_database.Close();
     if (!database_status.ok()) {
         std::cerr << "[server][ERROR] HTTP upload database close failed during shutdown: " << database_status.message
