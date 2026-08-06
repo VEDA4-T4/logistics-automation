@@ -61,6 +61,7 @@ private:
     QTcpSocket* socket_{ nullptr };
     QTimer* reconnect_timer_{ nullptr };
     QTimer* keep_alive_timer_{ nullptr };
+    QTimer* response_timeout_timer_{ nullptr };
     QUrl stream_url_;
     QUrl request_url_;
     QUrl metadata_track_url_;

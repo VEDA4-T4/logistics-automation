@@ -11,6 +11,10 @@ namespace logistics::control_center {
 namespace {
 
 constexpr qsizetype kMaximumMetadataDocumentSize = 4 * 1024 * 1024;
+constexpr qsizetype kMaximumRtspHeaderSize = 64 * 1024;
+constexpr qsizetype kMaximumRtspBodySize = 4 * 1024 * 1024;
+constexpr qsizetype kMaximumRtspReceiveBufferSize = kMaximumRtspHeaderSize + kMaximumRtspBodySize + 4;
+constexpr int kRtspResponseTimeoutMs = 5000;
 
 QByteArray hashHex(QByteArrayView value, QCryptographicHash::Algorithm algorithm) {
     return QCryptographicHash::hash(value, algorithm).toHex();
@@ -44,18 +48,29 @@ OnvifRtspMetadataClient::OnvifRtspMetadataClient(QObject* parent)
     : QObject(parent),
       socket_(new QTcpSocket(this)),
       reconnect_timer_(new QTimer(this)),
-      keep_alive_timer_(new QTimer(this)) {
+      keep_alive_timer_(new QTimer(this)),
+      response_timeout_timer_(new QTimer(this)) {
     reconnect_timer_->setSingleShot(true);
     keep_alive_timer_->setInterval(20000);
+    response_timeout_timer_->setSingleShot(true);
+    socket_->setReadBufferSize(kMaximumRtspReceiveBufferSize);
 
     connect(reconnect_timer_, &QTimer::timeout, this, &OnvifRtspMetadataClient::connectToCamera);
     connect(keep_alive_timer_, &QTimer::timeout, this, &OnvifRtspMetadataClient::sendKeepAlive);
+    connect(response_timeout_timer_, &QTimer::timeout, this, [this]() {
+        scheduleReconnect(QStringLiteral("ONVIF RTSP response deadline exceeded"));
+    });
     connect(socket_, &QTcpSocket::connected, this, [this]() {
         emit diagnosticMessage(QStringLiteral("TCP 연결 성공 · DESCRIBE 요청"));
         sendDescribe();
     });
     connect(socket_, &QTcpSocket::readyRead, this, [this]() {
-        receive_buffer_.append(socket_->readAll());
+        const auto remaining = kMaximumRtspReceiveBufferSize - receive_buffer_.size();
+        receive_buffer_.append(socket_->read(std::max<qint64>(1, remaining + 1)));
+        if (receive_buffer_.size() > kMaximumRtspReceiveBufferSize) {
+            scheduleReconnect(QStringLiteral("ONVIF RTSP receive buffer exceeded the safety limit"));
+            return;
+        }
         processIncomingData();
     });
     connect(socket_, &QTcpSocket::disconnected, this, [this]() {
@@ -94,6 +109,7 @@ void OnvifRtspMetadataClient::stop() {
     stopped_ = true;
     reconnect_timer_->stop();
     keep_alive_timer_->stop();
+    response_timeout_timer_->stop();
     socket_->abort();
     resetSession();
 }
@@ -152,14 +168,27 @@ void OnvifRtspMetadataClient::processIncomingData() {
 
         const auto header_end = receive_buffer_.indexOf("\r\n\r\n");
         if (header_end < 0) {
+            if (receive_buffer_.size() > kMaximumRtspHeaderSize) {
+                scheduleReconnect(QStringLiteral("ONVIF RTSP response header exceeded 64 KiB"));
+            }
+            return;
+        }
+        if (header_end > kMaximumRtspHeaderSize) {
+            scheduleReconnect(QStringLiteral("ONVIF RTSP response header exceeded 64 KiB"));
             return;
         }
         const auto header = receive_buffer_.left(header_end);
         const auto lines = header.split('\n');
         const auto headers = parseHeaders(lines);
         bool content_length_valid = false;
-        const auto content_length = headers.value("content-length").toInt(&content_length_valid);
-        const auto body_size = content_length_valid ? content_length : 0;
+        const auto content_length = headers.value("content-length").toLongLong(&content_length_valid);
+        if (headers.contains("content-length") &&
+            (!content_length_valid || content_length < 0 || content_length > kMaximumRtspBodySize)) {
+            scheduleReconnect(
+                QStringLiteral("ONVIF RTSP response body exceeded 4 MiB or has an invalid Content-Length"));
+            return;
+        }
+        const auto body_size = static_cast<qsizetype>(content_length_valid ? content_length : 0);
         if (receive_buffer_.size() < header_end + 4 + body_size) {
             return;
         }
@@ -170,6 +199,7 @@ void OnvifRtspMetadataClient::processIncomingData() {
 }
 
 void OnvifRtspMetadataClient::processRtspResponse(const QByteArray& header, const QByteArray& body) {
+    response_timeout_timer_->stop();
     auto lines = header.split('\n');
     for (auto& line : lines) {
         line = line.trimmed();
@@ -298,6 +328,7 @@ void OnvifRtspMetadataClient::sendRequest(const QByteArray& method, const QUrl& 
         return;
     }
     pending_request_ = { method, url, headers, authentication_retried };
+    response_timeout_timer_->start(kRtspResponseTimeoutMs);
     static quint32 cseq = 0;
     QByteArray request;
     request += method + ' ' + url.toEncoded() + " RTSP/1.0\r\n";
@@ -465,6 +496,7 @@ QUrl OnvifRtspMetadataClient::requestUrlWithoutCredentials(const QUrl& url) cons
 
 void OnvifRtspMetadataClient::resetSession() {
     keep_alive_timer_->stop();
+    response_timeout_timer_->stop();
     receive_buffer_.clear();
     metadata_buffer_.clear();
     pending_request_ = {};
