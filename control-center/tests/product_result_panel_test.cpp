@@ -23,6 +23,7 @@ void AssertHasFullValueToolTip(const QWidget& parent, const QString& value) {
     for (const auto* label : labels) {
         if (label->text() == value) {
             assert(label->toolTip().contains(value));
+            assert(label->styleSheet().contains(QStringLiteral("color:#e7eef3")));
             return;
         }
     }
@@ -62,6 +63,15 @@ int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
 
     logistics::control_center::ProductResultPanel panel(QUrl(QStringLiteral("http://127.0.0.1/")));
+    int empty_value_count = 0;
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        if (label->text() == QStringLiteral("데이터 없음")) {
+            assert(label->styleSheet().contains(QStringLiteral("color:#cca700")));
+            ++empty_value_count;
+        }
+    }
+    assert(empty_value_count == 7);
+
     logistics::control_center::CurrentProduct product;
     product.work_id = QStringLiteral("work-20260804-very-long-identifier");
     product.barcode = QStringLiteral("880123456789012345678901234567890");

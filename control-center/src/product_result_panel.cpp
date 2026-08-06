@@ -37,6 +37,7 @@ QLabel* AddValueRow(QGridLayout* layout, int row, int column, const QString& tit
     title_label->setMinimumWidth(36);
     title_label->setStyleSheet("color:#91a3b0;font-size:10px;font-weight:600;");
     auto* value_label = new QLabel(QStringLiteral("데이터 없음"), parent);
+    value_label->setStyleSheet("color:#cca700;font-size:10px;font-weight:700;");
     value_label->setWordWrap(false);
     value_label->setMinimumWidth(0);
     value_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
