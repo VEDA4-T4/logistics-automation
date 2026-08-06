@@ -65,6 +65,20 @@ vision_device_id=PI-VISION-01
 gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
+line_tracer_initial_position=A
+[homography]
+enabled=true
+pixel_to_conveyor=2,0,10,0,2,20,0,0,1
+conveyor_plane_z_mm=8.5e2
+robot_base_x_mm=1250
+robot_base_y_mm=430
+robot_base_z_mm=0
+robot_base_yaw_deg=90
+box_length_mm=400
+box_width_mm=300
+box_height_mm=250
+coordinate_frame=PI-GRIPPER-01_BASE
+calibration_version=4
 )ini");
 
     const auto config = central_server::LoadServerConfig(path);
@@ -76,6 +90,13 @@ line_tracer_device_id=PI-LT-01
     assert(config.http.tls_private_key.empty());
     assert(config.http.port == 8081);
     assert(config.process.enabled);
+    assert(config.process.line_tracer_initial_position == "A");
+    assert(config.process.homography.enabled);
+    assert(config.process.homography.pixel_to_conveyor[0] == 2.0);
+    assert(config.process.homography.pixel_to_conveyor[2] == 10.0);
+    assert(config.process.homography.conveyor_plane_z_mm == 850.0);
+    assert(config.process.homography.box_height_mm == 250.0);
+    assert(config.process.homography.calibration_version == 4);
     Remove(path);
 }
 
@@ -104,6 +125,15 @@ void TestInvalidSettingsAreRejected() {
     ExpectRejected("tls-files",
                    "[http]\nenabled=true\nbearer_token=token\ntls_enabled=true\n"
                    "tls_certificate=missing.crt\ntls_private_key=missing.key\n");
+    ExpectRejected("line-tracer-position", "[process]\nline_tracer_initial_position=D\n");
+    ExpectRejected("homography-matrix", "[homography]\nenabled=true\npixel_to_conveyor=1,0,0\n");
+    ExpectRejected("homography-number", "[homography]\nconveyor_plane_z_mm=850mm\n");
+    ExpectRejected("homography-singular",
+                   "[homography]\nenabled=true\npixel_to_conveyor=1,0,0,0,0,0,0,0,1\n"
+                   "box_length_mm=400\nbox_width_mm=300\nbox_height_mm=250\n");
+    ExpectRejected("homography-box",
+                   "[homography]\nenabled=true\npixel_to_conveyor=1,0,0,0,1,0,0,0,1\n"
+                   "box_length_mm=200\nbox_width_mm=300\nbox_height_mm=250\n");
     ExpectRejected("section", "[databse]\npath=/tmp/server.db\n");
 }
 

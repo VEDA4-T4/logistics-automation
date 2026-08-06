@@ -30,6 +30,7 @@
 
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/control_center/command_response.hpp"
+#include "logistics/control_center/control_center_theme.hpp"
 #include "logistics/control_center/detection_overlay.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
 #include "logistics/control_center/onvif_metadata.hpp"
@@ -39,6 +40,7 @@
 #include "logistics/control_center/process_control_panel.hpp"
 #include "logistics/control_center/product_result_panel.hpp"
 #include "logistics/control_center/rtsp_h264_stream.hpp"
+#include "logistics/control_center/rtsp_stream_worker.hpp"
 #include "logistics/control_center/ui_dialog.hpp"
 
 namespace logistics::control_center {
@@ -64,6 +66,7 @@ struct ControlCenterConfig {
     QString mqtt_client_id{ "control-center" };
     QString mqtt_username;
     QString mqtt_password;
+    QString mqtt_ca_certificate;
     int mqtt_port{ kDefaultMqttPort };
     int mqtt_reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     int mqtt_keep_alive_seconds{ 30 };
@@ -73,6 +76,7 @@ struct ControlCenterConfig {
     int channel_count{ kDefaultChannelCount };
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     bool low_latency{ true };
+    bool mqtt_tls_enabled{ false };
     int network_timeout_ms{ kDefaultRtspNetworkTimeoutMs };
     qsizetype probe_size_bytes{ kDefaultRtspProbeSizeBytes };
     qsizetype maximum_buffer_size_bytes{ kDefaultRtspMaximumBufferSizeBytes };
@@ -176,6 +180,22 @@ ControlCenterConfig loadControlCenterConfig() {
 
     config.mqtt_username = settings.value("mqtt/username").toString();
     config.mqtt_password = settings.value("mqtt/password").toString();
+
+    const auto mqtt_tls_value = settings.value("mqtt/tls_enabled", false).toString().trimmed().toLower();
+
+    if (mqtt_tls_value == QStringLiteral("true") || mqtt_tls_value == QStringLiteral("1")) {
+        config.mqtt_tls_enabled = true;
+    } else if (mqtt_tls_value == QStringLiteral("false") || mqtt_tls_value == QStringLiteral("0")) {
+        config.mqtt_tls_enabled = false;
+    } else {
+        config.warnings.append(QStringLiteral("mqtt/tls_enabled는 true 또는 false여야 하므로 false를 사용합니다."));
+    }
+
+    config.mqtt_ca_certificate = settings.value("mqtt/ca_certificate").toString().trimmed();
+
+    if (config.mqtt_tls_enabled && config.mqtt_ca_certificate.isEmpty()) {
+        config.warnings.append(QStringLiteral("MQTT TLS가 활성화됐지만 mqtt/ca_certificate가 비어 있습니다."));
+    }
 
     bool mqtt_port_is_valid = false;
     const auto mqtt_port = settings.value("mqtt/port", kDefaultMqttPort).toInt(&mqtt_port_is_valid);
@@ -409,10 +429,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Smart Logistics Control Center");
     setMinimumSize(1280, 720);
     resize(1600, 900);
-    setStyleSheet(
-        "QMainWindow{background:#1f1f1f;}"
-        "QStatusBar{background:#181818;color:#cccccc;border-top:1px solid #2b2b2b;}"
-        "QToolTip{background:#252526;color:#f0f0f0;border:1px solid #454545;padding:5px;}");
+    setStyleSheet(ControlCenterStyleSheet());
 
     const auto config = loadControlCenterConfig();
     control_target_device_id_ = config.control_target_device_id;
@@ -429,6 +446,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
     players_.resize(channel_count_);
+    video_stream_workers_.resize(channel_count_);
     video_streams_.resize(channel_count_);
     status_labels_.resize(channel_count_);
     channel_stacks_.resize(channel_count_);
@@ -442,14 +460,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* central_widget = new QWidget(this);
     central_widget->setObjectName(QStringLiteral("centralSurface"));
-    central_widget->setStyleSheet("#centralSurface{background:#1f1f1f;}");
     auto* root_layout = new QVBoxLayout(central_widget);
     root_layout->setContentsMargins(0, 0, 0, 0);
     root_layout->setSpacing(0);
 
     auto* app_header = new QFrame(central_widget);
     app_header->setObjectName(QStringLiteral("appHeader"));
-    app_header->setStyleSheet("#appHeader{background:#181818;border-bottom:1px solid #2b2b2b;}");
     app_header->setMinimumHeight(54);
     app_header->setMaximumHeight(54);
     auto* app_header_layout = new QHBoxLayout(app_header);
@@ -476,25 +492,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
     operations_dashboard_panel_->setState(operations_dashboard_state_);
     operations_dashboard_panel_->setControlTarget(config.control_target_device_id);
-    root_layout->addWidget(operations_dashboard_panel_);
 
     auto* content = new QWidget(central_widget);
     auto* content_layout = new QHBoxLayout(content);
-    content_layout->setContentsMargins(10, 10, 10, 10);
+    content_layout->setContentsMargins(10, 0, 10, 0);
     content_layout->setSpacing(0);
 
     auto* content_splitter = new QSplitter(Qt::Horizontal, content);
     content_splitter->setObjectName(QStringLiteral("contentSplitter"));
     content_splitter->setChildrenCollapsible(false);
     content_splitter->setHandleWidth(7);
-    content_splitter->setStyleSheet(
-        "QSplitter::handle{background:#1f1f1f;border-left:1px solid #303030;border-right:1px solid #303030;}"
-        "QSplitter::handle:hover{background:#264f78;}");
 
     auto* video_container = new QWidget(content_splitter);
     auto* video_grid = new QGridLayout(video_container);
     video_grid->setContentsMargins(0, 0, 0, 0);
-    video_grid->setSpacing(8);
+    video_grid->setHorizontalSpacing(8);
+    video_grid->setVerticalSpacing(0);
 
     auto* side_panel = new QWidget(content_splitter);
     side_panel->setObjectName(QStringLiteral("sidePanel"));
@@ -502,17 +515,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     side_panel->setStyleSheet("#sidePanel{background:transparent;}");
     auto* side_layout = new QVBoxLayout(side_panel);
     side_layout->setContentsMargins(0, 0, 0, 0);
-    side_layout->setSpacing(10);
+    side_layout->setSpacing(8);
     detail_tabs_ = new QTabWidget(side_panel);
     detail_tabs_->setObjectName(QStringLiteral("detailTabs"));
     detail_tabs_->setDocumentMode(false);
-    detail_tabs_->setStyleSheet(
-        "QTabWidget::pane{border:1px solid #2b2b2b;background:#181818;top:-1px;}"
-        "QTabBar::tab{background:#252526;color:#9d9d9d;border:1px solid #333333;border-bottom:0;"
-        "font-size:11px;font-weight:600;min-width:92px;padding:8px 16px;margin-right:2px;}"
-        "QTabBar::tab:hover{background:#2d2d30;color:#f0f0f0;}"
-        "QTabBar::tab:selected{background:#181818;color:#f0f0f0;border-top:2px solid #4daafc;"
-        "padding-top:7px;}");
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_tabs_);
     operational_log_panel_ = new OperationalLogPanel(detail_tabs_);
     detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));
@@ -536,7 +542,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     content_splitter->setStretchFactor(1, 2);
     content_splitter->setSizes({ 740, 500 });
     content_layout->addWidget(content_splitter);
-    root_layout->addWidget(content, 1);
+
+    auto* workspace_splitter = new QSplitter(Qt::Vertical, central_widget);
+    workspace_splitter->setObjectName(QStringLiteral("workspaceSplitter"));
+    workspace_splitter->setChildrenCollapsible(false);
+    workspace_splitter->setHandleWidth(7);
+    operations_dashboard_panel_->setMinimumHeight(250);
+    content->setMinimumHeight(360);
+    workspace_splitter->addWidget(operations_dashboard_panel_);
+    workspace_splitter->addWidget(content);
+    workspace_splitter->setStretchFactor(0, 0);
+    workspace_splitter->setStretchFactor(1, 1);
+    workspace_splitter->setSizes({ 300, 520 });
+    root_layout->addWidget(workspace_splitter, 1);
     setCentralWidget(central_widget);
 
     mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
@@ -578,15 +596,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             statusBar()->showMessage(QStringLiteral("오류 로그 %1건을 확인 처리했습니다.").arg(count), 3000);
         }
     });
+    mqtt_client_ = new MqttClient(
+        {
+            .host = config.mqtt_host,
+            .client_id = config.mqtt_client_id,
+            .username = config.mqtt_username,
+            .password = config.mqtt_password,
+            .ca_certificate = config.mqtt_ca_certificate,
+            .port = config.mqtt_port,
+            .reconnect_interval_ms = config.mqtt_reconnect_interval_ms,
+            .keep_alive_seconds = config.mqtt_keep_alive_seconds,
+            .tls_enabled = config.mqtt_tls_enabled,
+        },
+        this);
 
-    mqtt_client_ = new MqttClient({ .host = config.mqtt_host,
-                                    .client_id = config.mqtt_client_id,
-                                    .username = config.mqtt_username,
-                                    .password = config.mqtt_password,
-                                    .port = config.mqtt_port,
-                                    .reconnect_interval_ms = config.mqtt_reconnect_interval_ms,
-                                    .keep_alive_seconds = config.mqtt_keep_alive_seconds },
-                                  this);
     connect(mqtt_client_, &MqttClient::connectionStateChanged, this,
             [this](MqttClient::ConnectionState state, const QString& detail) {
                 mqtt_status_label_->setToolTip(detail);
@@ -686,9 +709,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     for (std::size_t channel = 0; channel < channel_count_; ++channel) {
         players_[channel] = new QMediaPlayer(this);
-        video_streams_[channel] = new RtspH264Stream(this);
-        video_streams_[channel]->setNetworkTimeout(rtsp_network_timeout_ms_);
-        video_streams_[channel]->setMaximumBufferSize(rtsp_maximum_buffer_size_bytes_);
+        video_stream_workers_[channel] =
+            std::make_unique<RtspStreamWorker>(rtsp_network_timeout_ms_, rtsp_maximum_buffer_size_bytes_);
+        video_streams_[channel] = video_stream_workers_[channel]->stream();
         QPlaybackOptions playback_options;
         playback_options.setPlaybackIntent(rtsp_low_latency_ ? QPlaybackOptions::PlaybackIntent::LowLatencyStreaming
                                                              : QPlaybackOptions::PlaybackIntent::Playback);
@@ -706,14 +729,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         detection_overlays_[channel] = new DetectionOverlay(video_layers_[channel]);
         reconnect_timers_[channel] = new QTimer(this);
 
-        channel_panel->setStyleSheet("background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;");
+        channel_panel->setMinimumSize(320, 180);
+        channel_panel->setStyleSheet("background-color:#181818;border:1px solid #303030;border-radius:6px;");
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
         video_layout->addWidget(detection_overlays_[channel], 0, 0);
         detection_overlays_[channel]->setChannelLabel(QStringLiteral("CH %1 · 재생 중").arg(channel + 1));
 
         state_overlays_[channel]->setAttribute(Qt::WA_StyledBackground, true);
-        state_overlays_[channel]->setStyleSheet("background-color:#181818;border-radius:5px;");
+        state_overlays_[channel]->setStyleSheet("background-color:#181818;border-radius:6px;");
         overlay_layout->setContentsMargins(16, 12, 16, 12);
         channel_label->setStyleSheet("color:#cccccc;font-size:12px;font-weight:700;");
         status_labels_[channel]->setObjectName(QStringLiteral("channelStatus%1").arg(channel + 1));
@@ -916,7 +940,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         } else {
             setChannelState(channel, ChannelState::Connecting);
             reconnecting_[channel] = true;
-            video_streams_[channel]->start(stream_urls_[channel]);
+            video_stream_workers_[channel]->start(stream_urls_[channel]);
             if (metadata_clients_[channel] != nullptr) {
                 metadata_clients_[channel]->start(metadata_stream_urls_[channel]);
             }
@@ -940,6 +964,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
 
     mqtt_client_->start();
+}
+
+MainWindow::~MainWindow() {
+    for (auto* player : players_) {
+        player->stop();
+        player->setSource({});
+    }
+    video_stream_workers_.clear();
+    video_streams_.clear();
 }
 
 void MainWindow::updatePlaybackState(std::size_t channel) {
@@ -1008,10 +1041,10 @@ void MainWindow::reconnectChannel(std::size_t channel) {
 
     reconnecting_[channel] = true;
     setChannelState(channel, ChannelState::Connecting);
-    video_streams_[channel]->stop();
     players_[channel]->stop();
     players_[channel]->setSource({});
-    video_streams_[channel]->start(stream_urls_[channel]);
+    video_stream_workers_[channel]->stop();
+    video_stream_workers_[channel]->start(stream_urls_[channel]);
 }
 
 void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand command,

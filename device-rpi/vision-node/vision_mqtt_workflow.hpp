@@ -1,9 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "logistics/contracts/mqtt_codec.hpp"
 
@@ -17,7 +20,9 @@ struct VisionObservation final {
     std::int32_t box_height{};
     std::int32_t frame_width{};
     std::int32_t frame_height{};
+    std::array<contracts::mqtt::PixelPoint, 4> box_corners{};
     std::optional<std::string> barcode;
+    bool barcode_region_detected{};
 };
 
 struct AssignedVisionWork final {
@@ -34,6 +39,7 @@ public:
                                                                       std::string message_id, std::string timestamp);
     [[nodiscard]] bool AssignWork(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] bool HasPendingBarcode() const;
+    [[nodiscard]] bool NeedsBarcodeFallback() const;
     [[nodiscard]] std::optional<AssignedVisionWork> TakeAssignedWork();
     void CancelPendingWork();
     void CompleteWork();
@@ -53,6 +59,30 @@ private:
     std::size_t assigned_frames_{};
     std::optional<VisionObservation> observation_;
     std::optional<std::string> work_id_;
+    std::optional<std::string> last_completed_work_id_;
+};
+
+enum class VisionPublicationChannel { kEvent, kError };
+
+struct VisionPublication final {
+    VisionPublicationChannel channel{ VisionPublicationChannel::kEvent };
+    contracts::mqtt::MqttMessage message;
+};
+
+class VisionResultOutbox final {
+public:
+    using Publisher = std::function<bool(const contracts::mqtt::MqttMessage&)>;
+
+    [[nodiscard]] bool Enqueue(std::string work_id, std::vector<VisionPublication> publications);
+    [[nodiscard]] bool Flush(const Publisher& event_publisher, const Publisher& error_publisher);
+    [[nodiscard]] std::optional<std::string> PendingWorkId() const;
+    void Reset();
+
+private:
+    mutable std::mutex mutex_;
+    std::string work_id_;
+    std::vector<VisionPublication> publications_;
+    std::size_t next_publication_{};
 };
 
 [[nodiscard]] contracts::mqtt::MqttMessage MakePositionDetectedMessage(std::string_view device_id,

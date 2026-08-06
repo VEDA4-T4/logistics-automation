@@ -1,0 +1,82 @@
+# Central Server
+user central-server
+topic read server/request/+
+topic read device/+/register
+topic read device/+/response
+topic read device/+/status
+topic read device/+/event
+topic read device/+/error
+topic read device/+/heartbeat
+topic write qt/+/response
+topic write qt/+/status
+topic write qt/+/event
+topic write qt/+/error
+topic write device/+/command
+topic write system/broadcast/command
+topic write server/status
+topic write server/heartbeat
+
+# Control Center
+user control-center
+topic write server/request/control-center
+topic read qt/control-center/response
+topic read qt/control-center/status
+topic read qt/control-center/event
+topic read qt/control-center/error
+topic read server/status
+topic read server/heartbeat
+
+# Input Device
+user PI-INPUT-01
+topic read device/PI-INPUT-01/command
+topic read system/broadcast/command
+topic write device/PI-INPUT-01/register
+topic write device/PI-INPUT-01/response
+topic write device/PI-INPUT-01/status
+topic write device/PI-INPUT-01/event
+topic write device/PI-INPUT-01/error
+topic write device/PI-INPUT-01/heartbeat
+
+# Vision Device
+user PI-VISION-01
+topic read device/PI-VISION-01/command
+topic read system/broadcast/command
+topic write device/PI-VISION-01/register
+topic write device/PI-VISION-01/response
+topic write device/PI-VISION-01/status
+topic write device/PI-VISION-01/event
+topic write device/PI-VISION-01/error
+topic write device/PI-VISION-01/heartbeat
+
+# Gripper Device
+user PI-GRIPPER-01
+topic read device/PI-GRIPPER-01/command
+topic read system/broadcast/command
+topic write device/PI-GRIPPER-01/register
+topic write device/PI-GRIPPER-01/response
+topic write device/PI-GRIPPER-01/status
+topic write device/PI-GRIPPER-01/event
+topic write device/PI-GRIPPER-01/error
+topic write device/PI-GRIPPER-01/heartbeat
+
+# Sorting Device
+user PI-SORTING-01
+topic read device/PI-SORTING-01/command
+topic read system/broadcast/command
+topic write device/PI-SORTING-01/register
+topic write device/PI-SORTING-01/response
+topic write device/PI-SORTING-01/status
+topic write device/PI-SORTING-01/event
+topic write device/PI-SORTING-01/error
+topic write device/PI-SORTING-01/heartbeat
+
+# Line Tracer Device
+user PI-LT-01
+topic read device/PI-LT-01/command
+topic read system/broadcast/command
+topic write device/PI-LT-01/register
+topic write device/PI-LT-01/response
+topic write device/PI-LT-01/status
+topic write device/PI-LT-01/event
+topic write device/PI-LT-01/error
+topic write device/PI-LT-01/heartbeat

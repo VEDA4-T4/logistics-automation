@@ -303,6 +303,26 @@ DatabaseStatus ProductRepository::Create(std::string_view work_id, std::int64_t 
     return statement.Step(row);
 }
 
+DatabaseStatus ProductRepository::MarkError(std::string_view work_id, std::int64_t now_ms) {
+    Statement statement;
+    auto status =
+        database_.Prepare("UPDATE product SET lifecycle_state='ERROR',updated_at_ms=? WHERE work_id=?", statement);
+    if (!status.ok() || !(status = statement.Bind(1, now_ms)).ok() || !(status = statement.Bind(2, work_id)).ok()) {
+        return status;
+    }
+    bool row = false;
+    if (!(status = statement.Step(row)).ok()) {
+        return status;
+    }
+    Statement changes;
+    status = database_.Prepare("SELECT changes()", changes);
+    if (!status.ok() || !(status = changes.Step(row)).ok()) {
+        return status;
+    }
+    return changes.ColumnInt(0) == 0 ? DatabaseStatus{ DatabaseStatusCode::kNotFound, "work_id not found" }
+                                     : DatabaseStatus::Ok();
+}
+
 DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts::mqtt::MessageType type,
                                              const EventPayload& payload, std::int64_t now_ms) {
     std::string sql;
@@ -633,6 +653,55 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
         return Failure(status);
     }
     return { PersistenceStatus::kStored, "message stored", work_id };
+}
+
+DatabaseStatus PersistenceService::RecordWorkInvalidation(const WorkInvalidation& invalidation) {
+    if (!IsUuid(invalidation.work_id) || invalidation.message_id.empty() || invalidation.error_code.empty() ||
+        invalidation.reason.empty() || invalidation.cause.empty() || invalidation.occurred_at_ms < 0) {
+        return { DatabaseStatusCode::kInvalidArgument, "invalid work invalidation metadata" };
+    }
+
+    const EventPayload payload{
+        .work_id = invalidation.work_id,
+        .process_state = "ERROR",
+        .error_code = invalidation.error_code,
+        .severity = "ERROR",
+        .error_message = invalidation.reason,
+        .details_json = contracts::mqtt::Json{ { "cause", invalidation.cause } }.dump(),
+    };
+    Transaction transaction(database_);
+    if (!transaction.status().ok()) {
+        return transaction.status();
+    }
+    ProductRepository products(database_);
+    auto status = products.MarkError(invalidation.work_id, invalidation.occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    Statement existing;
+    status = database_.Prepare("SELECT 1 FROM error_log WHERE message_id=?", existing);
+    if (!status.ok() || !(status = existing.Bind(1, invalidation.message_id)).ok()) {
+        return status;
+    }
+    bool already_recorded = false;
+    if (!(status = existing.Step(already_recorded)).ok()) {
+        return status;
+    }
+    if (already_recorded) {
+        return transaction.Commit();
+    }
+    status = products.AppendHistory(invalidation.work_id, invalidation.message_id,
+                                    contracts::mqtt::MessageType::kErrorOccurred, "central-server", payload,
+                                    invalidation.occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    LogRepository logs(database_);
+    status = logs.AppendError(invalidation.message_id, "central-server", payload, invalidation.occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    return transaction.Commit();
 }
 
 RetentionService::RetentionService(Database& database, StorageConfig config)

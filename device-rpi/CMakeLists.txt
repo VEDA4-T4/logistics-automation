@@ -139,6 +139,8 @@ target_link_libraries(device_status PUBLIC logistics::contracts)
 logistics_enable_warnings(device_status)
 
 if(LOGISTICS_BUILD_VISION_NODE)
+    find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core dnn highgui imgcodecs imgproc objdetect videoio)
+
     add_library(device_control_state common/device_control/device_control_state.cpp)
     add_library(logistics::device_control_state ALIAS device_control_state)
     target_include_directories(device_control_state PUBLIC common/include)
@@ -150,6 +152,35 @@ if(LOGISTICS_BUILD_VISION_NODE)
     target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
     target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
     logistics_enable_warnings(vision_mqtt_workflow)
+
+    add_library(
+        vision_processing_config
+        vision-node/vision_processing_config.cpp
+        vision-node/vision_processing_config.hpp
+    )
+    add_library(logistics::vision_processing_config ALIAS vision_processing_config)
+    target_include_directories(vision_processing_config PUBLIC vision-node)
+    logistics_enable_warnings(vision_processing_config)
+
+    add_library(
+        vision_failure_frame_store
+        vision-node/failure_frame_store.cpp
+        vision-node/failure_frame_store.hpp
+    )
+    add_library(logistics::vision_failure_frame_store ALIAS vision_failure_frame_store)
+    target_include_directories(vision_failure_frame_store PUBLIC vision-node ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(vision_failure_frame_store PUBLIC logistics::vision_processing_config ${OpenCV_LIBS})
+    logistics_enable_warnings(vision_failure_frame_store)
+
+    add_library(
+        vision_detection
+        vision-node/detection.cpp
+        vision-node/detection.hpp
+    )
+    add_library(logistics::vision_detection ALIAS vision_detection)
+    target_include_directories(vision_detection PUBLIC vision-node ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(vision_detection PUBLIC logistics::vision_processing_config ${OpenCV_LIBS})
+    logistics_enable_warnings(vision_detection)
 endif()
 
 add_library(
@@ -308,6 +339,27 @@ if(BUILD_TESTING)
         )
         logistics_enable_warnings(vision_mqtt_workflow_test)
         add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
+
+        add_executable(vision_processing_config_test tests/vision_processing_config_test.cpp)
+        target_link_libraries(vision_processing_config_test PRIVATE logistics::vision_processing_config)
+        logistics_enable_warnings(vision_processing_config_test)
+        add_test(NAME vision_processing_config_test COMMAND vision_processing_config_test)
+
+        add_executable(vision_detection_test tests/vision_detection_test.cpp)
+        target_link_libraries(vision_detection_test PRIVATE logistics::vision_detection)
+        logistics_enable_warnings(vision_detection_test)
+        add_test(NAME vision_detection_test COMMAND vision_detection_test)
+
+        add_executable(vision_super_resolution_preview_test tests/vision_super_resolution_preview_test.cpp)
+        target_link_libraries(vision_super_resolution_preview_test PRIVATE logistics::vision_detection)
+        logistics_enable_warnings(vision_super_resolution_preview_test)
+        add_test(NAME vision_super_resolution_preview_test COMMAND vision_super_resolution_preview_test)
+
+        add_executable(vision_failure_frame_store_test tests/vision_failure_frame_store_test.cpp)
+        target_link_libraries(vision_failure_frame_store_test PRIVATE logistics::vision_failure_frame_store)
+        logistics_enable_warnings(vision_failure_frame_store_test)
+        add_test(NAME vision_failure_frame_store_test COMMAND vision_failure_frame_store_test)
+
     endif()
 
     add_executable(device_image_uploader_test tests/image_uploader_test.cpp)
@@ -317,20 +369,29 @@ if(BUILD_TESTING)
 endif()
 if(LOGISTICS_BUILD_VISION_NODE)
     add_device_node(logistics_vision_node vision-node/main.cpp)
-    target_sources(
-        logistics_vision_node
-        PRIVATE
-            vision-node/detection.cpp
-            vision-node/detection.hpp
-    )
-
-    find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core highgui imgcodecs imgproc objdetect videoio)
-    target_include_directories(logistics_vision_node PRIVATE ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(logistics_vision_node PRIVATE ${OpenCV_LIBS})
     target_link_libraries(
         logistics_vision_node
-        PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow
+        PRIVATE
+            logistics::device_control_state
+            logistics::vision_detection
+            logistics::vision_failure_frame_store
+            logistics::vision_mqtt_workflow
     )
+
+    add_executable(logistics_vision_benchmark vision-node/vision_benchmark.cpp)
+    target_link_libraries(logistics_vision_benchmark PRIVATE logistics::vision_detection)
+    logistics_enable_warnings(logistics_vision_benchmark)
+    if(BUILD_TESTING)
+        add_test(NAME vision_benchmark_help COMMAND logistics_vision_benchmark --help)
+        add_test(
+            NAME vision_benchmark_visual_output
+            COMMAND
+                ${CMAKE_COMMAND}
+                -DBENCHMARK_EXECUTABLE=$<TARGET_FILE:logistics_vision_benchmark>
+                -DTEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/vision-benchmark-visual-test
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/vision_benchmark_visual_test.cmake
+        )
+    endif()
 
     if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         target_compile_definitions(logistics_vision_node PRIVATE LOGISTICS_VISION_MQTT_ENABLED=1)

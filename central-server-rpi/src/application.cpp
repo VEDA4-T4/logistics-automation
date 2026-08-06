@@ -29,6 +29,7 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 #include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/server_config.hpp"
+#include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
 namespace logistics::central_server {
@@ -173,25 +174,51 @@ int Application::Run(int argc, char* argv[]) {
     ProcessStateStore process_state_store(database);
 
     std::optional<StoredProcessState> stored_process_state;
+    std::vector<InvalidatedRestoredWork> invalidated_restored_works;
     database_status = process_state_store.Load(stored_process_state);
     if (!database_status.ok()) {
         std::cerr << "[server][ERROR] process state load failed: " << database_status.message << '\n';
         return 5;
     }
-    if (stored_process_state.has_value() &&
-        !process_orchestrator.RestoreAfterServerRestart(stored_process_state->system_state,
-                                                        std::move(stored_process_state->works),
-                                                        stored_process_state->message_sequence)) {
-        std::cerr << "[server][ERROR] stored process state is invalid\n";
-        return 5;
+    if (stored_process_state.has_value()) {
+        auto restore = process_orchestrator.RestoreAfterServerRestart(
+            stored_process_state->system_state, std::move(stored_process_state->works),
+            std::move(stored_process_state->gripper_targets), stored_process_state->message_sequence);
+        if (!restore.restored) {
+            std::cerr << "[server][ERROR] stored process state is invalid\n";
+            return 5;
+        }
+        invalidated_restored_works = std::move(restore.invalidated_works);
+    }
+    std::vector<WorkInvalidation> work_invalidations;
+    work_invalidations.reserve(invalidated_restored_works.size());
+    for (const auto& restored : invalidated_restored_works) {
+        work_invalidations.push_back({
+            .work_id = restored.work_id,
+            .message_id = "RECALIBRATION-" + restored.work_id,
+            .error_code = "ERR-PROCESS-RECALIBRATION-REQUIRED",
+            .reason = restored.reason,
+            .cause = "CALIBRATION_CHANGED",
+            .occurred_at_ms = CurrentUnixTimeMilliseconds(),
+        });
+    }
+    for (const auto& invalidation : work_invalidations) {
+        std::cerr << "[server][ERROR] restored work requires detection with the current calibration; work_id="
+                  << invalidation.work_id << "; error=ERR-PROCESS-RECALIBRATION-REQUIRED\n";
+        database_status = persistence.RecordWorkInvalidation(invalidation);
+        if (!database_status.ok()) {
+            std::cerr << "[server][ERROR] invalidated work persistence failed; work_id=" << invalidation.work_id
+                      << "; message=" << database_status.message << '\n';
+        }
     }
 
     const auto persist_process_state = [&process_orchestrator, &process_state_store]() {
         DatabaseStatus status;
         for (int attempt = 0; attempt < 3; ++attempt) {
-            status = process_state_store.Save(
-                process_orchestrator.StateMachine().SystemState(), process_orchestrator.MessageSequence(),
-                process_orchestrator.StateMachine().ActiveWorks(), CurrentUnixTimeMilliseconds());
+            status = process_state_store.Save(process_orchestrator.StateMachine().SystemState(),
+                                              process_orchestrator.MessageSequence(),
+                                              process_orchestrator.StateMachine().ActiveWorks(),
+                                              process_orchestrator.GripperTargets(), CurrentUnixTimeMilliseconds());
             if (status.ok()) {
                 return true;
             }
@@ -314,8 +341,13 @@ int Application::Run(int argc, char* argv[]) {
         return false;
     });
 
+ HEAD
     const auto dispatch_command = [&mqtt_client, &mqtt_handler, &device_manager, &command_manager,
                                    &process_orchestrator, &active_system_recovery_request_id,
+
+    const auto dispatch_command = [&mqtt_client, &device_manager, &command_manager, &process_orchestrator,
+                                   &server_config, &active_system_recovery_request_id,
+ origin/main
                                    &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
         if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
             command != nullptr && command->command == contracts::mqtt::ControlCommand::kStatusRequest) {
@@ -399,15 +431,10 @@ int Application::Run(int argc, char* argv[]) {
             return failed.has_value() && publish_qt_response(*failed);
         }
 
-        const auto publish_to_device = [&mqtt_client, &message](std::string_view device_id) {
-            auto forwarded = message;
-            forwarded.message_id += "-" + std::string(device_id);
-            if (auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(forwarded)) {
-                command->target_device_id = device_id;
-            } else if (auto* destination =
-                           contracts::mqtt::GetPayload<contracts::mqtt::DestinationSetPayload>(forwarded)) {
-                destination->target_device_id = device_id;
-            }
+        const auto publish_to_device = [&mqtt_client, &message, &server_config](std::string_view device_id) {
+            const auto forwarded =
+                PrepareCommandForDevice(message, device_id, server_config.process.line_tracer_device_id,
+                                        server_config.process.line_tracer_initial_position);
             return mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), forwarded,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         };
@@ -478,6 +505,20 @@ int Application::Run(int argc, char* argv[]) {
         std::cerr << "[server][ERROR] MQTT client startup failed\n";
         return 6;
     }
+    const auto publish_recalibration_notifications = [&work_invalidations, &mqtt_client, &server_config]() {
+        bool published = true;
+        for (const auto& invalidation : work_invalidations) {
+            const auto error = MakeWorkInvalidationError("central-server", invalidation, CurrentIso8601Timestamp());
+            if (!mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(server_config.qt_client_id), error,
+                                            contracts::mqtt::Qos::kAtLeastOnce)) {
+                std::cerr << "[server][ERROR] recalibration notification publish failed; work_id="
+                          << invalidation.work_id << '\n';
+                published = false;
+            }
+        }
+        return published;
+    };
+    bool recalibration_notifications_pending = !work_invalidations.empty();
 
     HttpUploadServer upload_server(database, server_config.http);
     database_status = upload_server.Start();
@@ -495,6 +536,9 @@ int Application::Run(int argc, char* argv[]) {
 
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        if (recalibration_notifications_pending && mqtt_client.IsConnected()) {
+            recalibration_notifications_pending = !publish_recalibration_notifications();
+        }
         static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
         for (const auto& timeout : command_manager.CheckTimeouts(CurrentIso8601Timestamp())) {
             if (!publish_qt_response(timeout)) {

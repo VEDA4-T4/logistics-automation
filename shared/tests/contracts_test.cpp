@@ -114,6 +114,13 @@ void TestAllMqttMessageRoundTrips() {
                                                                    .offset_x = 5,
                                                                    .offset_y = -3,
                                                                    .position_status = "OK",
+                                                                   .box_corners =
+                                                                       std::array{
+                                                                           mqtt::PixelPoint{ 120.0, 80.0 },
+                                                                           mqtt::PixelPoint{ 500.0, 80.0 },
+                                                                           mqtt::PixelPoint{ 500.0, 340.0 },
+                                                                           mqtt::PixelPoint{ 120.0, 340.0 },
+                                                                       },
                                                                }));
 
     AssertRoundTrip<mqtt::BarcodeDetectedPayload>(MakeMessage("MSG-0005", mqtt::MessageType::kBarcodeDetected,
@@ -123,7 +130,21 @@ void TestAllMqttMessageRoundTrips() {
                                                                   .barcode = "8801234567890",
                                                                   .confidence = 0.98,
                                                                   .message = std::nullopt,
+                                                                  .error_code = std::nullopt,
+                                                                  .failure_stage = std::nullopt,
                                                               }));
+
+    AssertRoundTrip<mqtt::BarcodeDetectedPayload>(
+        MakeMessage("MSG-0005-FAIL", mqtt::MessageType::kBarcodeDetected,
+                    mqtt::BarcodeDetectedPayload{
+                        .work_id = std::string(kTestWorkId),
+                        .recognition_status = "FAILED",
+                        .barcode = {},
+                        .confidence = std::nullopt,
+                        .message = "barcode region was not detected",
+                        .error_code = "ERR-VISION-BARCODE-REGION-NOT-DETECTED",
+                        .failure_stage = "BARCODE_DETECTION",
+                    }));
 
     AssertRoundTrip<mqtt::ProductImagePayload>(
         MakeMessage("MSG-0006", mqtt::MessageType::kProductImage,
@@ -462,6 +483,21 @@ void TestMqttCodecInvalidInputs() {
     assert(!invalid_work_encoded.IsSuccess());
     assert(invalid_work_encoded.status.error == mqtt::CodecError::kInvalidFieldValue);
     assert(invalid_work_encoded.status.field == "workId");
+
+    const auto incomplete_barcode_failure = MakeMessage("MSG-BAD-BARCODE-01", mqtt::MessageType::kBarcodeDetected,
+                                                        mqtt::BarcodeDetectedPayload{
+                                                            .work_id = std::string(kTestWorkId),
+                                                            .recognition_status = "FAILED",
+                                                            .barcode = {},
+                                                            .confidence = std::nullopt,
+                                                            .message = "barcode decode failed",
+                                                            .error_code = "ERR-VISION-BARCODE-DECODE-FAILED",
+                                                            .failure_stage = std::nullopt,
+                                                        });
+    const auto incomplete_barcode_failure_encoded = mqtt::SerializeMessage(incomplete_barcode_failure);
+    assert(!incomplete_barcode_failure_encoded.IsSuccess());
+    assert(incomplete_barcode_failure_encoded.status.error == mqtt::CodecError::kInvalidPayload);
+    assert(incomplete_barcode_failure_encoded.status.field == "data");
 
     const auto invalid_error_level = mqtt::DeserializeMessage(R"json(
         {

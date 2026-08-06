@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -52,9 +54,13 @@ inline constexpr std::string_view kCenterYField = "centerY";
 inline constexpr std::string_view kOffsetXField = "offsetX";
 inline constexpr std::string_view kOffsetYField = "offsetY";
 inline constexpr std::string_view kPositionStatusField = "positionStatus";
+inline constexpr std::string_view kBoxCornersField = "boxCorners";
+inline constexpr std::string_view kXField = "x";
+inline constexpr std::string_view kYField = "y";
 inline constexpr std::string_view kBarcodeField = "barcode";
 inline constexpr std::string_view kRecognitionStatusField = "recognitionStatus";
 inline constexpr std::string_view kConfidenceField = "confidence";
+inline constexpr std::string_view kFailureStageField = "failureStage";
 inline constexpr std::string_view kResultField = "result";
 inline constexpr std::string_view kProcessingResultField = "processingResult";
 inline constexpr std::string_view kProductIdField = "productId";
@@ -197,6 +203,15 @@ struct WorkCompletedPayload {
     }
 };
 
+struct PixelPoint {
+    double x{};
+    double y{};
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return std::isfinite(x) && std::isfinite(y) && x >= 0.0 && y >= 0.0;
+    }
+};
+
 struct PositionDetectedPayload {
     std::string work_id;
     std::int32_t box_x{ 0 };
@@ -208,10 +223,14 @@ struct PositionDetectedPayload {
     std::int32_t offset_x{ 0 };
     std::int32_t offset_y{ 0 };
     std::string position_status;
+    std::optional<std::array<PixelPoint, 4>> box_corners;
 
     [[nodiscard]] bool IsValid() const noexcept {
+        const bool valid_corners =
+            !box_corners.has_value() || std::all_of(box_corners->begin(), box_corners->end(),
+                                                    [](const PixelPoint& point) { return point.IsValid(); });
         return IsValidUuid(work_id) && box_x >= 0 && box_y >= 0 && box_width > 0 && box_height > 0 && center_x >= 0 &&
-               center_y >= 0 && !position_status.empty();
+               center_y >= 0 && !position_status.empty() && valid_corners;
     }
 };
 
@@ -221,12 +240,18 @@ struct BarcodeDetectedPayload {
     std::string barcode;
     std::optional<double> confidence;
     std::optional<std::string> message;
+    std::optional<std::string> error_code;
+    std::optional<std::string> failure_stage;
 
     [[nodiscard]] bool IsValid() const noexcept {
+        const bool has_failure_metadata = error_code.has_value() || failure_stage.has_value();
+        const bool failure_metadata_valid =
+            !has_failure_metadata || (recognition_status != "SUCCESS" && error_code.has_value() &&
+                                      failure_stage.has_value() && !error_code->empty() && !failure_stage->empty());
         return IsValidUuid(work_id) && IsValidRecognitionStatus(recognition_status) &&
                (recognition_status != "SUCCESS" || !barcode.empty()) &&
                (!confidence.has_value() || (*confidence >= 0.0 && *confidence <= 1.0)) &&
-               (!message.has_value() || !message->empty());
+               (!message.has_value() || !message->empty()) && failure_metadata_valid;
     }
 };
 
@@ -1083,7 +1108,7 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline Json SerializePayload(const PositionDetectedPayload& payload) {
-    return {
+    Json data = {
         { std::string(kWorkIdField), payload.work_id },
         { std::string(kBoxXField), payload.box_x },
         { std::string(kBoxYField), payload.box_y },
@@ -1095,6 +1120,14 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
         { std::string(kOffsetYField), payload.offset_y },
         { std::string(kPositionStatusField), payload.position_status },
     };
+    if (payload.box_corners.has_value()) {
+        data[std::string(kBoxCornersField)] = Json::array();
+        for (const auto& point : *payload.box_corners) {
+            data[std::string(kBoxCornersField)].push_back(
+                Json{ { std::string(kXField), point.x }, { std::string(kYField), point.y } });
+        }
+    }
+    return data;
 }
 
 [[nodiscard]] inline Json SerializePayload(const BarcodeDetectedPayload& payload) {
@@ -1106,6 +1139,8 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
         data[std::string(kBarcodeField)] = payload.barcode;
     WriteOptionalDouble(data, kConfidenceField, payload.confidence);
     WriteOptionalString(data, kMessageField, payload.message);
+    WriteOptionalString(data, kErrorCodeField, payload.error_code);
+    WriteOptionalString(data, kFailureStageField, payload.failure_stage);
     return data;
 }
 
@@ -1272,16 +1307,48 @@ inline void WriteOptionalLineTracerPosition(Json& data, std::string_view field,
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, PositionDetectedPayload& payload, CodecStatus& status) {
-    return ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) &&
-           ReadRequiredSignedInteger(data, kBoxXField, payload.box_x, status) &&
-           ReadRequiredSignedInteger(data, kBoxYField, payload.box_y, status) &&
-           ReadRequiredSignedInteger(data, kBoxWidthField, payload.box_width, status) &&
-           ReadRequiredSignedInteger(data, kBoxHeightField, payload.box_height, status) &&
-           ReadRequiredSignedInteger(data, kCenterXField, payload.center_x, status) &&
-           ReadRequiredSignedInteger(data, kCenterYField, payload.center_y, status) &&
-           ReadRequiredSignedInteger(data, kOffsetXField, payload.offset_x, status) &&
-           ReadRequiredSignedInteger(data, kOffsetYField, payload.offset_y, status) &&
-           ReadRequiredString(data, kPositionStatusField, payload.position_status, status);
+    if (!ReadRequiredUuid(data, kWorkIdField, payload.work_id, status) ||
+        !ReadRequiredSignedInteger(data, kBoxXField, payload.box_x, status) ||
+        !ReadRequiredSignedInteger(data, kBoxYField, payload.box_y, status) ||
+        !ReadRequiredSignedInteger(data, kBoxWidthField, payload.box_width, status) ||
+        !ReadRequiredSignedInteger(data, kBoxHeightField, payload.box_height, status) ||
+        !ReadRequiredSignedInteger(data, kCenterXField, payload.center_x, status) ||
+        !ReadRequiredSignedInteger(data, kCenterYField, payload.center_y, status) ||
+        !ReadRequiredSignedInteger(data, kOffsetXField, payload.offset_x, status) ||
+        !ReadRequiredSignedInteger(data, kOffsetYField, payload.offset_y, status) ||
+        !ReadRequiredString(data, kPositionStatusField, payload.position_status, status)) {
+        return false;
+    }
+
+    const auto corners = data.find(std::string(kBoxCornersField));
+    if (corners == data.end()) {
+        payload.box_corners.reset();
+        return true;
+    }
+    if (!corners->is_array() || corners->size() != 4U) {
+        status =
+            MakeError(CodecError::kInvalidFieldValue, kBoxCornersField, "boxCorners must contain exactly four points");
+        return false;
+    }
+
+    std::array<PixelPoint, 4> decoded{};
+    for (std::size_t index = 0; index < decoded.size(); ++index) {
+        const Json& point = (*corners)[index];
+        if (!point.is_object()) {
+            status = MakeError(CodecError::kInvalidFieldType, kBoxCornersField, "boxCorners entries must be objects");
+            return false;
+        }
+        const auto x = point.find(std::string(kXField));
+        const auto y = point.find(std::string(kYField));
+        if (x == point.end() || y == point.end() || !x->is_number() || !y->is_number()) {
+            status = MakeError(CodecError::kInvalidFieldType, kBoxCornersField,
+                               "boxCorners entries require numeric x and y");
+            return false;
+        }
+        decoded[index] = { .x = x->get<double>(), .y = y->get<double>() };
+    }
+    payload.box_corners = decoded;
+    return true;
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, BarcodeDetectedPayload& payload, CodecStatus& status) {
@@ -1289,7 +1356,9 @@ inline void WriteOptionalLineTracerPosition(Json& data, std::string_view field,
            ReadRequiredString(data, kRecognitionStatusField, payload.recognition_status, status) &&
            ReadOptionalStringValue(data, kBarcodeField, payload.barcode, status) &&
            ReadOptionalDouble(data, kConfidenceField, payload.confidence, status) &&
-           ReadOptionalString(data, kMessageField, payload.message, status);
+           ReadOptionalString(data, kMessageField, payload.message, status) &&
+           ReadOptionalString(data, kErrorCodeField, payload.error_code, status) &&
+           ReadOptionalString(data, kFailureStageField, payload.failure_stage, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, ProductImagePayload& payload, CodecStatus& status) {

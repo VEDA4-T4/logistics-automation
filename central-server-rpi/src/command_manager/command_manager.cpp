@@ -65,6 +65,25 @@ CommandRoutePlan ResolveCommandTargets(const mqtt::MqttMessage& message,
     return plan;
 }
 
+mqtt::MqttMessage PrepareCommandForDevice(const mqtt::MqttMessage& message, std::string_view device_id,
+                                          std::string_view line_tracer_device_id,
+                                          std::string_view line_tracer_initial_position) {
+    auto forwarded = message;
+    forwarded.message_id += "-" + std::string(device_id);
+
+    if (auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(forwarded)) {
+        command->target_device_id = device_id;
+        if (command->command == mqtt::ControlCommand::kInitialize && device_id == line_tracer_device_id &&
+            !line_tracer_initial_position.empty()) {
+            command->params["currentPosition"] = std::string(line_tracer_initial_position);
+        }
+    } else if (auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(forwarded)) {
+        destination->target_device_id = device_id;
+    }
+
+    return forwarded;
+}
+
 CommandManager::CommandManager(NowProvider now_provider)
     : now_provider_(now_provider ? std::move(now_provider) : NowProvider([] { return Clock::now(); })) {}
 

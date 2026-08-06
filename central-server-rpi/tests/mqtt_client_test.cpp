@@ -106,6 +106,8 @@ port=1884
 client_id=central-server-test
 username=server
 password=secret
+tls_enabled=false
+ca_certificate=
 keep_alive_seconds=45
 reconnect_min_delay_seconds=2
 reconnect_max_delay_seconds=20
@@ -130,6 +132,35 @@ path=/var/lib/logistics/logistics.db
     assert(config.clean_session);
     assert(config.device_registry_path == path.parent_path() / "registry/devices.json");
     assert(config.IsValid());
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+void TestTlsWithoutCaIsRejected() {
+    const auto path = MakeTemporaryConfigPath("tls-without-ca");
+
+    {
+        std::ofstream output(path);
+        assert(output);
+        output << R"ini(
+[mqtt]
+host=127.0.0.1
+port=8883
+client_id=central-server
+tls_enabled=true
+ca_certificate=
+)ini";
+    }
+
+    bool rejected = false;
+    try {
+        static_cast<void>(logistics::central_server::LoadMqttConfig(path));
+    } catch (const logistics::central_server::ConfigError&) {
+        rejected = true;
+    }
+
+    assert(rejected);
 
     std::error_code error;
     std::filesystem::remove(path, error);
@@ -183,6 +214,8 @@ client_id=central-server
         .reconnect_min_delay_seconds = 1,
         .reconnect_max_delay_seconds = 16,
         .clean_session = true,
+        .tls_enabled = false,
+        .ca_certificate = {},
     };
 }
 
@@ -353,5 +386,6 @@ int main() {
     TestTypedMessagePublishing();
     TestStartFailureIsLogged();
     TestConnectionRejectionIsLogged();
+    TestTlsWithoutCaIsRejected();
     return 0;
 }

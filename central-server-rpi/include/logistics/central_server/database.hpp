@@ -59,12 +59,14 @@ public:
     [[nodiscard]] DatabaseStatus Bind(int index, std::string_view value);
     [[nodiscard]] DatabaseStatus Bind(int index, std::int64_t value);
     [[nodiscard]] DatabaseStatus Bind(int index, int value);
+    [[nodiscard]] DatabaseStatus Bind(int index, double value);
     [[nodiscard]] DatabaseStatus BindNull(int index);
     [[nodiscard]] DatabaseStatus Step(bool& has_row);
     [[nodiscard]] DatabaseStatus Reset();
     [[nodiscard]] std::string ColumnText(int index) const;
     [[nodiscard]] std::int64_t ColumnInt64(int index) const;
     [[nodiscard]] int ColumnInt(int index) const;
+    [[nodiscard]] double ColumnDouble(int index) const;
 
 private:
     sqlite3_stmt* statement_{ nullptr };

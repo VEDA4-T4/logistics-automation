@@ -10,21 +10,23 @@ device_id=PI-SORTING-01
 node_name=sorting-node-01
 
 # Replace with the sorting Raspberry Pi IP address shown by `hostname -I`.
-ip_address=192.168.0.22
+ip_address=192.0.2.22
 
 [mqtt]
 # Replace with the central server/MQTT broker IP address or resolvable hostname.
-host=192.168.0.10
-port=1883
+host=mqtt.logistics.local
+port=8883
 
 # Must be unique among clients connected to the same MQTT broker.
 client_id=PI-SORTING-01
 
 # Leave both values empty only when the MQTT broker permits anonymous access.
-username=
-password=
+username=PI-SORTING-01
+password=replace-with-sorting-mqtt-password
 
 # Connection recovery policy. The defaults normally do not need adjustment.
+tls_enabled=true
+ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30

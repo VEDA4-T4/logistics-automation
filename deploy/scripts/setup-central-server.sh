@@ -8,9 +8,60 @@ build_dir="${LOGISTICS_BUILD_DIR:-${repo_root}/build-central}"
 runtime_dir="${LOGISTICS_RUNTIME_DIR:-${repo_root}/runtime/central-server}"
 config_path="${LOGISTICS_CONFIG_PATH:-${runtime_dir}/server.ini}"
 mqtt_host="${LOGISTICS_MQTT_HOST:-127.0.0.1}"
+mqtt_port="${LOGISTICS_MQTT_PORT:-8883}"
+mqtt_username="${LOGISTICS_MQTT_USERNAME:-central-server}"
+mqtt_password="${LOGISTICS_MQTT_PASSWORD:-}"
+mqtt_tls_enabled="${LOGISTICS_MQTT_TLS_ENABLED:-true}"
+mqtt_ca_certificate="${LOGISTICS_MQTT_CA_CERTIFICATE:-/etc/logistics/tls/ca.crt}"
 upload_token="${LOGISTICS_UPLOAD_TOKEN:-}"
 force_config="${LOGISTICS_FORCE_CONFIG:-0}"
 install_dependencies="${LOGISTICS_INSTALL_DEPENDENCIES:-0}"
+
+reject_line_breaks() {
+    [[ "$1" != *$'\n'* && "$1" != *$'\r'* ]]
+}
+
+validate_mqtt_settings() {
+    local host=$1 port=$2 username=$3 password=$4 tls_enabled=$5 ca_certificate=$6
+
+    if [[ -z "${host}" || -z "${username}" || -z "${password}" ]]; then
+        echo "MQTT host, username, and password must be set." >&2
+        return 1
+    fi
+    if ! reject_line_breaks "${host}" || ! reject_line_breaks "${username}" ||
+        ! reject_line_breaks "${password}" || ! reject_line_breaks "${ca_certificate}"; then
+        echo "MQTT settings must not contain line breaks." >&2
+        return 1
+    fi
+    if [[ ! "${port}" =~ ^[1-9][0-9]{0,4}$ ]] || ((port > 65535)); then
+        echo "LOGISTICS_MQTT_PORT must be an integer from 1 to 65535." >&2
+        return 1
+    fi
+    if [[ "${tls_enabled}" != true && "${tls_enabled}" != false ]]; then
+        echo "LOGISTICS_MQTT_TLS_ENABLED must be true or false." >&2
+        return 1
+    fi
+    if [[ "${tls_enabled}" == true && -z "${ca_certificate}" ]]; then
+        echo "LOGISTICS_MQTT_CA_CERTIFICATE is required when MQTT TLS is enabled." >&2
+        return 1
+    fi
+}
+
+run_self_check() {
+    validate_mqtt_settings mqtt.example 8883 central-server secret true /etc/logistics/tls/ca.crt
+    validate_mqtt_settings mqtt.example 1883 central-server secret false ""
+    ! validate_mqtt_settings mqtt.example 0 central-server secret true /etc/logistics/tls/ca.crt 2>/dev/null
+    ! validate_mqtt_settings mqtt.example 8883 central-server "" true /etc/logistics/tls/ca.crt 2>/dev/null
+    ! validate_mqtt_settings mqtt.example 8883 central-server secret yes /etc/logistics/tls/ca.crt 2>/dev/null
+    ! validate_mqtt_settings mqtt.example 8883 central-server secret true "" 2>/dev/null
+    ! validate_mqtt_settings $'mqtt.example\ninvalid' 8883 central-server secret true /etc/logistics/tls/ca.crt 2>/dev/null
+    echo "$(basename -- "${BASH_SOURCE[0]}") MQTT security self-check passed."
+}
+
+if [[ "${1:-}" == "--self-check" ]]; then
+    run_self_check
+    exit 0
+fi
 
 if [[ "$(uname -s)" != "Linux" ]]; then
     echo "This script must run on the central Linux/Raspberry Pi host." >&2
@@ -19,6 +70,10 @@ fi
 if [[ (! -e "${config_path}" || "${force_config}" == "1") && -z "${upload_token}" ]]; then
     echo "LOGISTICS_UPLOAD_TOKEN must be set." >&2
     exit 2
+fi
+if [[ ! -e "${config_path}" || "${force_config}" == "1" ]]; then
+    validate_mqtt_settings "${mqtt_host}" "${mqtt_port}" "${mqtt_username}" "${mqtt_password}" \
+        "${mqtt_tls_enabled}" "${mqtt_ca_certificate}" || exit 2
 fi
 
 sudo_command=()
@@ -44,10 +99,12 @@ else
     cat >"${temporary_config}" <<EOF
 [mqtt]
 host=${mqtt_host}
-port=1883
+port=${mqtt_port}
 client_id=central-server
-username=
-password=
+username=${mqtt_username}
+password=${mqtt_password}
+tls_enabled=${mqtt_tls_enabled}
+ca_certificate=${mqtt_ca_certificate}
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30

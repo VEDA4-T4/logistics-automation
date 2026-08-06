@@ -16,6 +16,7 @@ add_library(
     src/http_upload/upload_service.cpp
     src/db_manager/persistence.cpp
     src/db_manager/process_state_store.cpp
+    src/process_manager/work_invalidation.cpp
 )
 add_library(logistics::central_storage ALIAS logistics_central_storage)
 
@@ -146,6 +147,7 @@ target_link_libraries(
 
 add_library(
     logistics_central_server_process_orchestrator
+    src/process_manager/homography.cpp
     src/process_manager/process_orchestrator.cpp
 )
 add_library(
@@ -437,6 +439,14 @@ if(BUILD_TESTING)
         COMMAND central_server_process_orchestrator_test
     )
 
+    add_executable(central_server_homography_test tests/homography_test.cpp)
+    target_link_libraries(
+        central_server_homography_test
+        PRIVATE logistics::central_server_process_orchestrator
+    )
+    logistics_enable_warnings(central_server_homography_test)
+    add_test(NAME central_server_homography_test COMMAND central_server_homography_test)
+
     add_executable(
         central_server_mqtt_handler_test
         tests/mqtt_handler_test.cpp
@@ -498,4 +508,11 @@ if(BUILD_TESTING)
     )
     logistics_enable_warnings(central_upload_service_test)
     add_test(NAME central_upload_service_test COMMAND central_upload_service_test)
+
+    if(UNIX)
+        add_executable(central_http_upload_server_test tests/http_upload_server_test.cpp)
+        target_link_libraries(central_http_upload_server_test PRIVATE logistics::central_http_upload_server)
+        logistics_enable_warnings(central_http_upload_server_test)
+        add_test(NAME central_http_upload_server_test COMMAND central_http_upload_server_test)
+    endif()
 endif()

@@ -87,6 +87,10 @@ DatabaseStatus Statement::Bind(int index, int value) {
     return FromSqlite(sqlite3_bind_int(statement_, index, value), sqlite3_db_handle(statement_), "bind integer");
 }
 
+DatabaseStatus Statement::Bind(int index, double value) {
+    return FromSqlite(sqlite3_bind_double(statement_, index, value), sqlite3_db_handle(statement_), "bind real");
+}
+
 DatabaseStatus Statement::BindNull(int index) {
     return FromSqlite(sqlite3_bind_null(statement_, index), sqlite3_db_handle(statement_), "bind null");
 }
@@ -113,6 +117,9 @@ std::int64_t Statement::ColumnInt64(int index) const {
 }
 int Statement::ColumnInt(int index) const {
     return sqlite3_column_int(statement_, index);
+}
+double Statement::ColumnDouble(int index) const {
+    return sqlite3_column_double(statement_, index);
 }
 
 Database::~Database() {
