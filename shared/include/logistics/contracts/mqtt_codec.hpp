@@ -325,7 +325,6 @@ struct DeviceStatusPayload {
     std::optional<LineTracerPositionPayload> target_position;
     std::optional<LineTracerPositionPayload> confirmed_position;
     std::optional<std::string> movement_state;
-    bool position_reset{};
 
     [[nodiscard]] bool IsValid() const noexcept {
         const bool has_any_position = departure_position.has_value() || target_position.has_value() ||
@@ -339,8 +338,7 @@ struct DeviceStatusPayload {
                (!error_code.has_value() || !error_code->empty()) && (!has_any_position || has_complete_position) &&
                (!departure_position.has_value() || departure_position->IsValid()) &&
                (!target_position.has_value() || target_position->IsValid()) &&
-               (!confirmed_position.has_value() || confirmed_position->IsValid()) && valid_movement_state &&
-               (!position_reset || !has_any_position);
+               (!confirmed_position.has_value() || confirmed_position->IsValid()) && valid_movement_state;
     }
 };
 
@@ -1207,17 +1205,10 @@ inline void WriteOptionalLineTracerPosition(Json& data, std::string_view field,
 
     WriteOptionalString(data, kJobIdField, payload.job_id);
     WriteOptionalString(data, kErrorCodeField, payload.error_code);
-    if (payload.position_reset) {
-        data[std::string(kDeparturePositionField)] = nullptr;
-        data[std::string(kTargetPositionField)] = nullptr;
-        data[std::string(kConfirmedPositionField)] = nullptr;
-        data[std::string(kMovementStateField)] = nullptr;
-    } else {
-        WriteOptionalLineTracerPosition(data, kDeparturePositionField, payload.departure_position);
-        WriteOptionalLineTracerPosition(data, kTargetPositionField, payload.target_position);
-        WriteOptionalLineTracerPosition(data, kConfirmedPositionField, payload.confirmed_position);
-        WriteOptionalString(data, kMovementStateField, payload.movement_state);
-    }
+    WriteOptionalLineTracerPosition(data, kDeparturePositionField, payload.departure_position);
+    WriteOptionalLineTracerPosition(data, kTargetPositionField, payload.target_position);
+    WriteOptionalLineTracerPosition(data, kConfirmedPositionField, payload.confirmed_position);
+    WriteOptionalString(data, kMovementStateField, payload.movement_state);
     return data;
 }
 
@@ -1418,51 +1409,8 @@ inline void WriteOptionalLineTracerPosition(Json& data, std::string_view field,
     return true;
 }
 
-[[nodiscard]] inline bool ReadPositionReset(const Json& data, bool& output, CodecStatus& status) {
-    constexpr std::array position_fields{ kDeparturePositionField, kTargetPositionField, kConfirmedPositionField };
-    std::size_t position_present_count = 0;
-    std::size_t null_count = 0;
-    for (const std::string_view field : position_fields) {
-        const auto iterator = data.find(std::string(field));
-        if (iterator == data.end()) {
-            continue;
-        }
-        ++position_present_count;
-        if (iterator->is_null()) {
-            ++null_count;
-        }
-    }
-    const auto movement_iterator = data.find(std::string(kMovementStateField));
-    const bool movement_present = movement_iterator != data.end();
-    if (movement_present && movement_iterator->is_null()) {
-        ++null_count;
-    }
-
-    output = false;
-    if (position_present_count == 0U) {
-        return true;
-    }
-    if (position_present_count != position_fields.size() || !movement_present) {
-        status = MakeError(CodecError::kMissingField, kDeparturePositionField,
-                           "line tracer position fields must be omitted or supplied together");
-        return false;
-    }
-    constexpr std::size_t field_count = position_fields.size() + 1U;
-    if (null_count == field_count) {
-        output = true;
-        return true;
-    }
-    if (null_count != 0U) {
-        status = MakeError(CodecError::kInvalidFieldType, kDeparturePositionField,
-                           "line tracer position fields must all contain values or all be null");
-        return false;
-    }
-    return true;
-}
-
 [[nodiscard]] inline bool DeserializePayload(const Json& data, DeviceStatusPayload& payload, CodecStatus& status) {
-    return ReadPositionReset(data, payload.position_reset, status) &&
-           ReadConnectionState(data, kStatusField, payload.status, status) &&
+    return ReadConnectionState(data, kStatusField, payload.status, status) &&
            ReadRequiredString(data, kCurrentStateField, payload.current_state, status) &&
            ReadOptionalString(data, kJobIdField, payload.job_id, status) &&
            ReadOptionalString(data, kErrorCodeField, payload.error_code, status) &&

@@ -28,35 +28,6 @@ namespace mqtt = logistics::contracts::mqtt;
     };
 }
 
-[[nodiscard]] mqtt::MqttMessage MakePositionStatus(std::string message_id = "MSG-POSITION-01") {
-    return MakeMessage(
-        std::move(message_id), mqtt::MessageType::kDeviceStatus,
-        mqtt::DeviceStatusPayload{
-            .status = mqtt::ConnectionState::kOnline,
-            .current_state = "FOLLOWING_LINE",
-            .job_id = std::string("JOB-0001"),
-            .error_code = std::nullopt,
-            .departure_position = mqtt::LineTracerPositionPayload{ .area = "DEPARTURE", .location = "A" },
-            .target_position = mqtt::LineTracerPositionPayload{ .area = "DESTINATION", .location = "C" },
-            .confirmed_position = mqtt::LineTracerPositionPayload{ .area = "DEPARTURE", .location = "A" },
-            .movement_state = std::string("MOVING"),
-        });
-}
-
-void AssertPositionRetained(const central_server::DeviceSnapshot& device) {
-    assert(device.departure_position.has_value());
-    assert(device.departure_position->area == "DEPARTURE");
-    assert(device.departure_position->location == "A");
-    assert(device.target_position.has_value());
-    assert(device.target_position->area == "DESTINATION");
-    assert(device.target_position->location == "C");
-    assert(device.confirmed_position.has_value());
-    assert(device.confirmed_position->area == "DEPARTURE");
-    assert(device.confirmed_position->location == "A");
-    assert(device.movement_state == std::optional<std::string>("MOVING"));
-    assert(!device.position_reset);
-}
-
 void TestDeviceRegistrationAndHeartbeat() {
     central_server::DeviceManager manager;
 
@@ -165,59 +136,6 @@ void TestHeartbeatTimeoutTransitionsAndRecovery() {
     assert(delayed_again[0].connection_state == mqtt::ConnectionState::kDelayed);
 }
 
-void TestHeartbeatAndLegacyStatusPreservePositionUntilExplicitReset() {
-    central_server::DeviceManager manager;
-    const auto registration = MakeMessage("MSG-REGISTER-POSITION", mqtt::MessageType::kDeviceRegister,
-                                          mqtt::DeviceRegisterPayload{
-                                              .device_type = "line-tracer",
-                                              .node_name = "line-tracer-node-01",
-                                              .status = mqtt::ConnectionState::kOnline,
-                                              .ip_address = "192.168.0.31",
-                                              .uart_connected = true,
-                                          });
-    assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/register"), registration));
-    assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), MakePositionStatus()));
-
-    const auto heartbeat = MakeMessage("MSG-HEARTBEAT-POSITION", mqtt::MessageType::kHeartbeat,
-                                       mqtt::HeartbeatPayload{
-                                           .status = mqtt::ConnectionState::kOnline,
-                                           .current_state = "FOLLOWING_LINE",
-                                           .uptime = 100,
-                                           .job_id = std::string("JOB-0001"),
-                                           .error_code = std::nullopt,
-                                       });
-    assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/heartbeat"), heartbeat));
-
-    const auto legacy_status = MakeMessage("MSG-LEGACY-STATUS", mqtt::MessageType::kDeviceStatus,
-                                           mqtt::DeviceStatusPayload{
-                                               .status = mqtt::ConnectionState::kOffline,
-                                               .current_state = "DISCONNECTED",
-                                               .job_id = std::nullopt,
-                                               .error_code = std::string("ERR-MQTT-DISCONNECTED"),
-                                           });
-    assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), legacy_status));
-    auto device = manager.FindDevice("PI-01");
-    assert(device.has_value());
-    AssertPositionRetained(*device);
-
-    const auto reset = MakeMessage("MSG-POSITION-RESET", mqtt::MessageType::kDeviceStatus,
-                                   mqtt::DeviceStatusPayload{
-                                       .status = mqtt::ConnectionState::kOnline,
-                                       .current_state = "POSITION_UNKNOWN",
-                                       .job_id = std::nullopt,
-                                       .error_code = std::nullopt,
-                                       .position_reset = true,
-                                   });
-    assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), reset));
-    device = manager.FindDevice("PI-01");
-    assert(device.has_value());
-    assert(!device->departure_position.has_value());
-    assert(!device->target_position.has_value());
-    assert(!device->confirmed_position.has_value());
-    assert(!device->movement_state.has_value());
-    assert(device->position_reset);
-}
-
 void TestRegisteredDevicesSurviveServerRestart() {
     const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto path =
@@ -234,8 +152,6 @@ void TestRegisteredDevicesSurviveServerRestart() {
                                                   .uart_connected = true,
                                               });
         assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/register"), registration, "2026-07-15T08:30:03Z"));
-        assert(manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), MakePositionStatus(),
-                                     "2026-07-15T08:33:00Z"));
         auto heartbeat = MakeMessage("MSG-HEARTBEAT-PERSIST", mqtt::MessageType::kHeartbeat,
                                      mqtt::HeartbeatPayload{
                                          .status = mqtt::ConnectionState::kOnline,
@@ -271,7 +187,6 @@ void TestRegisteredDevicesSurviveServerRestart() {
         assert(device->last_heartbeat_timestamp == "2026-07-15T08:34:00Z");
         assert(device->last_seen_timestamp == "2026-07-15T08:35:00Z");
         assert(device->disconnected_at == std::optional<std::string>("2026-07-15T08:35:00Z"));
-        AssertPositionRetained(*device);
     }
 
     std::error_code error;
@@ -306,7 +221,6 @@ int main() {
     TestDeviceRegistrationAndHeartbeat();
     TestHeartbeatDoesNotRegisterUnknownDevice();
     TestHeartbeatTimeoutTransitionsAndRecovery();
-    TestHeartbeatAndLegacyStatusPreservePositionUntilExplicitReset();
     TestRegisteredDevicesSurviveServerRestart();
     TestMalformedRegistryIsRejected();
     return 0;
