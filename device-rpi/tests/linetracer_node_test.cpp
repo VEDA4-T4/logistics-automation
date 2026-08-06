@@ -128,6 +128,34 @@ struct Fixture {
         assert(session->HasPendingCommand() == expect_pending);
     }
 
+    void RespondToLastStatus(std::uint8_t state = UART_LINETRACER_STATE_FOLLOWING_LINE,
+                             std::uint8_t load_state = UART_LINETRACER_LOAD_EMPTY) {
+        const uart_frame_t command = LastFrame();
+        assert(command.command == UART_CMD_LINETRACER_GET_STATUS);
+
+        uart_frame_t response{};
+        response.version = UART_PROTOCOL_VERSION;
+        response.sequence = command.sequence;
+        response.command = UART_CMD_RESPONSE;
+        response.length = UART_LINETRACER_STATUS_PAYLOAD_SIZE;
+        response.payload[UART_RESPONSE_STATUS_INDEX] = UART_STATUS_SUCCESS;
+        response.payload[UART_RESPONSE_COMMAND_INDEX] = command.command;
+        response.payload[UART_RESPONSE_ERROR_INDEX] = UART_ERROR_NONE;
+        response.payload[UART_LINETRACER_STATUS_STATE_INDEX] = state;
+        response.payload[UART_LINETRACER_STATUS_JOB_ID_LOW_INDEX] =
+            static_cast<std::uint8_t>(node->ActiveUartJobId() & 0xffU);
+        response.payload[UART_LINETRACER_STATUS_JOB_ID_HIGH_INDEX] =
+            static_cast<std::uint8_t>((node->ActiveUartJobId() >> 8U) & 0xffU);
+        response.payload[UART_LINETRACER_STATUS_ROUTE_ID_INDEX] = node->ActiveRouteId();
+        response.payload[UART_LINETRACER_STATUS_LOAD_STATE_INDEX] = load_state;
+
+        std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+        std::size_t encoded_length = 0;
+        assert(uart_encode_frame(&response, encoded.data(), encoded.size(), &encoded_length) == UART_CODEC_OK);
+        backend->PushRead({ encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(encoded_length) });
+        assert(session->PollOnce().Succeeded());
+    }
+
     void PushEvent(std::uint8_t event_id, std::uint8_t detail = 0U, std::uint16_t job_id = 0U,
                    std::uint8_t route_id = UART_LINETRACER_ROUTE_NONE) {
         if (job_id == UART_LINETRACER_JOB_ID_NONE) {
@@ -291,11 +319,35 @@ void TestInitializeWithCurrentPositionSendsResetThenPosition() {
 
     fixture.AcknowledgeLastFrame();
     assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_B);
-    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.size() == 2U);
     const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
     assert(response.request_id == "REQ-CONTROL-01");
     assert(response.command == mqtt::ControlCommand::kInitialize);
     assert(response.result == mqtt::CommandResult::kSuccess);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
+    assert(status.movement_state == "IDLE");
+    assert(status.departure_position->area == "DEPARTURE");
+    assert(status.departure_position->location == "B");
+    assert(status.target_position->area == "DEPARTURE");
+    assert(status.target_position->location == "B");
+    assert(status.confirmed_position->area == "DEPARTURE");
+    assert(status.confirmed_position->location == "B");
+}
+
+void TestInitializeAcceptsStructuredCurrentPosition() {
+    Fixture fixture;
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kInitialize, "PI-LT-01",
+                    { { "currentPosition", { { "area", "DESTINATION" }, { "location", "C" } } } }));
+
+    assert(result.Succeeded());
+    fixture.AcknowledgeLastFrame(true);
+    fixture.AcknowledgeLastFrame();
+
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.back());
+    assert(status.confirmed_position->area == "DESTINATION");
+    assert(status.confirmed_position->location == "C");
+    assert(status.movement_state == "IDLE");
 }
 
 void TestInvalidCurrentPositionIsRejectedWithoutUartWrite() {
@@ -523,13 +575,23 @@ void TestAcceptedAssignReportsSuccessAfterAck() {
 
     fixture.AcknowledgeLastFrame();
 
-    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.size() == 2U);
     assert(fixture.reports.front().channel == LineTracerReportChannel::kResponse);
     const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
     assert(response.request_id == "REQ-DEST-01");
     assert(response.command == mqtt::ControlCommand::kDestinationSet);
     assert(response.result == mqtt::CommandResult::kSuccess);
     assert(!response.error_code.has_value());
+
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
+    assert(status.current_state == "MOVING");
+    assert(status.movement_state == "MOVING");
+    assert(status.departure_position->area == "DEPARTURE");
+    assert(status.departure_position->location == "A");
+    assert(status.target_position->area == "DESTINATION");
+    assert(status.target_position->location == "B");
+    assert(status.confirmed_position->area == "DEPARTURE");
+    assert(status.confirmed_position->location == "A");
 }
 
 void TestStateAndArrivalEventsReportPickupReady() {
@@ -546,6 +608,25 @@ void TestStateAndArrivalEventsReportPickupReady() {
         const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(report);
         assert(status.current_state == "PICKUP_READY_B");
         assert(status.job_id == kWorkId);
+        assert(status.movement_state == "MOVING");
+        assert(status.confirmed_position->area == "DEPARTURE");
+        assert(status.confirmed_position->location == "A");
+    }
+}
+
+void TestFinalArrivalConfirmsTargetPosition() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_STATE_CHANGED, UART_LINETRACER_STATE_ARRIVED);
+    fixture.PushEvent(UART_LINETRACER_EVENT_ARRIVED);
+
+    assert(fixture.reports.size() == 2U);
+    for (const auto& report : fixture.reports) {
+        const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(report);
+        assert(status.movement_state == "ARRIVED");
+        assert(status.confirmed_position->area == "DESTINATION");
+        assert(status.confirmed_position->location == "B");
     }
 }
 
@@ -571,6 +652,9 @@ void TestUnloadCompleteReportsCompletionAndClearsMapping() {
     const auto& load_off = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[0]);
     assert(load_off.current_state == "LOAD_OFF_B");
     assert(load_off.job_id == kWorkId);
+    assert(load_off.movement_state == "ARRIVED");
+    assert(load_off.confirmed_position->area == "DESTINATION");
+    assert(load_off.confirmed_position->location == "B");
 
     assert(fixture.reports[1].channel == LineTracerReportChannel::kEvent);
     assert(fixture.reports[1].message_type == mqtt::MessageType::kWorkCompleted);
@@ -581,6 +665,9 @@ void TestUnloadCompleteReportsCompletionAndClearsMapping() {
     const auto& parked = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[2]);
     assert(parked.current_state == "PARKED_B");
     assert(!parked.job_id.has_value());
+    assert(parked.movement_state == "IDLE");
+    assert(parked.confirmed_position->area == "DESTINATION");
+    assert(parked.confirmed_position->location == "B");
     assert(!fixture.node->HasActiveJob());
     assert(fixture.node->ActiveWorkId().empty());
     assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_B);
@@ -613,11 +700,114 @@ void TestStaleJobEventIsIgnored() {
     assert(fixture.node->HasActiveJob());
 }
 
+void TestKeepaliveRunsWithoutActiveJob() {
+    Fixture fixture;
+
+    fixture.node->Tick(std::chrono::milliseconds{ 999 });
+    assert(!fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.empty());
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1 });
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == 1U);
+
+    const uart_frame_t frame = fixture.LastFrame();
+    assert(frame.command == UART_CMD_LINETRACER_GET_STATUS);
+    assert(frame.length == UART_LINETRACER_GET_STATUS_PAYLOAD_SIZE);
+}
+
+void TestKeepaliveWaitsForOneSecondAndSendsStatusRequest() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+    const std::size_t writes_before = fixture.backend->writes.size();
+
+    fixture.node->Tick(std::chrono::milliseconds{ 999 });
+    assert(!fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before);
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1 });
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before + 1U);
+
+    const uart_frame_t frame = fixture.LastFrame();
+    assert(frame.command == UART_CMD_LINETRACER_GET_STATUS);
+    assert(frame.length == UART_LINETRACER_GET_STATUS_PAYLOAD_SIZE);
+}
+
+void TestKeepaliveDefersWhileAnotherCommandIsPending() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStop)).Succeeded());
+    const std::size_t writes_before = fixture.backend->writes.size();
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+
+    assert(!fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before);
+}
+
+void TestKeepaliveResponseClearsPendingWithoutMqttResponse() {
+    Fixture fixture;
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.session->HasPendingCommand());
+
+    fixture.RespondToLastStatus();
+
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.reports.empty());
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+    assert(fixture.node->TrySendStatusKeepalive());
+}
+
+void TestResetKeepsConnectionAliveWithoutActiveJob() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kInitialize)).Succeeded());
+    fixture.AcknowledgeLastFrame();
+    const std::size_t writes_before = fixture.backend->writes.size();
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+
+    assert(!fixture.node->HasActiveJob());
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before + 1U);
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_GET_STATUS);
+}
+
+void TestUnloadCompleteKeepsConnectionAliveWithoutActiveJob() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+    fixture.PushEvent(UART_LINETRACER_EVENT_UNLOAD_COMPLETE);
+    const std::size_t writes_before = fixture.backend->writes.size();
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+
+    assert(!fixture.node->HasActiveJob());
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before + 1U);
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_GET_STATUS);
+}
+
+void TestDisconnectedUartStopsKeepalive() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+    fixture.session->Close();
+    const std::size_t writes_before = fixture.backend->writes.size();
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+
+    assert(!fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before);
+}
+
 }  // namespace
 
 int main() {
     TestDestinationMapsToAssignRoute();
     TestInitializeWithCurrentPositionSendsResetThenPosition();
+    TestInitializeAcceptsStructuredCurrentPosition();
     TestInvalidCurrentPositionIsRejectedWithoutUartWrite();
     TestDestinationRequiresKnownCurrentPosition();
     TestStopUsesActiveJobId();
@@ -635,9 +825,17 @@ int main() {
     TestRejectedAssignDoesNotActivateJob();
     TestAcceptedAssignReportsSuccessAfterAck();
     TestStateAndArrivalEventsReportPickupReady();
+    TestFinalArrivalConfirmsTargetPosition();
     TestLoadDetectedReportsLoadOn();
     TestUnloadCompleteReportsCompletionAndClearsMapping();
     TestFaultReportsMappedError();
     TestStaleJobEventIsIgnored();
+    TestKeepaliveRunsWithoutActiveJob();
+    TestKeepaliveWaitsForOneSecondAndSendsStatusRequest();
+    TestKeepaliveDefersWhileAnotherCommandIsPending();
+    TestKeepaliveResponseClearsPendingWithoutMqttResponse();
+    TestResetKeepsConnectionAliveWithoutActiveJob();
+    TestUnloadCompleteKeepsConnectionAliveWithoutActiveJob();
+    TestDisconnectedUartStopsKeepalive();
     return 0;
 }
