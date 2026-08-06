@@ -24,53 +24,6 @@ constexpr int kRegistryVersion = 1;
     return iterator->get<std::string>();
 }
 
-[[nodiscard]] mqtt::Json OptionalPosition(const std::optional<mqtt::LineTracerPositionPayload>& position) {
-    if (!position.has_value()) {
-        return nullptr;
-    }
-    return {
-        { std::string(mqtt::kAreaField), position->area },
-        { std::string(mqtt::kLocationField), position->location },
-    };
-}
-
-[[nodiscard]] std::optional<mqtt::LineTracerPositionPayload> ReadOptionalPosition(const mqtt::Json& object,
-                                                                                  std::string_view field) {
-    const auto iterator = object.find(std::string(field));
-    if (iterator == object.end() || iterator->is_null()) {
-        return std::nullopt;
-    }
-    if (!iterator->is_object()) {
-        throw std::runtime_error(std::string(field) + " must be an object or null");
-    }
-    mqtt::LineTracerPositionPayload position{
-        .area = iterator->at(std::string(mqtt::kAreaField)).get<std::string>(),
-        .location = iterator->at(std::string(mqtt::kLocationField)).get<std::string>(),
-    };
-    if (!position.IsValid()) {
-        throw std::runtime_error(std::string(field) + " contains an invalid line tracer position");
-    }
-    return position;
-}
-
-[[nodiscard]] bool HasCompletePosition(const DeviceSnapshot& device) noexcept {
-    return device.departure_position.has_value() && device.target_position.has_value() &&
-           device.confirmed_position.has_value() && device.movement_state.has_value();
-}
-
-[[nodiscard]] bool HasAnyPosition(const DeviceSnapshot& device) noexcept {
-    return device.departure_position.has_value() || device.target_position.has_value() ||
-           device.confirmed_position.has_value() || device.movement_state.has_value();
-}
-
-void ResetPosition(DeviceSnapshot& device) {
-    device.departure_position.reset();
-    device.target_position.reset();
-    device.confirmed_position.reset();
-    device.movement_state.reset();
-    device.position_reset = true;
-}
-
 }  // namespace
 
 DeviceManager::DeviceManager(std::filesystem::path registry_path, NowProvider now_provider)
@@ -147,15 +100,6 @@ bool DeviceManager::HandleMessage(const mqtt::ParsedTopic& topic, const mqtt::Mq
             device.current_state = payload->current_state;
             device.job_id = payload->job_id;
             device.error_code = payload->error_code;
-            if (payload->position_reset) {
-                ResetPosition(device);
-            } else if (payload->departure_position.has_value()) {
-                device.departure_position = payload->departure_position;
-                device.target_position = payload->target_position;
-                device.confirmed_position = payload->confirmed_position;
-                device.movement_state = payload->movement_state;
-                device.position_reset = false;
-            }
             if (payload->status == mqtt::ConnectionState::kOffline) {
                 device.disconnected_at = received_at.empty() ? message.timestamp : std::string(received_at);
                 heartbeat_observed_at_.erase(device.device_id);
@@ -305,11 +249,6 @@ void DeviceManager::LoadRegistry() {
             device.current_state = "DISCONNECTED";
             device.job_id = ReadOptionalString(item, "jobId");
             device.error_code = ReadOptionalString(item, "errorCode");
-            device.departure_position = ReadOptionalPosition(item, mqtt::kDeparturePositionField);
-            device.target_position = ReadOptionalPosition(item, mqtt::kTargetPositionField);
-            device.confirmed_position = ReadOptionalPosition(item, mqtt::kConfirmedPositionField);
-            device.movement_state = ReadOptionalString(item, mqtt::kMovementStateField);
-            device.position_reset = item.value("positionReset", false);
             device.last_message_timestamp = item.value("lastReportedTimestamp", std::string{});
             device.last_heartbeat_timestamp = item.value("lastHeartbeatTimestamp", std::string{});
             device.last_seen_timestamp = item.value("lastSeenTimestamp", std::string{});
@@ -318,11 +257,8 @@ void DeviceManager::LoadRegistry() {
             device.uptime = item.value("uptime", std::uint64_t{});
             device.uart_connected = item.value("uartConnected", false);
             device.registered = true;
-            const bool valid_movement_state = !device.movement_state.has_value() || *device.movement_state == "IDLE" ||
-                                              *device.movement_state == "MOVING" || *device.movement_state == "ARRIVED";
             if (!mqtt::IsValidTopicLevel(device.device_id) || device.device_type.empty() || device.node_name.empty() ||
-                device.ip_address.empty() || (HasAnyPosition(device) && !HasCompletePosition(device)) ||
-                (device.position_reset && HasAnyPosition(device)) || !valid_movement_state) {
+                device.ip_address.empty()) {
                 throw DeviceRegistryError("device registry contains an invalid device: " + registry_path_.string());
             }
             const std::string device_id = device.device_id;
@@ -355,11 +291,6 @@ bool DeviceManager::PersistRegistryLocked() {
                 { "currentState", device.current_state },
                 { "jobId", OptionalString(device.job_id) },
                 { "errorCode", OptionalString(device.error_code) },
-                { std::string(mqtt::kDeparturePositionField), OptionalPosition(device.departure_position) },
-                { std::string(mqtt::kTargetPositionField), OptionalPosition(device.target_position) },
-                { std::string(mqtt::kConfirmedPositionField), OptionalPosition(device.confirmed_position) },
-                { std::string(mqtt::kMovementStateField), OptionalString(device.movement_state) },
-                { "positionReset", device.position_reset },
                 { "lastReportedTimestamp", device.last_message_timestamp },
                 { "lastHeartbeatTimestamp", device.last_heartbeat_timestamp },
                 { "lastSeenTimestamp", device.last_seen_timestamp },

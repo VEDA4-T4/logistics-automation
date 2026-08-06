@@ -27,11 +27,6 @@ struct DeviceSnapshot final {
     std::string current_state;
     std::optional<std::string> job_id;
     std::optional<std::string> error_code;
-    std::optional<contracts::mqtt::LineTracerPositionPayload> departure_position;
-    std::optional<contracts::mqtt::LineTracerPositionPayload> target_position;
-    std::optional<contracts::mqtt::LineTracerPositionPayload> confirmed_position;
-    std::optional<std::string> movement_state;
-    bool position_reset{};
     std::string last_message_timestamp;
     std::string last_heartbeat_timestamp;
     std::string last_seen_timestamp;

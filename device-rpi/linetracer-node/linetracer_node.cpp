@@ -284,8 +284,6 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
         } else if (accepted && pending_.effect == PendingEffect::kActivateJob) {
             EmitDeviceStatus(mqtt::ConnectionState::kOnline, "MOVING", std::optional<std::string>{ active_work_id_ },
                              std::nullopt);
-        } else if (accepted && pending_.effect == PendingEffect::kClearJob) {
-            EmitDeviceStatus(mqtt::ConnectionState::kOnline, "POSITION_UNKNOWN", std::nullopt, std::nullopt);
         }
         ClearPending();
         return;
@@ -380,8 +378,6 @@ mqtt::DeviceStatusPayload LineTracerNode::MakeDeviceStatusPayload(mqtt::Connecti
             departure_position_.has_value() && target_position_.has_value() && confirmed_position_.has_value()
                 ? std::optional<std::string>{ movement_state_ }
                 : std::nullopt,
-        .position_reset = !departure_position_.has_value() && !target_position_.has_value() &&
-                          !confirmed_position_.has_value() && current_position_ == UART_LINETRACER_POSITION_NONE,
     };
 }
 
