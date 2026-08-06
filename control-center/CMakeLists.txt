@@ -201,15 +201,19 @@ if(BUILD_TESTING)
     add_executable(
         control_center_rtsp_stream_worker_player_test
         tests/rtsp_stream_worker_player_test.cpp
+        src/operational_log_panel.cpp
+        src/operational_log_state.cpp
         src/rtsp_h264_stream.cpp
         src/rtsp_stream_worker.cpp
+        include/logistics/control_center/operational_log_panel.hpp
+        include/logistics/control_center/operational_log_state.hpp
         include/logistics/control_center/rtsp_h264_stream.hpp
         include/logistics/control_center/rtsp_stream_worker.hpp
     )
     target_include_directories(control_center_rtsp_stream_worker_player_test PRIVATE include)
     target_link_libraries(
         control_center_rtsp_stream_worker_player_test
-        PRIVATE Qt6::Core Qt6::Multimedia Qt6::Network Qt6::Widgets
+        PRIVATE Qt6::Core Qt6::Multimedia Qt6::Network Qt6::Widgets logistics::contracts
     )
     logistics_enable_warnings(control_center_rtsp_stream_worker_player_test)
     add_test(

@@ -113,6 +113,10 @@ bool ContainsQuery(const OperationalLogEntry& entry, const QString& query) {
 
 }  // namespace
 
+OperationalLogState::OperationalLogState(qsizetype maximum_entries) {
+    setMaximumEntries(maximum_entries);
+}
+
 OperationalLogUpdateResult OperationalLogState::applyEnvelope(const QString& topic, const QJsonObject& envelope) {
     const auto type_value = envelope.value(QString::fromLatin1(mqtt::kMessageTypeField));
     if (!type_value.isString()) {
@@ -258,7 +262,7 @@ OperationalLogUpdateResult OperationalLogState::applyEnvelope(const QString& top
     }
 
     if (should_append) {
-        processed_message_ids_.insert(message_id);
+        rememberProcessedMessageId(message_id);
         append(std::move(entry));
         result.applied = true;
     }
@@ -284,6 +288,9 @@ QList<OperationalLogEntry> OperationalLogState::appendOlderEntries(QList<Operati
     QList<OperationalLogEntry> inserted;
     inserted.reserve(entries.size());
     for (auto& entry : entries) {
+        if (entries_.size() >= maximum_entries_) {
+            break;
+        }
         if (entry.id.isEmpty() || !entry.occurred_at.isValid() || processed_message_ids_.contains(entry.id)) {
             continue;
         }
@@ -292,7 +299,7 @@ QList<OperationalLogEntry> OperationalLogState::appendOlderEntries(QList<Operati
         if (duplicate != entries_.cend()) {
             continue;
         }
-        processed_message_ids_.insert(entry.id);
+        rememberProcessedMessageId(entry.id);
         entries_.append(entry);
         inserted.append(std::move(entry));
     }
@@ -352,8 +359,43 @@ int OperationalLogState::activeAlertCount() const noexcept {
     }));
 }
 
+qsizetype OperationalLogState::maximumEntries() const noexcept {
+    return maximum_entries_;
+}
+
+qsizetype OperationalLogState::processedMessageIdCount() const noexcept {
+    return processed_message_ids_.size();
+}
+
+void OperationalLogState::setMaximumEntries(qsizetype maximum_entries) {
+    maximum_entries_ = std::max<qsizetype>(1, maximum_entries);
+    while (entries_.size() > maximum_entries_) {
+        entries_.removeLast();
+    }
+    trimProcessedMessageIds();
+}
+
 void OperationalLogState::append(OperationalLogEntry entry) {
     entries_.prepend(std::move(entry));
+    while (entries_.size() > maximum_entries_) {
+        entries_.removeLast();
+    }
+}
+
+void OperationalLogState::rememberProcessedMessageId(const QString& id) {
+    if (id.isEmpty() || processed_message_ids_.contains(id)) {
+        return;
+    }
+    processed_message_ids_.insert(id);
+    processed_message_id_order_.enqueue(id);
+    trimProcessedMessageIds();
+}
+
+void OperationalLogState::trimProcessedMessageIds() {
+    const auto maximum_processed_ids = maximum_entries_ * 2;
+    while (processed_message_id_order_.size() > maximum_processed_ids) {
+        processed_message_ids_.remove(processed_message_id_order_.dequeue());
+    }
 }
 
 QString OperationalSeverityLabel(OperationalLogSeverity severity) {

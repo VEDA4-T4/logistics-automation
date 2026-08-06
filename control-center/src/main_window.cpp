@@ -73,7 +73,9 @@ constexpr int kDefaultVideoGridMinimumWidth = 480;
 constexpr int kDefaultMqttPort = 1883;
 constexpr int kOperationalLogBatchIntervalMs = 100;
 constexpr qsizetype kOperationalLogBatchSize = 200;
-constexpr int kOperationalLogHistoryPageSize = 500;
+constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kDefaultMaximumEntries);
+constexpr qsizetype kMinimumOperationalLogEntries = OperationalLogState::kPageSize;
+constexpr qsizetype kMaximumOperationalLogEntries = 5000;
 
 struct ControlCenterConfig {
     QString path;
@@ -87,6 +89,7 @@ struct ControlCenterConfig {
     int mqtt_keep_alive_seconds{ 30 };
     QUrl image_base_url{ QStringLiteral("http://127.0.0.1:8080/") };
     QString history_bearer_token;
+    qsizetype operational_log_maximum_entries{ OperationalLogState::kDefaultMaximumEntries };
     QString control_target_device_id{ "SYSTEM" };
     QList<ProcessDefinition> process_definitions{ DefaultProcessDefinitions() };
     int channel_count{ kDefaultChannelCount };
@@ -295,6 +298,18 @@ ControlCenterConfig loadControlCenterConfig() {
     }
     config.history_bearer_token = settings.value(QStringLiteral("http/bearer_token")).toString().trimmed();
 
+    bool operational_log_maximum_entries_is_valid = false;
+    const auto operational_log_maximum_entries =
+        settings.value(QStringLiteral("logs/max_buffer_entries"), OperationalLogState::kDefaultMaximumEntries)
+            .toLongLong(&operational_log_maximum_entries_is_valid);
+    if (operational_log_maximum_entries_is_valid && operational_log_maximum_entries >= kMinimumOperationalLogEntries &&
+        operational_log_maximum_entries <= kMaximumOperationalLogEntries) {
+        config.operational_log_maximum_entries = static_cast<qsizetype>(operational_log_maximum_entries);
+    } else {
+        config.warnings.append(
+            QStringLiteral("logs/max_buffer_entries는 100~5000이어야 하므로 기본값 500을 사용합니다."));
+    }
+
     bool channel_count_is_valid = false;
     const auto channel_count =
         settings.value("rtsp/channel_count", kDefaultChannelCount).toInt(&channel_count_is_valid);
@@ -449,6 +464,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setStyleSheet(ControlCenterStyleSheet());
 
     const auto config = loadControlCenterConfig();
+    operational_log_state_.setMaximumEntries(config.operational_log_maximum_entries);
     control_target_device_id_ = config.control_target_device_id;
     operations_dashboard_state_.configureProcesses(config.process_definitions);
     channel_count_ = static_cast<std::size_t>(config.channel_count);
@@ -534,6 +550,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_splitter->setHandleWidth(7);
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_splitter);
     operational_log_panel_ = new OperationalLogPanel(detail_splitter);
+    operational_log_panel_->setMaximumEntries(kMaximumOperationalLogEntries);
     operational_log_panel_->setEntryPageProvider(
         [this](qsizetype offset, qsizetype limit) { return operational_log_state_.entries().mid(offset, limit); });
     history_network_manager_ = new QNetworkAccessManager(this);
@@ -593,14 +610,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 selectControlTarget(target_device_id, display_name);
             });
     operational_log_panel_->setAcknowledgeHandler([this](const QString& id) {
-        if (operational_log_state_.acknowledge(id)) {
-            operational_log_panel_->setEntryAcknowledged(id, operational_log_state_.activeAlertCount());
-        }
+        static_cast<void>(operational_log_state_.acknowledge(id));
+        operational_log_panel_->setEntryAcknowledged(id, operational_log_state_.activeAlertCount());
     });
     operational_log_panel_->setAcknowledgeAllHandler([this]() {
         const auto count = operational_log_state_.acknowledgeAllAlerts();
+        operational_log_panel_->setAllAlertsAcknowledged(operational_log_state_.activeAlertCount());
         if (count > 0) {
-            operational_log_panel_->setAllAlertsAcknowledged(operational_log_state_.activeAlertCount());
             statusBar()->showMessage(QStringLiteral("오류 로그 %1건을 확인 처리했습니다.").arg(count), 3000);
         }
     });
@@ -1053,14 +1069,38 @@ std::optional<OperationalLogEntry> ParseHistoryEntry(const QJsonValue& value) {
 
 }  // namespace
 
+void MainWindow::resetOperationalLogHistory() {
+    ++history_request_generation_;
+    history_request_in_flight_ = false;
+    history_page_loaded_ = false;
+    history_next_cursor_.clear();
+    history_current_page_ids_.clear();
+    operational_log_panel_->reloadEntries(operational_log_state_.activeAlertCount());
+    if (!history_bearer_token_.isEmpty()) {
+        QTimer::singleShot(0, this, [this]() { requestOlderOperationalLogs(); });
+    }
+}
+
 void MainWindow::requestOlderOperationalLogs() {
     if (history_request_in_flight_ || history_bearer_token_.isEmpty() || history_network_manager_ == nullptr) {
+        return;
+    }
+    if (history_page_loaded_ && history_next_cursor_.isEmpty()) {
+        operational_log_panel_->setOlderEntriesLoading(false);
+        return;
+    }
+    requestOperationalLogHistory(history_next_cursor_);
+}
+
+void MainWindow::requestOperationalLogHistory(const QString& requested_cursor) {
+    if (history_request_in_flight_ || history_bearer_token_.isEmpty() || history_network_manager_ == nullptr) {
+        operational_log_panel_->setOlderEntriesLoading(false);
         return;
     }
     QUrl history_url = history_base_url_.resolved(QUrl(QStringLiteral("api/v1/history")));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("limit"), QString::number(kOperationalLogHistoryPageSize));
-    const auto requested_cursor = history_next_cursor_;
+    const auto request_generation = ++history_request_generation_;
     if (!requested_cursor.isEmpty()) {
         query.addQueryItem(QStringLiteral("cursor"), requested_cursor);
     }
@@ -1073,11 +1113,15 @@ void MainWindow::requestOlderOperationalLogs() {
     history_request_in_flight_ = true;
     operational_log_panel_->setOlderEntriesLoading(true);
     auto* reply = history_network_manager_->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, requested_cursor]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requested_cursor, request_generation]() {
+        if (request_generation != history_request_generation_) {
+            reply->deleteLater();
+            return;
+        }
         const auto body = reply->readAll();
         const auto fail = [this, reply](const QString& reason) {
             history_request_in_flight_ = false;
-            operational_log_panel_->appendOlderEntries({}, true, operational_log_state_.activeAlertCount());
+            operational_log_panel_->setOlderEntriesLoading(false);
             statusBar()->showMessage(QStringLiteral("서버 과거 로그를 불러오지 못했습니다: %1").arg(reason), 6000);
             qWarning().noquote() << QStringLiteral("[HISTORY] %1").arg(reason);
             reply->deleteLater();
@@ -1122,16 +1166,40 @@ void MainWindow::requestOlderOperationalLogs() {
             fail(QStringLiteral("서버가 동일한 cursor를 반환했습니다."));
             return;
         }
-        history_next_cursor_ = next_cursor;
-        history_request_in_flight_ = false;
-        const auto inserted = operational_log_state_.appendOlderEntries(std::move(entries));
-        const bool has_more = !history_next_cursor_.isEmpty();
-        operational_log_panel_->appendOlderEntries(inserted, has_more, operational_log_state_.activeAlertCount());
-        reply->deleteLater();
-
-        if (inserted.isEmpty() && has_more) {
-            QTimer::singleShot(0, this, [this]() { requestOlderOperationalLogs(); });
+        const bool repeats_current_page = history_page_loaded_ && !entries.isEmpty() &&
+                                          std::all_of(entries.cbegin(), entries.cend(), [this](const auto& entry) {
+                                              return history_current_page_ids_.contains(entry.id);
+                                          });
+        if (repeats_current_page) {
+            history_request_in_flight_ = false;
+            history_next_cursor_ = next_cursor;
+            operational_log_panel_->appendOlderEntries({}, !next_cursor.isEmpty(),
+                                                       operational_log_state_.activeAlertCount());
+            reply->deleteLater();
+            if (!next_cursor.isEmpty()) {
+                QTimer::singleShot(0, this, [this]() { requestOlderOperationalLogs(); });
+            }
+            return;
         }
+        history_request_in_flight_ = false;
+        if (entries.isEmpty()) {
+            operational_log_panel_->setOlderEntriesLoading(false);
+            reply->deleteLater();
+            if (!next_cursor.isEmpty()) {
+                history_next_cursor_ = next_cursor;
+                QTimer::singleShot(0, this, [this]() { requestOlderOperationalLogs(); });
+            }
+            return;
+        }
+        history_next_cursor_ = next_cursor;
+        history_page_loaded_ = true;
+        history_current_page_ids_.clear();
+        for (const auto& entry : entries) {
+            history_current_page_ids_.insert(entry.id);
+        }
+        operational_log_panel_->appendOlderEntries(entries, !history_next_cursor_.isEmpty(),
+                                                   operational_log_state_.activeAlertCount());
+        reply->deleteLater();
     });
 }
 
@@ -1240,7 +1308,7 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
                                         individual_command_request_ids_.contains(response_request_id);
     const auto log_update = operational_log_state_.applyEnvelope(topic, envelope);
     if (log_update.applied) {
-        queueOperationalLogEntry(operational_log_state_.entries().front().id);
+        queueOperationalLogEntry(operational_log_state_.entries().front());
     } else if (log_update.handled && !log_update.error.isEmpty()) {
         statusBar()->showMessage(log_update.error, 4000);
     }
@@ -1347,13 +1415,13 @@ void MainWindow::clearPendingCommand() {
 void MainWindow::appendOperationalLog(OperationalLogSeverity severity, const QString& device_id,
                                       const QString& category, const QString& code, const QString& message) {
     operational_log_state_.appendLocal(severity, device_id, category, code, message);
-    queueOperationalLogEntry(operational_log_state_.entries().front().id);
+    queueOperationalLogEntry(operational_log_state_.entries().front());
 }
 
-void MainWindow::queueOperationalLogEntry(const QString& id) {
-    pending_operational_log_ids_.enqueue(id);
-    while (pending_operational_log_ids_.size() > OperationalLogState::kPageSize) {
-        pending_operational_log_ids_.dequeue();
+void MainWindow::queueOperationalLogEntry(const OperationalLogEntry& entry) {
+    pending_operational_log_entries_.enqueue(entry);
+    while (pending_operational_log_entries_.size() > operational_log_state_.maximumEntries()) {
+        pending_operational_log_entries_.dequeue();
     }
     if (!operational_log_flush_timer_->isActive()) {
         operational_log_flush_timer_->start();
@@ -1361,22 +1429,16 @@ void MainWindow::queueOperationalLogEntry(const QString& id) {
 }
 
 void MainWindow::flushPendingOperationalLogs() {
-    const auto count = std::min(kOperationalLogBatchSize, pending_operational_log_ids_.size());
+    const auto count = std::min(kOperationalLogBatchSize, pending_operational_log_entries_.size());
     QList<OperationalLogEntry> entries;
     entries.reserve(count);
-    const auto& current_entries = operational_log_state_.entries();
     for (qsizetype index = 0; index < count; ++index) {
-        const auto id = pending_operational_log_ids_.dequeue();
-        const auto entry = std::find_if(current_entries.cbegin(), current_entries.cend(),
-                                        [&id](const OperationalLogEntry& candidate) { return candidate.id == id; });
-        if (entry != current_entries.cend()) {
-            entries.prepend(*entry);
-        }
+        entries.prepend(pending_operational_log_entries_.dequeue());
     }
     if (!entries.isEmpty()) {
         operational_log_panel_->prependEntries(entries, operational_log_state_.activeAlertCount());
     }
-    if (pending_operational_log_ids_.isEmpty()) {
+    if (pending_operational_log_entries_.isEmpty()) {
         operational_log_flush_timer_->stop();
     }
 }

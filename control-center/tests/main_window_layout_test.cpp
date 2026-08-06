@@ -121,7 +121,9 @@ bool CheckHistoryPaging(QApplication& application) {
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
     logistics::control_center::MainWindow window;
     auto* table = window.findChild<QTableView*>(QStringLiteral("operationalLogTable"));
-    if (!LayoutCheck(table != nullptr, "history test log table is missing") ||
+    auto* log_panel_widget = window.findChild<QWidget*>(QStringLiteral("operationalLogPanel"));
+    auto* log_panel = static_cast<logistics::control_center::OperationalLogPanel*>(log_panel_widget);
+    if (!LayoutCheck(table != nullptr && log_panel != nullptr, "history test log panel is missing") ||
         !LayoutCheck(WaitUntil(application, [&]() { return requests.size() == 1 && table->model()->rowCount() >= 2; }),
                      "first history page was not loaded") ||
         !LayoutCheck(requests.front().contains("Authorization: Bearer local-history-token"),
@@ -136,28 +138,28 @@ bool CheckHistoryPaging(QApplication& application) {
         found_first_page =
             found_first_page || table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-A");
     }
-    if (!LayoutCheck(found_first_page && table->model()->canFetchMore({}), "first history page cannot fetch more")) {
+    if (!LayoutCheck(found_first_page && log_panel->canLoadOlderEntries(), "first history page cannot fetch more")) {
         return false;
     }
-    table->model()->fetchMore({});
+    log_panel->requestOlderEntries();
     if (!LayoutCheck(WaitUntil(application, [&]() { return requests.size() == 2 && delayed_error_socket != nullptr; }),
                      "second history page was not requested")) {
         return false;
     }
-    table->model()->fetchMore({});
+    log_panel->requestOlderEntries();
     application.processEvents();
-    if (!LayoutCheck(requests.size() == 2 && !table->model()->canFetchMore({}),
+    if (!LayoutCheck(requests.size() == 2 && !log_panel->canLoadOlderEntries(),
                      "history request was not kept to one in-flight request")) {
         return false;
     }
     write_response(delayed_error_socket, "503 Service Unavailable",
                    R"({"error":"TEMPORARY_FAILURE","message":"retry"})");
     delayed_error_socket = nullptr;
-    if (!LayoutCheck(WaitUntil(application, [&]() { return table->model()->canFetchMore({}); }),
+    if (!LayoutCheck(WaitUntil(application, [&]() { return log_panel->canLoadOlderEntries(); }),
                      "failed history page did not become retryable")) {
         return false;
     }
-    table->model()->fetchMore({});
+    log_panel->requestOlderEntries();
     bool found_second_page = false;
     if (!LayoutCheck(WaitUntil(application,
                                [&]() {
@@ -184,8 +186,13 @@ bool CheckHistoryPaging(QApplication& application) {
         found_second_page =
             found_second_page || table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-C");
     }
-    return LayoutCheck(found_second_page && !table->model()->canFetchMore({}),
-                       "history paging did not stop after null nextCursor");
+    bool retained_first_page = false;
+    for (int row = 0; row < table->model()->rowCount(); ++row) {
+        retained_first_page =
+            retained_first_page || table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-A");
+    }
+    return LayoutCheck(found_second_page && retained_first_page && !log_panel->canLoadOlderEntries(),
+                       "history paging did not retain loaded rows or stop after null nextCursor");
 }
 
 bool WriteChannelConfig(const QString& path, int channel_count) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QMainWindow>
 #include <QQueue>
 #include <QSet>
@@ -57,9 +58,11 @@ private:
     void completePendingRecoveryFromDeviceState();
     void handleCommandTimeout();
     void clearPendingCommand();
-    void queueOperationalLogEntry(const QString& id);
+    void queueOperationalLogEntry(const OperationalLogEntry& entry);
     void flushPendingOperationalLogs();
     void requestOlderOperationalLogs();
+    void requestOperationalLogHistory(const QString& requested_cursor);
+    void resetOperationalLogHistory();
     void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,
                               const QString& code, const QString& message);
     void refreshOperationsPresentation();
@@ -102,10 +105,11 @@ private:
     QString pending_request_id_;
     QSet<QString> individual_command_request_ids_;
     QQueue<QString> individual_command_request_order_;
-    QQueue<QString> pending_operational_log_ids_;
+    QQueue<OperationalLogEntry> pending_operational_log_entries_;
     QUrl history_base_url_;
     QString history_bearer_token_;
     QString history_next_cursor_;
+    QSet<QString> history_current_page_ids_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
     CurrentProductState current_product_state_;
     OperationalLogState operational_log_state_;
@@ -120,6 +124,8 @@ private:
     bool onvif_log_payload_{ false };
     int metadata_stale_timeout_ms_{ 1500 };
     bool history_request_in_flight_{ false };
+    bool history_page_loaded_{ false };
+    quint64 history_request_generation_{ 0 };
 };
 
 }  // namespace logistics::control_center

@@ -19,14 +19,16 @@
 #include <QSortFilterProxyModel>
 #include <QStackedLayout>
 #include <QTableView>
+#include <QTimer>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <algorithm>
 #include <utility>
 
 namespace logistics::control_center {
 namespace {
 
-constexpr qsizetype kPageSize = OperationalLogState::kPageSize;
+constexpr qsizetype kPageSize = OperationalLogState::kDefaultMaximumEntries;
 
 enum OperationalLogDataRole {
     kEntryIdRole = Qt::UserRole + 1,
@@ -60,6 +62,11 @@ class OperationalLogTableModel final : public QAbstractTableModel {
 public:
     explicit OperationalLogTableModel(QObject* parent = nullptr) : QAbstractTableModel(parent) {}
 
+    void setMaximumEntries(qsizetype maximum_entries) {
+        maximum_entries_ = std::max<qsizetype>(kPageSize, maximum_entries);
+        reload();
+    }
+
     void setPageProvider(OperationalLogPanel::EntryPageProvider provider) {
         page_provider_ = std::move(provider);
         reload();
@@ -77,17 +84,18 @@ public:
 
     void reload() {
         QList<OperationalLogEntry> first_page;
-        loaded_capacity_ = kPageSize;
+        loaded_capacity_ = std::min(kPageSize, maximum_entries_);
         if (page_provider_) {
-            first_page = page_provider_(0, kPageSize);
+            first_page = page_provider_(0, loaded_capacity_);
         }
-        if (first_page.size() > kPageSize) {
-            first_page.resize(kPageSize);
+        if (first_page.size() > loaded_capacity_) {
+            first_page.resize(loaded_capacity_);
         }
 
         beginResetModel();
         entries_.clear();
         loaded_ids_.clear();
+        older_entries_loading_ = false;
         next_offset_ = first_page.size();
         for (auto& entry : first_page) {
             if (!entry.id.isEmpty() && loaded_ids_.contains(entry.id)) {
@@ -175,13 +183,23 @@ public:
         return index.isValid() ? Qt::ItemIsEnabled | Qt::ItemIsSelectable : Qt::NoItemFlags;
     }
 
-    [[nodiscard]] bool canFetchMore(const QModelIndex& parent) const override {
-        return !parent.isValid() && has_more_ && !older_entries_loading_ &&
-               (older_entries_request_handler_ || page_provider_);
+    [[nodiscard]] bool canLoadOlderEntries() const {
+        if (entries_.size() >= maximum_entries_) {
+            return false;
+        }
+        const bool can_load_local_page = static_cast<bool>(page_provider_);
+        const bool can_request_server_page = older_entries_available_ && older_entries_request_handler_;
+        return has_more_ && !older_entries_loading_ && (can_load_local_page || can_request_server_page);
     }
 
-    void fetchMore(const QModelIndex& parent) override {
-        if (!canFetchMore(parent)) {
+    [[nodiscard]] bool canFetchMore(const QModelIndex&) const override {
+        return false;
+    }
+
+    void fetchMore(const QModelIndex&) override {}
+
+    void requestOlderEntries() {
+        if (!canLoadOlderEntries()) {
             return;
         }
         if (older_entries_request_handler_ && older_entries_available_) {
@@ -201,7 +219,7 @@ public:
             has_more_ = false;
             return;
         }
-        loaded_capacity_ += kPageSize;
+        loaded_capacity_ = std::min(maximum_entries_, loaded_capacity_ + kPageSize);
 
         QList<OperationalLogEntry> unique_entries;
         unique_entries.reserve(page.size());
@@ -212,8 +230,17 @@ public:
             loaded_ids_.insert(entry.id);
             unique_entries.append(std::move(entry));
         }
+        const auto remaining_capacity = maximum_entries_ - entries_.size();
+        if (unique_entries.size() > remaining_capacity) {
+            for (auto row = remaining_capacity; row < unique_entries.size(); ++row) {
+                loaded_ids_.remove(unique_entries[row].id);
+            }
+            unique_entries.resize(remaining_capacity);
+        }
         if (unique_entries.isEmpty()) {
             next_offset_ += page.size();
+            has_more_ = entries_.size() < maximum_entries_ &&
+                        (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
             return;
         }
         const auto first_row = entries_.size();
@@ -221,10 +248,11 @@ public:
         entries_.append(std::move(unique_entries));
         endInsertRows();
         next_offset_ = entries_.size();
-        has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
+        has_more_ = entries_.size() < maximum_entries_ &&
+                    (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
     }
 
-    void appendOlderEntries(QList<OperationalLogEntry> entries, bool has_more) {
+    qsizetype appendOlderEntries(QList<OperationalLogEntry> entries, bool has_more) {
         older_entries_loading_ = false;
         QList<OperationalLogEntry> unique_entries;
         QSet<QString> new_ids;
@@ -236,18 +264,19 @@ public:
             new_ids.insert(entry.id);
             unique_entries.append(std::move(entry));
         }
-        if (!unique_entries.isEmpty() && entries_.size() >= loaded_capacity_) {
-            loaded_capacity_ += kPageSize;
+        const auto remaining_capacity = maximum_entries_ - entries_.size();
+        if (unique_entries.size() > remaining_capacity) {
+            unique_entries.resize(remaining_capacity);
         }
-        const auto remaining = loaded_capacity_ - entries_.size();
-        if (unique_entries.size() > remaining) {
-            unique_entries.resize(remaining);
+        const auto required_capacity = entries_.size() + unique_entries.size();
+        while (loaded_capacity_ < required_capacity && loaded_capacity_ < maximum_entries_) {
+            loaded_capacity_ = std::min(maximum_entries_, loaded_capacity_ + kPageSize);
         }
-        next_offset_ = entries_.size() + unique_entries.size();
         older_entries_available_ = has_more;
-        has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
         if (unique_entries.isEmpty()) {
-            return;
+            has_more_ = entries_.size() < maximum_entries_ &&
+                        (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+            return 0;
         }
         for (const auto& entry : unique_entries) {
             loaded_ids_.insert(entry.id);
@@ -256,20 +285,31 @@ public:
         beginInsertRows({}, static_cast<int>(first_row), static_cast<int>(first_row + unique_entries.size() - 1));
         entries_.append(std::move(unique_entries));
         endInsertRows();
+        next_offset_ = entries_.size();
+        has_more_ = entries_.size() < maximum_entries_ &&
+                    (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+        return entries_.size() - first_row;
     }
 
     qsizetype prependEntries(QList<OperationalLogEntry> entries) {
         QList<OperationalLogEntry> unique_entries;
+        QSet<QString> new_ids;
         unique_entries.reserve(entries.size());
         for (auto& entry : entries) {
-            if (!entry.id.isEmpty() && loaded_ids_.contains(entry.id)) {
+            if (!entry.id.isEmpty() && (loaded_ids_.contains(entry.id) || new_ids.contains(entry.id))) {
                 continue;
             }
-            loaded_ids_.insert(entry.id);
+            new_ids.insert(entry.id);
             unique_entries.append(std::move(entry));
+        }
+        if (unique_entries.size() > loaded_capacity_) {
+            unique_entries.resize(loaded_capacity_);
         }
         if (unique_entries.isEmpty()) {
             return 0;
+        }
+        for (const auto& entry : unique_entries) {
+            loaded_ids_.insert(entry.id);
         }
 
         beginInsertRows({}, 0, static_cast<int>(unique_entries.size() - 1));
@@ -333,6 +373,13 @@ public:
     [[nodiscard]] bool hasMore() const noexcept {
         return has_more_;
     }
+    [[nodiscard]] int activeAlertCount() const noexcept {
+        return static_cast<int>(std::count_if(entries_.cbegin(), entries_.cend(), [](const auto& entry) {
+            const bool is_alert =
+                entry.severity == OperationalLogSeverity::Error || entry.severity == OperationalLogSeverity::Critical;
+            return is_alert && !entry.acknowledged;
+        }));
+    }
     [[nodiscard]] bool isLoadingOlderEntries() const noexcept {
         return older_entries_loading_;
     }
@@ -344,6 +391,7 @@ private:
     QSet<QString> loaded_ids_;
     qsizetype next_offset_{ 0 };
     qsizetype loaded_capacity_{ kPageSize };
+    qsizetype maximum_entries_{ OperationalLogState::kDefaultMaximumEntries };
     bool has_more_{ false };
     bool older_entries_loading_{ false };
     bool older_entries_available_{ false };
@@ -467,7 +515,9 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     table_->setShowGrid(false);
     table_->setAlternatingRowColors(false);
     table_->setWordWrap(false);
+    table_->installEventFilter(this);
     table_->viewport()->setCursor(Qt::PointingHandCursor);
+    table_->viewport()->installEventFilter(this);
     table_->verticalHeader()->setVisible(false);
     table_->verticalHeader()->setDefaultSectionSize(34);
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -499,9 +549,11 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
             pending_new_entry_count_ = 0;
             updateSummary();
         }
-        if (value >= scroll_bar->maximum() && table_model_->canFetchMore({})) {
-            table_model_->fetchMore({});
-            updateSummary();
+    });
+    connect(table_->verticalScrollBar(), &QScrollBar::sliderReleased, this, [this]() {
+        auto* scroll_bar = table_->verticalScrollBar();
+        if (scroll_bar->value() == scroll_bar->maximum()) {
+            requestOlderEntriesAtBoundary();
         }
     });
     connect(acknowledge_all_button_, &QPushButton::clicked, this, [this]() {
@@ -514,6 +566,12 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
 
 void OperationalLogPanel::setEntryPageProvider(EntryPageProvider provider) {
     table_model_->setPageProvider(std::move(provider));
+    pending_new_entry_count_ = 0;
+    updateSummary();
+}
+
+void OperationalLogPanel::setMaximumEntries(qsizetype maximum_entries) {
+    table_model_->setMaximumEntries(maximum_entries);
     pending_new_entry_count_ = 0;
     updateSummary();
 }
@@ -553,11 +611,12 @@ void OperationalLogPanel::prependEntries(const QList<OperationalLogEntry>& entri
     updateSummary();
 }
 
-void OperationalLogPanel::appendOlderEntries(const QList<OperationalLogEntry>& entries, bool has_more,
-                                             int active_alert_count) {
+qsizetype OperationalLogPanel::appendOlderEntries(const QList<OperationalLogEntry>& entries, bool has_more,
+                                                  int active_alert_count) {
     active_alert_count_ = active_alert_count;
-    table_model_->appendOlderEntries(entries, has_more);
+    const auto inserted_count = table_model_->appendOlderEntries(entries, has_more);
     updateSummary();
+    return inserted_count;
 }
 
 void OperationalLogPanel::setOlderEntriesRequestHandler(OlderEntriesRequestHandler handler) {
@@ -567,6 +626,15 @@ void OperationalLogPanel::setOlderEntriesRequestHandler(OlderEntriesRequestHandl
 
 void OperationalLogPanel::setOlderEntriesLoading(bool loading) {
     table_model_->setOlderEntriesLoading(loading);
+    updateSummary();
+}
+
+bool OperationalLogPanel::canLoadOlderEntries() const {
+    return table_model_->canLoadOlderEntries();
+}
+
+void OperationalLogPanel::requestOlderEntries() {
+    table_model_->requestOlderEntries();
     updateSummary();
 }
 
@@ -590,6 +658,34 @@ void OperationalLogPanel::setAcknowledgeAllHandler(AcknowledgeAllHandler handler
     acknowledge_all_handler_ = std::move(handler);
 }
 
+bool OperationalLogPanel::eventFilter(QObject* watched, QEvent* event) {
+    if ((watched == table_ || watched == table_->viewport()) && event->type() == QEvent::Wheel) {
+        auto* wheel_event = static_cast<QWheelEvent*>(event);
+        auto vertical_delta =
+            wheel_event->pixelDelta().y() != 0 ? wheel_event->pixelDelta().y() : wheel_event->angleDelta().y();
+        if (wheel_event->inverted()) {
+            vertical_delta = -vertical_delta;
+        }
+        if (vertical_delta != 0) {
+            if (vertical_delta < 0) {
+                QTimer::singleShot(0, this, [this]() { requestOlderEntriesAtBoundary(); });
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void OperationalLogPanel::requestOlderEntriesAtBoundary() {
+    if (table_model_->isLoadingOlderEntries()) {
+        return;
+    }
+    auto* scroll_bar = table_->verticalScrollBar();
+    if (scroll_bar->value() == scroll_bar->maximum() && table_model_->canLoadOlderEntries()) {
+        table_model_->requestOlderEntries();
+        updateSummary();
+    }
+}
+
 OperationalLogFilter OperationalLogPanel::currentFilter() const {
     OperationalLogFilter filter;
     const auto severity_value = severity_filter_->currentData().toInt();
@@ -609,6 +705,7 @@ void OperationalLogPanel::applyFilter() {
 
 void OperationalLogPanel::updateSummary() {
     const auto filtered_count = filter_model_->rowCount();
+    const auto displayed_alert_count = std::max(active_alert_count_, table_model_->activeAlertCount());
     QString summary = QStringLiteral("%1건 표시").arg(filtered_count);
     if (table_model_->isLoadingOlderEntries()) {
         summary += QStringLiteral(" · 이전 로그 불러오는 중…");
@@ -619,9 +716,9 @@ void OperationalLogPanel::updateSummary() {
         summary += QStringLiteral(" · 새 로그 %1건").arg(pending_new_entry_count_);
     }
     result_count_->setText(summary);
-    alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(active_alert_count_));
-    alert_count_->setVisible(active_alert_count_ > 0);
-    acknowledge_all_button_->setEnabled(active_alert_count_ > 0);
+    alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(displayed_alert_count));
+    alert_count_->setVisible(displayed_alert_count > 0);
+    acknowledge_all_button_->setEnabled(displayed_alert_count > 0);
     if (auto* empty_state = findChild<QLabel*>(QStringLiteral("operationalLogEmptyState")); empty_state != nullptr) {
         empty_state->setVisible(filtered_count == 0);
     }
