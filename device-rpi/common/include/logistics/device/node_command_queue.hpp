@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <deque>
 #include <iterator>
@@ -13,6 +14,20 @@
 #include "logistics/contracts/mqtt_codec.hpp"
 
 namespace logistics::device {
+
+template <typename Value, typename Predicate>
+[[nodiscard]] bool MakeRoomInBoundedQueue(std::deque<Value>& queue, const std::size_t capacity,
+                                          Predicate can_replace) {
+    if (queue.size() < capacity) {
+        return true;
+    }
+    const auto replaceable = std::find_if(queue.begin(), queue.end(), std::move(can_replace));
+    if (replaceable == queue.end()) {
+        return false;
+    }
+    queue.erase(replaceable);
+    return true;
+}
 
 class NodeCommandQueue final {
 public:

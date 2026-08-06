@@ -10,6 +10,7 @@ namespace {
 
 namespace mqtt = logistics::contracts::mqtt;
 using logistics::device::MakeTerminalCommandResponse;
+using logistics::device::MakeRoomInBoundedQueue;
 using logistics::device::NodeCommandQueue;
 
 mqtt::MqttMessage Control(const std::string& message_id, const mqtt::ControlCommand command) {
@@ -108,6 +109,15 @@ void TestZeroCapacityIsRejected() {
     assert(threw);
 }
 
+void TestBoundedQueueNeverGrowsPastCapacity() {
+    std::deque<int> queue{ 1, 2 };
+    assert(!MakeRoomInBoundedQueue(queue, 2U, [](int value) { return value == 3; }));
+    assert(queue.size() == 2U);
+    assert(MakeRoomInBoundedQueue(queue, 2U, [](int value) { return value == 1; }));
+    queue.push_back(3);
+    assert((queue == std::deque<int>{ 2, 3 }));
+}
+
 }  // namespace
 
 int main() {
@@ -116,5 +126,6 @@ int main() {
     TestEmergencyStopIsAcceptedWhenNormalQueueIsFull();
     TestTerminalResponsePreservesRequest();
     TestZeroCapacityIsRejected();
+    TestBoundedQueueNeverGrowsPastCapacity();
     return 0;
 }
