@@ -375,6 +375,11 @@ private:
                              "{\"error\":\"NOT_FOUND\",\"message\":\"unknown upload endpoint\"}");
         }
 
+        if (!IsAuthorized(connection, server.config_.bearer_token)) {
+            return QueueJson(connection, MHD_HTTP_UNAUTHORIZED,
+                             "{\"error\":\"UNAUTHORIZED\",\"message\":\"invalid device token\"}");
+        }
+
         if (*context_pointer == nullptr) {
             auto* context = new ConnectionContext(kind);
             context->processor = MHD_create_post_processor(connection, 64U * 1024U, &ProcessPart, context);
@@ -396,16 +401,6 @@ private:
             return MHD_YES;
         }
         context.responded = true;
-
-        const char* authorization =
-            MHD_lookup_connection_value(connection, MHD_HEADER_KIND, contract::kAuthorizationHeader.data());
-        if (!server.config_.bearer_token.empty()) {
-            const std::string expected = std::string(contract::kBearerPrefix) + server.config_.bearer_token;
-            if (authorization == nullptr || std::string_view(authorization) != expected) {
-                return QueueJson(connection, MHD_HTTP_UNAUTHORIZED,
-                                 "{\"error\":\"UNAUTHORIZED\",\"message\":\"invalid device token\"}");
-            }
-        }
 
         const char* idempotency =
             MHD_lookup_connection_value(connection, MHD_HEADER_KIND, contract::kIdempotencyHeader.data());
