@@ -314,9 +314,22 @@ int Application::Run(int argc, char* argv[]) {
         return false;
     });
 
-    const auto dispatch_command = [&mqtt_client, &device_manager, &command_manager, &process_orchestrator,
-                                   &active_system_recovery_request_id,
+    const auto dispatch_command = [&mqtt_client, &mqtt_handler, &device_manager, &command_manager,
+                                   &process_orchestrator, &active_system_recovery_request_id,
                                    &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
+        if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
+            command != nullptr && command->command == contracts::mqtt::ControlCommand::kStatusRequest) {
+            const bool replayed =
+                mqtt_handler.ReplayDeviceStatuses(command->target_device_id, CurrentIso8601Timestamp());
+            const auto response = command_manager.MakeImmediateResult(
+                message,
+                replayed ? contracts::mqtt::CommandResult::kSuccess : contracts::mqtt::CommandResult::kRejected,
+                CurrentIso8601Timestamp(),
+                replayed ? std::nullopt : std::optional<std::string>{ "ERR-STATUS-SNAPSHOT-NOT-FOUND" },
+                replayed ? "latest device status snapshot replayed" : "no retained device status snapshot found");
+            return response.has_value() && publish_qt_response(*response);
+        }
+
         std::optional<contracts::mqtt::ControlCommand> system_command;
         if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
             command != nullptr && (command->target_device_id == "SYSTEM" || command->target_device_id == "ALL")) {

@@ -258,6 +258,39 @@ void TestLineTracerPositionStatusRoundTrip() {
     assert(status->movement_state == "MOVING");
 }
 
+void TestLineTracerPositionResetRoundTrip() {
+    const auto original = MakeMessage("MSG-LT-POSITION-RESET", mqtt::MessageType::kDeviceStatus,
+                                      mqtt::DeviceStatusPayload{
+                                          .status = mqtt::ConnectionState::kOnline,
+                                          .current_state = "POSITION_UNKNOWN",
+                                          .job_id = std::nullopt,
+                                          .error_code = std::nullopt,
+                                          .position_reset = true,
+                                      });
+
+    const auto encoded = mqtt::SerializeMessage(original);
+    assert(encoded.IsSuccess());
+    const auto json = mqtt::Json::parse(encoded.payload);
+    const auto& data = json.at("data");
+    assert(data.at("departurePosition").is_null());
+    assert(data.at("targetPosition").is_null());
+    assert(data.at("confirmedPosition").is_null());
+    assert(data.at("movementState").is_null());
+
+    const auto decoded = mqtt::DeserializeMessage(encoded.payload);
+    assert(decoded.IsSuccess());
+    const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(decoded.value);
+    assert(status != nullptr);
+    assert(status->position_reset);
+    assert(!status->departure_position.has_value());
+
+    auto partial_reset = json;
+    partial_reset.at("data").erase("movementState");
+    const auto rejected = mqtt::DeserializeMessage(partial_reset.dump());
+    assert(!rejected.IsSuccess());
+    assert(rejected.status.error == mqtt::CodecError::kMissingField);
+}
+
 void TestMqttCodecInvalidInputs() {
     const auto malformed_json = mqtt::DeserializeMessage("{");
     assert(!malformed_json.IsSuccess());
@@ -689,6 +722,7 @@ int main() {
 
     TestAllMqttMessageRoundTrips();
     TestLineTracerPositionStatusRoundTrip();
+    TestLineTracerPositionResetRoundTrip();
     TestMqttCodecInvalidInputs();
     TestMqttTimestampValidation();
     TestMqttTopicMessageValidation();
