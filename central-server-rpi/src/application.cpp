@@ -341,13 +341,8 @@ int Application::Run(int argc, char* argv[]) {
         return false;
     });
 
- HEAD
     const auto dispatch_command = [&mqtt_client, &mqtt_handler, &device_manager, &command_manager,
-                                   &process_orchestrator, &active_system_recovery_request_id,
-
-    const auto dispatch_command = [&mqtt_client, &device_manager, &command_manager, &process_orchestrator,
-                                   &server_config, &active_system_recovery_request_id,
- origin/main
+                                   &process_orchestrator, &server_config, &active_system_recovery_request_id,
                                    &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
         if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
             command != nullptr && command->command == contracts::mqtt::ControlCommand::kStatusRequest) {
