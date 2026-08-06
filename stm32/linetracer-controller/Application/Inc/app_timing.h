@@ -10,12 +10,12 @@
 #define APP_TIMING_HEALTH_PERIOD_MS 500U
 
 /* Slower work executed from the owning task without blocking other tasks. */
-#define APP_TIMING_ULTRASONIC_PERIOD_MS 50U
+#define APP_TIMING_ULTRASONIC_PERIOD_MS 60U
 #define APP_TIMING_COMM_TX_HEARTBEAT_MS 1000U
 #define APP_TIMING_UNLOAD_STEP_MS 20U
 
 /* Sensor filtering and communication supervision. */
-#define APP_TIMING_LINE_DEBOUNCE_SAMPLES 3U
+#define APP_TIMING_LINE_DEBOUNCE_SAMPLES 1U
 #define APP_TIMING_FSR_STABLE_MS 300U
 #define APP_TIMING_UART_RX_TIMEOUT_MS UART_COMMAND_TIMEOUT_MS
 

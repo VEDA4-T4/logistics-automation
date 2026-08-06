@@ -305,6 +305,20 @@ static void SafetyTask_PublishLatched(const app_safety_event_t* source) {
     (void)SafetyTask_PublishControlEvent(&event);
 }
 
+static void SafetyTask_PublishObstacleState(const app_safety_event_t* source, uint8_t active) {
+    app_control_safety_event_t event = { 0 };
+
+    if (source == NULL) {
+        return;
+    }
+
+    event.type = (active != 0U) ? APP_CONTROL_SAFETY_OBSTACLE_ACTIVE : APP_CONTROL_SAFETY_OBSTACLE_CLEARED;
+    event.occurred_at_ms = source->occurred_at_ms;
+    event.reason = (active != 0U) ? LINETRACER_STOP_REASON_OBSTACLE : LINETRACER_STOP_REASON_NONE;
+    event.error_code = (active != 0U) ? (uint8_t)UART_ERROR_SENSOR : (uint8_t)UART_ERROR_NONE;
+    (void)SafetyTask_PublishControlEvent(&event);
+}
+
 static uint8_t SafetyTask_PublishResetResult(const app_safety_event_t* request, uint8_t approved) {
     app_control_safety_event_t event = { 0 };
 
@@ -406,6 +420,31 @@ static void SafetyTask_DeactivateHazard(const app_safety_event_t* event) {
     s_safety_context.active_hazard_mask &= ~hazard_mask;
 }
 
+static void SafetyTask_ProcessObstacle(const app_safety_event_t* event) {
+    if (event == NULL) {
+        return;
+    }
+
+    if (event->active != 0U) {
+        if ((s_safety_context.active_hazard_mask & SAFETY_HAZARD_OBSTACLE) != 0U) {
+            ++s_duplicate_event_count;
+            return;
+        }
+
+        s_safety_context.active_hazard_mask |= SAFETY_HAZARD_OBSTACLE;
+        SafetyTask_PublishObstacleState(event, 1U);
+        return;
+    }
+
+    if ((s_safety_context.active_hazard_mask & SAFETY_HAZARD_OBSTACLE) == 0U) {
+        ++s_duplicate_event_count;
+        return;
+    }
+
+    s_safety_context.active_hazard_mask &= ~SAFETY_HAZARD_OBSTACLE;
+    SafetyTask_PublishObstacleState(event, 0U);
+}
+
 static void SafetyTask_HandleReset(const app_safety_event_t* request) {
     if (request == NULL) {
         return;
@@ -424,6 +463,10 @@ static void SafetyTask_HandleReset(const app_safety_event_t* request) {
 static uint8_t SafetyTask_LineLossApplies(void) {
     app_control_snapshot_t snapshot;
 
+    if (ControlTask_IsTurning()) {
+        return 0U;
+    }
+
     if (!ControlTask_GetLatest(&snapshot)) {
         return 0U;
     }
@@ -440,6 +483,11 @@ static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
 
     if (event->type == APP_SAFETY_EVENT_RESET_REQUEST) {
         SafetyTask_HandleReset(event);
+        return;
+    }
+
+    if (event->type == APP_SAFETY_EVENT_OBSTACLE) {
+        SafetyTask_ProcessObstacle(event);
         return;
     }
 
@@ -468,8 +516,7 @@ static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
 static void SafetyTask_ReconcileLineLoss(uint32_t now_ms) {
     app_safety_event_t event = { 0 };
 
-    if (s_line_lost_sensor_active == 0U ||
-        (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) != 0U ||
+    if (s_line_lost_sensor_active == 0U || (s_safety_context.active_hazard_mask & SAFETY_HAZARD_LINE_LOST) != 0U ||
         SafetyTask_LineLossApplies() == 0U) {
         return;
     }

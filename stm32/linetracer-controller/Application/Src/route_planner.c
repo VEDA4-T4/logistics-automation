@@ -71,8 +71,28 @@ uint8_t RoutePlanner_Create(uart_linetracer_position_t current_position, uart_li
     }
 
     plan->junctions_remaining = plan->junctions_total;
-    plan->phase = ROUTE_PHASE_TO_SOURCE_JUNCTION;
-    plan->expected_marker = ROUTE_MARKER_DEST_EXIT;
+
+    /*
+     * Same-zone routes still cross their origin junction before reaching the
+     * pickup. Consume that first
+     * transverse stripe as a straight-through
+     * source junction; only the following stripe is the pickup marker.
+
+     */
+    if (target_index == origin_index) {
+        plan->phase = ROUTE_PHASE_TO_SOURCE_JUNCTION;
+        plan->expected_marker = ROUTE_MARKER_SOURCE_JUNCTION;
+    } else {
+        plan->phase = ROUTE_PHASE_TO_SOURCE_JUNCTION;
+        /*
+         * The vehicle starts on the white board with the black guide tape
+         * centred between the
+         * outer sensors. It does not need an origin-exit
+         * stripe group: the first both-black crossing is the
+         * source junction.
+         */
+        plan->expected_marker = ROUTE_MARKER_SOURCE_JUNCTION;
+    }
     plan->valid = 1U;
     return 1U;
 }
@@ -84,11 +104,6 @@ route_action_t RoutePlanner_OnMarker(route_plan_t* plan) {
 
     switch (plan->phase) {
         case ROUTE_PHASE_TO_SOURCE_JUNCTION:
-            if (plan->expected_marker == ROUTE_MARKER_DEST_EXIT) {
-                plan->expected_marker = ROUTE_MARKER_SOURCE_JUNCTION;
-                return ROUTE_ACTION_GO_STRAIGHT;
-            }
-
             if (plan->expected_marker != ROUTE_MARKER_SOURCE_JUNCTION) {
                 return RoutePlanner_Fail(plan);
             }
@@ -126,13 +141,9 @@ route_action_t RoutePlanner_OnMarker(route_plan_t* plan) {
             plan->expected_marker = ROUTE_MARKER_NONE;
             return ROUTE_ACTION_STOP_AT_PICKUP;
 
-        case ROUTE_PHASE_RETURN_TO_DEST:
-            if (plan->expected_marker == ROUTE_MARKER_PICKUP_EXIT) {
-                plan->expected_marker = ROUTE_MARKER_RETURN_JUNCTION;
-                return ROUTE_ACTION_GO_STRAIGHT;
-            }
-
-            if (plan->expected_marker == ROUTE_MARKER_RETURN_JUNCTION) {
+        case ROUTE_PHASE_TO_TARGET_UNLOAD:
+            if (plan->expected_marker == ROUTE_MARKER_TARGET_JUNCTION) {
+                /* The target-zone crossing is passed straight through after the pickup U-turn. */
                 plan->expected_marker = ROUTE_MARKER_DEST;
                 return ROUTE_ACTION_GO_STRAIGHT;
             }
@@ -162,12 +173,13 @@ route_action_t RoutePlanner_OnLoadOn(route_plan_t* plan) {
 
     if (plan->phase == ROUTE_PHASE_WAITING_LOAD && plan->loaded == 0U) {
         plan->loaded = 1U;
-        plan->phase = ROUTE_PHASE_RETURN_TO_DEST;
-        plan->expected_marker = ROUTE_MARKER_PICKUP_EXIT;
+        /* Turn at the pickup, then follow this zone's branch to its unload point. */
+        plan->phase = ROUTE_PHASE_TO_TARGET_UNLOAD;
+        plan->expected_marker = ROUTE_MARKER_TARGET_JUNCTION;
         return ROUTE_ACTION_TURN_AROUND;
     }
 
-    if (plan->loaded != 0U && (plan->phase == ROUTE_PHASE_RETURN_TO_DEST || plan->phase == ROUTE_PHASE_UNLOADING)) {
+    if (plan->loaded != 0U && (plan->phase == ROUTE_PHASE_TO_TARGET_UNLOAD || plan->phase == ROUTE_PHASE_UNLOADING)) {
         return ROUTE_ACTION_NONE;
     }
 
@@ -179,7 +191,7 @@ route_action_t RoutePlanner_OnLoadOff(route_plan_t* plan) {
         return ROUTE_ACTION_ERROR;
     }
 
-    if (plan->phase == ROUTE_PHASE_RETURN_TO_DEST && plan->loaded != 0U) {
+    if (plan->phase == ROUTE_PHASE_TO_TARGET_UNLOAD && plan->loaded != 0U) {
         plan->phase = ROUTE_PHASE_ERROR;
         plan->expected_marker = ROUTE_MARKER_NONE;
         plan->valid = 0U;

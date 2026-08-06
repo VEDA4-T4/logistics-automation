@@ -27,7 +27,14 @@ static_assert(APP_MARKER_INVALID == 5);
 sensor_logic_update_t UpdateLine(sensor_logic_context_t& context, std::uint8_t left, std::uint8_t right,
                                  std::uint32_t now_ms) {
     sensor_logic_update_t update{};
-    SensorLogic_UpdateLine(&context, left, right, now_ms, &update);
+    SensorLogic_UpdateLine(&context, left, 1U, right, now_ms, &update);
+    return update;
+}
+
+sensor_logic_update_t UpdateLineWithCenter(sensor_logic_context_t& context, std::uint8_t left, std::uint8_t center,
+                                           std::uint8_t right, std::uint32_t now_ms) {
+    sensor_logic_update_t update{};
+    SensorLogic_UpdateLine(&context, left, center, right, now_ms, &update);
     return update;
 }
 
@@ -38,19 +45,19 @@ sensor_logic_update_t UpdateFsr(sensor_logic_context_t& context, std::uint16_t r
 }
 
 void InitializeCentered(sensor_logic_context_t& context, std::uint32_t start_ms) {
-    (void)UpdateLine(context, 1U, 1U, start_ms);
-    (void)UpdateLine(context, 1U, 1U, start_ms + 10U);
-    (void)UpdateLine(context, 1U, 1U, start_ms + 20U);
-}
-
-std::uint32_t EmitMarkerStripe(sensor_logic_context_t& context, std::uint32_t start_ms) {
     (void)UpdateLine(context, 0U, 0U, start_ms);
     (void)UpdateLine(context, 0U, 0U, start_ms + 10U);
     (void)UpdateLine(context, 0U, 0U, start_ms + 20U);
-    (void)UpdateLine(context, 1U, 1U, start_ms + 60U);
-    (void)UpdateLine(context, 1U, 1U, start_ms + 70U);
-    (void)UpdateLine(context, 1U, 1U, start_ms + 80U);
-    (void)UpdateLine(context, 1U, 1U, start_ms + 130U);
+}
+
+std::uint32_t EmitMarkerStripe(sensor_logic_context_t& context, std::uint32_t start_ms) {
+    (void)UpdateLine(context, 1U, 1U, start_ms);
+    (void)UpdateLine(context, 1U, 1U, start_ms + 10U);
+    (void)UpdateLine(context, 1U, 1U, start_ms + 20U);
+    (void)UpdateLine(context, 0U, 0U, start_ms + 60U);
+    (void)UpdateLine(context, 0U, 0U, start_ms + 70U);
+    (void)UpdateLine(context, 0U, 0U, start_ms + 80U);
+    (void)UpdateLine(context, 0U, 0U, start_ms + 130U);
     return start_ms + 80U;
 }
 
@@ -63,9 +70,9 @@ sensor_logic_update_t EmitMarkerGroup(sensor_logic_context_t& context, std::uint
         next_stripe_at_ms = last_stripe_at_ms + 60U;
     }
 
-    auto update = UpdateLine(context, 1U, 1U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS - 1U);
+    auto update = UpdateLine(context, 0U, 0U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS - 1U);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
-    return UpdateLine(context, 1U, 1U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS);
+    return UpdateLine(context, 0U, 0U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS);
 }
 
 void TestMarkerMessageContract() {
@@ -75,11 +82,13 @@ void TestMarkerMessageContract() {
     CHECK_TRUE(snapshot.marker_code == APP_MARKER_NONE);
     CHECK_TRUE(snapshot.marker_count == 0U);
     CHECK_TRUE(snapshot.marker_detected_at_ms == 0U);
+    CHECK_TRUE(snapshot.marker_active == 0U);
 
     SensorLogic_Init(&context, 10U);
     CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_NONE);
     CHECK_TRUE(context.snapshot.marker_count == 0U);
     CHECK_TRUE(context.snapshot.marker_detected_at_ms == 0U);
+    CHECK_TRUE(context.snapshot.marker_active == 0U);
 
     snapshot.marker_code = APP_MARKER_DEST_C;
     snapshot.marker_count = 4U;
@@ -94,14 +103,14 @@ void TestLineNormalizationAndDebounce() {
     sensor_logic_context_t context{};
 
     SensorLogic_Init(&context, 0U);
-    CHECK_TRUE(UpdateLine(context, 1U, 1U, 0U).event_flags == 0U);
-    CHECK_TRUE(UpdateLine(context, 1U, 1U, 10U).event_flags == 0U);
-    auto update = UpdateLine(context, 1U, 1U, 20U);
+    CHECK_TRUE(UpdateLine(context, 0U, 0U, 0U).event_flags == 0U);
+    CHECK_TRUE(UpdateLine(context, 0U, 0U, 10U).event_flags == 0U);
+    auto update = UpdateLine(context, 0U, 0U, 20U);
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
 
     CHECK_TRUE(UpdateLine(context, 1U, 0U, 30U).event_flags == 0U);
-    CHECK_TRUE(UpdateLine(context, 1U, 1U, 40U).event_flags == 0U);
+    CHECK_TRUE(UpdateLine(context, 0U, 0U, 40U).event_flags == 0U);
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
 
     CHECK_TRUE(UpdateLine(context, 1U, 0U, 50U).event_flags == 0U);
@@ -117,11 +126,175 @@ void TestLineNormalizationAndDebounce() {
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_RIGHT_ONLY);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
 
-    (void)UpdateLine(context, 0U, 0U, 120U);
-    (void)UpdateLine(context, 0U, 0U, 130U);
-    update = UpdateLine(context, 0U, 0U, 140U);
-    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_WHITE_GAP);
+    (void)UpdateLine(context, 1U, 1U, 120U);
+    (void)UpdateLine(context, 1U, 1U, 130U);
+    update = UpdateLine(context, 1U, 1U, 140U);
+    CHECK_TRUE(context.snapshot.marker_active != 0U);
+    CHECK_TRUE(context.diagnostics.marker_active != 0U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_RIGHT_ONLY);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) == 0U);
+
+    (void)UpdateLine(context, 0U, 0U, 150U);
+    (void)UpdateLine(context, 0U, 0U, 160U);
+    update = UpdateLine(context, 0U, 0U, 170U);
+    CHECK_TRUE(context.snapshot.marker_active == 0U);
+    CHECK_TRUE(context.diagnostics.marker_active == 0U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
+}
+
+void TestOuterSensorsDetectMarkerWhenCenterMisses() {
+    sensor_logic_context_t context{};
+
+    SensorLogic_Init(&context, 0U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 0U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 10U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 20U);
+
+    (void)UpdateLineWithCenter(context, 1U, 0U, 1U, 30U);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 1U, 40U);
+    auto update = UpdateLineWithCenter(context, 1U, 0U, 1U, 50U);
+    CHECK_TRUE(update.event_flags == 0U);
+    CHECK_TRUE(context.snapshot.marker_active != 0U);
+
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 90U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 100U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 110U);
+    update = UpdateLineWithCenter(context, 0U, 0U, 0U, 110U + SENSOR_MARKER_GROUP_TIMEOUT_MS);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
+    CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_JUNCTION);
+    CHECK_TRUE(context.snapshot.marker_count == 1U);
+}
+
+void TestAnalogLineSamples() {
+    sensor_logic_context_t context{};
+    constexpr uint16_t kLeftMidpointRaw = (SENSOR_LINE_LEFT_WHITE_RAW + SENSOR_LINE_LEFT_BLACK_RAW) / 2U;
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, kLeftMidpointRaw, SENSOR_LINE_RIGHT_BLACK_RAW);
+
+    CHECK_TRUE(context.snapshot.line_left_raw == kLeftMidpointRaw);
+    CHECK_TRUE(context.snapshot.line_right_raw == SENSOR_LINE_RIGHT_BLACK_RAW);
+    CHECK_TRUE(context.line_left_filtered == 500U);
+    CHECK_TRUE(context.line_right_filtered == 1000U);
+    CHECK_TRUE(context.snapshot.line_error == -500);
+    CHECK_TRUE(context.line_left_black == 0U);
+    CHECK_TRUE(context.line_right_black != 0U);
+
+    SensorLogic_UpdateLineAnalogRaw(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_RIGHT_WHITE_RAW);
+    CHECK_TRUE(context.line_left_filtered == 625U);
+    CHECK_TRUE(context.line_right_filtered == 750U);
+    CHECK_TRUE(context.snapshot.line_error == -125);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, 0U, 4095U);
+    CHECK_TRUE(context.line_left_filtered == 0U);
+    CHECK_TRUE(context.line_right_filtered == SENSOR_LINE_NORMALIZED_MAX);
+    CHECK_TRUE(context.snapshot.line_error == -1000);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, 4095U, 0U);
+    CHECK_TRUE(context.line_left_filtered == SENSOR_LINE_NORMALIZED_MAX);
+    CHECK_TRUE(context.line_right_filtered == 0U);
+    CHECK_TRUE(context.snapshot.line_error == 1000);
+}
+
+void TestAnalogBlackHysteresis() {
+    sensor_logic_context_t context{};
+    constexpr std::uint16_t kLeftMidRaw =
+        SENSOR_LINE_LEFT_WHITE_RAW +
+        ((SENSOR_LINE_LEFT_BLACK_RAW - SENSOR_LINE_LEFT_WHITE_RAW) * 550U) / SENSOR_LINE_NORMALIZED_MAX;
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_RIGHT_WHITE_RAW);
+    CHECK_TRUE(context.line_left_black != 0U);
+    CHECK_TRUE(context.line_right_black == 0U);
+
+    for (std::uint8_t index = 0U; index < 16U; ++index) {
+        SensorLogic_UpdateLineAnalogRaw(&context, kLeftMidRaw, SENSOR_LINE_RIGHT_WHITE_RAW);
+    }
+    CHECK_TRUE(context.line_left_filtered > SENSOR_LINE_BLACK_EXIT_THRESHOLD);
+    CHECK_TRUE(context.line_left_filtered < SENSOR_LINE_BLACK_ENTER_THRESHOLD);
+    CHECK_TRUE(context.line_left_black != 0U);
+
+    for (std::uint8_t index = 0U; index < 8U; ++index) {
+        SensorLogic_UpdateLineAnalogRaw(&context, SENSOR_LINE_LEFT_WHITE_RAW, SENSOR_LINE_RIGHT_WHITE_RAW);
+    }
+    CHECK_TRUE(context.line_left_filtered <= SENSOR_LINE_BLACK_EXIT_THRESHOLD);
+    CHECK_TRUE(context.line_left_black == 0U);
+}
+
+void TestThreeSensorTrackingState() {
+    sensor_logic_context_t context{};
+
+    SensorLogic_Init(&context, 0U);
+    (void)UpdateLineWithCenter(context, 0U, 1U, 0U, 0U);
+    (void)UpdateLineWithCenter(context, 0U, 1U, 0U, 10U);
+    (void)UpdateLineWithCenter(context, 0U, 1U, 0U, 20U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
+
+    (void)UpdateLineWithCenter(context, 1U, 1U, 0U, 30U);
+    (void)UpdateLineWithCenter(context, 1U, 1U, 0U, 40U);
+    (void)UpdateLineWithCenter(context, 1U, 1U, 0U, 50U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_LEFT_ONLY);
+
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 60U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 70U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 80U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
+
+    (void)UpdateLineWithCenter(context, 1U, 1U, 1U, 90U);
+    (void)UpdateLineWithCenter(context, 1U, 1U, 1U, 100U);
+    (void)UpdateLineWithCenter(context, 1U, 1U, 1U, 110U);
+    CHECK_TRUE(context.snapshot.marker_active != 0U);
+}
+
+void TestAnalogLineErrorDeadband() {
+    sensor_logic_context_t context{};
+    constexpr std::uint16_t kLeftInsideDeadband =
+        SENSOR_LINE_LEFT_WHITE_RAW +
+        ((SENSOR_LINE_LEFT_BLACK_RAW - SENSOR_LINE_LEFT_WHITE_RAW) * SENSOR_LINE_ERROR_DEADBAND) /
+            SENSOR_LINE_NORMALIZED_MAX;
+    constexpr std::uint16_t kLeftOutsideDeadband =
+        SENSOR_LINE_LEFT_WHITE_RAW +
+        ((SENSOR_LINE_LEFT_BLACK_RAW - SENSOR_LINE_LEFT_WHITE_RAW) * (SENSOR_LINE_ERROR_DEADBAND + 100U)) /
+            SENSOR_LINE_NORMALIZED_MAX;
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, kLeftInsideDeadband, SENSOR_LINE_RIGHT_WHITE_RAW);
+    CHECK_TRUE(context.snapshot.line_error == 0);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, kLeftOutsideDeadband, SENSOR_LINE_RIGHT_WHITE_RAW);
+    CHECK_TRUE(context.snapshot.line_error > (int16_t)SENSOR_LINE_ERROR_DEADBAND);
+}
+
+void TestDigitalLineStateOwnsPidDirection() {
+    sensor_logic_context_t context{};
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, SENSOR_LINE_LEFT_WHITE_RAW, SENSOR_LINE_RIGHT_BLACK_RAW);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 0U);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 10U);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 20U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_LEFT_ONLY);
+    CHECK_TRUE(context.snapshot.line_error >= (int16_t)SENSOR_LINE_DO_PID_MIN_ERROR);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_RIGHT_WHITE_RAW);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 1U, 0U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 1U, 10U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 1U, 20U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_RIGHT_ONLY);
+    CHECK_TRUE(context.snapshot.line_error <= -(int16_t)SENSOR_LINE_DO_PID_MIN_ERROR);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_RIGHT_WHITE_RAW);
+    (void)UpdateLineWithCenter(context, 0U, 1U, 0U, 0U);
+    (void)UpdateLineWithCenter(context, 0U, 1U, 0U, 10U);
+    (void)UpdateLineWithCenter(context, 0U, 1U, 0U, 20U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
+    CHECK_TRUE(context.snapshot.line_error == 0);
 }
 
 void TestMarkerGroupClassification() {
@@ -153,94 +326,64 @@ void TestMarkerGroupClassification() {
         CHECK_TRUE(context.latest_marker_event.type == ((marker_case.expected_code == APP_MARKER_INVALID)
                                                             ? SENSOR_MARKER_EVENT_INVALID_COUNT
                                                             : SENSOR_MARKER_EVENT_DETECTED));
-        CHECK_TRUE((UpdateLine(context, 1U, 1U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS + 10U).event_flags &
+        CHECK_TRUE((UpdateLine(context, 0U, 0U, last_stripe_at_ms + SENSOR_MARKER_GROUP_TIMEOUT_MS + 10U).event_flags &
                     APP_SENSOR_EVENT_MARKER) == 0U);
     }
 }
 
-void TestInvalidMarkerEntryAndLineLost() {
+void TestInvalidMarkerWidthAndNoise() {
     sensor_logic_context_t context{};
 
     SensorLogic_Init(&context, 0U);
-    (void)UpdateLine(context, 1U, 1U, 0U);
-    (void)UpdateLine(context, 1U, 1U, 10U);
-    (void)UpdateLine(context, 1U, 1U, 20U);
-    (void)UpdateLine(context, 1U, 0U, 30U);
-    (void)UpdateLine(context, 1U, 0U, 40U);
-    (void)UpdateLine(context, 1U, 0U, 50U);
-    (void)UpdateLine(context, 0U, 0U, 60U);
-    (void)UpdateLine(context, 0U, 0U, 70U);
-    (void)UpdateLine(context, 0U, 0U, 80U);
-    (void)UpdateLine(context, 1U, 1U, 100U);
-    (void)UpdateLine(context, 1U, 1U, 110U);
-    auto update = UpdateLine(context, 1U, 1U, 120U);
-    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
-    CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_INVALID);
-    CHECK_TRUE(context.snapshot.marker_count == 1U);
-    CHECK_TRUE(context.latest_marker_event.type == SENSOR_MARKER_EVENT_INVALID_TRANSITION);
+    InitializeCentered(context, 0U);
+    (void)UpdateLine(context, 1U, 1U, 30U);
+    (void)UpdateLine(context, 1U, 1U, 31U);
+    (void)UpdateLine(context, 1U, 1U, 32U);
+    (void)UpdateLine(context, 0U, 0U, 33U);
+    (void)UpdateLine(context, 0U, 0U, 34U);
+    auto update = UpdateLine(context, 0U, 0U, 35U);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
+    CHECK_TRUE(context.marker_group_count == 0U);
 
     SensorLogic_Init(&context, 0U);
     InitializeCentered(context, 0U);
-    (void)UpdateLine(context, 0U, 0U, 30U);
-    (void)UpdateLine(context, 0U, 0U, 40U);
-    (void)UpdateLine(context, 0U, 0U, 50U);
-    (void)UpdateLine(context, 1U, 1U, 370U);
-    (void)UpdateLine(context, 1U, 1U, 380U);
-    update = UpdateLine(context, 1U, 1U, 390U);
+    (void)UpdateLine(context, 1U, 1U, 30U);
+    (void)UpdateLine(context, 1U, 1U, 40U);
+    (void)UpdateLine(context, 1U, 1U, 50U);
+    (void)UpdateLine(context, 0U, 0U, SENSOR_MARKER_MAX_BLACK_MS + 60U);
+    (void)UpdateLine(context, 0U, 0U, SENSOR_MARKER_MAX_BLACK_MS + 70U);
+    update = UpdateLine(context, 0U, 0U, SENSOR_MARKER_MAX_BLACK_MS + 80U);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
     CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_INVALID);
     CHECK_TRUE(context.latest_marker_event.type == SENSOR_MARKER_EVENT_INVALID_WIDTH);
-
-    SensorLogic_Init(&context, 0U);
-    (void)UpdateLine(context, 1U, 1U, 0U);
-    (void)UpdateLine(context, 1U, 1U, 10U);
-    (void)UpdateLine(context, 1U, 1U, 20U);
-    (void)UpdateLine(context, 0U, 0U, 30U);
-    (void)UpdateLine(context, 0U, 0U, 40U);
-    (void)UpdateLine(context, 0U, 0U, 50U);
-
-    update = UpdateLine(context, 0U, 0U, 550U);
-    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_LOST) != 0U);
-    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
-    CHECK_TRUE((update.safety_activated_flags & SENSOR_LOGIC_SAFETY_LINE_LOST) != 0U);
-    CHECK_TRUE((UpdateLine(context, 0U, 0U, 560U).event_flags & APP_SENSOR_EVENT_LINE_LOST) == 0U);
-
-    (void)UpdateLine(context, 1U, 1U, 570U);
-    (void)UpdateLine(context, 1U, 1U, 580U);
-    update = UpdateLine(context, 1U, 1U, 590U);
-    CHECK_TRUE((update.safety_cleared_flags & SENSOR_LOGIC_SAFETY_LINE_LOST) != 0U);
-
-    (void)UpdateLine(context, 1U, 1U, 600U);
-    (void)UpdateLine(context, 1U, 1U, 650U);
-    (void)UpdateLine(context, 0U, 0U, 660U);
-    (void)UpdateLine(context, 0U, 0U, 670U);
-    (void)UpdateLine(context, 0U, 0U, 680U);
-    (void)UpdateLine(context, 1U, 1U, 700U);
-    (void)UpdateLine(context, 1U, 1U, 710U);
-    update = UpdateLine(context, 1U, 1U, 720U);
-    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
-    update = UpdateLine(context, 1U, 1U, 969U);
-    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) == 0U);
-    update = UpdateLine(context, 1U, 1U, 970U);
-    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
-    CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_JUNCTION);
 }
 
 void TestFsrStabilityAndHysteresis() {
     sensor_logic_context_t context{};
+    std::uint32_t baseline_ready_count = 0U;
     std::uint32_t load_on_count = 0U;
     std::uint32_t load_off_count = 0U;
 
     SensorLogic_Init(&context, 0U);
-    for (std::uint32_t now = 0U; now <= 500U; now += 10U) {
-        auto update = UpdateFsr(context, ((now / 10U) % 2U == 0U) ? 2000U : 2300U, now);
+    SensorLogic_StartFsrBaselineCapture(&context, SENSOR_FSR_BASELINE_FOR_LOAD_ON);
+    for (std::uint32_t now = 0U; now < (SENSOR_FSR_BASELINE_SAMPLES * 10U); now += 10U) {
+        const auto update = UpdateFsr(context, 1700U, now);
+        if ((update.event_flags & APP_SENSOR_EVENT_FSR_BASELINE_READY) != 0U) {
+            ++baseline_ready_count;
+        }
+    }
+    CHECK_TRUE(baseline_ready_count == 1U);
+    CHECK_TRUE(context.fsr_baseline_valid != 0U);
+    CHECK_TRUE(context.diagnostics.fsr_empty_baseline == 1700U);
+
+    for (std::uint32_t now = 160U; now <= 500U; now += 10U) {
+        auto update = UpdateFsr(context, ((now / 10U) % 2U == 0U) ? 1850U : 1900U, now);
         CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LOAD_ON) == 0U);
     }
     CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_EMPTY);
 
-    SensorLogic_Init(&context, 0U);
-    for (std::uint32_t now = 0U; now <= 350U; now += 10U) {
-        auto update = UpdateFsr(context, 3000U, now);
+    for (std::uint32_t now = 510U; now <= 870U; now += 10U) {
+        auto update = UpdateFsr(context, 2000U, now);
         if ((update.event_flags & APP_SENSOR_EVENT_LOAD_ON) != 0U) {
             ++load_on_count;
         }
@@ -248,8 +391,18 @@ void TestFsrStabilityAndHysteresis() {
     CHECK_TRUE(load_on_count == 1U);
     CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_PRESENT);
 
-    for (std::uint32_t now = 360U; now <= 550U; now += 10U) {
-        auto update = UpdateFsr(context, 0U, now);
+    SensorLogic_StartFsrBaselineCapture(&context, SENSOR_FSR_BASELINE_FOR_LOAD_OFF);
+    baseline_ready_count = 0U;
+    for (std::uint32_t now = 880U; now < 880U + (SENSOR_FSR_BASELINE_SAMPLES * 10U); now += 10U) {
+        const auto update = UpdateFsr(context, 2000U, now);
+        if ((update.event_flags & APP_SENSOR_EVENT_FSR_BASELINE_READY) != 0U) {
+            ++baseline_ready_count;
+        }
+    }
+    CHECK_TRUE(baseline_ready_count == 1U);
+
+    for (std::uint32_t now = 1120U; now <= 1290U; now += 10U) {
+        auto update = UpdateFsr(context, 1850U, now);
         if ((update.event_flags & APP_SENSOR_EVENT_LOAD_OFF) != 0U) {
             ++load_off_count;
         }
@@ -257,8 +410,8 @@ void TestFsrStabilityAndHysteresis() {
     CHECK_TRUE(load_off_count == 0U);
     CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_PRESENT);
 
-    for (std::uint32_t now = 560U; now <= 1100U; now += 10U) {
-        auto update = UpdateFsr(context, 0U, now);
+    for (std::uint32_t now = 1300U; now <= 1650U; now += 10U) {
+        auto update = UpdateFsr(context, 1700U, now);
         if ((update.event_flags & APP_SENSOR_EVENT_LOAD_OFF) != 0U) {
             ++load_off_count;
         }
@@ -283,17 +436,47 @@ void TestOverloadAndObstacleHysteresis() {
     CHECK_TRUE(context.diagnostics.overload_active == 1U);
 
     sensor_logic_update_t update{};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 100U, 1U, 400U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 400U, &update);
+    CHECK_TRUE(update.event_flags == 0U);
+    CHECK_TRUE(context.diagnostics.obstacle_mask == 0U);
+
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 410U, &update);
+    CHECK_TRUE(update.event_flags == 0U);
+    CHECK_TRUE(context.diagnostics.obstacle_mask == 0U);
+
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 420U, &update);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_OBSTACLE) != 0U);
     CHECK_TRUE((update.safety_activated_flags & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U);
 
     update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 180U, 1U, 410U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 60U, 1U, 430U, &update);
     CHECK_TRUE(update.event_flags == 0U);
     CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
 
     update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 230U, 1U, 420U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 440U, &update);
+    CHECK_TRUE(update.event_flags == 0U);
+    CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
+
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 450U, &update);
+    CHECK_TRUE(update.event_flags == 0U);
+    CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
+
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 460U, &update);
+    CHECK_TRUE(update.event_flags == 0U);
+    CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
+
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 470U, &update);
+    CHECK_TRUE(update.event_flags == 0U);
+    CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
+
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 480U, &update);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_OBSTACLE) != 0U);
     CHECK_TRUE((update.safety_cleared_flags & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U);
 }
@@ -347,10 +530,12 @@ void TestSensorErrorsAndStaleness() {
     SensorLogic_MarkUltrasonicStarted(&context, 0U, 0U);
     SensorLogic_UpdateUltrasonic(&context, 0U, 500U, 1U, 10U, &update);
     update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 20U, &update);
-    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 30U, &update);
+    for (std::uint32_t sample = 1U; sample < SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES; ++sample) {
+        SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 10U + (sample * 10U), &update);
+    }
     CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
-    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 40U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, 10U + (SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES * 10U),
+                                 &update);
     CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) != 0U);
 
     SensorLogic_Init(&context, 0U);
@@ -365,17 +550,75 @@ void TestSensorErrorsAndStaleness() {
     CHECK_TRUE(context.snapshot.fsr_valid == 0U);
 }
 
+void TestRouteTestSafetyFiltering() {
+    constexpr auto kFrontError = static_cast<std::uint32_t>(SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT);
+    constexpr auto kRearError = static_cast<std::uint32_t>(SENSOR_LOGIC_ERROR_ULTRASONIC_REAR);
+    constexpr auto kLeftError = static_cast<std::uint32_t>(SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT);
+    constexpr auto kRightError = static_cast<std::uint32_t>(SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
+    constexpr auto kFsrError = static_cast<std::uint32_t>(SENSOR_LOGIC_ERROR_FSR_ADC);
+    constexpr auto kFrontObstacle = static_cast<std::uint8_t>(SENSOR_LOGIC_DIRECTION_FRONT);
+    constexpr auto kRearObstacle = static_cast<std::uint8_t>(SENSOR_LOGIC_DIRECTION_REAR);
+    constexpr auto kLeftObstacle = static_cast<std::uint8_t>(SENSOR_LOGIC_DIRECTION_LEFT);
+    constexpr auto kRightObstacle = static_cast<std::uint8_t>(SENSOR_LOGIC_DIRECTION_RIGHT);
+    constexpr auto kAllUltrasonicErrors = kFrontError | kRearError | kLeftError | kRightError;
+    constexpr auto kAllUltrasonicObstacles =
+        static_cast<std::uint8_t>(kFrontObstacle | kRearObstacle | kLeftObstacle | kRightObstacle);
+    sensor_logic_context_t context{};
+    sensor_logic_update_t update{};
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_MarkUltrasonicStarted(&context, 0U, 0U);
+    for (std::uint32_t sample = 1U; sample <= SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES; ++sample) {
+        SensorLogic_UpdateUltrasonic(&context, 0U, 0U, 0U, sample * 10U, &update);
+    }
+    CHECK_TRUE((context.diagnostics.error_flags & kFrontError) != 0U);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_MarkUltrasonicStarted(&context, 1U, 0U);
+    for (std::uint32_t sample = 1U; sample <= SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES; ++sample) {
+        SensorLogic_UpdateUltrasonic(&context, 1U, 0U, 0U, sample * 10U, &update);
+    }
+    CHECK_TRUE((context.diagnostics.error_flags & kRearError) != 0U);
+
+    SensorLogic_Init(&context, 0U);
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 10U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 20U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 30U, &update);
+    CHECK_TRUE((context.diagnostics.obstacle_mask & kFrontObstacle) != 0U);
+
+#if LINETRACER_ROUTE_TEST_MODE
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors) == 0U);
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors | kFsrError) ==
+               ((kAllUltrasonicErrors | kFsrError) & ~SENSOR_ROUTE_TEST_IGNORED_ERROR_FLAGS));
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kAllUltrasonicObstacles) == 0U);
+#else
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors) == kFrontError);
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors | kFsrError) == (kFrontError | kFsrError));
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kAllUltrasonicObstacles) == kFrontObstacle);
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kRearError | kLeftError | kRightError) == 0U);
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kRearObstacle) == 0U);
+#endif
+}
+
 }  // namespace
 
 int main() {
     TestMarkerMessageContract();
     TestLineNormalizationAndDebounce();
+    TestOuterSensorsDetectMarkerWhenCenterMisses();
+    TestAnalogLineSamples();
+    TestAnalogBlackHysteresis();
+    TestThreeSensorTrackingState();
+    TestAnalogLineErrorDeadband();
+    TestDigitalLineStateOwnsPidDirection();
     TestMarkerGroupClassification();
-    TestInvalidMarkerEntryAndLineLost();
+    TestInvalidMarkerWidthAndNoise();
     TestFsrStabilityAndHysteresis();
     TestOverloadAndObstacleHysteresis();
     TestPendingEventLatch();
     TestSensorErrorsAndStaleness();
+    TestRouteTestSafetyFiltering();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " sensor logic test(s) failed\n";

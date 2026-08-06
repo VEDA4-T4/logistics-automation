@@ -47,12 +47,7 @@ typedef enum {
     SENSOR_LOGIC_SAFETY_OVERLOAD = (1U << 2U)
 } sensor_logic_safety_flags_t;
 
-typedef enum {
-    SENSOR_MARKER_IDLE = 0,
-    SENSOR_MARKER_GAP_CANDIDATE,
-    SENSOR_MARKER_CONFIRMED,
-    SENSOR_MARKER_LINE_LOST
-} sensor_marker_state_t;
+typedef enum { SENSOR_MARKER_IDLE = 0, SENSOR_MARKER_BLACK_CANDIDATE, SENSOR_MARKER_CONFIRMED } sensor_marker_state_t;
 
 typedef enum {
     SENSOR_MARKER_EVENT_NONE = 0,
@@ -78,9 +73,11 @@ typedef struct {
     uint32_t obstacle_changed_at_ms;
     uint32_t error_changed_at_ms;
     uint16_t fsr_filtered;
+    uint16_t fsr_empty_baseline;
     uint16_t marker_duration_ms;
     uint8_t obstacle_mask;
     uint8_t overload_active;
+    uint8_t marker_active;
 } sensor_logic_diagnostics_t;
 
 typedef struct {
@@ -112,17 +109,24 @@ typedef struct {
     uint8_t next_index;
 } sensor_fsr_filter_t;
 
+typedef enum { SENSOR_FSR_BASELINE_FOR_LOAD_ON = 0, SENSOR_FSR_BASELINE_FOR_LOAD_OFF } sensor_fsr_baseline_mode_t;
+
 typedef struct {
     sensor_debounce_filter_t line_left_filter;
+    sensor_debounce_filter_t line_center_filter;
     sensor_debounce_filter_t line_right_filter;
     sensor_fsr_filter_t fsr_filter;
+    uint16_t line_left_filtered;
+    uint16_t line_right_filtered;
+    uint16_t line_center_filtered;
     app_sensor_snapshot_t snapshot;
     sensor_logic_diagnostics_t diagnostics;
     sensor_marker_event_t latest_marker_event;
-    uint32_t line_white_since_ms;
+    uint32_t marker_black_since_ms;
     uint32_t marker_rearm_since_ms;
     uint32_t marker_group_last_stripe_at_ms;
     uint32_t fsr_candidate_since_ms;
+    uint32_t fsr_baseline_sum;
     uint32_t overload_candidate_since_ms;
     uint32_t last_fsr_sample_ms;
     uint32_t ultrasonic_last_success_ms[SENSOR_LOGIC_ULTRASONIC_COUNT];
@@ -130,54 +134,50 @@ typedef struct {
     sensor_marker_state_t marker_state;
     uint8_t ultrasonic_failure_count[SENSOR_LOGIC_ULTRASONIC_COUNT];
     uint8_t ultrasonic_recovery_count[SENSOR_LOGIC_ULTRASONIC_COUNT];
+    uint8_t ultrasonic_obstacle_on_count[SENSOR_LOGIC_ULTRASONIC_COUNT];
+    uint8_t ultrasonic_obstacle_off_count[SENSOR_LOGIC_ULTRASONIC_COUNT];
     uint8_t ultrasonic_started_mask;
-    uint8_t line_white_active;
-    uint8_t line_lost_active;
     uint8_t marker_event_valid;
-    uint8_t marker_rearm_centered;
+    uint8_t marker_rearm_active;
     uint8_t marker_group_count;
     uint8_t marker_group_active;
     uint8_t fsr_candidate_loaded;
+    uint8_t fsr_baseline_capture_active;
+    uint8_t fsr_baseline_valid;
+    uint8_t fsr_baseline_sample_count;
+    sensor_fsr_baseline_mode_t fsr_baseline_mode;
     uint8_t overload_candidate_active;
+    uint8_t line_analog_initialized;
+    uint8_t line_center_analog_initialized;
+    uint8_t line_left_black;
+    uint8_t line_right_black;
+    uint8_t line_center_black;
 } sensor_logic_context_t;
 
-void SensorLogic_Init(sensor_logic_context_t *context, uint32_t now_ms);
-void SensorLogic_UpdateLine(sensor_logic_context_t *context,
-                            uint8_t line_left,
-                            uint8_t line_right,
-                            uint32_t now_ms,
-                            sensor_logic_update_t *update);
-void SensorLogic_UpdateFsr(sensor_logic_context_t *context,
-                           uint16_t raw_value,
-                           uint32_t now_ms,
-                           sensor_logic_update_t *update);
-void SensorLogic_MarkFsrError(sensor_logic_context_t *context,
-                              uint32_t error_flag,
-                              uint32_t now_ms);
-void SensorLogic_MarkAllUltrasonicUnavailable(sensor_logic_context_t *context,
-                                               uint32_t now_ms);
-void SensorLogic_MarkUltrasonicStarted(sensor_logic_context_t *context,
-                                       uint8_t sensor_index,
-                                       uint32_t now_ms);
-void SensorLogic_UpdateUltrasonic(sensor_logic_context_t *context,
-                                  uint8_t sensor_index,
-                                  uint16_t distance_mm,
-                                  uint8_t valid,
-                                  uint32_t now_ms,
-                                  sensor_logic_update_t *update);
-void SensorLogic_CheckStaleness(sensor_logic_context_t *context,
-                                uint32_t now_ms);
+void SensorLogic_Init(sensor_logic_context_t* context, uint32_t now_ms);
+void SensorLogic_UpdateLine(sensor_logic_context_t* context, uint8_t line_left, uint8_t line_center, uint8_t line_right,
+                            uint32_t now_ms, sensor_logic_update_t* update);
+void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t* context, uint16_t line_left_raw, uint16_t line_right_raw);
+void SensorLogic_UpdateLineCenter(sensor_logic_context_t* context, uint8_t line_center, uint16_t line_center_raw);
+void SensorLogic_UpdateFsr(sensor_logic_context_t* context, uint16_t raw_value, uint32_t now_ms,
+                           sensor_logic_update_t* update);
+void SensorLogic_StartFsrBaselineCapture(sensor_logic_context_t* context, sensor_fsr_baseline_mode_t mode);
+void SensorLogic_MarkFsrError(sensor_logic_context_t* context, uint32_t error_flag, uint32_t now_ms);
+void SensorLogic_MarkAllUltrasonicUnavailable(sensor_logic_context_t* context, uint32_t now_ms);
+void SensorLogic_MarkUltrasonicStarted(sensor_logic_context_t* context, uint8_t sensor_index, uint32_t now_ms);
+void SensorLogic_UpdateUltrasonic(sensor_logic_context_t* context, uint8_t sensor_index, uint16_t distance_mm,
+                                  uint8_t valid, uint32_t now_ms, sensor_logic_update_t* update);
+void SensorLogic_CheckStaleness(sensor_logic_context_t* context, uint32_t now_ms);
+uint32_t SensorLogic_GetEffectiveSafetyErrorFlags(uint32_t raw_error_flags);
+uint8_t SensorLogic_GetEffectiveSafetyObstacleMask(uint8_t raw_obstacle_mask);
 
-const app_sensor_snapshot_t *SensorLogic_GetSnapshot(const sensor_logic_context_t *context);
-const sensor_logic_diagnostics_t *SensorLogic_GetDiagnostics(const sensor_logic_context_t *context);
-uint8_t SensorLogic_GetLatestMarker(const sensor_logic_context_t *context,
-                                    sensor_marker_event_t *event);
+const app_sensor_snapshot_t* SensorLogic_GetSnapshot(const sensor_logic_context_t* context);
+const sensor_logic_diagnostics_t* SensorLogic_GetDiagnostics(const sensor_logic_context_t* context);
+uint8_t SensorLogic_GetLatestMarker(const sensor_logic_context_t* context, sensor_marker_event_t* event);
 
-void SensorEventLatch_Init(sensor_event_latch_t *latch);
-uint32_t SensorEventLatch_Pend(sensor_event_latch_t *latch,
-                               uint32_t event_flags);
-void SensorEventLatch_Acknowledge(sensor_event_latch_t *latch,
-                                  uint32_t event_flags);
+void SensorEventLatch_Init(sensor_event_latch_t* latch);
+uint32_t SensorEventLatch_Pend(sensor_event_latch_t* latch, uint32_t event_flags);
+void SensorEventLatch_Acknowledge(sensor_event_latch_t* latch, uint32_t event_flags);
 
 #ifdef __cplusplus
 }
