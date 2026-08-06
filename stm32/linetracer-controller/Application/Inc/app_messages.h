@@ -86,6 +86,10 @@ typedef struct {
     uint32_t event_flags;
     uint32_t marker_detected_at_ms;
     uint16_t fsr_raw;
+    uint16_t line_left_raw;
+    uint16_t line_center_raw;
+    uint16_t line_right_raw;
+    int16_t line_error;
     uint16_t ultrasonic_front_mm;
     uint16_t ultrasonic_rear_mm;
     uint16_t ultrasonic_left_mm;
@@ -94,8 +98,10 @@ typedef struct {
     uart_linetracer_load_state_t load_state;
     app_marker_code_t marker_code;
     uint8_t line_left;
+    uint8_t line_center;
     uint8_t line_right;
     uint8_t marker_count;
+    uint8_t marker_active;
 } app_sensor_snapshot_t;
 
 typedef enum {
@@ -130,6 +136,8 @@ typedef struct {
 typedef enum {
     APP_CONTROL_SAFETY_NONE = 0,
     APP_CONTROL_SAFETY_LATCHED,
+    APP_CONTROL_SAFETY_OBSTACLE_ACTIVE,
+    APP_CONTROL_SAFETY_OBSTACLE_CLEARED,
     APP_CONTROL_SAFETY_RESET_APPROVED,
     APP_CONTROL_SAFETY_RESET_REJECTED
 } app_control_safety_event_type_t;

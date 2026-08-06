@@ -14,14 +14,14 @@ app_control_snapshot_t MakeControlSnapshot(uart_linetracer_state_t state) {
     return snapshot;
 }
 
-void TestLineLossOnlyAppliesWhileFollowingOrCorrecting() {
+void TestLineLossOnlyAppliesWhileFollowing() {
     auto snapshot = MakeControlSnapshot(UART_LINETRACER_STATE_IDLE);
 
     assert(SafetyPolicy_LineLossApplies(&snapshot) == 0U);
     snapshot.state = UART_LINETRACER_STATE_FOLLOWING_LINE;
     assert(SafetyPolicy_LineLossApplies(&snapshot) == 1U);
     snapshot.state = UART_LINETRACER_STATE_CORRECTING;
-    assert(SafetyPolicy_LineLossApplies(&snapshot) == 1U);
+    assert(SafetyPolicy_LineLossApplies(&snapshot) == 0U);
     snapshot.state = UART_LINETRACER_STATE_STOPPED;
     assert(SafetyPolicy_LineLossApplies(&snapshot) == 0U);
 
@@ -50,7 +50,7 @@ void TestOnlyQueuedCommRxEstopIsMomentary() {
 }  // namespace
 
 int main() {
-    TestLineLossOnlyAppliesWhileFollowingOrCorrecting();
+    TestLineLossOnlyAppliesWhileFollowing();
     TestOnlyQueuedCommRxEstopIsMomentary();
     return 0;
 }
