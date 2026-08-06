@@ -55,6 +55,8 @@ line_tracer_device_id=PI-LT-01
 # Physical parking position used when initializing the line tracer.
 # Allowed values: A, B, C
 line_tracer_initial_position=A
+# Product-catalog misses are routed here instead of stalling the work.
+default_destination=3
 
 [homography]
 # Keep disabled until pixel_to_conveyor is replaced with a matrix measured for the installed camera.

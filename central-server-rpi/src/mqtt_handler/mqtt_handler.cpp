@@ -124,10 +124,12 @@ void DefaultLog(MqttHandlerLogLevel level, std::string_view message) {
 
 }  // namespace
 
-MqttHandler::MqttHandler(DeviceManager& device_manager, Logger logger, PersistenceService* persistence_service)
+MqttHandler::MqttHandler(DeviceManager& device_manager, Logger logger, PersistenceService* persistence_service,
+                         std::string default_destination)
     : device_manager_(device_manager),
       logger_(logger ? std::move(logger) : Logger(DefaultLog)),
-      persistence_service_(persistence_service) {}
+      persistence_service_(persistence_service),
+      default_destination_(std::move(default_destination)) {}
 
 void MqttHandler::SetWorkCreatedHandler(WorkCreatedHandler handler) {
     work_created_handler_ = std::move(handler);
@@ -229,6 +231,16 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             if (!lookup_status.ok()) {
                 Log(MqttHandlerLogLevel::kError, "product catalog lookup failed: " + lookup_status.message);
                 return false;
+            }
+            if (!catalog_product && !default_destination_.empty()) {
+                Log(MqttHandlerLogLevel::kInfo, "product catalog miss; using default destination=" +
+                                                    default_destination_ + "; barcode=" + barcode->barcode);
+                catalog_product = CatalogProduct{
+                    .barcode = barcode->barcode,
+                    .product_id = "UNREGISTERED",
+                    .product_name = "Unregistered product",
+                    .destination = default_destination_,
+                };
             }
             if (catalog_product) {
                 catalog_product_message = mqtt::MqttMessage{

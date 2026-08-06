@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
 
 namespace logistics::contracts::mqtt {
@@ -27,7 +28,7 @@ public:
     using ProcessMessageHandler = std::function<bool(const contracts::mqtt::MqttMessage& message)>;
 
     explicit MqttHandler(DeviceManager& device_manager, Logger logger = {},
-                         PersistenceService* persistence_service = nullptr);
+                         PersistenceService* persistence_service = nullptr, std::string default_destination = {});
     void SetWorkCreatedHandler(WorkCreatedHandler handler);
     void SetQtEventHandler(QtEventHandler handler);
     void SetCommandRouteHandler(MessageRouteHandler handler);
@@ -46,6 +47,7 @@ private:
     DeviceManager& device_manager_;
     Logger logger_;
     PersistenceService* persistence_service_;
+    std::string default_destination_;
     WorkCreatedHandler work_created_handler_;
     QtEventHandler qt_event_handler_;
     MessageRouteHandler command_route_handler_;
