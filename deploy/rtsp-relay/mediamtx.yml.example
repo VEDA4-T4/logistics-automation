@@ -1,0 +1,50 @@
+logLevel: info
+logDestinations: [stdout]
+
+authMethod: internal
+authInternalUsers:
+  - user: control-center
+    pass: replace-with-relay-password
+    ips: []
+    permissions:
+      - action: read
+        path: ~^channel[1-4]$
+  - user: any
+    pass:
+    ips: [127.0.0.1, ::1]
+    permissions:
+      - action: api
+
+api: true
+apiAddress: 127.0.0.1:9997
+metrics: false
+pprof: false
+playback: false
+
+rtsp: true
+rtspTransports: [tcp]
+rtspAddress: :8554
+rtspAuthMethods: [digest]
+rtmp: false
+hls: false
+webrtc: false
+srt: false
+moq: false
+
+paths:
+  channel1:
+    source: rtsp://camera-1.example.com/stream
+    sourceOnDemand: false
+    rtspTransport: tcp
+  channel2:
+    source: rtsp://camera-2.example.com/stream
+    sourceOnDemand: false
+    rtspTransport: tcp
+  channel3:
+    source: rtsp://camera-3.example.com/stream
+    sourceOnDemand: false
+    rtspTransport: tcp
+  channel4:
+    source: rtsp://camera-4.example.com/stream
+    sourceOnDemand: false
+    rtspTransport: tcp

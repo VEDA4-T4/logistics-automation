@@ -87,6 +87,10 @@ DatabaseStatus Statement::Bind(int index, int value) {
     return FromSqlite(sqlite3_bind_int(statement_, index, value), sqlite3_db_handle(statement_), "bind integer");
 }
 
+DatabaseStatus Statement::Bind(int index, double value) {
+    return FromSqlite(sqlite3_bind_double(statement_, index, value), sqlite3_db_handle(statement_), "bind real");
+}
+
 DatabaseStatus Statement::BindNull(int index) {
     return FromSqlite(sqlite3_bind_null(statement_, index), sqlite3_db_handle(statement_), "bind null");
 }
@@ -114,15 +118,18 @@ std::int64_t Statement::ColumnInt64(int index) const {
 int Statement::ColumnInt(int index) const {
     return sqlite3_column_int(statement_, index);
 }
+double Statement::ColumnDouble(int index) const {
+    return sqlite3_column_double(statement_, index);
+}
 
 Database::~Database() {
-    sqlite3_close(handle_);
+    static_cast<void>(Close());
 }
 Database::Database(Database&& other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
 
 Database& Database::operator=(Database&& other) noexcept {
     if (this != &other) {
-        sqlite3_close(handle_);
+        static_cast<void>(Close());
         handle_ = std::exchange(other.handle_, nullptr);
     }
     return *this;
@@ -200,6 +207,25 @@ DatabaseStatus Database::IntegrityCheck() {
     if (!status.ok() || !row || statement.ColumnText(0) != "ok") {
         return { DatabaseStatusCode::kSqlError, "SQLite quick_check failed" };
     }
+    return DatabaseStatus::Ok();
+}
+
+DatabaseStatus Database::Checkpoint() {
+    if (handle_ == nullptr) {
+        return { DatabaseStatusCode::kInvalidArgument, "database is not open" };
+    }
+    return Execute("PRAGMA wal_checkpoint(TRUNCATE)");
+}
+
+DatabaseStatus Database::Close() {
+    if (handle_ == nullptr) {
+        return DatabaseStatus::Ok();
+    }
+    const int code = sqlite3_close(handle_);
+    if (code != SQLITE_OK) {
+        return FromSqlite(code, handle_, "close database");
+    }
+    handle_ = nullptr;
     return DatabaseStatus::Ok();
 }
 

@@ -1,0 +1,21 @@
+[Unit]
+Description=Logistics Central Server
+After=network-online.target mosquitto.service
+Wants=network-online.target
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+User=logistics
+Group=logistics
+WorkingDirectory=/opt/logistics-automation
+ExecStart=/opt/logistics-automation/build-central/central-server-rpi/logistics_central_server --config /etc/logistics/server.ini
+KillSignal=SIGTERM
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -83,6 +83,38 @@ bool ControlTask_IsTurning(void) {
     return turning;
 }
 
+static bool ControlTask_StateRequiresUltrasonic(linetracer_control_state_t state) {
+    switch (state) {
+        case LINETRACER_CONTROL_TURNING_FROM_DEST:
+        case LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION:
+        case LINETRACER_CONTROL_MOVING_ON_COMMON_LINE:
+        case LINETRACER_CONTROL_TURNING_TO_PICKUP:
+        case LINETRACER_CONTROL_MOVING_TO_PICKUP:
+        case LINETRACER_CONTROL_TURNING_AT_PICKUP:
+        case LINETRACER_CONTROL_MOVING_TO_DEST:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+bool ControlTask_ShouldMonitorUltrasonic(void) {
+    bool enabled = false;
+    uint32_t primask = ControlTask_EnterShortCriticalSection();
+
+    if ((controlTaskInitialized != 0U) && (controlTaskContext.safety_latched == 0U)) {
+        enabled = ControlTask_StateRequiresUltrasonic(controlTaskContext.state);
+        if (controlTaskContext.state == LINETRACER_CONTROL_OBSTACLE_STOP) {
+            enabled = (controlTaskContext.resume_valid != 0U) &&
+                      ControlTask_StateRequiresUltrasonic(controlTaskContext.resume_state);
+        }
+    }
+
+    ControlTask_ExitShortCriticalSection(primask);
+    return enabled;
+}
+
 static void ControlTask_PublishHealthEvent(app_health_event_type_t type, uint32_t detail, uint32_t now_ms) {
     app_health_event_t event = { 0 };
 

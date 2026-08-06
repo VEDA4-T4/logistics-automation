@@ -35,18 +35,17 @@ void TestObstacleHysteresis() {
     assert((update.safety_cleared_flags & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U);
 }
 
-void TestFrontOnlySafetyPolicy() {
+void TestAllDirectionSafetyPolicy() {
     constexpr auto kAllObstacles =
         static_cast<std::uint8_t>(SENSOR_LOGIC_DIRECTION_FRONT | SENSOR_LOGIC_DIRECTION_REAR |
                                   SENSOR_LOGIC_DIRECTION_LEFT | SENSOR_LOGIC_DIRECTION_RIGHT);
-    constexpr auto kSideErrors = static_cast<std::uint32_t>(
-        SENSOR_LOGIC_ERROR_ULTRASONIC_REAR | SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
+    constexpr auto kAllUltrasonicErrors =
+        static_cast<std::uint32_t>(SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_REAR |
+                                   SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
 
-    assert(SensorLogic_GetEffectiveSafetyObstacleMask(kAllObstacles) == SENSOR_LOGIC_DIRECTION_FRONT);
-    assert(SensorLogic_GetEffectiveSafetyObstacleMask(SENSOR_LOGIC_DIRECTION_REAR) == 0U);
-    assert(SensorLogic_GetEffectiveSafetyErrorFlags(kSideErrors) == 0U);
-    assert(SensorLogic_GetEffectiveSafetyErrorFlags(SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) ==
-           SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT);
+    assert(SensorLogic_GetEffectiveSafetyObstacleMask(kAllObstacles) == kAllObstacles);
+    assert(SensorLogic_GetEffectiveSafetyObstacleMask(SENSOR_LOGIC_DIRECTION_REAR) == SENSOR_LOGIC_DIRECTION_REAR);
+    assert((SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors) & kAllUltrasonicErrors) == 0U);
 }
 
 void TestUltrasonicFailureDebounce() {
@@ -68,7 +67,7 @@ void TestUltrasonicFailureDebounce() {
 
 int main() {
     TestObstacleHysteresis();
-    TestFrontOnlySafetyPolicy();
+    TestAllDirectionSafetyPolicy();
     TestUltrasonicFailureDebounce();
     return 0;
 }

@@ -1,5 +1,7 @@
 # UART contracts
 
+공통 버전 형식, 호환성 분류와 폐기 절차는 [통신 계약 버전 및 변경 관리](../VERSIONING.md)를 따릅니다.
+
 장치 Raspberry Pi와 STM32 사이의 패킷 정의를 관리하는 위치입니다.
 
 패킷은 다음 frame을 사용합니다.

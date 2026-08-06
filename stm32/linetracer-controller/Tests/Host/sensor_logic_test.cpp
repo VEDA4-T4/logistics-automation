@@ -436,49 +436,55 @@ void TestOverloadAndObstacleHysteresis() {
     CHECK_TRUE(context.diagnostics.overload_active == 1U);
 
     sensor_logic_update_t update{};
-    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 400U, &update);
-    CHECK_TRUE(update.event_flags == 0U);
-    CHECK_TRUE(context.diagnostics.obstacle_mask == 0U);
+    for (std::uint32_t sample = 1U; sample < SENSOR_OBSTACLE_ACTIVATE_SAMPLES; ++sample) {
+        update = {};
+        SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 400U + (sample * 10U), &update);
+        CHECK_TRUE(update.event_flags == 0U);
+        CHECK_TRUE(context.diagnostics.obstacle_mask == 0U);
+    }
 
     update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 410U, &update);
-    CHECK_TRUE(update.event_flags == 0U);
-    CHECK_TRUE(context.diagnostics.obstacle_mask == 0U);
-
-    update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 420U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U,
+                                 400U + (SENSOR_OBSTACLE_ACTIVATE_SAMPLES * 10U), &update);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_OBSTACLE) != 0U);
     CHECK_TRUE((update.safety_activated_flags & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U);
 
     update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 60U, 1U, 430U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_OFF_MM - 1U, 1U, 500U, &update);
     CHECK_TRUE(update.event_flags == 0U);
     CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
 
-    update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 440U, &update);
-    CHECK_TRUE(update.event_flags == 0U);
-    CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
+    for (std::uint32_t sample = 1U; sample < SENSOR_OBSTACLE_CLEAR_SAMPLES; ++sample) {
+        update = {};
+        SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_OFF_MM, 1U, 510U + (sample * 10U), &update);
+        CHECK_TRUE(update.event_flags == 0U);
+        CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
+    }
 
     update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 450U, &update);
-    CHECK_TRUE(update.event_flags == 0U);
-    CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
-
-    update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 460U, &update);
-    CHECK_TRUE(update.event_flags == 0U);
-    CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
-
-    update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 470U, &update);
-    CHECK_TRUE(update.event_flags == 0U);
-    CHECK_TRUE(context.diagnostics.obstacle_mask != 0U);
-
-    update = {};
-    SensorLogic_UpdateUltrasonic(&context, 0U, 90U, 1U, 480U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_OFF_MM, 1U, 510U + (SENSOR_OBSTACLE_CLEAR_SAMPLES * 10U),
+                                 &update);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_OBSTACLE) != 0U);
     CHECK_TRUE((update.safety_cleared_flags & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U);
+}
+
+void TestUltrasonicSuspendClearsObstacleAndStaleness() {
+    sensor_logic_context_t context{};
+    sensor_logic_update_t update{};
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_MarkUltrasonicStarted(&context, 0U, 0U);
+    SensorLogic_UpdateUltrasonic(&context, 0U, SENSOR_OBSTACLE_ON_MM, 1U, 10U, &update);
+    CHECK_TRUE((context.diagnostics.obstacle_mask & SENSOR_LOGIC_DIRECTION_FRONT) != 0U);
+
+    update = {};
+    SensorLogic_SuspendUltrasonic(&context, 20U, &update);
+    CHECK_TRUE(context.diagnostics.obstacle_mask == 0U);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_OBSTACLE) != 0U);
+    CHECK_TRUE((update.safety_cleared_flags & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U);
+
+    SensorLogic_CheckStaleness(&context, SENSOR_ULTRASONIC_STALE_MS + 100U);
+    CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT) == 0U);
 }
 
 void TestPendingEventLatch() {
@@ -593,11 +599,13 @@ void TestRouteTestSafetyFiltering() {
                ((kAllUltrasonicErrors | kFsrError) & ~SENSOR_ROUTE_TEST_IGNORED_ERROR_FLAGS));
     CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kAllUltrasonicObstacles) == 0U);
 #else
-    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors) == kFrontError);
-    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors | kFsrError) == (kFrontError | kFsrError));
-    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kAllUltrasonicObstacles) == kFrontObstacle);
-    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kRearError | kLeftError | kRightError) == 0U);
-    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kRearObstacle) == 0U);
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors) == kAllUltrasonicErrors);
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors | kFsrError) ==
+               (kAllUltrasonicErrors | kFsrError));
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kAllUltrasonicObstacles) == kAllUltrasonicObstacles);
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kRearError | kLeftError | kRightError) ==
+               (kRearError | kLeftError | kRightError));
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kRearObstacle) == kRearObstacle);
 #endif
 }
 
@@ -616,6 +624,7 @@ int main() {
     TestInvalidMarkerWidthAndNoise();
     TestFsrStabilityAndHysteresis();
     TestOverloadAndObstacleHysteresis();
+    TestUltrasonicSuspendClearsObstacleAndStaleness();
     TestPendingEventLatch();
     TestSensorErrorsAndStaleness();
     TestRouteTestSafetyFiltering();

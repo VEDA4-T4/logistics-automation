@@ -2,28 +2,64 @@
 ; Do not commit control-centor.ini because it can contain credentials.
 
 [mqtt]
-host=127.0.0.1
-port=1883
+host=mqtt.logistics.local
+port=8883
 client_id=control-center
-username=
-password=
+username=control-center
+password=replace-with-control-center-mqtt-password
+tls_enabled=true
+ca_certificate=C:/ProgramData/Logistics/tls/ca.crt
 reconnect_interval_ms=3000
 keep_alive_seconds=30
 
 [control]
-; The central server resolves this logical target to the appropriate devices.
+; Initial GUI selection. Click the top SYSTEM/process cards to change the target at runtime.
+; Emergency stop is always sent to SYSTEM regardless of this selection.
 target_device_id=SYSTEM
+
+[dashboard]
+; Map each independently operating process to the sourceId used by its device node.
+input_device_id=PI-INPUT-01
+vision_device_id=PI-VISION-01
+; The gripper only transfers a product between conveyors; it does not rotate the product.
+gripper_device_id=PI-GRIPPER-01
+sorting_device_id=PI-SORTING-01
+linetracer_device_id=PI-LT-01
+
+[http]
+; Relative image paths from MQTT are resolved against this central-server URL.
+image_base_url=http://central-server.logistics.local:8080/
 
 [rtsp]
 ; Supported channel count: 1-16
 channel_count=4
 reconnect_interval_ms=3000
+; Video RTP is forced over the RTSP TCP control connection.
+transport=tcp
+; Qt 6.10+ FFmpeg decoder: reduce playback buffering for live monitoring.
+; Disable this when smooth playback is more important than latency.
+low_latency=true
+; RTSP response or video packet timeout. A timeout is handled by the reconnect flow.
+network_timeout_ms=3000
+; FFmpeg startup analysis size. Smaller starts faster but can miss uncommon stream details.
+probe_size_bytes=32768
+; Drop queued dependent frames and wait for the next IDR when this input limit is exceeded.
+max_buffer_size_bytes=2097152
+; Subscribe to the ONVIF XML metadata track and draw detections over the video.
+onvif_metadata_enabled=true
+; Print received ONVIF XML and parsed detections to Qt Creator Application Output.
+; Enable only while diagnosing because per-frame logs can delay the UI.
+onvif_log_payload=false
+; Remove boxes when no newer metadata frame arrives within this time.
+metadata_stale_timeout_ms=1500
 
-; Define one RTSP or RTSPS URL for every configured channel.
-channel_1_url=rtsp://username:password@camera-1.example.com:554/stream
-channel_2_url=rtsp://username:password@camera-2.example.com:554/stream
-channel_3_url=rtsp://username:password@camera-3.example.com:554/stream
-channel_4_url=rtsp://username:password@camera-4.example.com:554/stream
+; CCTV credentials stay on the Raspberry Pi relay. The relay username is control-centor.
+; Replace relay-password with the separately supplied password, percent-encoded for URL use.
+channel_1_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel1
+channel_2_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel2
+channel_3_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel3
+channel_4_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel4
+; Leave channel_N_metadata_url unset when MediaMTX relays video and ONVIF metadata on the same path.
 
 [ui]
 language=ko_KR

@@ -1,6 +1,7 @@
 #ifndef LOGISTICS_CONTRACTS_UART_SORTING_COMMANDS_H
 #define LOGISTICS_CONTRACTS_UART_SORTING_COMMANDS_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "logistics/contracts/uart_protocol.h"
@@ -22,9 +23,10 @@ extern "C" {
  * 목적지 ID만 전송하고, 목적지별 실제 게이트 각도는 STM32 설정에서
  * 관리한다.
  *
- * 목적지 초음파 센서 1~3의 감지 결과는 SortingControlTask로 전달한다.
- * 현재 목적지와 같은 센서가 물품을 감지하면 분류 게이트 서보를
- * 자동으로 Home 위치로 복귀시킨다.
+ * 목적지 초음파 센서 1~3의 상태와 거리(cm)는 UART_CMD_SENSOR_STATUS로
+ * Raspberry Pi에 보고한다. 센서 결과에 따른 목적지 판단은 이 계약의
+ * 범위가 아니며, Raspberry Pi는 외부에서 결정된 최종 장치 제어 명령만
+ * STM32에 전달한다.
  */
 typedef enum {
     UART_CMD_SORTING_ROUTE_ITEM = 0x30U,
@@ -34,7 +36,8 @@ typedef enum {
     UART_CMD_SORTING_CONVEYOR_START = 0x34U,
     UART_CMD_SORTING_CONVEYOR_STOP = 0x35U,
     UART_CMD_SORTING_CONVEYOR_SET_SPEED = 0x36U,
-    UART_CMD_SORTING_CONVEYOR_GET_STATUS = 0x37U
+    UART_CMD_SORTING_CONVEYOR_GET_STATUS = 0x37U,
+    UART_CMD_SORTING_RETURN_HOME = 0x38U
 
 } uart_sorting_command_t;
 
@@ -53,6 +56,10 @@ typedef enum {
     UART_SORTING_DESTINATION_3 = 0x03U
 
 } uart_sorting_destination_t;
+
+#define UART_SORTING_CYCLE_ID_NONE 0U
+#define UART_SORTING_CYCLE_ID_MIN 1U
+#define UART_SORTING_CYCLE_ID_MAX UINT16_MAX
 
 #define UART_SORTING_DESTINATION_MIN UART_SORTING_DESTINATION_1
 #define UART_SORTING_DESTINATION_MAX UART_SORTING_DESTINATION_3
@@ -98,8 +105,9 @@ typedef enum {
  *   [1] cycle_id_high
  *   [2] destination_id
  *
- * cycle_id는 little-endian uint16_t이다. 게이트가 Home으로 복귀하여
- * 분류 완료 이벤트를 송신할 때까지 같은 cycle_id를 유지한다.
+ * cycle_id는 little-endian uint16_t이다. 게이트가 목적지 위치로 이동한 뒤
+ * SORTING_RETURN_HOME을 처리하고 분류 완료 이벤트를 송신할 때까지 같은
+ * cycle_id를 유지한다.
  */
 #define UART_SORTING_ROUTE_CYCLE_ID_LOW_INDEX 0U
 #define UART_SORTING_ROUTE_CYCLE_ID_HIGH_INDEX 1U
@@ -124,6 +132,20 @@ typedef enum {
 #define UART_SORTING_CANCEL_CYCLE_ID_LOW_INDEX 0U
 #define UART_SORTING_CANCEL_CYCLE_ID_HIGH_INDEX 1U
 #define UART_SORTING_CANCEL_PAYLOAD_SIZE 2U
+
+/*
+ * SORTING_RETURN_HOME Payload
+ *
+ *   [0] cycle_id_low
+ *   [1] cycle_id_high
+ *
+ * 서버/Raspberry Pi가 물품 통과를 판정한 뒤 현재 cycle의 게이트를 Home으로
+ * 복귀시키기 위해 전송한다. 현재 처리 중인 cycle_id와 일치할 때만 처리한다.
+ * 정상 공정 완료용 명령이며, 비정상 중단에는 SORTING_CANCEL을 사용한다.
+ */
+#define UART_SORTING_RETURN_HOME_CYCLE_ID_LOW_INDEX 0U
+#define UART_SORTING_RETURN_HOME_CYCLE_ID_HIGH_INDEX 1U
+#define UART_SORTING_RETURN_HOME_PAYLOAD_SIZE 2U
 
 /*
  * SORTING_RESET
@@ -173,44 +195,23 @@ typedef enum {
  * 분류 이벤트
  * ============================================================================
  *
- * ITEM_DETECTED:
- *   현재 목적지의 센서가 물품을 감지하여 Home 복귀를 시작했음
- *
  * CYCLE_COMPLETE:
- *   게이트가 Home 위치로 복귀하여 분류 cycle이 완료되었음
- *
- * UNEXPECTED_SENSOR:
- *   현재 목적지와 다른 위치의 센서가 물품을 감지했음
- *
- * FAULT:
- *   센서 timeout, 센서 오류 또는 서보 오류가 발생했음
+ *   STM32가 요청받은 게이트 동작을 완료하고 Home 위치로 복귀하여
+ *   분류 cycle이 완료되었음
  */
 typedef enum {
-    UART_SORTING_EVENT_ITEM_DETECTED = 0x01U,
-    UART_SORTING_EVENT_CYCLE_COMPLETE = 0x02U,
-    UART_SORTING_EVENT_UNEXPECTED_SENSOR = 0x03U,
-    UART_SORTING_EVENT_FAULT = 0x04U
+    UART_SORTING_EVENT_CYCLE_COMPLETE = 0x02U
 
 } uart_sorting_event_t;
 
-/* ITEM_DETECTED / CYCLE_COMPLETE */
+/* Fault reporting: HealthTask -> UART_CMD_DEVICE_STATUS. */
+
+/* CYCLE_COMPLETE */
 #define UART_SORTING_EVENT_CYCLE_ID_LOW_INDEX UART_EVENT_HEADER_SIZE
 #define UART_SORTING_EVENT_CYCLE_ID_HIGH_INDEX (UART_EVENT_HEADER_SIZE + 1U)
 #define UART_SORTING_EVENT_DESTINATION_INDEX (UART_EVENT_HEADER_SIZE + 2U)
 #define UART_SORTING_CYCLE_EVENT_DATA_SIZE 3U
 #define UART_SORTING_CYCLE_EVENT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_SORTING_CYCLE_EVENT_DATA_SIZE)
-
-/* UNEXPECTED_SENSOR */
-#define UART_SORTING_UNEXPECTED_EXPECTED_DESTINATION_INDEX (UART_EVENT_HEADER_SIZE + 2U)
-#define UART_SORTING_UNEXPECTED_DETECTED_SENSOR_INDEX (UART_EVENT_HEADER_SIZE + 3U)
-#define UART_SORTING_UNEXPECTED_EVENT_DATA_SIZE 4U
-#define UART_SORTING_UNEXPECTED_EVENT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_SORTING_UNEXPECTED_EVENT_DATA_SIZE)
-
-/* FAULT */
-#define UART_SORTING_FAULT_DESTINATION_INDEX (UART_EVENT_HEADER_SIZE + 2U)
-#define UART_SORTING_FAULT_ERROR_INDEX (UART_EVENT_HEADER_SIZE + 3U)
-#define UART_SORTING_FAULT_EVENT_DATA_SIZE 4U
-#define UART_SORTING_FAULT_EVENT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_SORTING_FAULT_EVENT_DATA_SIZE)
 
 /*
  * ============================================================================
@@ -227,6 +228,7 @@ static inline uint8_t uart_sorting_command_is_valid(uint32_t command) {
         case UART_CMD_SORTING_CONVEYOR_STOP:
         case UART_CMD_SORTING_CONVEYOR_SET_SPEED:
         case UART_CMD_SORTING_CONVEYOR_GET_STATUS:
+        case UART_CMD_SORTING_RETURN_HOME:
             return 1U;
 
         default:
@@ -238,6 +240,10 @@ static inline uint8_t uart_sorting_command_is_valid(uint32_t command) {
 
 static inline uint8_t uart_sorting_destination_is_valid(uint32_t destination_id) {
     return (destination_id >= UART_SORTING_DESTINATION_MIN && destination_id <= UART_SORTING_DESTINATION_MAX) ? 1U : 0U;
+}
+
+static inline uint8_t uart_sorting_cycle_id_is_valid(uint32_t cycle_id) {
+    return (cycle_id >= UART_SORTING_CYCLE_ID_MIN && cycle_id <= UART_SORTING_CYCLE_ID_MAX) ? 1U : 0U;
 }
 
 static inline uint8_t uart_sorting_status_destination_is_valid(uint32_t destination_id) {
@@ -252,14 +258,6 @@ static inline uint8_t uart_sorting_sensor_id_is_valid(uint32_t sensor_id) {
     return (sensor_id >= UART_SORTING_SENSOR_ID_MIN && sensor_id <= UART_SORTING_SENSOR_ID_MAX) ? 1U : 0U;
 }
 
-static inline uint8_t uart_sorting_sensor_matches_destination(uint32_t sensor_id, uint32_t destination_id) {
-    if (uart_sorting_sensor_id_is_valid(sensor_id) == 0U || uart_sorting_destination_is_valid(destination_id) == 0U) {
-        return 0U;
-    }
-
-    return (sensor_id == destination_id) ? 1U : 0U;
-}
-
 static inline uint8_t uart_sorting_gate_state_is_valid(uint32_t state) {
     return (state <= UART_SORTING_GATE_FAULT) ? 1U : 0U;
 }
@@ -270,24 +268,7 @@ static inline uint8_t uart_sorting_conveyor_state_is_valid(uint32_t state) {
 
 static inline uint8_t uart_sorting_event_is_valid(uint32_t event_id) {
     switch (event_id) {
-        case UART_SORTING_EVENT_ITEM_DETECTED:
         case UART_SORTING_EVENT_CYCLE_COMPLETE:
-        case UART_SORTING_EVENT_UNEXPECTED_SENSOR:
-        case UART_SORTING_EVENT_FAULT:
-            return 1U;
-
-        default:
-            return 0U;
-    }
-}
-
-static inline uint8_t uart_sorting_fault_error_is_valid(uint32_t error) {
-    switch (error) {
-        case UART_ERROR_TIMEOUT:
-        case UART_ERROR_SENSOR:
-        case UART_ERROR_SERVO:
-        case UART_ERROR_EMERGENCY_STOP:
-        case UART_ERROR_INTERNAL:
             return 1U;
 
         default:
@@ -311,6 +292,15 @@ static inline uint16_t uart_sorting_cancel_cycle_id(const uint8_t* payload) {
 
     return (uint16_t)((uint16_t)payload[UART_SORTING_CANCEL_CYCLE_ID_LOW_INDEX] |
                       ((uint16_t)payload[UART_SORTING_CANCEL_CYCLE_ID_HIGH_INDEX] << 8U));
+}
+
+static inline uint16_t uart_sorting_return_home_cycle_id(const uint8_t* payload) {
+    if (payload == NULL) {
+        return 0U;
+    }
+
+    return (uint16_t)((uint16_t)payload[UART_SORTING_RETURN_HOME_CYCLE_ID_LOW_INDEX] |
+                      ((uint16_t)payload[UART_SORTING_RETURN_HOME_CYCLE_ID_HIGH_INDEX] << 8U));
 }
 
 /* CMD별 Payload 길이와 값 범위를 검증한다. */
@@ -343,10 +333,22 @@ static inline uint8_t uart_sorting_payload_is_valid(uint32_t command, const uint
                 return 0U;
             }
 
-            return uart_sorting_destination_is_valid(payload[UART_SORTING_ROUTE_DESTINATION_INDEX]);
+            return ((uart_sorting_cycle_id_is_valid(uart_sorting_route_cycle_id(payload)) != 0U) &&
+                    (uart_sorting_destination_is_valid(payload[UART_SORTING_ROUTE_DESTINATION_INDEX]) != 0U))
+                       ? 1U
+                       : 0U;
 
         case UART_CMD_SORTING_CANCEL:
-            return (length == UART_SORTING_CANCEL_PAYLOAD_SIZE && payload != NULL) ? 1U : 0U;
+            return ((length == UART_SORTING_CANCEL_PAYLOAD_SIZE) && (payload != NULL) &&
+                    (uart_sorting_cycle_id_is_valid(uart_sorting_cancel_cycle_id(payload)) != 0U))
+                       ? 1U
+                       : 0U;
+
+        case UART_CMD_SORTING_RETURN_HOME:
+            return ((length == UART_SORTING_RETURN_HOME_PAYLOAD_SIZE) && (payload != NULL) &&
+                    (uart_sorting_cycle_id_is_valid(uart_sorting_return_home_cycle_id(payload)) != 0U))
+                       ? 1U
+                       : 0U;
 
         default:
             return 0U;
@@ -370,40 +372,12 @@ static inline uint8_t uart_sorting_event_payload_is_valid(const uint8_t* payload
     }
 
     switch (event_id) {
-        case UART_SORTING_EVENT_ITEM_DETECTED:
         case UART_SORTING_EVENT_CYCLE_COMPLETE:
             if (length != UART_SORTING_CYCLE_EVENT_PAYLOAD_SIZE) {
                 return 0U;
             }
 
             return uart_sorting_destination_is_valid(payload[UART_SORTING_EVENT_DESTINATION_INDEX]);
-
-        case UART_SORTING_EVENT_UNEXPECTED_SENSOR:
-            if (length != UART_SORTING_UNEXPECTED_EVENT_PAYLOAD_SIZE) {
-                return 0U;
-            }
-
-            if (uart_sorting_destination_is_valid(payload[UART_SORTING_UNEXPECTED_EXPECTED_DESTINATION_INDEX]) == 0U ||
-                uart_sorting_sensor_id_is_valid(payload[UART_SORTING_UNEXPECTED_DETECTED_SENSOR_INDEX]) == 0U) {
-                return 0U;
-            }
-
-            return uart_sorting_sensor_matches_destination(
-                       payload[UART_SORTING_UNEXPECTED_DETECTED_SENSOR_INDEX],
-                       payload[UART_SORTING_UNEXPECTED_EXPECTED_DESTINATION_INDEX]) == 0U
-                       ? 1U
-                       : 0U;
-
-        case UART_SORTING_EVENT_FAULT:
-            if (length != UART_SORTING_FAULT_EVENT_PAYLOAD_SIZE) {
-                return 0U;
-            }
-
-            if (uart_sorting_status_destination_is_valid(payload[UART_SORTING_FAULT_DESTINATION_INDEX]) == 0U) {
-                return 0U;
-            }
-
-            return uart_sorting_fault_error_is_valid(payload[UART_SORTING_FAULT_ERROR_INDEX]);
 
         default:
             return 0U;

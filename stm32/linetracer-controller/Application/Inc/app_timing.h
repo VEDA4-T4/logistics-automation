@@ -10,7 +10,7 @@
 #define APP_TIMING_HEALTH_PERIOD_MS 500U
 
 /* Slower work executed from the owning task without blocking other tasks. */
-#define APP_TIMING_ULTRASONIC_PERIOD_MS 60U
+#define APP_TIMING_ULTRASONIC_PERIOD_MS 20U
 #define APP_TIMING_COMM_TX_HEARTBEAT_MS 1000U
 #define APP_TIMING_UNLOAD_STEP_MS 20U
 

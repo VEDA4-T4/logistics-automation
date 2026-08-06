@@ -1,0 +1,8 @@
+{
+  "name": "logistics-automation",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "nlohmann-json"
+  ],
+  "builtin-baseline": "9e132b87abf0e515dca6cdc9894121b77da86bf1"
+}

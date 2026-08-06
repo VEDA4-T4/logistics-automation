@@ -613,6 +613,38 @@ void SensorLogic_MarkUltrasonicStarted(sensor_logic_context_t* context, uint8_t 
     context->ultrasonic_started_mask |= direction_flag;
 }
 
+void SensorLogic_SuspendUltrasonic(sensor_logic_context_t* context, uint32_t now_ms, sensor_logic_update_t* update) {
+    const uint32_t valid_mask = SENSOR_LOGIC_VALID_ULTRASONIC_FRONT | SENSOR_LOGIC_VALID_ULTRASONIC_REAR |
+                                SENSOR_LOGIC_VALID_ULTRASONIC_LEFT | SENSOR_LOGIC_VALID_ULTRASONIC_RIGHT;
+    const uint32_t error_mask = SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_REAR |
+                                SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT;
+    uint8_t previous_obstacle_mask;
+
+    if ((context == NULL) || (update == NULL)) {
+        return;
+    }
+
+    previous_obstacle_mask = context->diagnostics.obstacle_mask;
+    context->ultrasonic_started_mask = 0U;
+    (void)memset(context->ultrasonic_failure_count, 0, sizeof(context->ultrasonic_failure_count));
+    (void)memset(context->ultrasonic_recovery_count, 0, sizeof(context->ultrasonic_recovery_count));
+    (void)memset(context->ultrasonic_obstacle_on_count, 0, sizeof(context->ultrasonic_obstacle_on_count));
+    (void)memset(context->ultrasonic_obstacle_off_count, 0, sizeof(context->ultrasonic_obstacle_off_count));
+    context->diagnostics.valid_flags &= ~valid_mask;
+    SensorLogic_SetErrorFlags(context, context->diagnostics.error_flags & ~error_mask, now_ms);
+    context->diagnostics.obstacle_mask = 0U;
+    context->snapshot.ultrasonic_front_mm = 0U;
+    context->snapshot.ultrasonic_rear_mm = 0U;
+    context->snapshot.ultrasonic_left_mm = 0U;
+    context->snapshot.ultrasonic_right_mm = 0U;
+
+    if (previous_obstacle_mask != 0U) {
+        context->diagnostics.obstacle_changed_at_ms = now_ms;
+        update->event_flags |= APP_SENSOR_EVENT_OBSTACLE;
+        update->safety_cleared_flags |= SENSOR_LOGIC_SAFETY_OBSTACLE;
+    }
+}
+
 void SensorLogic_UpdateUltrasonic(sensor_logic_context_t* context, uint8_t sensor_index, uint16_t distance_mm,
                                   uint8_t valid, uint32_t now_ms, sensor_logic_update_t* update) {
     uint16_t* distance_field;
@@ -735,6 +767,11 @@ void SensorLogic_CheckStaleness(sensor_logic_context_t* context, uint32_t now_ms
 
 uint32_t SensorLogic_GetEffectiveSafetyErrorFlags(uint32_t raw_error_flags) {
     uint32_t effective_flags = raw_error_flags & ~((uint32_t)SENSOR_ROUTE_TEST_IGNORED_ERROR_FLAGS);
+
+#if !SENSOR_ULTRASONIC_TIMEOUT_SAFETY_FAULT
+    effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_REAR |
+                         (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
+#endif
 
 #if SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY
     effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_REAR | (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT |

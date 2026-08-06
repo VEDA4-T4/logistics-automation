@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "logistics/central_server/database.hpp"
+#include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_message.hpp"
 
 namespace logistics::central_server {
@@ -34,6 +35,7 @@ struct TransportMetadata {
 struct EventPayload {
     std::optional<std::string> work_id;
     std::optional<std::string> barcode;
+    std::optional<std::string> product_id;
     std::optional<std::string> product_name;
     std::optional<std::string> destination;
     std::optional<std::string> device_role;
@@ -47,6 +49,17 @@ struct EventPayload {
     std::vector<std::uint8_t> image_bytes;
     std::optional<std::string> image_mime_type;
     std::optional<std::int64_t> captured_at_ms;
+    std::optional<std::string> image_id;
+    std::optional<std::string> image_path;
+    std::optional<std::string> image_checksum;
+    std::optional<std::string> image_upload_status;
+};
+
+struct CatalogProduct {
+    std::string barcode;
+    std::string product_id;
+    std::string product_name;
+    std::string destination;
 };
 
 enum class PersistenceStatus : std::uint8_t { kStored, kDuplicate, kRetryableError, kPermanentError };
@@ -97,6 +110,7 @@ class ProductRepository final {
 public:
     explicit ProductRepository(Database& database) : database_(database) {}
     [[nodiscard]] DatabaseStatus Create(std::string_view work_id, std::int64_t now_ms);
+    [[nodiscard]] DatabaseStatus MarkError(std::string_view work_id, std::int64_t now_ms);
     [[nodiscard]] DatabaseStatus ApplyEvent(std::string_view work_id, contracts::mqtt::MessageType type,
                                             const EventPayload& payload, std::int64_t now_ms);
     [[nodiscard]] DatabaseStatus AppendHistory(std::string_view work_id, std::string_view message_id,
@@ -136,13 +150,13 @@ public:
     [[nodiscard]] PersistenceResult PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                           const EventPayload& payload,
                                                           const TransportMetadata& metadata);
+    [[nodiscard]] DatabaseStatus RecordWorkInvalidation(const WorkInvalidation& invalidation);
+    [[nodiscard]] DatabaseStatus FindActiveProductByBarcode(std::string_view barcode,
+                                                            std::optional<CatalogProduct>& output);
 
 private:
-    [[nodiscard]] DatabaseStatus RunRetentionIfDue(std::int64_t now_ms);
     Database& database_;
-    StorageConfig storage_config_;
     ImageStore image_store_;
-    std::int64_t next_cleanup_at_ms_{};
 };
 
 class RetentionService final {
