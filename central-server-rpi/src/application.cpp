@@ -172,6 +172,8 @@ int Application::Run(int argc, char* argv[]) {
     CommandManager command_manager;
     ProcessOrchestrator process_orchestrator(server_config.process);
     ProcessStateStore process_state_store(database);
+    // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
+    std::mutex process_mutex;
 
     std::optional<StoredProcessState> stored_process_state;
     std::vector<InvalidatedRestoredWork> invalidated_restored_works;
@@ -468,8 +470,9 @@ int Application::Run(int argc, char* argv[]) {
             return true;
         });
 
-    mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state](
+    mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state, &process_mutex](
                                       std::string_view topic, std::string_view payload) {
+        const std::lock_guard process_lock(process_mutex);
         const auto previous_revision = process_orchestrator.Revision();
         if (!mqtt_handler.Handle(topic, payload)) {
             std::cerr << "[server][ERROR] MQTT message processing failed; topic=" << topic << '\n';
@@ -502,7 +505,27 @@ int Application::Run(int argc, char* argv[]) {
     };
     bool recalibration_notifications_pending = !work_invalidations.empty();
 
-    HttpUploadServer upload_server(database, server_config.http);
+    Database upload_database;
+    database_status = upload_database.Open(server_config.database);
+    if (!database_status.ok()) {
+        mqtt_client.Stop();
+        std::cerr << "[server][ERROR] HTTP upload database open failed: " << database_status.message << '\n';
+        return 7;
+    }
+
+    Database maintenance_database;
+    database_status = maintenance_database.Open(server_config.database);
+    if (!database_status.ok()) {
+        mqtt_client.Stop();
+        static_cast<void>(upload_database.Close());
+        std::cerr << "[server][ERROR] maintenance database open failed: " << database_status.message << '\n';
+        return 7;
+    }
+    RetentionService scheduled_retention(maintenance_database, server_config.storage);
+    auto next_retention_cleanup =
+        std::chrono::steady_clock::now() + std::chrono::hours(server_config.storage.cleanup_interval_hours);
+
+    HttpUploadServer upload_server(upload_database, server_config.http);
     database_status = upload_server.Start();
     if (!database_status.ok()) {
         mqtt_client.Stop();
@@ -518,10 +541,25 @@ int Application::Run(int argc, char* argv[]) {
 
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        const auto loop_now = std::chrono::steady_clock::now();
+        if (loop_now >= next_retention_cleanup) {
+            next_retention_cleanup = loop_now + std::chrono::hours(server_config.storage.cleanup_interval_hours);
+            const auto retention_status = scheduled_retention.RunOnce(CurrentUnixTimeMilliseconds());
+            if (!retention_status.ok()) {
+                std::cerr << "[server][ERROR] scheduled retention cleanup failed: " << retention_status.message << '\n';
+            }
+        }
         if (recalibration_notifications_pending && mqtt_client.IsConnected()) {
             recalibration_notifications_pending = !publish_recalibration_notifications();
         }
-        static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
+        {
+            const std::lock_guard process_lock(process_mutex);
+            const auto previous_revision = process_orchestrator.Revision();
+            static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
+            if (process_orchestrator.Revision() != previous_revision) {
+                static_cast<void>(persist_process_state());
+            }
+        }
         for (const auto& timeout : command_manager.CheckTimeouts(CurrentIso8601Timestamp())) {
             if (!publish_qt_response(timeout)) {
                 std::cerr << "[server][ERROR] command timeout publish failed\n";
@@ -533,6 +571,18 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_client.Stop();
 
     bool shutdown_ok = persist_process_state();
+    database_status = maintenance_database.Close();
+    if (!database_status.ok()) {
+        std::cerr << "[server][ERROR] maintenance database close failed during shutdown: " << database_status.message
+                  << '\n';
+        shutdown_ok = false;
+    }
+    database_status = upload_database.Close();
+    if (!database_status.ok()) {
+        std::cerr << "[server][ERROR] HTTP upload database close failed during shutdown: " << database_status.message
+                  << '\n';
+        shutdown_ok = false;
+    }
     database_status = database.Checkpoint();
     if (!database_status.ok()) {
         std::cerr << "[server][ERROR] database checkpoint failed during shutdown: " << database_status.message << '\n';

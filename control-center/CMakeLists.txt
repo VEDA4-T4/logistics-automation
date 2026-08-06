@@ -199,6 +199,19 @@ if(BUILD_TESTING)
     add_test(NAME control_center_rtsp_h264_stream_test COMMAND control_center_rtsp_h264_stream_test)
 
     add_executable(
+        control_center_rtsp_response_limits_test
+        tests/rtsp_response_limits_test.cpp
+        src/onvif_rtsp_metadata_client.cpp
+        src/rtsp_h264_stream.cpp
+        include/logistics/control_center/onvif_rtsp_metadata_client.hpp
+        include/logistics/control_center/rtsp_h264_stream.hpp
+    )
+    target_include_directories(control_center_rtsp_response_limits_test PRIVATE include)
+    target_link_libraries(control_center_rtsp_response_limits_test PRIVATE Qt6::Core Qt6::Network)
+    logistics_enable_warnings(control_center_rtsp_response_limits_test)
+    add_test(NAME control_center_rtsp_response_limits_test COMMAND control_center_rtsp_response_limits_test)
+
+    add_executable(
         control_center_rtsp_stream_worker_player_test
         tests/rtsp_stream_worker_player_test.cpp
         src/rtsp_h264_stream.cpp

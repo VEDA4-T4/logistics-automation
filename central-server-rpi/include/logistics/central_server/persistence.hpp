@@ -155,11 +155,8 @@ public:
                                                             std::optional<CatalogProduct>& output);
 
 private:
-    [[nodiscard]] DatabaseStatus RunRetentionIfDue(std::int64_t now_ms);
     Database& database_;
-    StorageConfig storage_config_;
     ImageStore image_store_;
-    std::int64_t next_cleanup_at_ms_{};
 };
 
 class RetentionService final {

@@ -60,6 +60,13 @@ int main() {
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
     assert(database.IntegrityCheck().ok());
+
+    server::Database upload_database;
+    assert(upload_database.Open(database_config).ok());
+    assert(database.Begin().ok());
+    server::Transaction independent_upload_transaction(upload_database);
+    assert(independent_upload_transaction.status().code == server::DatabaseStatusCode::kBusy);
+    assert(database.Rollback().ok());
     assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 6);
     assert(Scalar(database,
                   "SELECT count(*) FROM product_catalog WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
@@ -142,7 +149,7 @@ int main() {
     assert(result.status == server::PersistenceStatus::kStored);
     assert(Scalar(database, "SELECT count(*) FROM product WHERE barcode='5901234123457'") == 1);
 
-    server::UploadService upload_service(database, root / "uploads");
+    server::UploadService upload_service(upload_database, root / "uploads");
     const std::vector<std::uint8_t> image_bytes{ 0xff, 0xd8, 0xff, 0xd9 };
     const server::UploadRequest image_upload{
         .kind = logistics::contracts::http::UploadKind::kImage,

@@ -1,6 +1,5 @@
 #include "logistics/central_server/persistence.hpp"
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -471,11 +470,7 @@ DatabaseStatus LogRepository::AppendSecurity(std::string_view event_type, std::s
 }
 
 PersistenceService::PersistenceService(Database& database, StorageConfig storage_config)
-    : database_(database),
-      storage_config_(std::move(storage_config)),
-      image_store_(storage_config_.image_root),
-      next_cleanup_at_ms_(CurrentUnixTimeMilliseconds() +
-                          std::max(1, storage_config_.cleanup_interval_hours) * 3'600'000LL) {}
+    : database_(database), image_store_(std::move(storage_config.image_root)) {}
 
 DatabaseStatus PersistenceService::FindActiveProductByBarcode(std::string_view barcode,
                                                               std::optional<CatalogProduct>& output) {
@@ -500,23 +495,9 @@ DatabaseStatus PersistenceService::FindActiveProductByBarcode(std::string_view b
     return DatabaseStatus::Ok();
 }
 
-DatabaseStatus PersistenceService::RunRetentionIfDue(std::int64_t now_ms) {
-    if (now_ms < next_cleanup_at_ms_)
-        return DatabaseStatus::Ok();
-    RetentionService retention(database_, storage_config_);
-    auto status = retention.RunOnce(now_ms);
-    if (status.ok()) {
-        next_cleanup_at_ms_ = now_ms + std::max(1, storage_config_.cleanup_interval_hours) * 3'600'000LL;
-    }
-    return status;
-}
-
 PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                             const EventPayload& payload,
                                                             const TransportMetadata& metadata) {
-    const auto cleanup_status = RunRetentionIfDue(CurrentUnixTimeMilliseconds());
-    if (!cleanup_status.ok())
-        return Failure(cleanup_status);
     const auto parsed_topic = contracts::mqtt::ParseTopic(metadata.topic);
     if (!envelope.IsValid() || !parsed_topic.IsValid() || metadata.received_at_ms < 0 ||
         (parsed_topic.endpoint_id.size() > 0 && parsed_topic.endpoint_id != envelope.source_id)) {

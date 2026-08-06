@@ -46,5 +46,11 @@ MQTT `host`에는 broker의 주소, `http/image_base_url`에는 중앙서버의 
 
 ## MQTT TLS
 
-현재 구현은 사용자/비밀번호를 지원하지만 암호화 연결은 아직 적용하지 않았습니다. broker를 TLS 전용으로 바꾸기 전에
-[Mosquitto TLS의 Qt 구현 항목](../deploy/mosquitto/README.md#qt-control-center)을 완료해야 합니다.
+Control Center는 CA 인증서로 broker 인증서를 검증하는 MQTT TLS 연결을 지원합니다. `[mqtt]`에 broker 인증서의
+SAN과 일치하는 `host`, TLS listener의 `port`, `tls_enabled=true`, PEM 형식의 `ca_certificate` 경로를 설정합니다.
+연결에는 TLS 1.2 이상과 peer 검증이 적용됩니다.
+
+`username`과 `password`는 broker가 요구하는 MQTT 계정 인증에 사용하며 TLS 설정과 별개입니다. TLS를 끄면
+`connectToHost()`를 사용하는 평문 연결이므로 운영 환경에서는 사용하지 않습니다. 현재 client 인증서와 private key를
+사용하는 mTLS 및 사용자 지정 TLS version/cipher 설정은 지원하지 않습니다. broker 인증서와 CA 준비 절차는
+[Mosquitto TLS 설정](../deploy/mosquitto/README.md#4-내부-ca와-서버-인증서)을 참고하세요.
