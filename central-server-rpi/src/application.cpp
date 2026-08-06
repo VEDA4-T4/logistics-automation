@@ -172,6 +172,8 @@ int Application::Run(int argc, char* argv[]) {
     CommandManager command_manager;
     ProcessOrchestrator process_orchestrator(server_config.process);
     ProcessStateStore process_state_store(database);
+    // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
+    std::mutex process_mutex;
 
     std::optional<StoredProcessState> stored_process_state;
     std::vector<InvalidatedRestoredWork> invalidated_restored_works;
@@ -468,8 +470,9 @@ int Application::Run(int argc, char* argv[]) {
             return true;
         });
 
-    mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state](
+    mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state, &process_mutex](
                                       std::string_view topic, std::string_view payload) {
+        const std::lock_guard process_lock(process_mutex);
         const auto previous_revision = process_orchestrator.Revision();
         if (!mqtt_handler.Handle(topic, payload)) {
             std::cerr << "[server][ERROR] MQTT message processing failed; topic=" << topic << '\n';
@@ -521,7 +524,14 @@ int Application::Run(int argc, char* argv[]) {
         if (recalibration_notifications_pending && mqtt_client.IsConnected()) {
             recalibration_notifications_pending = !publish_recalibration_notifications();
         }
-        static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
+        {
+            const std::lock_guard process_lock(process_mutex);
+            const auto previous_revision = process_orchestrator.Revision();
+            static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
+            if (process_orchestrator.Revision() != previous_revision) {
+                static_cast<void>(persist_process_state());
+            }
+        }
         for (const auto& timeout : command_manager.CheckTimeouts(CurrentIso8601Timestamp())) {
             if (!publish_qt_response(timeout)) {
                 std::cerr << "[server][ERROR] command timeout publish failed\n";
