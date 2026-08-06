@@ -287,9 +287,8 @@ QList<OperationalLogEntry> OperationalLogState::appendOlderEntries(QList<Operati
         if (entry.id.isEmpty() || !entry.occurred_at.isValid() || processed_message_ids_.contains(entry.id)) {
             continue;
         }
-        const auto duplicate = std::find_if(entries_.cbegin(), entries_.cend(), [&entry](const auto& existing) {
-            return existing.id == entry.id;
-        });
+        const auto duplicate = std::find_if(entries_.cbegin(), entries_.cend(),
+                                            [&entry](const auto& existing) { return existing.id == entry.id; });
         if (duplicate != entries_.cend()) {
             continue;
         }
@@ -342,17 +341,15 @@ const QList<OperationalLogEntry>& OperationalLogState::entries() const noexcept 
 }
 
 int OperationalLogState::unacknowledgedCount() const noexcept {
-    return static_cast<int>(std::count_if(entries_.cbegin(), entries_.cend(),
-                                          [](const auto& entry) { return !entry.acknowledged; }));
+    return static_cast<int>(
+        std::count_if(entries_.cbegin(), entries_.cend(), [](const auto& entry) { return !entry.acknowledged; }));
 }
 
 int OperationalLogState::activeAlertCount() const noexcept {
-    return static_cast<int>(std::count_if(entries_.cbegin(), entries_.cend(),
-                                          [](const auto& entry) {
-                                              return !entry.acknowledged &&
-                                                     (entry.severity == OperationalLogSeverity::Error ||
-                                                      entry.severity == OperationalLogSeverity::Critical);
-                                          }));
+    return static_cast<int>(std::count_if(entries_.cbegin(), entries_.cend(), [](const auto& entry) {
+        return !entry.acknowledged &&
+               (entry.severity == OperationalLogSeverity::Error || entry.severity == OperationalLogSeverity::Critical);
+    }));
 }
 
 void OperationalLogState::append(OperationalLogEntry entry) {

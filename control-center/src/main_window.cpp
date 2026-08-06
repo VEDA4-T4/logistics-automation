@@ -24,8 +24,8 @@
 #include <QStackedLayout>
 #include <QStatusBar>
 #include <QStringList>
-#include <QTimer>
 #include <QTimeZone>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVBoxLayout>
@@ -534,9 +534,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_splitter->setHandleWidth(7);
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_splitter);
     operational_log_panel_ = new OperationalLogPanel(detail_splitter);
-    operational_log_panel_->setEntryPageProvider([this](qsizetype offset, qsizetype limit) {
-        return operational_log_state_.entries().mid(offset, limit);
-    });
+    operational_log_panel_->setEntryPageProvider(
+        [this](qsizetype offset, qsizetype limit) { return operational_log_state_.entries().mid(offset, limit); });
     history_network_manager_ = new QNetworkAccessManager(this);
     if (!history_bearer_token_.isEmpty()) {
         operational_log_panel_->setOlderEntriesRequestHandler([this]() { requestOlderOperationalLogs(); });
@@ -1094,8 +1093,8 @@ void MainWindow::requestOlderOperationalLogs() {
         const auto response = document.object();
         const auto items_value = response.value(QStringLiteral("items"));
         const auto next_cursor_value = response.value(QStringLiteral("nextCursor"));
-        if (!items_value.isArray() || (!next_cursor_value.isUndefined() && !next_cursor_value.isNull() &&
-                                      !next_cursor_value.isString())) {
+        if (!items_value.isArray() ||
+            (!next_cursor_value.isUndefined() && !next_cursor_value.isNull() && !next_cursor_value.isString())) {
             fail(QStringLiteral("응답 페이지 형식이 올바르지 않습니다."));
             return;
         }

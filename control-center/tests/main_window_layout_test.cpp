@@ -66,38 +66,39 @@ bool CheckHistoryPaging(QApplication& application) {
     };
     QObject::connect(&server, &QTcpServer::newConnection, &application, [&]() {
         auto* socket = server.nextPendingConnection();
-        QObject::connect(socket, &QTcpSocket::readyRead, &application,
-                         [&, socket, request = QByteArray{}, handled = false]() mutable {
-            if (handled) {
-                return;
-            }
-            request.append(socket->readAll());
-            if (!request.contains("\r\n\r\n")) {
-                return;
-            }
-            handled = true;
-            requests.append(request);
-            switch (requests.size()) {
-                case 1:
-                    write_response(
-                        socket, "200 OK",
-                        R"({"count":2,"items":[{"historyId":"100.2.2","messageId":"HIST-1","eventType":"DEVICE_STATUS","sourceId":"HISTORY-A","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":100},{"historyId":"100.2.1","messageId":"HIST-2","eventType":"ERROR_OCCURRED","sourceId":"HISTORY-B","state":"","errorCode":"ERR-HISTORY","severity":"ERROR","message":"과거 오류","details":{},"occurredAtMs":100}],"nextCursor":"100.2.1"})");
-                    break;
-                case 2:
-                    delayed_error_socket = socket;
-                    break;
-                case 3:
-                    write_response(
-                        socket, "200 OK",
-                        R"({"count":2,"items":[{"historyId":"100.2.2","messageId":"HIST-1","eventType":"DEVICE_STATUS","sourceId":"HISTORY-A","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":100},{"historyId":"100.2.1","messageId":"HIST-2","eventType":"ERROR_OCCURRED","sourceId":"HISTORY-B","state":"","errorCode":"ERR-HISTORY","severity":"ERROR","message":"과거 오류","details":{},"occurredAtMs":100}],"nextCursor":"90.2.5"})");
-                    break;
-                default:
-                    write_response(
-                        socket, "200 OK",
-                        R"({"count":1,"items":[{"historyId":"90.2.4","messageId":"HIST-3","eventType":"WORK_CREATED","sourceId":"HISTORY-C","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":90}],"nextCursor":null})");
-                    break;
-            }
-        });
+        QObject::connect(
+            socket, &QTcpSocket::readyRead, &application,
+            [&, socket, request = QByteArray{}, handled = false]() mutable {
+                if (handled) {
+                    return;
+                }
+                request.append(socket->readAll());
+                if (!request.contains("\r\n\r\n")) {
+                    return;
+                }
+                handled = true;
+                requests.append(request);
+                switch (requests.size()) {
+                    case 1:
+                        write_response(
+                            socket, "200 OK",
+                            R"({"count":2,"items":[{"historyId":"100.2.2","messageId":"HIST-1","eventType":"DEVICE_STATUS","sourceId":"HISTORY-A","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":100},{"historyId":"100.2.1","messageId":"HIST-2","eventType":"ERROR_OCCURRED","sourceId":"HISTORY-B","state":"","errorCode":"ERR-HISTORY","severity":"ERROR","message":"과거 오류","details":{},"occurredAtMs":100}],"nextCursor":"100.2.1"})");
+                        break;
+                    case 2:
+                        delayed_error_socket = socket;
+                        break;
+                    case 3:
+                        write_response(
+                            socket, "200 OK",
+                            R"({"count":2,"items":[{"historyId":"100.2.2","messageId":"HIST-1","eventType":"DEVICE_STATUS","sourceId":"HISTORY-A","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":100},{"historyId":"100.2.1","messageId":"HIST-2","eventType":"ERROR_OCCURRED","sourceId":"HISTORY-B","state":"","errorCode":"ERR-HISTORY","severity":"ERROR","message":"과거 오류","details":{},"occurredAtMs":100}],"nextCursor":"90.2.5"})");
+                        break;
+                    default:
+                        write_response(
+                            socket, "200 OK",
+                            R"({"count":1,"items":[{"historyId":"90.2.4","messageId":"HIST-3","eventType":"WORK_CREATED","sourceId":"HISTORY-C","state":"STORED","errorCode":"","severity":"","message":"","details":{},"occurredAtMs":90}],"nextCursor":null})");
+                        break;
+                }
+            });
     });
 
     QTemporaryDir directory;
@@ -109,11 +110,10 @@ bool CheckHistoryPaging(QApplication& application) {
     if (!LayoutCheck(config.open(QIODevice::WriteOnly | QIODevice::Text), "could not write history test config")) {
         return false;
     }
-    const auto contents =
-        QByteArray("[mqtt]\nhost=127.0.0.1\nport=1\n[http]\nimage_base_url=http://127.0.0.1:") +
-        QByteArray::number(server.serverPort()) +
-        "/\nbearer_token=local-history-token\n[rtsp]\nchannel_count=1\n"
-        "channel_1_url=rtsp://127.0.0.1:1/channel1\nonvif_metadata_enabled=false\n";
+    const auto contents = QByteArray("[mqtt]\nhost=127.0.0.1\nport=1\n[http]\nimage_base_url=http://127.0.0.1:") +
+                          QByteArray::number(server.serverPort()) +
+                          "/\nbearer_token=local-history-token\n[rtsp]\nchannel_count=1\n"
+                          "channel_1_url=rtsp://127.0.0.1:1/channel1\nonvif_metadata_enabled=false\n";
     if (!LayoutCheck(config.write(contents) == contents.size(), "history test config write was incomplete")) {
         return false;
     }
@@ -133,7 +133,8 @@ bool CheckHistoryPaging(QApplication& application) {
 
     bool found_first_page = false;
     for (int row = 0; row < table->model()->rowCount(); ++row) {
-        found_first_page = found_first_page || table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-A");
+        found_first_page =
+            found_first_page || table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-A");
     }
     if (!LayoutCheck(found_first_page && table->model()->canFetchMore({}), "first history page cannot fetch more")) {
         return false;
@@ -158,28 +159,30 @@ bool CheckHistoryPaging(QApplication& application) {
     }
     table->model()->fetchMore({});
     bool found_second_page = false;
-    if (!LayoutCheck(WaitUntil(application, [&]() {
-                         for (int row = 0; row < table->model()->rowCount(); ++row) {
-                             if (table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-C")) {
-                                 return true;
-                             }
-                         }
-                         return false;
-                     }),
+    if (!LayoutCheck(WaitUntil(application,
+                               [&]() {
+                                   for (int row = 0; row < table->model()->rowCount(); ++row) {
+                                       if (table->model()->index(row, 2).data().toString() ==
+                                           QStringLiteral("HISTORY-C")) {
+                                           return true;
+                                       }
+                                   }
+                                   return false;
+                               }),
                      "second history page was not appended")) {
         return false;
     }
     if (!LayoutCheck(requests.size() == 4, "duplicate history page was not skipped automatically") ||
-        !LayoutCheck(requests[1].contains("limit=500&cursor=100.2.1") &&
-                         requests[2].contains("limit=500&cursor=100.2.1"),
-                     "history retry did not preserve its cursor") ||
+        !LayoutCheck(
+            requests[1].contains("limit=500&cursor=100.2.1") && requests[2].contains("limit=500&cursor=100.2.1"),
+            "history retry did not preserve its cursor") ||
         !LayoutCheck(requests[3].contains("limit=500&cursor=90.2.5"),
                      "duplicate history page did not advance to its next cursor")) {
         return false;
     }
     for (int row = 0; row < table->model()->rowCount(); ++row) {
-        found_second_page = found_second_page ||
-                            table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-C");
+        found_second_page =
+            found_second_page || table->model()->index(row, 2).data().toString() == QStringLiteral("HISTORY-C");
     }
     return LayoutCheck(found_second_page && !table->model()->canFetchMore({}),
                        "history paging did not stop after null nextCursor");

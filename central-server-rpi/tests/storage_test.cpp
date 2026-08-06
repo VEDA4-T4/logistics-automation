@@ -293,10 +293,10 @@ int main() {
     assert(history.FindAll(2, {}, retried_global_history_page).ok());
     assert(retried_global_history_page.next_cursor == first_global_history_page.next_cursor);
     for (std::size_t index = 0; index < first_global_history_page.entries.size(); ++index) {
-        assert(retried_global_history_page.entries[index].history_id == first_global_history_page.entries[index].history_id);
+        assert(retried_global_history_page.entries[index].history_id ==
+               first_global_history_page.entries[index].history_id);
     }
-    assert(history.FindByWorkId(work_id, 0, {}, history_page).code ==
-           server::DatabaseStatusCode::kInvalidArgument);
+    assert(history.FindByWorkId(work_id, 0, {}, history_page).code == server::DatabaseStatusCode::kInvalidArgument);
     assert(history.FindAll(server::HistoryService::kMaximumLimit + 1, {}, history_page).code ==
            server::DatabaseStatusCode::kInvalidArgument);
     assert(history.FindByDeviceId("invalid/device", 10, {}, history_page).code ==

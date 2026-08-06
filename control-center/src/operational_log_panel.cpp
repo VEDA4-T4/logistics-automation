@@ -166,9 +166,8 @@ public:
         if (orientation != Qt::Horizontal || role != Qt::DisplayRole) {
             return {};
         }
-        static const QStringList headers = {
-            QStringLiteral("시각"), QStringLiteral("등급"), QStringLiteral("장치"), QStringLiteral("내용")
-        };
+        static const QStringList headers = { QStringLiteral("시각"), QStringLiteral("등급"), QStringLiteral("장치"),
+                                             QStringLiteral("내용") };
         return section >= 0 && section < headers.size() ? headers[section] : QVariant{};
     }
 
@@ -186,8 +185,8 @@ public:
             return;
         }
         if (older_entries_request_handler_ && older_entries_available_) {
-            const auto local_page = page_provider_ ? page_provider_(next_offset_, kPageSize)
-                                                   : QList<OperationalLogEntry>{};
+            const auto local_page =
+                page_provider_ ? page_provider_(next_offset_, kPageSize) : QList<OperationalLogEntry>{};
             if (local_page.isEmpty()) {
                 older_entries_loading_ = true;
                 older_entries_request_handler_();
@@ -222,8 +221,7 @@ public:
         entries_.append(std::move(unique_entries));
         endInsertRows();
         next_offset_ = entries_.size();
-        has_more_ = older_entries_available_ ||
-                    (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
+        has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
     }
 
     void appendOlderEntries(QList<OperationalLogEntry> entries, bool has_more) {
@@ -247,8 +245,7 @@ public:
         }
         next_offset_ = entries_.size() + unique_entries.size();
         older_entries_available_ = has_more;
-        has_more_ = older_entries_available_ ||
-                    (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
+        has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
         if (unique_entries.isEmpty()) {
             return;
         }
@@ -313,8 +310,8 @@ public:
     void acknowledgeAllAlerts() {
         for (qsizetype row = 0; row < entries_.size(); ++row) {
             auto& entry = entries_[row];
-            const bool is_alert = entry.severity == OperationalLogSeverity::Error ||
-                                  entry.severity == OperationalLogSeverity::Critical;
+            const bool is_alert =
+                entry.severity == OperationalLogSeverity::Error || entry.severity == OperationalLogSeverity::Critical;
             if (!is_alert || entry.acknowledged) {
                 continue;
             }
@@ -333,8 +330,12 @@ public:
         return nullptr;
     }
 
-    [[nodiscard]] bool hasMore() const noexcept { return has_more_; }
-    [[nodiscard]] bool isLoadingOlderEntries() const noexcept { return older_entries_loading_; }
+    [[nodiscard]] bool hasMore() const noexcept {
+        return has_more_;
+    }
+    [[nodiscard]] bool isLoadingOlderEntries() const noexcept {
+        return older_entries_loading_;
+    }
 
 private:
     OperationalLogPanel::EntryPageProvider page_provider_;

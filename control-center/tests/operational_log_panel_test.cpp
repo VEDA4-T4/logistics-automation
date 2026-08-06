@@ -107,8 +107,7 @@ int main(int argc, char* argv[]) {
     application.processEvents();
     assert(state.activeAlertCount() == 0);
     assert(!acknowledge_all->isEnabled());
-    assert(table->model()->index(1, 3).data(Qt::ForegroundRole).value<QColor>() ==
-           QColor(QStringLiteral("#777777")));
+    assert(table->model()->index(1, 3).data(Qt::ForegroundRole).value<QColor>() == QColor(QStringLiteral("#777777")));
 
     unacknowledged->setChecked(true);
     application.processEvents();

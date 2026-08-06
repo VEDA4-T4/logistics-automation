@@ -35,9 +35,8 @@ DatabaseStatus ParseCursor(std::string_view value, std::optional<HistoryCursor>&
         return DatabaseStatus::Ok();
     }
     const auto first_separator = value.find('.');
-    const auto second_separator = first_separator == std::string_view::npos
-                                      ? std::string_view::npos
-                                      : value.find('.', first_separator + 1);
+    const auto second_separator =
+        first_separator == std::string_view::npos ? std::string_view::npos : value.find('.', first_separator + 1);
     if (first_separator == std::string_view::npos || second_separator == std::string_view::npos ||
         value.find('.', second_separator + 1) != std::string_view::npos) {
         return { DatabaseStatusCode::kInvalidArgument, "history cursor is invalid" };
@@ -45,8 +44,7 @@ DatabaseStatus ParseCursor(std::string_view value, std::optional<HistoryCursor>&
 
     HistoryCursor cursor;
     if (!ParseInteger(value.substr(0, first_separator), cursor.occurred_at_ms) ||
-        !ParseInteger(value.substr(first_separator + 1, second_separator - first_separator - 1),
-                      cursor.source_rank) ||
+        !ParseInteger(value.substr(first_separator + 1, second_separator - first_separator - 1), cursor.source_rank) ||
         !ParseInteger(value.substr(second_separator + 1), cursor.row_id) || cursor.occurred_at_ms < 0 ||
         cursor.source_rank < 1 || cursor.source_rank > 2 || cursor.row_id <= 0) {
         return { DatabaseStatusCode::kInvalidArgument, "history cursor is invalid" };

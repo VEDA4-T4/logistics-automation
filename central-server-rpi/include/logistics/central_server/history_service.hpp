@@ -39,8 +39,8 @@ public:
     [[nodiscard]] DatabaseStatus FindAll(std::size_t limit, std::string_view cursor, HistoryPage& output);
     [[nodiscard]] DatabaseStatus FindByWorkId(std::string_view work_id, std::size_t limit, std::string_view cursor,
                                               HistoryPage& output);
-    [[nodiscard]] DatabaseStatus FindByDeviceId(std::string_view device_id, std::size_t limit,
-                                                std::string_view cursor, HistoryPage& output);
+    [[nodiscard]] DatabaseStatus FindByDeviceId(std::string_view device_id, std::size_t limit, std::string_view cursor,
+                                                HistoryPage& output);
 
 private:
     Database& database_;
