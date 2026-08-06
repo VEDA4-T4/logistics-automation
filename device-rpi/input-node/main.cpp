@@ -36,12 +36,13 @@ inline constexpr std::size_t kCommandQueueCapacity = 64U;
 inline constexpr std::size_t kOutboundQueueCapacity = 256U;
 inline constexpr auto kSpontaneousPollTimeout = std::chrono::milliseconds{ 20 };
 inline constexpr auto kUartReconnectInterval = std::chrono::seconds{ 2 };
-// 2000ms은 컨트롤러의 정확히 1000ms짜리 하트비트와 주기적으로 재정렬되어(비트
-// 주파수) 약 8분 34초마다 응답이 지연되는 현상을 만들었다(2026-08-06 실기기
-// 관측, ERR-HEALTH-QUEUE-OVERFLOW와 시각 일치 확인). 하트비트 주기의 작은
-// 정수배에서 벗어난 값으로 바꿔 재정렬 주기를 늘린다 - 충돌 가능성 자체를
-// 없애는 게 아니라 훨씬 뜸하게 만드는 완화책이다.
-inline constexpr auto kUartKeepAliveInterval = std::chrono::milliseconds{ 2700 };
+// 한동안 2700ms을 썼다. 2000ms이 컨트롤러의 정확히 1000ms짜리 하트비트와
+// 주기적으로 재정렬되면서(비트 주파수) 약 8분 34초마다 응답이 지연됐기 때문이다
+// (2026-08-06 실기기 관측). 실제 원인은 주기가 아니라 컨트롤러 쪽에 있었다.
+// RX 복구가 HAL_UART_DMAStop()으로 전송 중이던 프레임까지 끊어서, 두 주기가
+// 겹치는 순간마다 하트비트가 잘리고 응답이 재시도 타임아웃만큼 밀렸다.
+// 컨트롤러가 송수신을 분리한 뒤로는 겹침 자체가 무해해져서 원래 값으로 되돌린다.
+inline constexpr auto kUartKeepAliveInterval = std::chrono::milliseconds{ 2000 };
 inline constexpr auto kIdleDelay = std::chrono::milliseconds{ 5 };
 
 volatile std::sig_atomic_t stop_requested = 0;
