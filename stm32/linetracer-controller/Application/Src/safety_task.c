@@ -25,6 +25,13 @@ extern osThreadId_t SafetyTaskHandle;
 #define SAFETY_HAZARD_COMM_TIMEOUT (1UL << 7U)
 #define SAFETY_HAZARD_SENSOR_FAULT (1UL << 8U)
 #define SAFETY_HAZARD_HEALTH_FAULT (1UL << 9U)
+#define SAFETY_HAZARD_OBSTACLE_FRONT (1UL << 10U)
+#define SAFETY_HAZARD_OBSTACLE_REAR (1UL << 11U)
+#define SAFETY_HAZARD_OBSTACLE_LEFT (1UL << 12U)
+#define SAFETY_HAZARD_OBSTACLE_RIGHT (1UL << 13U)
+#define SAFETY_HAZARD_OBSTACLE_DIRECTIONS                                                       \
+    (SAFETY_HAZARD_OBSTACLE_FRONT | SAFETY_HAZARD_OBSTACLE_REAR | SAFETY_HAZARD_OBSTACLE_LEFT | \
+     SAFETY_HAZARD_OBSTACLE_RIGHT)
 
 typedef struct {
     uint32_t active_hazard_mask;
@@ -277,8 +284,7 @@ static uint8_t SafetyTask_PublishControlEvent(const app_control_safety_event_t* 
 
     queued_event = *event;
     queued_event.motor_inhibit_generation = MotorControl_GetSafetyInhibitGeneration();
-    if (s_control_event_outbox_count == 0U &&
-        osMessageQueuePut(controlSafetyQueue, &queued_event, 0U, 0U) == osOK) {
+    if (s_control_event_outbox_count == 0U && osMessageQueuePut(controlSafetyQueue, &queued_event, 0U, 0U) == osOK) {
         SafetyTask_StoreLatestControlEvent(&queued_event);
         return 1U;
     }
@@ -332,6 +338,24 @@ static void SafetyTask_PublishLatched(const app_safety_event_t* source) {
     event.occurred_at_ms = source->occurred_at_ms;
     event.reason = s_safety_context.latched_reason;
     event.error_code = s_safety_context.error_code;
+    (void)SafetyTask_PublishControlEvent(&event);
+}
+
+static void SafetyTask_PublishObstacleState(const app_safety_event_t* source, uint8_t active) {
+    app_control_safety_event_t event = { 0 };
+
+    if (source == NULL) {
+        return;
+    }
+
+    event.type = (active != 0U) ? APP_CONTROL_SAFETY_OBSTACLE_ACTIVE : APP_CONTROL_SAFETY_OBSTACLE_CLEARED;
+    event.occurred_at_ms = source->occurred_at_ms;
+    event.reason = (active != 0U) ? LINETRACER_STOP_REASON_OBSTACLE : LINETRACER_STOP_REASON_NONE;
+    event.error_code = (active != 0U) ? (uint8_t)UART_ERROR_SENSOR : (uint8_t)UART_ERROR_NONE;
+    event.minimum_distance_mm = (active != 0U) ? source->minimum_distance_mm : 0U;
+    event.obstacle_direction_mask = (active != 0U) ? source->obstacle_direction_mask : 0U;
+    event.motor_inhibit_release_allowed =
+        (active == 0U && s_safety_context.latched == 0U && s_safety_context.active_hazard_mask == 0U) ? 1U : 0U;
     (void)SafetyTask_PublishControlEvent(&event);
 }
 
@@ -468,6 +492,45 @@ static void SafetyTask_DeactivateHazard(const app_safety_event_t* event) {
     s_safety_context.active_hazard_mask &= ~hazard_mask;
 }
 
+static void SafetyTask_ProcessObstacle(const app_safety_event_t* event) {
+    uint32_t direction_hazard_mask;
+
+    if (event == NULL) {
+        return;
+    }
+
+    if (event->active != 0U) {
+        if (event->obstacle_direction_mask == 0U || event->minimum_distance_mm == 0U ||
+            (event->obstacle_direction_mask & (uint8_t)(~APP_OBSTACLE_DIRECTION_ALL)) != 0U) {
+            ++s_invalid_event_count;
+            return;
+        }
+
+        direction_hazard_mask = ((uint32_t)event->obstacle_direction_mask << 10U) & SAFETY_HAZARD_OBSTACLE_DIRECTIONS;
+        s_safety_context.active_hazard_mask &= ~SAFETY_HAZARD_OBSTACLE_DIRECTIONS;
+        s_safety_context.active_hazard_mask |= direction_hazard_mask;
+
+        if ((s_safety_context.active_hazard_mask & SAFETY_HAZARD_OBSTACLE) != 0U) {
+            ++s_duplicate_event_count;
+            return;
+        }
+
+        /* Assert the hardware gate before relying on ControlTask scheduling. */
+        MotorControl_SetSafetyInhibit(1U);
+        s_safety_context.active_hazard_mask |= SAFETY_HAZARD_OBSTACLE;
+        SafetyTask_PublishObstacleState(event, 1U);
+        return;
+    }
+
+    if ((s_safety_context.active_hazard_mask & SAFETY_HAZARD_OBSTACLE) == 0U) {
+        ++s_duplicate_event_count;
+        return;
+    }
+
+    s_safety_context.active_hazard_mask &= ~(SAFETY_HAZARD_OBSTACLE | SAFETY_HAZARD_OBSTACLE_DIRECTIONS);
+    SafetyTask_PublishObstacleState(event, 0U);
+}
+
 static void SafetyTask_HandleReset(const app_safety_event_t* request) {
     if (request == NULL) {
         return;
@@ -532,6 +595,10 @@ static void SafetyTask_HandleRecovery(const app_safety_event_t* request, uint32_
 static uint8_t SafetyTask_LineLossApplies(void) {
     app_control_snapshot_t snapshot;
 
+    if (ControlTask_IsTurning()) {
+        return 0U;
+    }
+
     if (!ControlTask_GetLatest(&snapshot)) {
         return 0U;
     }
@@ -553,6 +620,11 @@ static void SafetyTask_ProcessEvent(const app_safety_event_t* event) {
 
     if (event->type == APP_SAFETY_EVENT_RECOVERY_REQUEST) {
         SafetyTask_HandleRecovery(event, event->occurred_at_ms);
+        return;
+    }
+
+    if (event->type == APP_SAFETY_EVENT_OBSTACLE) {
+        SafetyTask_ProcessObstacle(event);
         return;
     }
 

@@ -104,7 +104,7 @@ void TestControlToCommTxLifecycleAndPersistentFault() {
     recovery.type = APP_CONTROL_SAFETY_RECOVERY_APPROVED;
     assert(ControlLogic_ApplySafetyEvent(&control, &recovery, 50U) != 0U);
     ControlLogic_MakeSnapshot(&control, UART_LINETRACER_LOAD_EMPTY, 50U, &control_snapshot);
-    assert(control_snapshot.state == UART_LINETRACER_STATE_CORRECTING);
+    assert(control_snapshot.state == UART_LINETRACER_STATE_FOLLOWING_LINE);
     assert(control_snapshot.job_id == 77U);
     assert(control_snapshot.route_id == UART_LINETRACER_ROUTE_C);
 }

@@ -13,7 +13,7 @@ uart_linetracer_route_t RouteForIndex(std::uint8_t index) {
     return static_cast<uart_linetracer_route_t>(UART_LINETRACER_ROUTE_MIN + index);
 }
 
-void TestOutboundAndReturn(std::uint8_t origin, std::uint8_t target) {
+void TestPickupAndSameZoneUnload(std::uint8_t origin, std::uint8_t target) {
     route_plan_t plan{};
     const auto position = PositionForIndex(origin);
     const auto route = RouteForIndex(target);
@@ -25,22 +25,22 @@ void TestOutboundAndReturn(std::uint8_t origin, std::uint8_t target) {
     assert(plan.target_index == target);
     assert(plan.junctions_total == distance);
     assert(plan.junctions_remaining == distance);
-    assert(plan.phase == ROUTE_PHASE_TO_SOURCE_JUNCTION);
-    assert(plan.expected_marker == ROUTE_MARKER_DEST_EXIT);
     assert(RoutePlanner_TargetDestination(&plan) == PositionForIndex(target));
-
-    assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
-    assert(plan.phase == ROUTE_PHASE_TO_SOURCE_JUNCTION);
-    assert(plan.expected_marker == ROUTE_MARKER_SOURCE_JUNCTION);
 
     if (target == origin) {
         assert(plan.common_direction == ROUTE_DIRECTION_NONE);
+        assert(plan.phase == ROUTE_PHASE_TO_SOURCE_JUNCTION);
+        assert(plan.expected_marker == ROUTE_MARKER_SOURCE_JUNCTION);
         assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
+        assert(plan.phase == ROUTE_PHASE_TO_PICKUP);
+        assert(plan.expected_marker == ROUTE_MARKER_PICKUP);
     } else {
         const auto source_action = (target > origin) ? ROUTE_ACTION_TURN_RIGHT : ROUTE_ACTION_TURN_LEFT;
         const auto target_action = (target > origin) ? ROUTE_ACTION_TURN_LEFT : ROUTE_ACTION_TURN_RIGHT;
 
         assert(plan.common_direction == ((target > origin) ? ROUTE_DIRECTION_RIGHT : ROUTE_DIRECTION_LEFT));
+        assert(plan.phase == ROUTE_PHASE_TO_SOURCE_JUNCTION);
+        assert(plan.expected_marker == ROUTE_MARKER_SOURCE_JUNCTION);
         assert(RoutePlanner_OnMarker(&plan) == source_action);
         assert(plan.phase == ROUTE_PHASE_ON_COMMON_LINE);
 
@@ -58,11 +58,8 @@ void TestOutboundAndReturn(std::uint8_t origin, std::uint8_t target) {
 
     assert(RoutePlanner_OnLoadOn(&plan) == ROUTE_ACTION_TURN_AROUND);
     assert(plan.loaded != 0U);
-    assert(plan.phase == ROUTE_PHASE_RETURN_TO_DEST);
-    assert(plan.expected_marker == ROUTE_MARKER_PICKUP_EXIT);
-
-    assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
-    assert(plan.expected_marker == ROUTE_MARKER_RETURN_JUNCTION);
+    assert(plan.phase == ROUTE_PHASE_TO_TARGET_UNLOAD);
+    assert(plan.expected_marker == ROUTE_MARKER_TARGET_JUNCTION);
     assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
     assert(plan.expected_marker == ROUTE_MARKER_DEST);
     assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_STOP_AT_DEST);
@@ -73,31 +70,69 @@ void TestOutboundAndReturn(std::uint8_t origin, std::uint8_t target) {
     assert(plan.loaded == 0U);
 }
 
-void TestAllOutboundAndReturnRoutes() {
+void TestAllPickupAndSameZoneUnloadRoutes() {
     for (std::uint8_t origin = 0U; origin < 3U; ++origin) {
         for (std::uint8_t target = 0U; target < 3U; ++target) {
-            TestOutboundAndReturn(origin, target);
+            TestPickupAndSameZoneUnload(origin, target);
         }
     }
 }
 
-void MovePlanToLoadedReturn(route_plan_t* plan) {
+void TestDirectedCrossZoneTurns() {
+    struct route_expectation_t {
+        uart_linetracer_position_t origin;
+        uart_linetracer_route_t target;
+        route_action_t source_turn;
+        route_action_t target_turn;
+        std::uint8_t intermediate_junction_count;
+    };
+
+    static constexpr route_expectation_t kRoutes[] = {
+        { UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_B, ROUTE_ACTION_TURN_RIGHT, ROUTE_ACTION_TURN_LEFT,
+          0U },
+        { UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_C, ROUTE_ACTION_TURN_RIGHT, ROUTE_ACTION_TURN_LEFT,
+          1U },
+        { UART_LINETRACER_POSITION_DEST_B, UART_LINETRACER_ROUTE_A, ROUTE_ACTION_TURN_LEFT, ROUTE_ACTION_TURN_RIGHT,
+          0U },
+        { UART_LINETRACER_POSITION_DEST_B, UART_LINETRACER_ROUTE_C, ROUTE_ACTION_TURN_RIGHT, ROUTE_ACTION_TURN_LEFT,
+          0U },
+        { UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_A, ROUTE_ACTION_TURN_LEFT, ROUTE_ACTION_TURN_RIGHT,
+          1U },
+        { UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_B, ROUTE_ACTION_TURN_LEFT, ROUTE_ACTION_TURN_RIGHT,
+          0U },
+    };
+
+    for (const auto& expected : kRoutes) {
+        route_plan_t plan{};
+
+        assert(RoutePlanner_Create(expected.origin, expected.target, &plan) != 0U);
+        assert(RoutePlanner_OnMarker(&plan) == expected.source_turn);
+        for (std::uint8_t junction = 0U; junction < expected.intermediate_junction_count; ++junction) {
+            assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
+        }
+        assert(RoutePlanner_OnMarker(&plan) == expected.target_turn);
+        assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_STOP_AT_PICKUP);
+        assert(RoutePlanner_OnLoadOn(&plan) == ROUTE_ACTION_TURN_AROUND);
+        assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
+        assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_STOP_AT_DEST);
+    }
+}
+
+void MovePlanToLoadedDelivery(route_plan_t* plan) {
     const auto distance = plan->junctions_total;
 
-    assert(RoutePlanner_OnMarker(plan) == ROUTE_ACTION_GO_STRAIGHT);
-    assert(RoutePlanner_OnMarker(plan) != ROUTE_ACTION_ERROR);
-    for (std::uint8_t marker = 0U; marker < distance; ++marker) {
+    for (std::uint8_t marker = 0U; marker <= distance; ++marker) {
         assert(RoutePlanner_OnMarker(plan) != ROUTE_ACTION_ERROR);
     }
     assert(RoutePlanner_OnMarker(plan) == ROUTE_ACTION_STOP_AT_PICKUP);
     assert(RoutePlanner_OnLoadOn(plan) == ROUTE_ACTION_TURN_AROUND);
 }
 
-void TestLoadLostDuringReturn() {
+void TestLoadLostDuringDelivery() {
     route_plan_t plan{};
 
     assert(RoutePlanner_Create(UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_C, &plan) != 0U);
-    MovePlanToLoadedReturn(&plan);
+    MovePlanToLoadedDelivery(&plan);
     assert(RoutePlanner_OnLoadOff(&plan) == ROUTE_ACTION_LOAD_LOST);
     assert(plan.phase == ROUTE_PHASE_ERROR);
     assert(plan.valid == 0U);
@@ -112,7 +147,6 @@ void TestInvalidInputsAndUnexpectedMarker() {
     assert(plan.valid == 0U);
 
     assert(RoutePlanner_Create(UART_LINETRACER_POSITION_DEST_B, UART_LINETRACER_ROUTE_B, &plan) != 0U);
-    assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
     assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
     assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_STOP_AT_PICKUP);
     assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_ERROR);
@@ -134,8 +168,9 @@ void TestReset() {
 }  // namespace
 
 int main() {
-    TestAllOutboundAndReturnRoutes();
-    TestLoadLostDuringReturn();
+    TestAllPickupAndSameZoneUnloadRoutes();
+    TestDirectedCrossZoneTurns();
+    TestLoadLostDuringDelivery();
     TestInvalidInputsAndUnexpectedMarker();
     TestReset();
     return 0;

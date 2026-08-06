@@ -154,6 +154,10 @@ const char* EventName(std::uint8_t event_id) {
             return "STARTED";
         case UART_LINETRACER_EVENT_HEARTBEAT:
             return "HEARTBEAT";
+        case UART_LINETRACER_EVENT_OBSTACLE_DETECTED:
+            return "OBSTACLE_DETECTED";
+        case UART_LINETRACER_EVENT_OBSTACLE_CLEARED:
+            return "OBSTACLE_CLEARED";
         default:
             return "UNKNOWN";
     }
@@ -230,6 +234,16 @@ void PrintJobRoute(const std::uint8_t* payload) {
                    frame.length == UART_LINETRACER_FAULT_EVENT_PAYLOAD_SIZE) {
             PrintJobRoute(frame.payload);
             std::cout << " error=" << ErrorName(frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX]);
+        } else if ((event_id == UART_LINETRACER_EVENT_OBSTACLE_DETECTED ||
+                    event_id == UART_LINETRACER_EVENT_OBSTACLE_CLEARED) &&
+                   frame.length == UART_LINETRACER_OBSTACLE_EVENT_PAYLOAD_SIZE) {
+            PrintJobRoute(frame.payload);
+            std::cout << " directions=";
+            PrintHexByte(frame.payload[UART_LINETRACER_OBSTACLE_EVENT_DIRECTION_INDEX]);
+            std::cout << " minimum_distance_mm="
+                      << uart_linetracer_read_job_id(frame.payload, UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_LOW_INDEX,
+                                                     UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_HIGH_INDEX)
+                      << " state=" << StateName(frame.payload[UART_LINETRACER_OBSTACLE_EVENT_STATE_INDEX]);
         } else if (frame.length == UART_LINETRACER_JOB_EVENT_PAYLOAD_SIZE) {
             PrintJobRoute(frame.payload);
         }

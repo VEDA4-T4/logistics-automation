@@ -116,7 +116,9 @@ typedef enum {
     UART_LINETRACER_EVENT_STATE_CHANGED = 0x04U,
     UART_LINETRACER_EVENT_FAULT = 0x05U,
     UART_LINETRACER_EVENT_STARTED = 0x06U,
-    UART_LINETRACER_EVENT_HEARTBEAT = 0x07U
+    UART_LINETRACER_EVENT_HEARTBEAT = 0x07U,
+    UART_LINETRACER_EVENT_OBSTACLE_DETECTED = 0x08U,
+    UART_LINETRACER_EVENT_OBSTACLE_CLEARED = 0x09U
 } uart_linetracer_event_t;
 
 #define UART_LINETRACER_EVENT_JOB_ID_LOW_INDEX UART_EVENT_HEADER_SIZE
@@ -132,6 +134,21 @@ typedef enum {
 #define UART_LINETRACER_FAULT_EVENT_ERROR_INDEX (UART_EVENT_HEADER_SIZE + 3U)
 #define UART_LINETRACER_FAULT_EVENT_DATA_SIZE 4U
 #define UART_LINETRACER_FAULT_EVENT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_LINETRACER_FAULT_EVENT_DATA_SIZE)
+
+#define UART_LINETRACER_OBSTACLE_EVENT_DIRECTION_INDEX (UART_EVENT_HEADER_SIZE + 3U)
+#define UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_LOW_INDEX (UART_EVENT_HEADER_SIZE + 4U)
+#define UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_HIGH_INDEX (UART_EVENT_HEADER_SIZE + 5U)
+#define UART_LINETRACER_OBSTACLE_EVENT_STATE_INDEX (UART_EVENT_HEADER_SIZE + 6U)
+#define UART_LINETRACER_OBSTACLE_EVENT_DATA_SIZE 7U
+#define UART_LINETRACER_OBSTACLE_EVENT_PAYLOAD_SIZE (UART_EVENT_HEADER_SIZE + UART_LINETRACER_OBSTACLE_EVENT_DATA_SIZE)
+
+#define UART_LINETRACER_OBSTACLE_DIRECTION_FRONT (1U << 0U)
+#define UART_LINETRACER_OBSTACLE_DIRECTION_REAR (1U << 1U)
+#define UART_LINETRACER_OBSTACLE_DIRECTION_LEFT (1U << 2U)
+#define UART_LINETRACER_OBSTACLE_DIRECTION_RIGHT (1U << 3U)
+#define UART_LINETRACER_OBSTACLE_DIRECTION_ALL                                            \
+    (UART_LINETRACER_OBSTACLE_DIRECTION_FRONT | UART_LINETRACER_OBSTACLE_DIRECTION_REAR | \
+     UART_LINETRACER_OBSTACLE_DIRECTION_LEFT | UART_LINETRACER_OBSTACLE_DIRECTION_RIGHT)
 
 /* Periodic heartbeat payload. Uptime is a 32-bit little-endian millisecond counter. */
 #define UART_LINETRACER_HEARTBEAT_STATE_INDEX UART_EVENT_HEADER_SIZE
@@ -207,6 +224,8 @@ static inline uint8_t uart_linetracer_event_is_valid(uint32_t event_id) {
         case UART_LINETRACER_EVENT_FAULT:
         case UART_LINETRACER_EVENT_STARTED:
         case UART_LINETRACER_EVENT_HEARTBEAT:
+        case UART_LINETRACER_EVENT_OBSTACLE_DETECTED:
+        case UART_LINETRACER_EVENT_OBSTACLE_CLEARED:
             return 1U;
 
         default:
@@ -357,6 +376,13 @@ static inline uint8_t uart_linetracer_event_payload_is_valid(const uint8_t* payl
             }
             break;
 
+        case UART_LINETRACER_EVENT_OBSTACLE_DETECTED:
+        case UART_LINETRACER_EVENT_OBSTACLE_CLEARED:
+            if (length != UART_LINETRACER_OBSTACLE_EVENT_PAYLOAD_SIZE) {
+                return 0U;
+            }
+            break;
+
         default:
             return 0U;
     }
@@ -410,6 +436,26 @@ static inline uint8_t uart_linetracer_event_payload_is_valid(const uint8_t* payl
                 return 0U;
             }
             return 1U;
+
+        case UART_LINETRACER_EVENT_OBSTACLE_DETECTED:
+        case UART_LINETRACER_EVENT_OBSTACLE_CLEARED: {
+            uint8_t direction_mask = payload[UART_LINETRACER_OBSTACLE_EVENT_DIRECTION_INDEX];
+            uint16_t minimum_distance_mm =
+                uart_linetracer_read_job_id(payload, UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_LOW_INDEX,
+                                            UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_HIGH_INDEX);
+
+            job_id = uart_linetracer_event_job_id(payload);
+            if (uart_linetracer_job_id_is_valid(job_id) == 0U ||
+                uart_linetracer_route_is_valid(payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX]) == 0U ||
+                uart_linetracer_state_is_valid(payload[UART_LINETRACER_OBSTACLE_EVENT_STATE_INDEX]) == 0U ||
+                (direction_mask & (uint8_t)(~UART_LINETRACER_OBSTACLE_DIRECTION_ALL)) != 0U) {
+                return 0U;
+            }
+            if (event_id == UART_LINETRACER_EVENT_OBSTACLE_DETECTED) {
+                return (direction_mask != 0U && minimum_distance_mm != 0U) ? 1U : 0U;
+            }
+            return (direction_mask == 0U && minimum_distance_mm == 0U) ? 1U : 0U;
+        }
 
         default:
             return 0U;

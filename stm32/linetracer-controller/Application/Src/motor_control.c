@@ -6,10 +6,17 @@
 #include "motor_control_config.h"
 #include "tim.h"
 
-#define MOTOR_LEFT_IN1_PIN GPIO_PIN_0
-#define MOTOR_LEFT_IN2_PIN GPIO_PIN_1
-#define MOTOR_RIGHT_IN1_PIN GPIO_PIN_2
-#define MOTOR_RIGHT_IN2_PIN GPIO_PIN_3
+/*
+ * Physical wiring on this vehicle is intentionally crossed relative to the
+ * JMOD labels: the left wheel is connected to channel B (BO1/BO2) and the
+ * right wheel is connected to channel A (AO1/AO2).  Keep the rest of the
+ * application in logical vehicle coordinates (left/right); only this HAL
+ * boundary translates them to the actual driver channels.
+ */
+#define MOTOR_LEFT_IN1_PIN GPIO_PIN_2 /* BIN1 */
+#define MOTOR_LEFT_IN2_PIN GPIO_PIN_3 /* BIN2 */
+#define MOTOR_RIGHT_IN1_PIN GPIO_PIN_0 /* AIN1 */
+#define MOTOR_RIGHT_IN2_PIN GPIO_PIN_1 /* AIN2 */
 #define MOTOR_STBY_PIN GPIO_PIN_4
 #define MOTOR_GPIO_PORT GPIOC
 
@@ -72,8 +79,9 @@ static uint8_t MotorControl_DirectionChanged(const motor_output_t* output) {
 }
 
 void MotorControl_ForceStop(void) {
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
+    /* Logical left is physical channel B/TIM3_CH2; logical right is A/CH1. */
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0U);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
     HAL_GPIO_WritePin(MOTOR_GPIO_PORT, MOTOR_STBY_PIN, GPIO_PIN_RESET);
     MotorControl_WriteDirection(MOTOR_LEFT_IN1_PIN, MOTOR_LEFT_IN2_PIN, MOTOR_DIRECTION_COAST);
     MotorControl_WriteDirection(MOTOR_RIGHT_IN1_PIN, MOTOR_RIGHT_IN2_PIN, MOTOR_DIRECTION_COAST);
@@ -176,15 +184,15 @@ uint8_t MotorControl_Apply(const motor_output_t* output) {
     }
 
     if (MotorControl_DirectionChanged(output) != 0U) {
-        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0U);
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
         HAL_GPIO_WritePin(MOTOR_GPIO_PORT, MOTOR_STBY_PIN, GPIO_PIN_RESET);
         MotorControl_WriteDirection(MOTOR_LEFT_IN1_PIN, MOTOR_LEFT_IN2_PIN, left_direction);
         MotorControl_WriteDirection(MOTOR_RIGHT_IN1_PIN, MOTOR_RIGHT_IN2_PIN, right_direction);
     }
 
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, output->left_pwm);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, output->right_pwm);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, output->left_pwm);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, output->right_pwm);
     HAL_GPIO_WritePin(MOTOR_GPIO_PORT, MOTOR_STBY_PIN, GPIO_PIN_SET);
     motorControlLastOutput = *output;
     MotorControl_ExitCriticalSection(primask);

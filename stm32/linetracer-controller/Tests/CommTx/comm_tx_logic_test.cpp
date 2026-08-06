@@ -113,6 +113,47 @@ void TestFaultMayBeReportedWithoutActiveJob() {
     assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(frame.payload, frame.length) != 0U);
 }
 
+void TestObstacleStateChangeEventsContainDirectionDistanceAndMotionState() {
+    comm_tx_logic_t logic{};
+    auto event = MakeJobEvent(APP_TX_EVENT_OBSTACLE_DETECTED);
+    comm_tx_observed_state_t observed{};
+    std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+    std::size_t length{};
+
+    event.state = UART_LINETRACER_STATE_STOPPED;
+    event.obstacle_direction_mask = UART_LINETRACER_OBSTACLE_DIRECTION_FRONT | UART_LINETRACER_OBSTACLE_DIRECTION_LEFT;
+    event.minimum_distance_mm = 43U;
+    CommTxLogic_Init(&logic);
+    CommTxLogic_InitObservedState(&observed);
+    assert(CommTxLogic_EncodeEvent(&logic, &event, encoded.data(), encoded.size(), &length) == UART_CODEC_OK);
+    auto frame = Decode(encoded, length);
+    assert(frame.payload[UART_EVENT_ID_INDEX] == UART_LINETRACER_EVENT_OBSTACLE_DETECTED);
+    assert(frame.payload[UART_LINETRACER_OBSTACLE_EVENT_DIRECTION_INDEX] == event.obstacle_direction_mask);
+    assert(uart_linetracer_read_job_id(frame.payload, UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_LOW_INDEX,
+                                       UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_HIGH_INDEX) == 43U);
+    assert(frame.payload[UART_LINETRACER_OBSTACLE_EVENT_STATE_INDEX] == UART_LINETRACER_STATE_STOPPED);
+    assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(frame.payload, frame.length) != 0U);
+    CommTxLogic_ObserveEvent(&observed, &event);
+    CommTxLogic_ObserveEvent(&observed, &event);
+    assert((observed.sensor_flags & UART_LINETRACER_FLAG_OBSTACLE_DETECTED) != 0U);
+    assert(observed.error_code == UART_ERROR_SENSOR);
+
+    event.type = APP_TX_EVENT_OBSTACLE_CLEARED;
+    event.state = UART_LINETRACER_STATE_FOLLOWING_LINE;
+    event.obstacle_direction_mask = 0U;
+    event.minimum_distance_mm = 0U;
+    assert(CommTxLogic_EncodeEvent(&logic, &event, encoded.data(), encoded.size(), &length) == UART_CODEC_OK);
+    frame = Decode(encoded, length);
+    assert(frame.payload[UART_EVENT_ID_INDEX] == UART_LINETRACER_EVENT_OBSTACLE_CLEARED);
+    assert(frame.payload[UART_LINETRACER_OBSTACLE_EVENT_DIRECTION_INDEX] == 0U);
+    assert(frame.payload[UART_LINETRACER_OBSTACLE_EVENT_STATE_INDEX] == UART_LINETRACER_STATE_FOLLOWING_LINE);
+    assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(frame.payload, frame.length) != 0U);
+    CommTxLogic_ObserveEvent(&observed, &event);
+    CommTxLogic_ObserveEvent(&observed, &event);
+    assert((observed.sensor_flags & UART_LINETRACER_FLAG_OBSTACLE_DETECTED) == 0U);
+    assert(observed.error_code == UART_ERROR_NONE);
+}
+
 void TestHeartbeatContainsUptimeStateSensorsAndError() {
     comm_tx_logic_t logic{};
     comm_tx_heartbeat_t heartbeat{};
@@ -179,8 +220,12 @@ void TestEmergencyEventPriorityPrecedesRegularEvents() {
     assert(APP_TX_PRIORITY_SAFETY > APP_TX_PRIORITY_EVENT);
     assert(APP_TX_PRIORITY_EVENT > APP_TX_PRIORITY_TELEMETRY);
     assert(app_tx_event_is_emergency(APP_TX_EVENT_FAULT) != 0U);
+    assert(app_tx_event_is_emergency(APP_TX_EVENT_OBSTACLE_DETECTED) != 0U);
+    assert(app_tx_event_is_emergency(APP_TX_EVENT_OBSTACLE_CLEARED) != 0U);
     assert(app_tx_event_is_emergency(APP_TX_EVENT_STARTED) == 0U);
     assert(app_tx_event_priority(APP_TX_EVENT_FAULT) == APP_TX_PRIORITY_SAFETY);
+    assert(app_tx_event_priority(APP_TX_EVENT_OBSTACLE_DETECTED) == APP_TX_PRIORITY_SAFETY);
+    assert(app_tx_event_priority(APP_TX_EVENT_OBSTACLE_CLEARED) == APP_TX_PRIORITY_SAFETY);
     assert(app_tx_event_priority(APP_TX_EVENT_STARTED) == APP_TX_PRIORITY_EVENT);
     assert(app_tx_event_priority(APP_TX_EVENT_ARRIVED) == APP_TX_PRIORITY_EVENT);
 }
@@ -227,7 +272,7 @@ void TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags() {
     CommTxLogic_InitObservedState(&state);
     snapshot.line_state = LINETRACER_LINE_CENTERED;
     snapshot.load_state = UART_LINETRACER_LOAD_PRESENT;
-    snapshot.ultrasonic_front_mm = 100U;
+    snapshot.ultrasonic_front_mm = 43U;
     snapshot.ultrasonic_rear_mm = 500U;
     snapshot.ultrasonic_left_mm = 500U;
     snapshot.ultrasonic_right_mm = 500U;
@@ -317,6 +362,7 @@ int main() {
     TestStatusResponseContainsCurrentState();
     TestStartedEventUsesAsyncSequence();
     TestFaultMayBeReportedWithoutActiveJob();
+    TestObstacleStateChangeEventsContainDirectionDistanceAndMotionState();
     TestHeartbeatContainsUptimeStateSensorsAndError();
     TestHeartbeatAllowsIdleAndRejectsUnknownFlags();
     TestAsyncSequenceWraps();

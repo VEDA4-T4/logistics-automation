@@ -10,10 +10,9 @@ uint8_t SafetyPolicy_LineLossApplies(const app_control_snapshot_t* snapshot) {
         return 0U;
     }
 
-    return (snapshot->state == UART_LINETRACER_STATE_FOLLOWING_LINE ||
-            snapshot->state == UART_LINETRACER_STATE_CORRECTING)
-               ? 1U
-               : 0U;
+    // Line departure is expected while CORRECTING.
+    // ControlTask's turn timeout remains the safety backstop.
+    return (snapshot->state == UART_LINETRACER_STATE_FOLLOWING_LINE) ? 1U : 0U;
 }
 
 uint8_t SafetyPolicy_IsMomentaryRemoteEstop(const app_safety_event_t* event) {

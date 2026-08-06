@@ -113,6 +113,30 @@ static uart_codec_result_t CommTxLogic_BuildFaultEvent(const app_tx_event_t* eve
     return UART_CODEC_OK;
 }
 
+static uart_codec_result_t CommTxLogic_BuildObstacleEvent(const app_tx_event_t* event, uint8_t event_id,
+                                                          uart_frame_t* frame) {
+    uint8_t detected = (event_id == UART_LINETRACER_EVENT_OBSTACLE_DETECTED) ? 1U : 0U;
+
+    if (CommTxLogic_JobRoutePairIsValid(event->job_id, event->route_id, 0U) == 0U ||
+        uart_linetracer_state_is_valid(event->state) == 0U ||
+        (event->obstacle_direction_mask & (uint8_t)(~UART_LINETRACER_OBSTACLE_DIRECTION_ALL)) != 0U ||
+        (detected != 0U && (event->obstacle_direction_mask == 0U || event->minimum_distance_mm == 0U)) ||
+        (detected == 0U && (event->obstacle_direction_mask != 0U || event->minimum_distance_mm != 0U))) {
+        return UART_CODEC_INVALID_ARGUMENT;
+    }
+
+    CommTxLogic_InitFrame(frame, 0U, UART_CMD_EVENT);
+    frame->length = UART_LINETRACER_OBSTACLE_EVENT_PAYLOAD_SIZE;
+    frame->payload[UART_EVENT_ID_INDEX] = event_id;
+    CommTxLogic_WriteUint16(frame->payload, UART_LINETRACER_EVENT_JOB_ID_LOW_INDEX, event->job_id);
+    frame->payload[UART_LINETRACER_EVENT_ROUTE_ID_INDEX] = (uint8_t)event->route_id;
+    frame->payload[UART_LINETRACER_OBSTACLE_EVENT_DIRECTION_INDEX] = event->obstacle_direction_mask;
+    CommTxLogic_WriteUint16(frame->payload, UART_LINETRACER_OBSTACLE_EVENT_DISTANCE_LOW_INDEX,
+                            event->minimum_distance_mm);
+    frame->payload[UART_LINETRACER_OBSTACLE_EVENT_STATE_INDEX] = (uint8_t)event->state;
+    return UART_CODEC_OK;
+}
+
 void CommTxLogic_Init(comm_tx_logic_t* context) {
     if (context != NULL) {
         context->next_sequence = 0U;
@@ -169,6 +193,14 @@ void CommTxLogic_ObserveEvent(comm_tx_observed_state_t* state, const app_tx_even
 
     if (event->type == APP_TX_EVENT_FAULT && uart_linetracer_fault_error_is_valid(event->error_code) != 0U) {
         state->error_code = event->error_code;
+    } else if (event->type == APP_TX_EVENT_OBSTACLE_DETECTED) {
+        state->sensor_flags |= UART_LINETRACER_FLAG_OBSTACLE_DETECTED;
+        state->error_code = UART_ERROR_SENSOR;
+    } else if (event->type == APP_TX_EVENT_OBSTACLE_CLEARED) {
+        state->sensor_flags &= (uint8_t)(~UART_LINETRACER_FLAG_OBSTACLE_DETECTED);
+        if (state->error_code == UART_ERROR_SENSOR) {
+            state->error_code = UART_ERROR_NONE;
+        }
     } else if (event->type == APP_TX_EVENT_COMMAND_ACK && event->status == UART_STATUS_ACK &&
                ((event->original_command == UART_CMD_LINETRACER_RESET_SYSTEM &&
                  (event->state == UART_LINETRACER_STATE_IDLE || event->state == UART_LINETRACER_STATE_STOPPED)) ||
@@ -220,10 +252,10 @@ void CommTxLogic_ObserveSensor(comm_tx_observed_state_t* state, const app_sensor
             continue;
         }
         ++valid_count;
-        if (distances[index] <= SENSOR_OBSTACLE_ON_MM) {
+        if (distances[index] <= SENSOR_ULTRASONIC_STOP_DISTANCE_MM) {
             obstacle_detected = 1U;
         }
-        if (distances[index] < SENSOR_OBSTACLE_OFF_MM) {
+        if (distances[index] < SENSOR_ULTRASONIC_CLEAR_DISTANCE_MM) {
             all_clear = 0U;
         }
     }
@@ -341,6 +373,14 @@ uart_codec_result_t CommTxLogic_EncodeEvent(comm_tx_logic_t* context, const app_
 
         case APP_TX_EVENT_STATE_CHANGED:
             result = CommTxLogic_BuildStateEvent(event, &frame);
+            break;
+
+        case APP_TX_EVENT_OBSTACLE_DETECTED:
+            result = CommTxLogic_BuildObstacleEvent(event, UART_LINETRACER_EVENT_OBSTACLE_DETECTED, &frame);
+            break;
+
+        case APP_TX_EVENT_OBSTACLE_CLEARED:
+            result = CommTxLogic_BuildObstacleEvent(event, UART_LINETRACER_EVENT_OBSTACLE_CLEARED, &frame);
             break;
 
         case APP_TX_EVENT_FAULT:

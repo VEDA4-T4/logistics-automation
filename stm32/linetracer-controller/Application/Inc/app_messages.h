@@ -86,6 +86,10 @@ typedef struct {
     uint32_t event_flags;
     uint32_t marker_detected_at_ms;
     uint16_t fsr_raw;
+    uint16_t line_left_raw;
+    uint16_t line_center_raw;
+    uint16_t line_right_raw;
+    int16_t line_error;
     uint16_t ultrasonic_front_mm;
     uint16_t ultrasonic_rear_mm;
     uint16_t ultrasonic_left_mm;
@@ -94,8 +98,10 @@ typedef struct {
     uart_linetracer_load_state_t load_state;
     app_marker_code_t marker_code;
     uint8_t line_left;
+    uint8_t line_center;
     uint8_t line_right;
     uint8_t marker_count;
+    uint8_t marker_active;
 } app_sensor_snapshot_t;
 
 typedef enum {
@@ -114,14 +120,28 @@ typedef enum {
     APP_SAFETY_EVENT_HEALTH_FAULT
 } app_safety_event_type_t;
 
+typedef enum {
+    APP_OBSTACLE_DIRECTION_NONE = 0U,
+    APP_OBSTACLE_DIRECTION_FRONT = (1U << 0U),
+    APP_OBSTACLE_DIRECTION_REAR = (1U << 1U),
+    APP_OBSTACLE_DIRECTION_LEFT = (1U << 2U),
+    APP_OBSTACLE_DIRECTION_RIGHT = (1U << 3U)
+} app_obstacle_direction_flags_t;
+
+#define APP_OBSTACLE_DIRECTION_ALL                                                              \
+    (APP_OBSTACLE_DIRECTION_FRONT | APP_OBSTACLE_DIRECTION_REAR | APP_OBSTACLE_DIRECTION_LEFT | \
+     APP_OBSTACLE_DIRECTION_RIGHT)
+
 typedef struct {
     app_safety_event_type_t type;
     uint32_t occurred_at_ms;
     linetracer_stop_reason_t reason;
     uint16_t original_payload_crc;
+    uint16_t minimum_distance_mm;
     app_task_id_t source_task;
     uint8_t error_code;
     uint8_t active;
+    uint8_t obstacle_direction_mask;
     uint8_t request_sequence;
     uint8_t original_command;
     uint8_t original_payload_length;
@@ -131,6 +151,8 @@ typedef struct {
 typedef enum {
     APP_CONTROL_SAFETY_NONE = 0,
     APP_CONTROL_SAFETY_LATCHED,
+    APP_CONTROL_SAFETY_OBSTACLE_ACTIVE,
+    APP_CONTROL_SAFETY_OBSTACLE_CLEARED,
     APP_CONTROL_SAFETY_RESET_APPROVED,
     APP_CONTROL_SAFETY_RESET_REJECTED,
     APP_CONTROL_SAFETY_RECOVERY_APPROVED,
@@ -146,7 +168,10 @@ typedef struct {
     uint32_t motor_inhibit_generation;
     linetracer_stop_reason_t reason;
     uint16_t original_payload_crc;
+    uint16_t minimum_distance_mm;
     uint8_t error_code;
+    uint8_t obstacle_direction_mask;
+    uint8_t motor_inhibit_release_allowed;
     uint8_t request_sequence;
     uint8_t original_command;
     uint8_t original_payload_length;
@@ -176,6 +201,8 @@ typedef enum {
     APP_TX_EVENT_LOAD_DETECTED,
     APP_TX_EVENT_UNLOAD_COMPLETE,
     APP_TX_EVENT_STATE_CHANGED,
+    APP_TX_EVENT_OBSTACLE_DETECTED,
+    APP_TX_EVENT_OBSTACLE_CLEARED,
     APP_TX_EVENT_FAULT
 } app_tx_event_type_t;
 
@@ -191,6 +218,7 @@ typedef struct {
     uint32_t created_at_ms;
     uint16_t job_id;
     uint16_t original_payload_crc;
+    uint16_t minimum_distance_mm;
     uart_linetracer_route_t route_id;
     uart_linetracer_state_t state;
     uart_linetracer_load_state_t load_state;
@@ -199,6 +227,7 @@ typedef struct {
     uint8_t original_payload_length;
     uint8_t status;
     uint8_t error_code;
+    uint8_t obstacle_direction_mask;
     uint8_t retry_count;
 } app_tx_event_t;
 
@@ -207,7 +236,10 @@ static inline uint8_t app_tx_event_is_response(app_tx_event_type_t type) {
 }
 
 static inline uint8_t app_tx_event_is_emergency(app_tx_event_type_t type) {
-    return (type == APP_TX_EVENT_FAULT) ? 1U : 0U;
+    return (type == APP_TX_EVENT_FAULT || type == APP_TX_EVENT_OBSTACLE_DETECTED ||
+            type == APP_TX_EVENT_OBSTACLE_CLEARED)
+               ? 1U
+               : 0U;
 }
 
 static inline uint8_t app_tx_event_priority(app_tx_event_type_t type) {
@@ -217,6 +249,8 @@ static inline uint8_t app_tx_event_priority(app_tx_event_type_t type) {
             return APP_TX_PRIORITY_RESPONSE;
 
         case APP_TX_EVENT_FAULT:
+        case APP_TX_EVENT_OBSTACLE_DETECTED:
+        case APP_TX_EVENT_OBSTACLE_CLEARED:
             return APP_TX_PRIORITY_SAFETY;
 
         case APP_TX_EVENT_STARTED:
