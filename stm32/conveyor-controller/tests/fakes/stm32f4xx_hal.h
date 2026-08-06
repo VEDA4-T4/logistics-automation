@@ -44,11 +44,9 @@ static inline uint32_t __get_PRIMASK(void) {
     return 0U;
 }
 
-static inline void __disable_irq(void) {
-}
+static inline void __disable_irq(void) {}
 
-static inline void __enable_irq(void) {
-}
+static inline void __enable_irq(void) {}
 
 uint32_t HAL_GetTick(void);
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef* huart, const uint8_t* data, uint16_t length);
