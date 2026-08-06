@@ -447,6 +447,43 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     assert(qt_statuses.size() == 2);
 }
 
+void TestRetainedPositionSnapshotReplay() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto registry_path =
+        std::filesystem::temp_directory_path() / ("logistics-position-replay-" + unique + ".json");
+
+    {
+        central_server::DeviceManager device_manager(registry_path);
+        assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/register"), MakeRegistration(),
+                                            "2026-07-16T01:00:01Z"));
+        assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), MakePositionStatus(),
+                                            "2026-07-16T01:00:03Z"));
+    }
+
+    {
+        central_server::DeviceManager restored(registry_path);
+        central_server::MqttHandler handler(restored);
+        std::vector<mqtt::MqttMessage> qt_statuses;
+        handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
+            qt_statuses.push_back(message);
+            return true;
+        });
+
+        assert(handler.ReplayDeviceStatuses("PI-01", "2026-07-16T01:05:00Z"));
+        assert(qt_statuses.size() == 1);
+        assert(qt_statuses[0].source_id == "PI-01");
+        assert(qt_statuses[0].timestamp == "2026-07-16T01:00:03Z");
+        const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
+        assert(status != nullptr);
+        assert(status->status == mqtt::ConnectionState::kOffline);
+        AssertPositionStatus(*status);
+        assert(!handler.ReplayDeviceStatuses("PI-NOT-REGISTERED", "2026-07-16T01:05:01Z"));
+    }
+
+    std::error_code error;
+    std::filesystem::remove(registry_path, error);
+}
+
 void TestMessageTypesUseDedicatedRouteHandlers() {
     const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path() / ("logistics-routing-test-" + unique);
@@ -577,6 +614,7 @@ int main() {
     TestHeartbeatIsForwardedToQtAsDeviceStatus();
     TestSensorStatusIsAcceptedAndForwardedToQt();
     TestHeartbeatTimeoutChangesAreForwardedToQt();
+    TestRetainedPositionSnapshotReplay();
     TestMessageTypesUseDedicatedRouteHandlers();
     return 0;
 }

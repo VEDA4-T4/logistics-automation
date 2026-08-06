@@ -432,6 +432,36 @@ bool MqttHandler::CheckHeartbeatTimeouts(std::string_view checked_at) {
     return published;
 }
 
+bool MqttHandler::ReplayDeviceStatuses(std::string_view target_device_id, std::string_view replayed_at) {
+    if (!qt_status_handler_) {
+        return false;
+    }
+    const bool replay_all = target_device_id == "ALL" || target_device_id == "SYSTEM";
+    const std::string fallback_timestamp = replayed_at.empty() ? CurrentIso8601Timestamp() : std::string(replayed_at);
+    bool matched = false;
+    bool published = true;
+
+    for (const auto& device : device_manager_.RegisteredDevices()) {
+        if (!replay_all && device.device_id != target_device_id) {
+            continue;
+        }
+        matched = true;
+        const mqtt::MqttMessage status_message{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "SNAPSHOT-" + device.device_id + "-" + std::to_string(++replay_message_sequence_),
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .source_id = device.device_id,
+            .timestamp = device.last_message_timestamp.empty() ? fallback_timestamp : device.last_message_timestamp,
+            .data = MakeDeviceStatusPayload(device),
+        };
+        if (!qt_status_handler_(status_message)) {
+            published = false;
+            Log(MqttHandlerLogLevel::kError, "device snapshot replay failed for " + device.device_id);
+        }
+    }
+    return matched && published;
+}
+
 void MqttHandler::Log(MqttHandlerLogLevel level, std::string_view message) const {
     if (logger_) {
         logger_(level, message);
