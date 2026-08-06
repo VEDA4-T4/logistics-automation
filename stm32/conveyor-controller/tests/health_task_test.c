@@ -446,6 +446,50 @@ static void test_sustained_queue_overflow_escalates_to_fatal(void) {
 }
 
 /*
+ * RX DMA 재시작(uartRestarts)은 파서/큐 카운터에 아무 흔적도 안 남기지만
+ * 재시작 구간에 도착한 요청 프레임은 그대로 유실된다. health_task_drop_count가
+ * 이 카운터를 놓치면 이 유실은 어떤 EVENT도 없이 조용히 사라진다.
+ */
+static void test_uart_restart_reports_transient_queue_overflow(void) {
+    reset_all();
+    HealthTask_Init();
+    health_ping_all();
+    HealthTask_RunCycle(); /* baseline snapshot */
+
+    fakeCommRxStats.uartRestarts = 1U; /* 1회만 증가 */
+    fakeTick += 100U;
+    health_ping_all();
+    HealthTask_RunCycle();
+
+    assert(safetyTriggerCalls == 0U);
+    assert(commTxSendCallCount == 2U); /* DEVICE_WIDE(COMM_RX) -> 양쪽 채널 모두 보고 */
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] ==
+           (uint8_t)HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT);
+}
+
+/*
+ * ST HAL은 TX DMA 오류 시 진행 중이던 RX도 함께 중단시키므로, tx_error만
+ * 늘어도 실제로는 요청 프레임을 놓쳤을 수 있다. dropped_* 카운터만 보던
+ * 기존 로직은 이 경우를 전혀 못 잡았다.
+ */
+static void test_tx_error_reports_transient_queue_overflow(void) {
+    reset_all();
+    HealthTask_Init();
+    health_ping_all();
+    HealthTask_RunCycle(); /* baseline snapshot */
+
+    fakeCommTxStats.tx_error[COMM_TX_CH_INPUT] = 1U; /* 1회만 증가 */
+    fakeTick += 100U;
+    health_ping_all();
+    HealthTask_RunCycle();
+
+    assert(safetyTriggerCalls == 0U);
+    assert(commTxSendCallCount == 2U); /* DEVICE_WIDE(COMM_TX) -> 양쪽 채널 모두 보고 */
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] ==
+           (uint8_t)HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT);
+}
+
+/*
  * .noinit 격 fake 레코드가 아직 유효하지 않으면(magic 불일치) NONE으로
  * 보고된다 - 첫 부팅이나 전원 손실 직후를 흉내낸다.
  */
@@ -470,6 +514,8 @@ int main(void) {
     test_late_health_cycle_does_not_underflow_sensor_age();
     test_transient_queue_overflow_reports_without_fatal();
     test_sustained_queue_overflow_escalates_to_fatal();
+    test_uart_restart_reports_transient_queue_overflow();
+    test_tx_error_reports_transient_queue_overflow();
     test_no_persisted_record_reports_none();
     return 0;
 }

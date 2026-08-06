@@ -154,7 +154,10 @@ static uint32_t health_task_drop_count(health_task_id_t id) {
         case HEALTH_TASK_COMM_RX: {
             comm_rx_stats_t stats;
             comm_rx_get_stats(&stats);
-            return stats.controlQueueDrops + stats.rxQueueDrops + stats.responseDrops;
+            /* uartRestarts: DMA 오류로 RX가 재시작되면 재시작 구간 동안 도착한 바이트는
+             * 유실된다 - 파서/큐 카운터에는 아무 흔적도 안 남지만 요청 프레임 하나를
+             * 통째로 놓친 것과 같은 효과라 여기 포함해야 감시망에 걸린다. */
+            return stats.controlQueueDrops + stats.rxQueueDrops + stats.responseDrops + stats.uartRestarts;
         }
         case HEALTH_TASK_INPUT_CONTROL: {
             input_control_task_stats_t stats;
@@ -173,8 +176,14 @@ static uint32_t health_task_drop_count(health_task_id_t id) {
         }
         case HEALTH_TASK_COMM_TX: {
             const comm_tx_stats_t* stats = CommTx_GetStats();
+            /* tx_error/tx_timeout: ST HAL은 TX DMA 오류 시 진행 중이던 RX도 함께
+             * 중단시킨다(UART_DMAError가 huart 단위로 TX/RX를 함께 정리) - TX 쪽
+             * 카운터만 보이는 사고여도 실제로는 RX 재시작(uartRestarts)과 같은
+             * 조합으로 요청이 유실될 수 있어 dropped_* 옆에 같이 감시해야 한다. */
             return stats->dropped_queue_full + stats->dropped_urgent_queue_full + stats->dropped_ring_full +
-                   stats->dropped_retry_exhausted + stats->dropped_invalid + stats->dropped_encode_error;
+                   stats->dropped_retry_exhausted + stats->dropped_invalid + stats->dropped_encode_error +
+                   stats->tx_error[COMM_TX_CH_INPUT] + stats->tx_error[COMM_TX_CH_SORTING] +
+                   stats->tx_timeout[COMM_TX_CH_INPUT] + stats->tx_timeout[COMM_TX_CH_SORTING];
         }
         case HEALTH_TASK_SENSOR:
         default:
