@@ -12,6 +12,7 @@
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
+#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>

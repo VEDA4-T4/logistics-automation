@@ -1,100 +1,95 @@
 # Logistics Automation
 
-AI CCTV, Qt 중앙관제, 중앙 서버 Raspberry Pi, 장치 Raspberry Pi, STM32와 물류 설비를 통합하는 스마트 물류
-자동화 프로젝트입니다.
+Qt 관제 시스템, 중앙 Raspberry Pi 서버, 공정별 Raspberry Pi 노드와 STM32 제어기를 MQTT·HTTP(S)·UART로
+연결하는 물류 자동화 프로젝트입니다.
 
-## Repository layout
+## 구성
 
-- `control-center/`: Qt 기반 중앙관제 및 RTSP 화면
-- `central-server-rpi/`: MQTT 메시지 처리, 장치/작업 관리, SQLite 저장
-- `device-rpi/`: 공정별 Raspberry Pi 노드와 MQTT-UART bridge
-- `stm32/`: 컨베이어, 회전, 분류, 라인트레이서 펌웨어
-- `shared/`: MQTT/UART 계약과 공통 도메인 타입
-- `deploy/`: Mosquitto 및 systemd 배포 설정
-- `docs/`: 아키텍처와 개발 문서
+```text
+Control Center (Qt/Windows)
+          │ MQTT
+          ▼
+Mosquitto ── Central Server (Raspberry Pi, SQLite, HTTP upload)
+          │ MQTT
+          ▼
+Input → Vision → Gripper → Sorting → Line Tracer
+          │
+          └─ Device Raspberry Pi ↔ UART ↔ STM32
+```
 
-상세한 디렉터리 책임은 [docs/architecture/project-structure.md](docs/architecture/project-structure.md)를 참고하세요.
+- `control-center/`: Qt 관제 화면, 공정 제어, RTSP/ONVIF 영상
+- `central-server-rpi/`: MQTT 라우팅, 공정 상태 머신, SQLite, 이미지·로그 HTTP 업로드
+- `device-rpi/`: 공정별 MQTT 노드와 STM32 UART 브리지
+- `stm32/`: Input, Gripper, Sorting, Line Tracer 펌웨어
+- `shared/`: MQTT·HTTP·UART 통신 계약
+- `deploy/`: 설치 스크립트, Mosquitto, systemd 운영 자료
 
-## Build
+상세한 책임과 의존성 규칙은 [프로젝트 구조](docs/architecture/project-structure.md)를 참고하세요.
 
-기본 빌드는 Qt가 필요 없는 중앙 서버와 장치 노드 골격을 빌드합니다.
+## 빠른 시작
+
+Ubuntu/Raspberry Pi에서 중앙서버를 준비합니다. MQTT 비밀번호는 shell history에 남기지 않도록 prompt로 입력합니다.
+
+```bash
+read -rsp 'central-server MQTT password: ' LOGISTICS_MQTT_PASSWORD; printf '\n'
+export LOGISTICS_MQTT_PASSWORD
+export LOGISTICS_UPLOAD_TOKEN='충분히-긴-임의의-토큰'
+export LOGISTICS_MQTT_HOST='mqtt.logistics.local'
+export LOGISTICS_INSTALL_DEPENDENCIES=1
+./deploy/scripts/setup-central-server.sh
+unset LOGISTICS_MQTT_PASSWORD
+```
+
+Vision Raspberry Pi에서는 중앙서버의 실제 LAN 주소를 사용합니다.
+
+```bash
+read -rsp 'PI-VISION-01 MQTT password: ' LOGISTICS_MQTT_PASSWORD; printf '\n'
+export LOGISTICS_MQTT_PASSWORD
+export LOGISTICS_CENTRAL_HOST='192.168.0.10'
+export LOGISTICS_MQTT_HOST='mqtt.logistics.local'
+export LOGISTICS_UPLOAD_TOKEN='중앙서버와-동일한-토큰'
+export LOGISTICS_DEVICE_ID='PI-VISION-01'
+export LOGISTICS_INSTALL_DEPENDENCIES=1
+export LOGISTICS_INSTALL_OPENCV=1
+./deploy/scripts/setup-vision-node.sh
+unset LOGISTICS_MQTT_PASSWORD
+```
+
+생성된 설정은 Git에서 제외되는 `runtime/` 아래에 보관됩니다. 전체 설치와 실행 순서는
+[통합 실행 가이드](docs/guides/integration-runbook.md)를 따르세요.
+
+## 문서
+
+| 목적 | 문서 |
+| --- | --- |
+| 구성 요소별 안내 | [Control Center](control-center/README.md) · [Central Server](central-server-rpi/README.md) · [Device Nodes](device-rpi/README.md) |
+| 처음 설치 | [Ubuntu/Raspberry Pi 설치](docs/setup/ubuntu-rpi.md) · [Windows Qt 설치](docs/setup/windows-control-center.md) |
+| 빌드와 테스트 | [빌드 및 테스트](docs/guides/compilation-and-tests.md) |
+| INI와 장치 주소 | [런타임 설정](docs/guides/runtime-configuration.md) |
+| 전체 시스템 실행 | [통합 실행 가이드](docs/guides/integration-runbook.md) |
+| 운영 및 장애 대응 | [운영 점검과 문제 해결](docs/guides/operations-troubleshooting.md) |
+| Mosquitto 인증·ACL·TLS | [Mosquitto 보안 및 TLS](deploy/mosquitto/README.md) |
+| MQTT·HTTP·UART 규격 | [통신 계약](docs/guides/communication-contracts.md) |
+| STM32 개발 | [STM32 안내](stm32/README.md) |
+
+전체 문서 목록은 [문서 허브](docs/README.md)에서 확인할 수 있습니다.
+
+## 기본 빌드
+
+Qt 관제 시스템을 제외한 호스트 코드는 다음 명령으로 빌드합니다.
 
 ```sh
-cmake -S . -B build
+cmake -S . -B build -G Ninja \
+  -DLOGISTICS_BUILD_CONTROL_CENTER=OFF
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Qt 6가 설치된 환경에서 중앙관제를 함께 빌드하려면 다음 옵션을 사용합니다.
+플랫폼별 의존성과 개별 타깃 명령은 [빌드 및 테스트](docs/guides/compilation-and-tests.md)에 정리되어 있습니다.
 
-```sh
-cmake -S . -B build -DLOGISTICS_BUILD_CONTROL_CENTER=ON
-```
+## 보안 주의
 
-### 중앙관제 MQTT 설정
-
-`control-center/config/control-centor.ini.example`을 `control-centor.ini`로 복사한 뒤 브로커 값을 입력합니다.
-실제 설정 파일은 접속 정보를 포함할 수 있으므로 Git에서 제외되며, 빌드할 때 실행 파일의 `config` 폴더로
-자동 복사됩니다. 다른 위치의 설정을 사용하려면 `LOGISTICS_CONTROL_CENTER_CONFIG` 환경 변수에 INI 파일의
-절대 경로를 지정합니다.
-
-```ini
-[mqtt]
-host=127.0.0.1
-port=1883
-client_id=control-center
-username=
-password=
-reconnect_interval_ms=3000
-keep_alive_seconds=30
-```
-
-연결되면 QoS 1로 중앙 서버 및 해당 클라이언트 토픽을 구독합니다. 연결이 끊기면
-`reconnect_interval_ms` 간격으로 재연결하며, 연결 및 오류 상태는 중앙관제 상태 표시줄에 나타납니다.
-
-### Qt MQTT 모듈 직접 빌드 (Windows)
-
-중앙관제의 MQTT 클라이언트는 Qt와 버전 및 toolchain이 같은 Qt MQTT 모듈이 필요합니다. 아래 명령은
-Qt 6.11.1, MinGW 13.1 64-bit, CMake 3.30, Ninja 환경을 기준으로 합니다. Qt 버전을 변경하면
-`QtRoot`, 소스 태그와 도구 경로를 함께 변경해야 합니다.
-
-```powershell
-$QtRoot = "C:/Qt/6.11.1/mingw_64"
-$Work = Join-Path $env:TEMP "qtmqtt-6.11.1"
-$env:PATH = "C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;C:\Qt\Tools\CMake_64\bin;$QtRoot/bin;$env:PATH"
-
-git clone --branch v6.11.1 --depth 1 https://github.com/qt/qtmqtt.git "$Work/src"
-New-Item -ItemType Directory -Path "$Work/build" -Force | Out-Null
-
-Push-Location "$Work/build"
-& "$QtRoot/bin/qt-configure-module.bat" "$Work/src" -cmake-generator Ninja -- `
-    "-DCMAKE_BUILD_TYPE=Release" `
-    "-DCMAKE_INSTALL_PREFIX:PATH=$QtRoot" `
-    "-DQT_BUILD_TESTS=OFF" `
-    "-DQT_BUILD_EXAMPLES=OFF"
-Pop-Location
-
-cmake --build "$Work/build" --parallel
-cmake --install "$Work/build"
-
-Test-Path "$QtRoot/lib/cmake/Qt6Mqtt/Qt6MqttConfig.cmake"
-Remove-Item -LiteralPath $Work -Recurse -Force
-```
-
-`cmake --install`에서 권한 오류가 발생하면 관리자 PowerShell에서 설치 명령만 다시 실행합니다. 설치 확인
-명령은 `True`를 반환해야 합니다. 프로젝트에서는 다음과 같이 모듈을 탐색하고 링크합니다.
-
-```cmake
-find_package(Qt6 REQUIRED COMPONENTS Mqtt)
-target_link_libraries(logistics_control_center PRIVATE Qt6::Mqtt)
-```
-
-Qt Creator 밖에서 실행 파일을 직접 실행하거나 배포할 때는 Qt DLL을 실행 파일 옆에 배치해야 합니다.
-
-```powershell
-& "$QtRoot/bin/windeployqt.exe" --release path\to\logistics_control_center.exe
-```
-
-Qt MQTT는 상용 라이선스 또는 GPLv3로 제공되므로 배포 전에 프로젝트 라이선스와의 호환성을 확인합니다.
-
-STM32 펌웨어는 호스트 빌드에서 제외되며 STM32CubeIDE 또는 ARM toolchain으로 각 controller를 빌드합니다.
+- 실제 `.ini`, 비밀번호, 업로드 토큰, 개인키는 커밋하지 않습니다.
+- 다른 기기에서 중앙서버에 접속할 때 `127.0.0.1` 대신 중앙서버의 LAN 주소 또는 DNS 이름을 사용합니다.
+- MQTT 클라이언트는 CA 검증을 사용하는 TLS `8883`을 지원합니다. 설정의 `host`는 broker 서버 인증서 SAN에 포함된
+  DNS 이름 또는 IP여야 합니다.
