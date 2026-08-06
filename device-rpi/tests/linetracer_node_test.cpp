@@ -319,11 +319,35 @@ void TestInitializeWithCurrentPositionSendsResetThenPosition() {
 
     fixture.AcknowledgeLastFrame();
     assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_B);
-    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.size() == 2U);
     const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
     assert(response.request_id == "REQ-CONTROL-01");
     assert(response.command == mqtt::ControlCommand::kInitialize);
     assert(response.result == mqtt::CommandResult::kSuccess);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
+    assert(status.movement_state == "IDLE");
+    assert(status.departure_position->area == "DEPARTURE");
+    assert(status.departure_position->location == "B");
+    assert(status.target_position->area == "DEPARTURE");
+    assert(status.target_position->location == "B");
+    assert(status.confirmed_position->area == "DEPARTURE");
+    assert(status.confirmed_position->location == "B");
+}
+
+void TestInitializeAcceptsStructuredCurrentPosition() {
+    Fixture fixture;
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kInitialize, "PI-LT-01",
+                    { { "currentPosition", { { "area", "DESTINATION" }, { "location", "C" } } } }));
+
+    assert(result.Succeeded());
+    fixture.AcknowledgeLastFrame(true);
+    fixture.AcknowledgeLastFrame();
+
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.back());
+    assert(status.confirmed_position->area == "DESTINATION");
+    assert(status.confirmed_position->location == "C");
+    assert(status.movement_state == "IDLE");
 }
 
 void TestInvalidCurrentPositionIsRejectedWithoutUartWrite() {
@@ -551,13 +575,23 @@ void TestAcceptedAssignReportsSuccessAfterAck() {
 
     fixture.AcknowledgeLastFrame();
 
-    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.size() == 2U);
     assert(fixture.reports.front().channel == LineTracerReportChannel::kResponse);
     const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
     assert(response.request_id == "REQ-DEST-01");
     assert(response.command == mqtt::ControlCommand::kDestinationSet);
     assert(response.result == mqtt::CommandResult::kSuccess);
     assert(!response.error_code.has_value());
+
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
+    assert(status.current_state == "MOVING");
+    assert(status.movement_state == "MOVING");
+    assert(status.departure_position->area == "DEPARTURE");
+    assert(status.departure_position->location == "A");
+    assert(status.target_position->area == "DESTINATION");
+    assert(status.target_position->location == "B");
+    assert(status.confirmed_position->area == "DEPARTURE");
+    assert(status.confirmed_position->location == "A");
 }
 
 void TestStateAndArrivalEventsReportPickupReady() {
@@ -574,6 +608,25 @@ void TestStateAndArrivalEventsReportPickupReady() {
         const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(report);
         assert(status.current_state == "PICKUP_READY_B");
         assert(status.job_id == kWorkId);
+        assert(status.movement_state == "MOVING");
+        assert(status.confirmed_position->area == "DEPARTURE");
+        assert(status.confirmed_position->location == "A");
+    }
+}
+
+void TestFinalArrivalConfirmsTargetPosition() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_STATE_CHANGED, UART_LINETRACER_STATE_ARRIVED);
+    fixture.PushEvent(UART_LINETRACER_EVENT_ARRIVED);
+
+    assert(fixture.reports.size() == 2U);
+    for (const auto& report : fixture.reports) {
+        const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(report);
+        assert(status.movement_state == "ARRIVED");
+        assert(status.confirmed_position->area == "DESTINATION");
+        assert(status.confirmed_position->location == "B");
     }
 }
 
@@ -599,6 +652,9 @@ void TestUnloadCompleteReportsCompletionAndClearsMapping() {
     const auto& load_off = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[0]);
     assert(load_off.current_state == "LOAD_OFF_B");
     assert(load_off.job_id == kWorkId);
+    assert(load_off.movement_state == "ARRIVED");
+    assert(load_off.confirmed_position->area == "DESTINATION");
+    assert(load_off.confirmed_position->location == "B");
 
     assert(fixture.reports[1].channel == LineTracerReportChannel::kEvent);
     assert(fixture.reports[1].message_type == mqtt::MessageType::kWorkCompleted);
@@ -609,6 +665,9 @@ void TestUnloadCompleteReportsCompletionAndClearsMapping() {
     const auto& parked = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[2]);
     assert(parked.current_state == "PARKED_B");
     assert(!parked.job_id.has_value());
+    assert(parked.movement_state == "IDLE");
+    assert(parked.confirmed_position->area == "DESTINATION");
+    assert(parked.confirmed_position->location == "B");
     assert(!fixture.node->HasActiveJob());
     assert(fixture.node->ActiveWorkId().empty());
     assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_B);
@@ -748,6 +807,7 @@ void TestDisconnectedUartStopsKeepalive() {
 int main() {
     TestDestinationMapsToAssignRoute();
     TestInitializeWithCurrentPositionSendsResetThenPosition();
+    TestInitializeAcceptsStructuredCurrentPosition();
     TestInvalidCurrentPositionIsRejectedWithoutUartWrite();
     TestDestinationRequiresKnownCurrentPosition();
     TestStopUsesActiveJobId();
@@ -765,6 +825,7 @@ int main() {
     TestRejectedAssignDoesNotActivateJob();
     TestAcceptedAssignReportsSuccessAfterAck();
     TestStateAndArrivalEventsReportPickupReady();
+    TestFinalArrivalConfirmsTargetPosition();
     TestLoadDetectedReportsLoadOn();
     TestUnloadCompleteReportsCompletionAndClearsMapping();
     TestFaultReportsMappedError();

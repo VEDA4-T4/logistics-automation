@@ -225,18 +225,15 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     };
 }
 
-[[nodiscard]] LineTracerReport MakeUartStatus(std::string current_state, std::optional<std::string> job_id,
+[[nodiscard]] LineTracerReport MakeUartStatus(const LineTracerNode& node, std::string current_state,
+                                              std::optional<std::string> job_id,
                                               std::optional<std::string> error_code) {
     return {
         .channel = LineTracerReportChannel::kStatus,
         .message_type = mqtt::MessageType::kDeviceStatus,
-        .data =
-            mqtt::DeviceStatusPayload{
-                .status = error_code.has_value() ? mqtt::ConnectionState::kUartError : mqtt::ConnectionState::kOnline,
-                .current_state = std::move(current_state),
-                .job_id = std::move(job_id),
-                .error_code = std::move(error_code),
-            },
+        .data = node.MakeDeviceStatusPayload(
+            error_code.has_value() ? mqtt::ConnectionState::kUartError : mqtt::ConnectionState::kOnline,
+            std::move(current_state), std::move(job_id), std::move(error_code)),
     };
 }
 
@@ -344,7 +341,7 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
                 device_status->SetUartConnected(true);
                 uart_disconnected_reported = false;
                 uart_failure_pending = false;
-                queue_report(MakeUartStatus(line_tracer.HasActiveJob() ? "UART_RECONNECTED" : "IDLE",
+                queue_report(MakeUartStatus(line_tracer, line_tracer.HasActiveJob() ? "UART_RECONNECTED" : "IDLE",
                                             ActiveWorkId(line_tracer), std::nullopt));
                 std::clog << "[linetracer][uart][INFO] connected: " << uart_path << '\n';
             } else {
@@ -409,8 +406,8 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
         if (uart_failure_pending && !uart_disconnected_reported) {
             uart_session.Close();
             device_status->SetUartConnected(false);
-            queue_report(
-                MakeUartStatus("UART_DISCONNECTED", ActiveWorkId(line_tracer), std::string("ERR-UART-DISCONNECTED")));
+            queue_report(MakeUartStatus(line_tracer, "UART_DISCONNECTED", ActiveWorkId(line_tracer),
+                                        std::string("ERR-UART-DISCONNECTED")));
             uart_disconnected_reported = true;
             uart_failure_pending = false;
             next_uart_reconnect = Clock::now() + kUartReconnectInterval;

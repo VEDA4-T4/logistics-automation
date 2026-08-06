@@ -219,6 +219,45 @@ void TestAllMqttMessageRoundTrips() {
                                                               }));
 }
 
+void TestLineTracerPositionStatusRoundTrip() {
+    const auto original =
+        MakeMessage("MSG-LT-POSITION-01", mqtt::MessageType::kDeviceStatus,
+                    mqtt::DeviceStatusPayload{
+                        .status = mqtt::ConnectionState::kOnline,
+                        .current_state = "FOLLOWING_LINE",
+                        .job_id = std::string(kTestWorkId),
+                        .error_code = std::nullopt,
+                        .departure_position = mqtt::LineTracerPositionPayload{ .area = "DEPARTURE", .location = "A" },
+                        .target_position = mqtt::LineTracerPositionPayload{ .area = "DESTINATION", .location = "C" },
+                        .confirmed_position = mqtt::LineTracerPositionPayload{ .area = "DEPARTURE", .location = "A" },
+                        .movement_state = std::string("MOVING"),
+                    });
+
+    const auto encoded = mqtt::SerializeMessage(original);
+    assert(encoded.IsSuccess());
+    const auto json = mqtt::Json::parse(encoded.payload);
+    const auto& data = json.at("data");
+    assert(data.at("departurePosition").at("area") == "DEPARTURE");
+    assert(data.at("departurePosition").at("location") == "A");
+    assert(data.at("targetPosition").at("area") == "DESTINATION");
+    assert(data.at("targetPosition").at("location") == "C");
+    assert(data.at("confirmedPosition").at("area") == "DEPARTURE");
+    assert(data.at("confirmedPosition").at("location") == "A");
+    assert(data.at("movementState") == "MOVING");
+
+    const auto decoded = mqtt::DeserializeMessage(encoded.payload);
+    assert(decoded.IsSuccess());
+    const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(decoded.value);
+    assert(status != nullptr);
+    assert(status->departure_position->area == "DEPARTURE");
+    assert(status->departure_position->location == "A");
+    assert(status->target_position->area == "DESTINATION");
+    assert(status->target_position->location == "C");
+    assert(status->confirmed_position->area == "DEPARTURE");
+    assert(status->confirmed_position->location == "A");
+    assert(status->movement_state == "MOVING");
+}
+
 void TestMqttCodecInvalidInputs() {
     const auto malformed_json = mqtt::DeserializeMessage("{");
     assert(!malformed_json.IsSuccess());
@@ -649,6 +688,7 @@ int main() {
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 15 }) == mqtt::ConnectionState::kOffline);
 
     TestAllMqttMessageRoundTrips();
+    TestLineTracerPositionStatusRoundTrip();
     TestMqttCodecInvalidInputs();
     TestMqttTimestampValidation();
     TestMqttTopicMessageValidation();
