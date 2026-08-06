@@ -56,8 +56,27 @@ typedef struct {
     uint32_t last_ultrasonic_start_ms;
     uint32_t reported_safety_error_flags;
     uint8_t reported_safety_obstacle_mask;
-    uint8_t next_ultrasonic_index;
+    uint8_t next_ultrasonic_slot;
 } sensor_task_context_t;
+
+enum {
+    SENSOR_ULTRASONIC_FRONT_INDEX = 0U,
+    SENSOR_ULTRASONIC_REAR_INDEX,
+    SENSOR_ULTRASONIC_LEFT_INDEX,
+    SENSOR_ULTRASONIC_RIGHT_INDEX
+};
+
+/*
+ * Keep one transmitter active at a time, but sample the front sensor in
+ * three-sample bursts so a real obstacle
+ * can stop the vehicle promptly.
+ */
+static const uint8_t s_ultrasonic_measurement_schedule[] = {
+    SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_FRONT_INDEX,
+    SENSOR_ULTRASONIC_REAR_INDEX,  SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_FRONT_INDEX,
+    SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_LEFT_INDEX,  SENSOR_ULTRASONIC_FRONT_INDEX,
+    SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_FRONT_INDEX, SENSOR_ULTRASONIC_RIGHT_INDEX,
+};
 
 static const ultrasonic_sensor_descriptor_t s_ultrasonic_sensors[SENSOR_LOGIC_ULTRASONIC_COUNT] = {
     {
@@ -595,13 +614,13 @@ void StartSensorTask(void* argument) {
             SensorLogic_UpdateUltrasonic(&context.logic, ultrasonic_result.sensor_index,
                                          PulseWidthToMillimeters(ultrasonic_result.pulse_width_us),
                                          ultrasonic_result.valid, now_ms, &update);
-            context.next_ultrasonic_index =
-                (uint8_t)((ultrasonic_result.sensor_index + 1U) % SENSOR_LOGIC_ULTRASONIC_COUNT);
+            context.next_ultrasonic_slot =
+                (uint8_t)((context.next_ultrasonic_slot + 1U) % sizeof(s_ultrasonic_measurement_schedule));
         }
 
         if ((ultrasonic_timer_ready != 0U) && (s_ultrasonic_capture_state == ULTRASONIC_CAPTURE_IDLE) &&
             (TimeElapsed(now_ms, context.last_ultrasonic_start_ms, APP_TIMING_ULTRASONIC_PERIOD_MS) != 0U)) {
-            uint8_t sensor_index = context.next_ultrasonic_index;
+            uint8_t sensor_index = s_ultrasonic_measurement_schedule[context.next_ultrasonic_slot];
 
             context.last_ultrasonic_start_ms = now_ms;
             if (StartUltrasonicMeasurement(sensor_index, now_ms) != 0U) {

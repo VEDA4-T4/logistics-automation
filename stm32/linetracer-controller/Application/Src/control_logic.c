@@ -342,6 +342,15 @@ uint8_t ControlLogic_StateCanResume(linetracer_control_state_t state) {
     }
 }
 
+static uint8_t ControlLogic_StateCanPauseForObstacle(linetracer_control_state_t state) {
+    if (state == LINETRACER_CONTROL_INITIALIZING || state == LINETRACER_CONTROL_WAITING_AT_DEST ||
+        state == LINETRACER_CONTROL_UNLOADING) {
+        return 1U;
+    }
+
+    return ControlLogic_StateCanResume(state);
+}
+
 static uint8_t ControlLogic_NormalTransitionIsAllowed(const control_context_t* context,
                                                       linetracer_control_state_t next_state) {
     switch (context->state) {
@@ -396,6 +405,9 @@ static uint8_t ControlLogic_NormalTransitionIsAllowed(const control_context_t* c
 
         case LINETRACER_CONTROL_STOPPED:
             return ControlLogic_StateCanResume(next_state);
+
+        case LINETRACER_CONTROL_OBSTACLE_STOP:
+            return ControlLogic_StateCanPauseForObstacle(next_state);
 
         case LINETRACER_CONTROL_ERROR:
             return (next_state == LINETRACER_CONTROL_INITIALIZING) ? 1U : 0U;
@@ -478,6 +490,39 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
     }
 
     switch (event->type) {
+        case APP_CONTROL_SAFETY_OBSTACLE_ACTIVE:
+            if (context->safety_latched != 0U || ControlLogic_StateCanPauseForObstacle(context->state) == 0U) {
+                return 0U;
+            }
+
+            context->resume_state = context->state;
+            context->resume_valid = 1U;
+            context->stop_reason = LINETRACER_STOP_REASON_OBSTACLE;
+            context->safety_error_code = UART_ERROR_SENSOR;
+            context->junction_condition_active = 0U;
+            context->junction_candidate_active = 0U;
+            return ControlLogic_Transition(context, LINETRACER_CONTROL_OBSTACLE_STOP, now_ms);
+
+        case APP_CONTROL_SAFETY_OBSTACLE_CLEARED:
+            if (context->safety_latched != 0U || context->state != LINETRACER_CONTROL_OBSTACLE_STOP ||
+                context->resume_valid == 0U) {
+                return 0U;
+            }
+
+            context->stop_reason = LINETRACER_STOP_REASON_NONE;
+            context->safety_error_code = UART_ERROR_NONE;
+            if (ControlLogic_Transition(context, context->resume_state, now_ms) == 0U) {
+                context->stop_reason = LINETRACER_STOP_REASON_OBSTACLE;
+                context->safety_error_code = UART_ERROR_SENSOR;
+                return 0U;
+            }
+            context->resume_valid = 0U;
+            if (ControlLogic_IsTurning(context) != 0U) {
+                context->junction_phase_started_at_ms = now_ms;
+                context->junction_turn_started_at_ms = now_ms;
+            }
+            return 1U;
+
         case APP_CONTROL_SAFETY_LATCHED:
         case APP_CONTROL_SAFETY_RESET_REJECTED:
             reason = event->reason;
@@ -1239,9 +1284,10 @@ linetracer_stop_reason_t ControlLogic_CheckRouteTimeout(control_context_t* conte
 
     /*
      * Demo tracks can have different branch lengths and turning radii. When
-     * route timeouts are disabled, progress is driven only by confirmed line,
+     * route timeouts are disabled,
+     * progress is driven only by confirmed line,
      * marker, and load events instead of wall-clock deadlines.
-     */
+ */
     if (CONTROL_ROUTE_TIMEOUTS_ENABLED == 0U) {
         (void)now_ms;
         return LINETRACER_STOP_REASON_NONE;

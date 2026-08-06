@@ -119,16 +119,42 @@ void TestObstacleSafetyState() {
     control_context_t context{};
     ControlLogic_Init(&context, 200U);
 
+    auto position = MakeCommand(APP_CONTROL_COMMAND_SET_CURRENT_POSITION, 201U, 1U);
+    position.position = UART_LINETRACER_POSITION_DEST_B;
+    assert(ControlLogic_HandleCommand(&context, &position, 201U).accepted != 0U);
+
+    auto assign = MakeCommand(APP_CONTROL_COMMAND_ASSIGN_ROUTE, 202U, 2U);
+    assign.job_id = 55U;
+    assign.route_id = UART_LINETRACER_ROUTE_C;
+    assert(ControlLogic_HandleCommand(&context, &assign, 202U).accepted != 0U);
+    const auto moving_state = context.state;
+
     app_control_safety_event_t safety_event{};
-    safety_event.type = APP_CONTROL_SAFETY_LATCHED;
+    safety_event.type = APP_CONTROL_SAFETY_OBSTACLE_ACTIVE;
     safety_event.reason = LINETRACER_STOP_REASON_OBSTACLE;
     safety_event.error_code = UART_ERROR_SENSOR;
 
     assert(ControlLogic_ApplySafetyEvent(&context, &safety_event, 210U) != 0U);
-    assert(context.safety_latched != 0U);
+    assert(context.safety_latched == 0U);
     assert(context.state == LINETRACER_CONTROL_OBSTACLE_STOP);
     assert(context.stop_reason == LINETRACER_STOP_REASON_OBSTACLE);
     assert(context.safety_error_code == UART_ERROR_SENSOR);
+    assert(context.resume_valid != 0U);
+    assert(context.resume_state == moving_state);
+    assert(context.route_active != 0U);
+    assert(context.active_job_id == 55U);
+
+    safety_event.type = APP_CONTROL_SAFETY_OBSTACLE_CLEARED;
+    safety_event.reason = LINETRACER_STOP_REASON_NONE;
+    safety_event.error_code = UART_ERROR_NONE;
+    assert(ControlLogic_ApplySafetyEvent(&context, &safety_event, 220U) != 0U);
+    assert(context.state == moving_state);
+    assert(context.safety_latched == 0U);
+    assert(context.stop_reason == LINETRACER_STOP_REASON_NONE);
+    assert(context.safety_error_code == UART_ERROR_NONE);
+    assert(context.resume_valid == 0U);
+    assert(context.route_active != 0U);
+    assert(context.active_job_id == 55U);
 }
 
 void TestRouteStopAndResume() {
@@ -327,7 +353,6 @@ void TestUnclassifiedMarkerIsRejected() {
     assert(context.stop_reason == LINETRACER_STOP_REASON_MARKER_SEQUENCE);
 }
 
-
 void TestRouteTimeouts() {
     control_context_t context{};
 
@@ -370,8 +395,7 @@ void TestRouteTimeouts() {
     context.state = LINETRACER_CONTROL_TURNING_AT_PICKUP;
     context.pending_route_action = ROUTE_ACTION_TURN_AROUND;
     context.state_entered_at_ms = 20100U;
-    assert(ControlLogic_CheckRouteTimeout(&context, 20100U + CONTROL_TURN_TIMEOUT_MS) ==
-           LINETRACER_STOP_REASON_NONE);
+    assert(ControlLogic_CheckRouteTimeout(&context, 20100U + CONTROL_TURN_TIMEOUT_MS) == LINETRACER_STOP_REASON_NONE);
     assert(ControlLogic_CheckRouteTimeout(&context, 20100U + CONTROL_UTURN_TIMEOUT_MS - 1U) ==
            LINETRACER_STOP_REASON_NONE);
     assert(ControlLogic_CheckRouteTimeout(&context, 20100U + CONTROL_UTURN_TIMEOUT_MS) ==

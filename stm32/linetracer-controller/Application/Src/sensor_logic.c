@@ -730,11 +730,24 @@ void SensorLogic_CheckStaleness(sensor_logic_context_t* context, uint32_t now_ms
 }
 
 uint32_t SensorLogic_GetEffectiveSafetyErrorFlags(uint32_t raw_error_flags) {
-    return raw_error_flags & ~((uint32_t)SENSOR_ROUTE_TEST_IGNORED_ERROR_FLAGS);
+    uint32_t effective_flags = raw_error_flags & ~((uint32_t)SENSOR_ROUTE_TEST_IGNORED_ERROR_FLAGS);
+
+#if SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY
+    effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_REAR | (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT |
+                         (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
+#endif
+
+    return effective_flags;
 }
 
 uint8_t SensorLogic_GetEffectiveSafetyObstacleMask(uint8_t raw_obstacle_mask) {
-    return raw_obstacle_mask & (uint8_t)~((uint8_t)SENSOR_ROUTE_TEST_IGNORED_OBSTACLE_MASK);
+    uint8_t effective_mask = raw_obstacle_mask & (uint8_t)~((uint8_t)SENSOR_ROUTE_TEST_IGNORED_OBSTACLE_MASK);
+
+#if SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY
+    effective_mask &= (uint8_t)SENSOR_LOGIC_DIRECTION_FRONT;
+#endif
+
+    return effective_mask;
 }
 
 const app_sensor_snapshot_t* SensorLogic_GetSnapshot(const sensor_logic_context_t* context) {

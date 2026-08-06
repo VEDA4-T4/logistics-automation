@@ -21,6 +21,8 @@ static uint8_t controlTaskMotorReady;
 static uint32_t controlTaskStartBoostUntilMs;
 static volatile uint8_t controlTaskInitialized;
 
+static void ControlTask_PublishStateChanged(uint32_t now_ms);
+
 typedef struct {
     app_tx_event_t event;
     uint32_t retry_at_ms;
@@ -207,11 +209,16 @@ static void ControlTask_ProcessSafetyEvents(void) {
         controlTaskStartBoostUntilMs = 0U;
         MotorControl_ForceStop();
         if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
-            app_tx_event_t fault_event;
+            if (event.type == APP_CONTROL_SAFETY_LATCHED || event.type == APP_CONTROL_SAFETY_RESET_REJECTED) {
+                app_tx_event_t fault_event;
 
-            if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
-                                                   &fault_event) != 0U) {
-                ControlTask_PublishTxEvent(&fault_event, now_ms);
+                if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
+                                                       &fault_event) != 0U) {
+                    ControlTask_PublishTxEvent(&fault_event, now_ms);
+                }
+            } else if (event.type == APP_CONTROL_SAFETY_OBSTACLE_ACTIVE ||
+                       event.type == APP_CONTROL_SAFETY_OBSTACLE_CLEARED) {
+                ControlTask_PublishStateChanged(now_ms);
             }
             ControlTask_PublishSafetyResetResult(&event, now_ms);
         }
