@@ -410,6 +410,11 @@ void TestInitializeMapsToResetAndClearsActiveJob() {
     assert(!fixture.node->HasActiveJob());
     assert(fixture.node->ActiveWorkId().empty());
     assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_NONE);
+    assert(!fixture.reports.empty());
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
+    assert(status != nullptr);
+    assert(status->current_state == "POSITION_UNKNOWN");
+    assert(status->position_reset);
 }
 
 void TestRecoveryUsesCommonDeviceResetAndClearsActiveJob() {
