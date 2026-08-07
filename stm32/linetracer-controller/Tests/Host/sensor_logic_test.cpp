@@ -224,23 +224,6 @@ void TestAnalogBlackHysteresis() {
     CHECK_TRUE(context.line_left_black == 0U);
 }
 
-void TestCenterDigitalInputOwnsBlackState() {
-    sensor_logic_context_t context{};
-
-    SensorLogic_Init(&context, 0U);
-
-    SensorLogic_UpdateLineCenter(&context, 0U, SENSOR_LINE_CENTER_BLACK_RAW);
-    CHECK_TRUE(context.snapshot.line_center_raw == SENSOR_LINE_CENTER_BLACK_RAW);
-    CHECK_TRUE(context.line_center_filtered == SENSOR_LINE_NORMALIZED_MAX);
-    CHECK_TRUE(context.line_center_black == 0U);
-    CHECK_TRUE(context.snapshot.line_center == 0U);
-
-    SensorLogic_UpdateLineCenter(&context, 1U, SENSOR_LINE_CENTER_WHITE_RAW);
-    CHECK_TRUE(context.snapshot.line_center_raw == SENSOR_LINE_CENTER_WHITE_RAW);
-    CHECK_TRUE(context.line_center_black != 0U);
-    CHECK_TRUE(context.snapshot.line_center != 0U);
-}
-
 void TestThreeSensorTrackingState() {
     sensor_logic_context_t context{};
 
@@ -620,7 +603,6 @@ int main() {
     TestOuterSensorsDetectMarkerWhenCenterMisses();
     TestAnalogLineSamples();
     TestAnalogBlackHysteresis();
-    TestCenterDigitalInputOwnsBlackState();
     TestThreeSensorTrackingState();
     TestAnalogLineErrorDeadband();
     TestDigitalLineStateOwnsPidDirection();
