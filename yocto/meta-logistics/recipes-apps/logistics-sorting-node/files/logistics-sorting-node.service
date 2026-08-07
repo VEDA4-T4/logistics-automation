@@ -1,7 +1,7 @@
 [Unit]
 Description=Logistics Sorting Conveyor Node
-Wants=network-online.target
-After=network-online.target systemd-modules-load.service
+Wants=network.target
+After=network.target systemd-modules-load.service
 ConditionPathExists=/etc/logistics/sorting-node.ini
 ConditionPathExists=/etc/logistics/tls/ca.crt
 
