@@ -28,6 +28,7 @@ void TestCommonValidationDoesNotTruncateWideValues() {
     assert(UART_IS_VALID_COMMAND(0x101U) == 0U);
     assert(UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(UART_CMD_PING, 0U) != 0U);
     assert(UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(UART_CMD_PING, 256U) == 0U);
+    assert(uart_app_error_is_valid(UART_ERROR_SPEED_NOT_CONFIGURED) != 0U);
 }
 
 void TestInputPayloadValidation() {

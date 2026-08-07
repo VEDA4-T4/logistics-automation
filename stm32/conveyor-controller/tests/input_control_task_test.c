@@ -335,6 +335,11 @@ static void test_operation_results(void) {
     assert(request.frame.command == UART_CMD_OPERATION_RESULT);
     assert(request.frame.length == UART_OPERATION_RESULT_PAYLOAD_SIZE);
     assert(request.frame.payload[UART_OPERATION_RESULT_STATUS_INDEX] == UART_STATUS_ERROR);
+    assert(request.frame.payload[UART_OPERATION_RESULT_ERROR_INDEX] == UART_ERROR_SPEED_NOT_CONFIGURED);
+
+    message = command_message(0x45U, UART_CMD_INPUT_CONVEYOR_SET_SPEED, NULL, 0U);
+    assert(input_control_task_process_message(&controller, &message) == INPUT_CONTROL_INVALID_PAYLOAD);
+    request = pop_tx();
     assert(request.frame.payload[UART_OPERATION_RESULT_ERROR_INDEX] == UART_ERROR_INVALID_PAYLOAD);
 
     message = command_message(0x41U, UART_CMD_INPUT_CONVEYOR_SET_SPEED, speed, sizeof(speed));

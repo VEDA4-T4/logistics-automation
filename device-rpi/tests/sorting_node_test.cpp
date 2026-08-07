@@ -422,6 +422,36 @@ void TestStartConfiguresSpeedBeforeStartingConveyor() {
     assert(response.result == mqtt::CommandResult::kSuccess);
 }
 
+void TestStartResendsCachedSpeedAfterControllerRestart() {
+    Fixture fixture;
+    mqtt::Json params = mqtt::Json::object();
+    params["speed"] = 70;
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, {}, params)).Succeeded());
+    fixture.PushOperationResult();
+    fixture.PushOperationResult();
+
+    fixture.node->ResetControllerHeartbeatMonitor();
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart)).Succeeded());
+
+    const auto command = fixture.LastCommand();
+    assert(command.command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
+    assert(command.payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 70U);
+}
+
+void TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload() {
+    Fixture speed_fixture;
+    assert(speed_fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    speed_fixture.PushOperationResult(UART_STATUS_ERROR, UART_ERROR_SPEED_NOT_CONFIGURED);
+    const auto& speed_response = ReportPayload<mqtt::CommandResponsePayload>(speed_fixture.reports.front());
+    assert(speed_response.error_code == "ERR-SPEED-NOT-CONFIGURED");
+
+    Fixture payload_fixture;
+    assert(payload_fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    payload_fixture.PushOperationResult(UART_STATUS_NACK, UART_ERROR_INVALID_PAYLOAD);
+    const auto& payload_response = ReportPayload<mqtt::CommandResponsePayload>(payload_fixture.reports.front());
+    assert(payload_response.error_code == "ERR-UART-PAYLOAD");
+}
+
 void TestEmergencyStopPreemptsPendingCommandAndIsNotRetried() {
     Fixture fixture;
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
@@ -704,6 +734,8 @@ int main() {
     TestNackDoesNotActivateCycleAndReportsFailure();
     TestControllerErrorsDistinguishRejectionFromFailure();
     TestStartConfiguresSpeedBeforeStartingConveyor();
+    TestStartResendsCachedSpeedAfterControllerRestart();
+    TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload();
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
     TestSafetyRecoveryUsesOneWayDeviceReset();
     TestPendingSafetyCommandCannotBeOverwritten();

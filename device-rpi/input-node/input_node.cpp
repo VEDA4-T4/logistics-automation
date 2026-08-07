@@ -22,6 +22,7 @@ namespace mqtt = contracts::mqtt;
         case InputCommandStatus::kRejected:
         case InputCommandStatus::kUnsupportedMessage:
         case InputCommandStatus::kUnsupportedCommand:
+        case InputCommandStatus::kInvalidSpeed:
         case InputCommandStatus::kInvalidTarget:
             return mqtt::CommandResult::kRejected;
         case InputCommandStatus::kControllerFailure:
@@ -86,6 +87,8 @@ namespace mqtt = contracts::mqtt;
             return "ERR-EMERGENCY-STOP";
         case UART_ERROR_INVALID_PAYLOAD:
             return "ERR-UART-INVALID-PAYLOAD";
+        case UART_ERROR_SPEED_NOT_CONFIGURED:
+            return "ERR-SPEED-NOT-CONFIGURED";
         case UART_ERROR_UNSUPPORTED_COMMAND:
             return "ERR-UART-UNSUPPORTED";
         case UART_ERROR_INTERNAL:
@@ -111,6 +114,8 @@ namespace mqtt = contracts::mqtt;
             return std::string("ERR-UART-IO");
         case InputCommandStatus::kInvalidTarget:
             return std::string("ERR-MQTT-INVALID-TARGET");
+        case InputCommandStatus::kInvalidSpeed:
+            return std::string("ERR-SPEED-INVALID");
         case InputCommandStatus::kUnsupportedMessage:
         case InputCommandStatus::kUnsupportedCommand:
             return std::string("ERR-UNSUPPORTED-COMMAND");
@@ -120,13 +125,30 @@ namespace mqtt = contracts::mqtt;
     return std::string("ERR-INTERNAL");
 }
 
-[[nodiscard]] std::optional<std::uint8_t> SpeedFromParams(const mqtt::Json& params) {
+[[nodiscard]] std::optional<std::uint8_t> SpeedFromParams(const mqtt::Json& params, bool& invalid) {
+    invalid = false;
     const auto iterator = params.find("speed");
-    if (iterator == params.end() || !iterator->is_number_integer()) {
+    if (iterator == params.end()) {
         return std::nullopt;
     }
-    const auto value = iterator->get<std::int64_t>();
-    if (value < UART_INPUT_CONVEYOR_SPEED_MIN || value > UART_INPUT_CONVEYOR_SPEED_MAX) {
+    if (!iterator->is_number_integer() && !iterator->is_number_unsigned()) {
+        invalid = true;
+        return std::nullopt;
+    }
+
+    std::uint64_t value = 0U;
+    if (iterator->is_number_unsigned()) {
+        value = iterator->get<std::uint64_t>();
+    } else {
+        const auto signed_value = iterator->get<std::int64_t>();
+        if (signed_value <= UART_INPUT_CONVEYOR_SPEED_MIN) {
+            invalid = true;
+            return std::nullopt;
+        }
+        value = static_cast<std::uint64_t>(signed_value);
+    }
+    if (value == 0U || value > UART_INPUT_CONVEYOR_SPEED_MAX) {
+        invalid = true;
         return std::nullopt;
     }
     return static_cast<std::uint8_t>(value);
@@ -247,10 +269,10 @@ struct ControllerEventDescription {
 
 }  // namespace
 
-InputNode::InputNode(std::string device_id, InputUartSession& uart_session)
-    : device_id_(std::move(device_id)), uart_session_(uart_session) {
-    if (!mqtt::IsValidTopicLevel(device_id_)) {
-        throw std::invalid_argument("input device ID must be one non-wildcard MQTT topic level");
+InputNode::InputNode(std::string device_id, InputUartSession& uart_session, const std::uint8_t default_speed)
+    : device_id_(std::move(device_id)), uart_session_(uart_session), default_speed_(default_speed) {
+    if (!mqtt::IsValidTopicLevel(device_id_) || default_speed == 0U || default_speed > UART_INPUT_CONVEYOR_SPEED_MAX) {
+        throw std::invalid_argument("input device ID or default speed is invalid");
     }
 }
 
@@ -353,13 +375,19 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
 
     switch (action) {
         case DeviceControlAction::kStart: {
-            if (const auto speed = SpeedFromParams(command.params); speed.has_value()) {
-                const std::array<std::uint8_t, UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE> speed_payload{ *speed };
-                InputCommandResult speed_result = Execute(result, UART_CMD_INPUT_CONVEYOR_SET_SPEED, speed_payload);
-                if (!speed_result.Succeeded()) {
-                    EmitCommandResponse(speed_result, "input conveyor speed could not be set");
-                    return speed_result;
-                }
+            bool invalid_speed = false;
+            const auto speed = SpeedFromParams(command.params, invalid_speed);
+            if (invalid_speed) {
+                result.status = InputCommandStatus::kInvalidSpeed;
+                EmitCommandResponse(result, "input conveyor speed is invalid");
+                return result;
+            }
+            const std::array<std::uint8_t, UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE> speed_payload{ speed.value_or(
+                default_speed_) };
+            InputCommandResult speed_result = Execute(result, UART_CMD_INPUT_CONVEYOR_SET_SPEED, speed_payload);
+            if (!speed_result.Succeeded()) {
+                EmitCommandResponse(speed_result, "input conveyor speed could not be set");
+                return speed_result;
             }
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_START, conveyor_payload);
             EmitCommandResponse(result, "input conveyor start");

@@ -65,7 +65,7 @@ typedef enum {
 } health_issue_kind_t;
 
 static inline uint8_t uart_app_error_is_valid(uint32_t error) {
-    return (error <= UART_ERROR_INVALID_PAYLOAD || error == UART_ERROR_INTERNAL) ? 1U : 0U;
+    return (error <= UART_ERROR_SPEED_NOT_CONFIGURED || error == UART_ERROR_INTERNAL) ? 1U : 0U;
 }
 
 static inline uint8_t uart_app_heartbeat_payload_is_valid(const uint8_t* payload, uint32_t length) {

@@ -158,6 +158,8 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
         case UART_ERROR_INVALID_LENGTH:
         case UART_ERROR_INVALID_PAYLOAD:
             return "ERR-UART-PAYLOAD";
+        case UART_ERROR_SPEED_NOT_CONFIGURED:
+            return "ERR-SPEED-NOT-CONFIGURED";
         case UART_ERROR_CRC_MISMATCH:
             return "ERR-UART-CRC";
         case UART_ERROR_SEQUENCE:
@@ -399,19 +401,12 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
                 result.status = SortingCommandStatus::kInvalidSpeed;
                 return result;
             }
-            if (!speed.has_value() && configured_speed_ == 0U) {
-                speed = default_speed_;
-            }
-            if (speed.has_value()) {
-                requested_speed = *speed;
-                cycle_payload[0] = requested_speed;
-                uart_command = UART_CMD_SORTING_CONVEYOR_SET_SPEED;
-                effect = PendingEffect::kStartAfterSpeed;
-                payload = cycle_payload.data();
-                payload_length = UART_SORTING_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
-            } else {
-                uart_command = UART_CMD_SORTING_CONVEYOR_START;
-            }
+            requested_speed = speed.value_or(configured_speed_ == 0U ? default_speed_ : configured_speed_);
+            cycle_payload[0] = requested_speed;
+            uart_command = UART_CMD_SORTING_CONVEYOR_SET_SPEED;
+            effect = PendingEffect::kStartAfterSpeed;
+            payload = cycle_payload.data();
+            payload_length = UART_SORTING_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
             break;
         }
         case DeviceControlAction::kStop:
