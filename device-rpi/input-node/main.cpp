@@ -111,19 +111,11 @@ void UpdateDeviceStatus(const InputReport& report, DeviceStatus& device_status) 
                                    std::string_view device_id, std::string_view message_session_id,
                                    std::uint64_t& message_sequence, DeviceStatus& device_status) {
     UpdateDeviceStatus(report, device_status);
-    if (outbox.size() >= kOutboundQueueCapacity) {
-        const auto stale_status = std::find_if(outbox.begin(), outbox.end(), [](const OutboundMessage& queued) {
+    if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
             return queued.channel == InputReportChannel::kStatus;
-        });
-        if (stale_status == outbox.end()) {
-            if (report.channel != InputReportChannel::kResponse) {
-                std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued command responses\n";
-                return false;
-            }
-            std::cerr << "[input][mqtt][WARN] outbound queue capacity exceeded to preserve a command response\n";
-        } else {
-            outbox.erase(stale_status);
-        }
+        })) {
+        std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued messages\n";
+        return false;
     }
     outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
     return true;

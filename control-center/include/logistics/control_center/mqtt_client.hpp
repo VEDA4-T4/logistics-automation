@@ -43,9 +43,11 @@ public:
     void stop();
     [[nodiscard]] qint32 publishCommand(logistics::contracts::mqtt::ControlCommand command,
                                         const QString& target_device_id, const QString& component_id = {});
+    [[nodiscard]] qint32 requestCentralSnapshots();
 
 signals:
     void connectionStateChanged(ConnectionState state, const QString& detail);
+    void subscriptionsReady();
     void messageReceived(const QString& topic, const QJsonObject& envelope);
     void messageRejected(const QString& topic, const QString& reason);
     void errorOccurred(const QString& detail);
@@ -56,6 +58,9 @@ private:
     void connectToBroker();
     void scheduleReconnect();
     void subscribeRequiredTopics();
+    [[nodiscard]] qint32 publishCommand(logistics::contracts::mqtt::ControlCommand command,
+                                        const QString& target_device_id, const QString& component_id,
+                                        bool track_response);
     void handleMessage(const QByteArray& payload, const QString& topic);
     [[nodiscard]] QString errorDescription(int error) const;
 

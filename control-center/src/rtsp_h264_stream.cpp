@@ -13,6 +13,9 @@ namespace logistics::control_center {
 namespace {
 
 constexpr char kAnnexBStartCode[] = "\0\0\0\1";
+constexpr qsizetype kMaximumRtspHeaderSize = 64 * 1024;
+constexpr qsizetype kMaximumRtspBodySize = 4 * 1024 * 1024;
+constexpr qsizetype kMaximumRtspReceiveBufferSize = kMaximumRtspHeaderSize + kMaximumRtspBodySize + 4;
 
 QByteArray hashHex(QByteArrayView value, QCryptographicHash::Algorithm algorithm) {
     return QCryptographicHash::hash(value, algorithm).toHex();
@@ -68,18 +71,22 @@ RtspH264Stream::RtspH264Stream(QObject* parent)
       network_timeout_timer_(new QTimer(this)) {
     keep_alive_timer_->setInterval(20000);
     network_timeout_timer_->setSingleShot(true);
+    socket_->setReadBufferSize(kMaximumRtspReceiveBufferSize);
 
     connect(keep_alive_timer_, &QTimer::timeout, this, &RtspH264Stream::sendKeepAlive);
     connect(network_timeout_timer_, &QTimer::timeout, this,
             [this]() { fail(QStringLiteral("RTSP/TCP 영상 수신 시간이 초과되었습니다.")); });
     connect(socket_, &QTcpSocket::connected, this, [this]() {
         emit diagnosticMessage(QStringLiteral("TCP 연결 성공 · DESCRIBE 요청"));
-        network_timeout_timer_->start(network_timeout_ms_);
         sendDescribe();
     });
     connect(socket_, &QTcpSocket::readyRead, this, [this]() {
-        network_timeout_timer_->start(network_timeout_ms_);
-        receive_buffer_.append(socket_->readAll());
+        const auto remaining = kMaximumRtspReceiveBufferSize - receive_buffer_.size();
+        receive_buffer_.append(socket_->read(std::max<qint64>(1, remaining + 1)));
+        if (receive_buffer_.size() > kMaximumRtspReceiveBufferSize) {
+            fail(QStringLiteral("RTSP receive buffer exceeded the configured safety limit"));
+            return;
+        }
         processIncomingData();
     });
     connect(socket_, &QTcpSocket::disconnected, this, [this]() {
@@ -212,20 +219,35 @@ void RtspH264Stream::processIncomingData() {
             }
             const auto packet = receive_buffer_.mid(4, packet_size);
             receive_buffer_.remove(0, 4 + packet_size);
+            if (streaming_ && !awaiting_response_) {
+                network_timeout_timer_->start(network_timeout_ms_);
+            }
             processInterleavedPacket(channel, packet);
             continue;
         }
 
         const auto header_end = receive_buffer_.indexOf("\r\n\r\n");
         if (header_end < 0) {
+            if (receive_buffer_.size() > kMaximumRtspHeaderSize) {
+                fail(QStringLiteral("RTSP response header exceeded 64 KiB"));
+            }
+            return;
+        }
+        if (header_end > kMaximumRtspHeaderSize) {
+            fail(QStringLiteral("RTSP response header exceeded 64 KiB"));
             return;
         }
         const auto header = receive_buffer_.left(header_end);
         const auto lines = header.split('\n');
         const auto headers = parseHeaders(lines);
         bool content_length_valid = false;
-        const auto content_length = headers.value("content-length").toInt(&content_length_valid);
-        const auto body_size = content_length_valid ? content_length : 0;
+        const auto content_length = headers.value("content-length").toLongLong(&content_length_valid);
+        if (headers.contains("content-length") &&
+            (!content_length_valid || content_length < 0 || content_length > kMaximumRtspBodySize)) {
+            fail(QStringLiteral("RTSP response body exceeded 4 MiB or has an invalid Content-Length"));
+            return;
+        }
+        const auto body_size = static_cast<qsizetype>(content_length_valid ? content_length : 0);
         if (receive_buffer_.size() < header_end + 4 + body_size) {
             return;
         }
@@ -236,6 +258,8 @@ void RtspH264Stream::processIncomingData() {
 }
 
 void RtspH264Stream::processRtspResponse(const QByteArray& header, const QByteArray& body) {
+    awaiting_response_ = false;
+    network_timeout_timer_->stop();
     auto lines = header.split('\n');
     for (auto& line : lines) {
         line = line.trimmed();
@@ -299,6 +323,8 @@ void RtspH264Stream::processRtspResponse(const QByteArray& header, const QByteAr
         keep_alive_timer_->start();
         network_timeout_timer_->start(network_timeout_ms_);
         emit connectionStateChanged(true, QStringLiteral("RTSP/TCP 영상 수신 중"));
+    } else if (streaming_) {
+        network_timeout_timer_->start(network_timeout_ms_);
     }
 }
 
@@ -485,6 +511,8 @@ void RtspH264Stream::sendRequest(const QByteArray& method, const QUrl& url,
         return;
     }
     pending_request_ = { method, url, headers, authentication_retried };
+    awaiting_response_ = true;
+    network_timeout_timer_->start(network_timeout_ms_);
     QByteArray request;
     request += method + ' ' + url.toEncoded() + " RTSP/1.0\r\n";
     request += "CSeq: " + QByteArray::number(++cseq_) + "\r\n";
@@ -677,6 +705,7 @@ void RtspH264Stream::resetSession() {
     video_rtp_channel_ = 0;
     last_sequence_ = -1;
     streaming_ = false;
+    awaiting_response_ = false;
     current_contains_idr_ = false;
     ready_emitted_ = false;
     drop_until_idr_ = true;

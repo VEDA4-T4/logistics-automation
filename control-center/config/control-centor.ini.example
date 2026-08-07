@@ -29,10 +29,11 @@ linetracer_device_id=PI-LT-01
 [http]
 ; Relative image paths from MQTT are resolved against this central-server URL.
 image_base_url=http://central-server.logistics.local:8080/
+; Optional. When set, the operations log loads older entries from /api/v1/history.
+; Use the same value as the central server's [http] bearer_token.
+bearer_token=
 
 [rtsp]
-; Supported channel count: 1-16
-channel_count=4
 reconnect_interval_ms=3000
 ; Video RTP is forced over the RTSP TCP control connection.
 transport=tcp
@@ -53,13 +54,11 @@ onvif_log_payload=false
 ; Remove boxes when no newer metadata frame arrives within this time.
 metadata_stale_timeout_ms=1500
 
-; CCTV credentials stay on the Raspberry Pi relay. The relay username is control-centor.
-; Replace relay-password with the separately supplied password, percent-encoded for URL use.
-channel_1_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel1
-channel_2_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel2
-channel_3_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel3
-channel_4_url=rtsp://control-centor:relay-password@172.20.33.72:8554/channel4
-; Leave channel_N_metadata_url unset when MediaMTX relays video and ONVIF metadata on the same path.
+; Qt connects directly to each CCTV RTSP stream. RTSP is not encrypted; use a trusted LAN or VPN.
+; Keep real credentials only in control-centor.ini.
+; Replace cctv-user/cctv-password and percent-encode reserved password characters.
+channel_1_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/profile2/media.smp
+; Leave channel_1_metadata_url unset when video and ONVIF metadata use the same CCTV endpoint.
 
 [ui]
 language=ko_KR

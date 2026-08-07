@@ -1,6 +1,7 @@
 #include "logistics/control_center/operational_log_panel.hpp"
 
 #include <QAbstractItemView>
+#include <QAbstractTableModel>
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
@@ -14,17 +15,27 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QSignalBlocker>
-#include <QTableWidget>
-#include <QTableWidgetItem>
+#include <QScrollBar>
+#include <QSortFilterProxyModel>
+#include <QStackedLayout>
+#include <QTableView>
+#include <QTimer>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <algorithm>
 #include <utility>
 
 namespace logistics::control_center {
 namespace {
 
-constexpr qsizetype kMaximumVisibleEntries = 200;
+constexpr qsizetype kPageSize = OperationalLogState::kDefaultMaximumEntries;
+
+enum OperationalLogDataRole {
+    kEntryIdRole = Qt::UserRole + 1,
+    kAcknowledgedRole,
+    kSeverityRole,
+    kSearchTextRole,
+};
 
 QString SeverityColor(OperationalLogSeverity severity) {
     switch (severity) {
@@ -40,28 +51,393 @@ QString SeverityColor(OperationalLogSeverity severity) {
     return QStringLiteral("#cccccc");
 }
 
-QTableWidgetItem* ReadOnlyItem(const QString& text) {
-    auto* item = new QTableWidgetItem(text);
-    item->setFlags(item->flags() & ~Qt::ItemIsEditable);
-    return item;
+QString EntryTooltip(const OperationalLogEntry& entry) {
+    return QStringLiteral("분류: %1\n장치: %2\n코드: %3\n토픽: %4\n메시지 ID: %5")
+        .arg(entry.category, entry.device_id, entry.code, entry.topic, entry.id);
 }
 
 }  // namespace
+
+class OperationalLogTableModel final : public QAbstractTableModel {
+public:
+    explicit OperationalLogTableModel(QObject* parent = nullptr) : QAbstractTableModel(parent) {}
+
+    void setMaximumEntries(qsizetype maximum_entries) {
+        maximum_entries_ = std::max<qsizetype>(kPageSize, maximum_entries);
+        reload();
+    }
+
+    void setPageProvider(OperationalLogPanel::EntryPageProvider provider) {
+        page_provider_ = std::move(provider);
+        reload();
+    }
+
+    void setOlderEntriesRequestHandler(OperationalLogPanel::OlderEntriesRequestHandler handler) {
+        older_entries_request_handler_ = std::move(handler);
+        older_entries_available_ = static_cast<bool>(older_entries_request_handler_);
+        has_more_ = has_more_ || older_entries_available_;
+    }
+
+    void setOlderEntriesLoading(bool loading) {
+        older_entries_loading_ = loading;
+    }
+
+    void reload() {
+        QList<OperationalLogEntry> first_page;
+        loaded_capacity_ = std::min(kPageSize, maximum_entries_);
+        if (page_provider_) {
+            first_page = page_provider_(0, loaded_capacity_);
+        }
+        if (first_page.size() > loaded_capacity_) {
+            first_page.resize(loaded_capacity_);
+        }
+
+        beginResetModel();
+        entries_.clear();
+        loaded_ids_.clear();
+        older_entries_loading_ = false;
+        next_offset_ = first_page.size();
+        for (auto& entry : first_page) {
+            if (!entry.id.isEmpty() && loaded_ids_.contains(entry.id)) {
+                continue;
+            }
+            loaded_ids_.insert(entry.id);
+            entries_.append(std::move(entry));
+        }
+        has_more_ = (page_provider_ && first_page.size() == kPageSize) || older_entries_available_;
+        endResetModel();
+    }
+
+    [[nodiscard]] int rowCount(const QModelIndex& parent = {}) const override {
+        return parent.isValid() ? 0 : static_cast<int>(entries_.size());
+    }
+
+    [[nodiscard]] int columnCount(const QModelIndex& parent = {}) const override {
+        return parent.isValid() ? 0 : 4;
+    }
+
+    [[nodiscard]] QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override {
+        if (!index.isValid() || index.row() < 0 || index.row() >= entries_.size()) {
+            return {};
+        }
+        const auto& entry = entries_[index.row()];
+        if (role == kEntryIdRole)
+            return entry.id;
+        if (role == kAcknowledgedRole)
+            return entry.acknowledged;
+        if (role == kSeverityRole)
+            return static_cast<int>(entry.severity);
+        if (role == kSearchTextRole) {
+            return QStringLiteral("%1 %2 %3 %4 %5 %6")
+                .arg(entry.device_id, entry.category, entry.code, entry.message, entry.topic, entry.id);
+        }
+        if (role == Qt::ToolTipRole) {
+            return index.column() == 0 ? entry.occurred_at.toLocalTime().toString(Qt::ISODateWithMs)
+                                       : EntryTooltip(entry);
+        }
+        if (role == Qt::ForegroundRole) {
+            if (entry.acknowledged && index.column() != 1) {
+                return QColor(QStringLiteral("#777777"));
+            }
+            if (index.column() == 1) {
+                return QColor(SeverityColor(entry.severity));
+            }
+            return {};
+        }
+        if (role == Qt::FontRole && index.column() == 1) {
+            QFont font;
+            font.setBold(true);
+            return font;
+        }
+        if (role != Qt::DisplayRole) {
+            return {};
+        }
+        switch (index.column()) {
+            case 0:
+                return entry.occurred_at.toLocalTime().toString(QStringLiteral("HH:mm:ss"));
+            case 1:
+                return OperationalSeverityLabel(entry.severity);
+            case 2:
+                return entry.device_id;
+            case 3: {
+                const auto acknowledgement = entry.acknowledged ? QStringLiteral("확인됨") : QStringLiteral("미확인");
+                const auto code_prefix = entry.code.isEmpty() ? QString{} : QStringLiteral("[%1] ").arg(entry.code);
+                return QStringLiteral("%1%2 · %3").arg(code_prefix, entry.message, acknowledgement);
+            }
+            default:
+                return {};
+        }
+    }
+
+    [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation,
+                                      int role = Qt::DisplayRole) const override {
+        if (orientation != Qt::Horizontal || role != Qt::DisplayRole) {
+            return {};
+        }
+        static const QStringList headers = { QStringLiteral("시각"), QStringLiteral("등급"), QStringLiteral("장치"),
+                                             QStringLiteral("내용") };
+        return section >= 0 && section < headers.size() ? headers[section] : QVariant{};
+    }
+
+    [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override {
+        return index.isValid() ? Qt::ItemIsEnabled | Qt::ItemIsSelectable : Qt::NoItemFlags;
+    }
+
+    [[nodiscard]] bool canLoadOlderEntries() const {
+        if (entries_.size() >= maximum_entries_) {
+            return false;
+        }
+        const bool can_load_local_page = static_cast<bool>(page_provider_);
+        const bool can_request_server_page = older_entries_available_ && older_entries_request_handler_;
+        return has_more_ && !older_entries_loading_ && (can_load_local_page || can_request_server_page);
+    }
+
+    [[nodiscard]] bool canFetchMore(const QModelIndex&) const override {
+        return false;
+    }
+
+    void fetchMore(const QModelIndex&) override {}
+
+    void requestOlderEntries() {
+        if (!canLoadOlderEntries()) {
+            return;
+        }
+        if (older_entries_request_handler_ && older_entries_available_) {
+            const auto local_page =
+                page_provider_ ? page_provider_(next_offset_, kPageSize) : QList<OperationalLogEntry>{};
+            if (local_page.isEmpty()) {
+                older_entries_loading_ = true;
+                older_entries_request_handler_();
+                return;
+            }
+        }
+        auto page = page_provider_ ? page_provider_(next_offset_, kPageSize) : QList<OperationalLogEntry>{};
+        if (page.size() > kPageSize) {
+            page.resize(kPageSize);
+        }
+        if (page.isEmpty()) {
+            has_more_ = false;
+            return;
+        }
+        loaded_capacity_ = std::min(maximum_entries_, loaded_capacity_ + kPageSize);
+
+        QList<OperationalLogEntry> unique_entries;
+        unique_entries.reserve(page.size());
+        for (auto& entry : page) {
+            if (!entry.id.isEmpty() && loaded_ids_.contains(entry.id)) {
+                continue;
+            }
+            loaded_ids_.insert(entry.id);
+            unique_entries.append(std::move(entry));
+        }
+        const auto remaining_capacity = maximum_entries_ - entries_.size();
+        if (unique_entries.size() > remaining_capacity) {
+            for (auto row = remaining_capacity; row < unique_entries.size(); ++row) {
+                loaded_ids_.remove(unique_entries[row].id);
+            }
+            unique_entries.resize(remaining_capacity);
+        }
+        if (unique_entries.isEmpty()) {
+            next_offset_ += page.size();
+            has_more_ = entries_.size() < maximum_entries_ &&
+                        (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+            return;
+        }
+        const auto first_row = entries_.size();
+        beginInsertRows({}, static_cast<int>(first_row), static_cast<int>(first_row + unique_entries.size() - 1));
+        entries_.append(std::move(unique_entries));
+        endInsertRows();
+        next_offset_ = entries_.size();
+        has_more_ = entries_.size() < maximum_entries_ &&
+                    (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+    }
+
+    qsizetype appendOlderEntries(QList<OperationalLogEntry> entries, bool has_more) {
+        older_entries_loading_ = false;
+        QList<OperationalLogEntry> unique_entries;
+        QSet<QString> new_ids;
+        unique_entries.reserve(entries.size());
+        for (auto& entry : entries) {
+            if (!entry.id.isEmpty() && (loaded_ids_.contains(entry.id) || new_ids.contains(entry.id))) {
+                continue;
+            }
+            new_ids.insert(entry.id);
+            unique_entries.append(std::move(entry));
+        }
+        const auto remaining_capacity = maximum_entries_ - entries_.size();
+        if (unique_entries.size() > remaining_capacity) {
+            unique_entries.resize(remaining_capacity);
+        }
+        const auto required_capacity = entries_.size() + unique_entries.size();
+        while (loaded_capacity_ < required_capacity && loaded_capacity_ < maximum_entries_) {
+            loaded_capacity_ = std::min(maximum_entries_, loaded_capacity_ + kPageSize);
+        }
+        older_entries_available_ = has_more;
+        if (unique_entries.isEmpty()) {
+            has_more_ = entries_.size() < maximum_entries_ &&
+                        (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+            return 0;
+        }
+        for (const auto& entry : unique_entries) {
+            loaded_ids_.insert(entry.id);
+        }
+        const auto first_row = entries_.size();
+        beginInsertRows({}, static_cast<int>(first_row), static_cast<int>(first_row + unique_entries.size() - 1));
+        entries_.append(std::move(unique_entries));
+        endInsertRows();
+        next_offset_ = entries_.size();
+        has_more_ = entries_.size() < maximum_entries_ &&
+                    (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+        return entries_.size() - first_row;
+    }
+
+    qsizetype prependEntries(QList<OperationalLogEntry> entries) {
+        QList<OperationalLogEntry> unique_entries;
+        QSet<QString> new_ids;
+        unique_entries.reserve(entries.size());
+        for (auto& entry : entries) {
+            if (!entry.id.isEmpty() && (loaded_ids_.contains(entry.id) || new_ids.contains(entry.id))) {
+                continue;
+            }
+            new_ids.insert(entry.id);
+            unique_entries.append(std::move(entry));
+        }
+        if (unique_entries.size() > loaded_capacity_) {
+            unique_entries.resize(loaded_capacity_);
+        }
+        if (unique_entries.isEmpty()) {
+            return 0;
+        }
+        for (const auto& entry : unique_entries) {
+            loaded_ids_.insert(entry.id);
+        }
+
+        beginInsertRows({}, 0, static_cast<int>(unique_entries.size() - 1));
+        for (auto index = unique_entries.size(); index > 0; --index) {
+            entries_.prepend(std::move(unique_entries[index - 1]));
+        }
+        endInsertRows();
+        const auto overflow = entries_.size() - loaded_capacity_;
+        if (overflow > 0) {
+            const auto first_row = loaded_capacity_;
+            const auto last_row = entries_.size() - 1;
+            beginRemoveRows({}, static_cast<int>(first_row), static_cast<int>(last_row));
+            for (auto row = first_row; row <= last_row; ++row) {
+                loaded_ids_.remove(entries_[row].id);
+            }
+            entries_.remove(first_row, overflow);
+            endRemoveRows();
+        }
+        next_offset_ = entries_.size();
+        has_more_ = has_more_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
+        return unique_entries.size();
+    }
+
+    bool acknowledge(const QString& id) {
+        for (qsizetype row = 0; row < entries_.size(); ++row) {
+            auto& entry = entries_[row];
+            if (entry.id != id || entry.acknowledged) {
+                continue;
+            }
+            entry.acknowledged = true;
+            emit dataChanged(index(static_cast<int>(row), 0), index(static_cast<int>(row), 3),
+                             { Qt::DisplayRole, Qt::ForegroundRole, kAcknowledgedRole });
+            return true;
+        }
+        return false;
+    }
+
+    void acknowledgeAllAlerts() {
+        for (qsizetype row = 0; row < entries_.size(); ++row) {
+            auto& entry = entries_[row];
+            const bool is_alert =
+                entry.severity == OperationalLogSeverity::Error || entry.severity == OperationalLogSeverity::Critical;
+            if (!is_alert || entry.acknowledged) {
+                continue;
+            }
+            entry.acknowledged = true;
+            emit dataChanged(index(static_cast<int>(row), 0), index(static_cast<int>(row), 3),
+                             { Qt::DisplayRole, Qt::ForegroundRole, kAcknowledgedRole });
+        }
+    }
+
+    [[nodiscard]] const OperationalLogEntry* entryById(const QString& id) const {
+        for (const auto& entry : entries_) {
+            if (entry.id == id) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] bool hasMore() const noexcept {
+        return has_more_;
+    }
+    [[nodiscard]] int activeAlertCount() const noexcept {
+        return static_cast<int>(std::count_if(entries_.cbegin(), entries_.cend(), [](const auto& entry) {
+            const bool is_alert =
+                entry.severity == OperationalLogSeverity::Error || entry.severity == OperationalLogSeverity::Critical;
+            return is_alert && !entry.acknowledged;
+        }));
+    }
+    [[nodiscard]] bool isLoadingOlderEntries() const noexcept {
+        return older_entries_loading_;
+    }
+
+private:
+    OperationalLogPanel::EntryPageProvider page_provider_;
+    OperationalLogPanel::OlderEntriesRequestHandler older_entries_request_handler_;
+    QList<OperationalLogEntry> entries_;
+    QSet<QString> loaded_ids_;
+    qsizetype next_offset_{ 0 };
+    qsizetype loaded_capacity_{ kPageSize };
+    qsizetype maximum_entries_{ OperationalLogState::kDefaultMaximumEntries };
+    bool has_more_{ false };
+    bool older_entries_loading_{ false };
+    bool older_entries_available_{ false };
+};
+
+class OperationalLogFilterProxyModel final : public QSortFilterProxyModel {
+public:
+    explicit OperationalLogFilterProxyModel(QObject* parent = nullptr) : QSortFilterProxyModel(parent) {}
+
+    void setOperationalFilter(OperationalLogFilter filter) {
+        beginFilterChange();
+        filter_ = std::move(filter);
+        endFilterChange(QSortFilterProxyModel::Direction::Rows);
+    }
+
+protected:
+    [[nodiscard]] bool filterAcceptsRow(int source_row, const QModelIndex& source_parent) const override {
+        const auto source_index = sourceModel()->index(source_row, 0, source_parent);
+        if (filter_.filter_by_severity &&
+            source_index.data(kSeverityRole).toInt() != static_cast<int>(filter_.severity)) {
+            return false;
+        }
+        if (filter_.unacknowledged_only && source_index.data(kAcknowledgedRole).toBool()) {
+            return false;
+        }
+        return filter_.query.trimmed().isEmpty() ||
+               source_index.data(kSearchTextRole).toString().contains(filter_.query.trimmed(), Qt::CaseInsensitive);
+    }
+
+private:
+    OperationalLogFilter filter_;
+};
 
 OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("operationalLogPanel"));
     setStyleSheet(
         "#operationalLogPanel{background:#181818;}"
-        "QLineEdit{background:#202020;color:#d4d4d4;border:1px solid #303030;border-radius:6px;padding:7px;}"
+        "QLineEdit{background:#202020;color:#d4d4d4;border:1px solid #303030;border-radius:6px;padding:5px;}"
         "QLineEdit:hover{border-color:#454545;}"
         "QCheckBox{color:#a8a8a8;spacing:6px;}"
         "QPushButton#acknowledgeAllLogsButton{color:#ff938a;border-color:#5d3235;background:#2a2021;}"
-        "QTableWidget{background:#181818;color:#cccccc;border:0;gridline-color:transparent;outline:0;}"
+        "QTableView{background:#181818;color:#cccccc;border:0;gridline-color:transparent;outline:0;}"
         "QHeaderView::section{background:#181818;color:#777777;border:0;border-bottom:1px solid #303030;"
-        "font-size:10px;font-weight:600;padding:7px;}"
-        "QTableWidget::item{border-bottom:1px solid #303030;padding:8px;}"
-        "QTableWidget::item:hover{background:#202a33;}"
-        "QTableWidget::item:selected{background:#21364a;color:#f0f0f0;}");
+        "font-size:10px;font-weight:600;padding:4px 6px;}"
+        "QTableView::item{border-bottom:1px solid #303030;padding:4px 6px;}"
+        "QTableView::item:hover{background:#202a33;}");
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(10, 10, 10, 10);
@@ -95,11 +471,6 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     severity_filter_->addItem(QStringLiteral("경고"), static_cast<int>(OperationalLogSeverity::Warning));
     severity_filter_->addItem(QStringLiteral("오류"), static_cast<int>(OperationalLogSeverity::Error));
     severity_filter_->addItem(QStringLiteral("심각"), static_cast<int>(OperationalLogSeverity::Critical));
-    severity_filter_->view()->setStyleSheet(
-        "QAbstractItemView{background:#252526;color:#d4d4d4;border:1px solid #454545;outline:0;"
-        "selection-background-color:#094771;selection-color:#ffffff;padding:3px;}"
-        "QAbstractItemView::item{min-height:28px;padding:2px 8px;}"
-        "QAbstractItemView::item:hover{background:#2a3f52;color:#ffffff;}");
     query_filter_ = new QLineEdit(this);
     query_filter_->setObjectName(QStringLiteral("logQueryFilter"));
     query_filter_->setPlaceholderText(QStringLiteral("장치·코드·내용 검색"));
@@ -126,73 +497,157 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     secondary_filters->addWidget(acknowledge_all_button_);
     layout->addLayout(secondary_filters);
 
-    table_ = new QTableWidget(this);
+    auto* table_surface = new QWidget(this);
+    auto* table_stack = new QStackedLayout(table_surface);
+    table_stack->setContentsMargins(0, 0, 0, 0);
+    table_stack->setStackingMode(QStackedLayout::StackAll);
+    table_model_ = new OperationalLogTableModel(this);
+    filter_model_ = new OperationalLogFilterProxyModel(this);
+    filter_model_->setSourceModel(table_model_);
+    filter_model_->setDynamicSortFilter(true);
+    table_ = new QTableView(table_surface);
     table_->setObjectName(QStringLiteral("operationalLogTable"));
-    table_->setColumnCount(4);
-    table_->setHorizontalHeaderLabels(
-        { QStringLiteral("시각"), QStringLiteral("등급"), QStringLiteral("장치"), QStringLiteral("내용") });
+    table_->setModel(filter_model_);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     table_->setShowGrid(false);
     table_->setAlternatingRowColors(false);
     table_->setWordWrap(false);
+    table_->installEventFilter(this);
     table_->viewport()->setCursor(Qt::PointingHandCursor);
+    table_->viewport()->installEventFilter(this);
     table_->verticalHeader()->setVisible(false);
-    table_->verticalHeader()->setDefaultSectionSize(46);
+    table_->verticalHeader()->setDefaultSectionSize(34);
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-    layout->addWidget(table_, 1);
+    table_stack->addWidget(table_);
+    auto* empty_state = new QLabel(QStringLiteral("표시할 운영 로그가 없습니다"), table_surface);
+    empty_state->setObjectName(QStringLiteral("operationalLogEmptyState"));
+    empty_state->setAlignment(Qt::AlignCenter);
+    empty_state->setAttribute(Qt::WA_TransparentForMouseEvents);
+    empty_state->setStyleSheet("color:#777777;font-size:11px;");
+    table_stack->addWidget(empty_state);
+    layout->addWidget(table_surface, 1);
 
-    connect(severity_filter_, &QComboBox::currentIndexChanged, this, [this]() { refresh(); });
-    connect(query_filter_, &QLineEdit::textChanged, this, [this]() { refresh(); });
-    connect(unacknowledged_filter_, &QCheckBox::toggled, this, [this]() { refresh(); });
-    connect(table_, &QTableWidget::cellClicked, this, [this](int row, int) { acknowledgeEntry(entryIdAtRow(row)); });
-    connect(table_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
-        const auto id = entryIdAtRow(row);
+    connect(severity_filter_, &QComboBox::currentIndexChanged, this, [this]() { applyFilter(); });
+    connect(query_filter_, &QLineEdit::textChanged, this, [this]() { applyFilter(); });
+    connect(unacknowledged_filter_, &QCheckBox::toggled, this, [this]() { applyFilter(); });
+    connect(table_, &QTableView::clicked, this,
+            [this](const QModelIndex& index) { acknowledgeEntry(entryIdAtRow(index.row())); });
+    connect(table_, &QTableView::doubleClicked, this, [this](const QModelIndex& index) {
+        const auto id = entryIdAtRow(index.row());
         acknowledgeEntry(id);
         showDetails(id);
+    });
+    connect(table_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        auto* scroll_bar = table_->verticalScrollBar();
+        if (value == scroll_bar->minimum() && pending_new_entry_count_ > 0) {
+            pending_new_entry_count_ = 0;
+            updateSummary();
+        }
+    });
+    connect(table_->verticalScrollBar(), &QScrollBar::sliderReleased, this, [this]() {
+        auto* scroll_bar = table_->verticalScrollBar();
+        if (scroll_bar->value() == scroll_bar->maximum()) {
+            requestOlderEntriesAtBoundary();
+        }
     });
     connect(acknowledge_all_button_, &QPushButton::clicked, this, [this]() {
         if (acknowledge_all_handler_) {
             acknowledge_all_handler_();
         }
     });
-    refresh();
+    applyFilter();
 }
 
-void OperationalLogPanel::setState(const OperationalLogState& state) {
-    state_ = state;
-    refresh();
+void OperationalLogPanel::setEntryPageProvider(EntryPageProvider provider) {
+    table_model_->setPageProvider(std::move(provider));
+    pending_new_entry_count_ = 0;
+    updateSummary();
 }
 
-void OperationalLogPanel::setEntryAcknowledged(const QString& id) {
-    if (!state_.acknowledge(id)) {
-        return;
-    }
-    if (unacknowledged_filter_->isChecked()) {
-        refresh();
+void OperationalLogPanel::setMaximumEntries(qsizetype maximum_entries) {
+    table_model_->setMaximumEntries(maximum_entries);
+    pending_new_entry_count_ = 0;
+    updateSummary();
+}
+
+void OperationalLogPanel::reloadEntries(int active_alert_count) {
+    active_alert_count_ = active_alert_count;
+    pending_new_entry_count_ = 0;
+    table_model_->reload();
+    table_->scrollToTop();
+    updateSummary();
+}
+
+void OperationalLogPanel::prependEntries(const QList<OperationalLogEntry>& entries, int active_alert_count) {
+    auto* scroll_bar = table_->verticalScrollBar();
+    const bool follows_latest = scroll_bar->value() == scroll_bar->minimum();
+    const int previous_scroll_value = scroll_bar->value();
+    active_alert_count_ = active_alert_count;
+    const auto inserted_count = table_model_->prependEntries(entries);
+    if (inserted_count == 0) {
+        updateSummary();
         return;
     }
 
-    const QSignalBlocker blocker(table_);
-    for (int row = 0; row < table_->rowCount(); ++row) {
-        if (entryIdAtRow(row) != id) {
-            continue;
+    int visible_inserted_count = 0;
+    for (qsizetype row = 0; row < inserted_count; ++row) {
+        if (filter_model_->mapFromSource(table_model_->index(static_cast<int>(row), 0)).isValid()) {
+            ++visible_inserted_count;
         }
-        for (int column = 0; column < table_->columnCount(); ++column) {
-            if (auto* item = table_->item(row, column); item != nullptr) {
-                item->setForeground(QColor(QStringLiteral("#777777")));
-                item->setData(Qt::UserRole + 1, true);
-            }
-        }
-        break;
     }
-    alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(state_.activeAlertCount()));
-    alert_count_->setVisible(state_.activeAlertCount() > 0);
-    acknowledge_all_button_->setEnabled(state_.activeAlertCount() > 0);
+    if (follows_latest) {
+        table_->scrollToTop();
+    } else {
+        pending_new_entry_count_ += static_cast<int>(inserted_count);
+        scroll_bar->setValue(previous_scroll_value +
+                             visible_inserted_count * table_->verticalHeader()->defaultSectionSize());
+    }
+    updateSummary();
+}
+
+qsizetype OperationalLogPanel::appendOlderEntries(const QList<OperationalLogEntry>& entries, bool has_more,
+                                                  int active_alert_count) {
+    active_alert_count_ = active_alert_count;
+    const auto inserted_count = table_model_->appendOlderEntries(entries, has_more);
+    updateSummary();
+    return inserted_count;
+}
+
+void OperationalLogPanel::setOlderEntriesRequestHandler(OlderEntriesRequestHandler handler) {
+    table_model_->setOlderEntriesRequestHandler(std::move(handler));
+    updateSummary();
+}
+
+void OperationalLogPanel::setOlderEntriesLoading(bool loading) {
+    table_model_->setOlderEntriesLoading(loading);
+    updateSummary();
+}
+
+bool OperationalLogPanel::canLoadOlderEntries() const {
+    return table_model_->canLoadOlderEntries();
+}
+
+void OperationalLogPanel::requestOlderEntries() {
+    table_model_->requestOlderEntries();
+    updateSummary();
+}
+
+void OperationalLogPanel::setEntryAcknowledged(const QString& id, int active_alert_count) {
+    active_alert_count_ = active_alert_count;
+    table_model_->acknowledge(id);
+    updateSummary();
+}
+
+void OperationalLogPanel::setAllAlertsAcknowledged(int active_alert_count) {
+    active_alert_count_ = active_alert_count;
+    table_model_->acknowledgeAllAlerts();
+    updateSummary();
 }
 
 void OperationalLogPanel::setAcknowledgeHandler(AcknowledgeHandler handler) {
@@ -201,6 +656,34 @@ void OperationalLogPanel::setAcknowledgeHandler(AcknowledgeHandler handler) {
 
 void OperationalLogPanel::setAcknowledgeAllHandler(AcknowledgeAllHandler handler) {
     acknowledge_all_handler_ = std::move(handler);
+}
+
+bool OperationalLogPanel::eventFilter(QObject* watched, QEvent* event) {
+    if ((watched == table_ || watched == table_->viewport()) && event->type() == QEvent::Wheel) {
+        auto* wheel_event = static_cast<QWheelEvent*>(event);
+        auto vertical_delta =
+            wheel_event->pixelDelta().y() != 0 ? wheel_event->pixelDelta().y() : wheel_event->angleDelta().y();
+        if (wheel_event->inverted()) {
+            vertical_delta = -vertical_delta;
+        }
+        if (vertical_delta != 0) {
+            if (vertical_delta < 0) {
+                QTimer::singleShot(0, this, [this]() { requestOlderEntriesAtBoundary(); });
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void OperationalLogPanel::requestOlderEntriesAtBoundary() {
+    if (table_model_->isLoadingOlderEntries()) {
+        return;
+    }
+    auto* scroll_bar = table_->verticalScrollBar();
+    if (scroll_bar->value() == scroll_bar->maximum() && table_model_->canLoadOlderEntries()) {
+        table_model_->requestOlderEntries();
+        updateSummary();
+    }
 }
 
 OperationalLogFilter OperationalLogPanel::currentFilter() const {
@@ -215,80 +698,51 @@ OperationalLogFilter OperationalLogPanel::currentFilter() const {
     return filter;
 }
 
-void OperationalLogPanel::refresh() {
-    const auto entries = state_.filteredEntries(currentFilter());
-    const auto visible_count = std::min(entries.size(), kMaximumVisibleEntries);
-    const QSignalBlocker blocker(table_);
-    table_->setUpdatesEnabled(false);
-    table_->setSortingEnabled(false);
-    table_->setRowCount(visible_count);
-    for (qsizetype row = 0; row < visible_count; ++row) {
-        const auto& entry = entries[row];
-        auto* time_item = ReadOnlyItem(entry.occurred_at.toLocalTime().toString(QStringLiteral("HH:mm:ss")));
-        time_item->setData(Qt::UserRole, entry.id);
-        time_item->setData(Qt::UserRole + 1, entry.acknowledged);
-        time_item->setToolTip(entry.occurred_at.toLocalTime().toString(Qt::ISODateWithMs));
-        auto* severity_item = ReadOnlyItem(OperationalSeverityLabel(entry.severity));
-        severity_item->setForeground(QColor(SeverityColor(entry.severity)));
-        QFont severity_font = severity_item->font();
-        severity_font.setBold(true);
-        severity_item->setFont(severity_font);
-        auto* device_item = ReadOnlyItem(entry.device_id);
-        const auto acknowledgement = entry.acknowledged ? QStringLiteral("확인됨") : QStringLiteral("미확인");
-        const auto code_prefix = entry.code.isEmpty() ? QString{} : QStringLiteral("[%1] ").arg(entry.code);
-        auto* message_item = ReadOnlyItem(QStringLiteral("%1%2 · %3").arg(code_prefix, entry.message, acknowledgement));
-        const auto tooltip = QStringLiteral("분류: %1\n장치: %2\n코드: %3\n토픽: %4\n메시지 ID: %5")
-                                 .arg(entry.category, entry.device_id, entry.code, entry.topic, entry.id);
-        device_item->setToolTip(tooltip);
-        message_item->setToolTip(tooltip);
-        if (entry.acknowledged) {
-            time_item->setForeground(QColor(QStringLiteral("#777777")));
-            device_item->setForeground(QColor(QStringLiteral("#777777")));
-            message_item->setForeground(QColor(QStringLiteral("#777777")));
-        }
-        table_->setItem(static_cast<int>(row), 0, time_item);
-        table_->setItem(static_cast<int>(row), 1, severity_item);
-        table_->setItem(static_cast<int>(row), 2, device_item);
-        table_->setItem(static_cast<int>(row), 3, message_item);
+void OperationalLogPanel::applyFilter() {
+    filter_model_->setOperationalFilter(currentFilter());
+    updateSummary();
+}
+
+void OperationalLogPanel::updateSummary() {
+    const auto filtered_count = filter_model_->rowCount();
+    const auto displayed_alert_count = std::max(active_alert_count_, table_model_->activeAlertCount());
+    QString summary = QStringLiteral("%1건 표시").arg(filtered_count);
+    if (table_model_->isLoadingOlderEntries()) {
+        summary += QStringLiteral(" · 이전 로그 불러오는 중…");
+    } else if (table_model_->hasMore()) {
+        summary += QStringLiteral(" · 아래로 스크롤해 이전 로그 보기");
     }
-    table_->setUpdatesEnabled(true);
-    result_count_->setText(entries.size() > visible_count
-                               ? QStringLiteral("%1건 중 최근 %2건 표시").arg(entries.size()).arg(visible_count)
-                               : QStringLiteral("%1건").arg(entries.size()));
-    alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(state_.activeAlertCount()));
-    alert_count_->setVisible(state_.activeAlertCount() > 0);
-    acknowledge_all_button_->setEnabled(state_.activeAlertCount() > 0);
+    if (pending_new_entry_count_ > 0) {
+        summary += QStringLiteral(" · 새 로그 %1건").arg(pending_new_entry_count_);
+    }
+    result_count_->setText(summary);
+    alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(displayed_alert_count));
+    alert_count_->setVisible(displayed_alert_count > 0);
+    acknowledge_all_button_->setEnabled(displayed_alert_count > 0);
+    if (auto* empty_state = findChild<QLabel*>(QStringLiteral("operationalLogEmptyState")); empty_state != nullptr) {
+        empty_state->setVisible(filtered_count == 0);
+    }
 }
 
 QString OperationalLogPanel::entryIdAtRow(int row) const {
-    if (row < 0 || table_->item(row, 0) == nullptr) {
+    if (row < 0) {
         return {};
     }
-    return table_->item(row, 0)->data(Qt::UserRole).toString();
+    return filter_model_->index(row, 0).data(kEntryIdRole).toString();
 }
 
 void OperationalLogPanel::acknowledgeEntry(const QString& id) {
     if (id.isEmpty() || !acknowledge_handler_) {
         return;
     }
-    for (const auto& entry : state_.entries()) {
-        if (entry.id == id) {
-            if (!entry.acknowledged) {
-                acknowledge_handler_(id);
-            }
-            return;
-        }
+    const auto* entry = table_model_->entryById(id);
+    if (entry != nullptr && !entry->acknowledged) {
+        acknowledge_handler_(id);
     }
 }
 
 void OperationalLogPanel::showDetails(const QString& id) {
-    const OperationalLogEntry* selected = nullptr;
-    for (const auto& entry : state_.entries()) {
-        if (entry.id == id) {
-            selected = &entry;
-            break;
-        }
-    }
+    const auto* selected = table_model_->entryById(id);
     if (selected == nullptr) {
         return;
     }
@@ -299,15 +753,6 @@ void OperationalLogPanel::showDetails(const QString& id) {
     dialog->setWindowTitle(QStringLiteral("운영 로그 상세"));
     dialog->resize(620, 430);
     dialog->setMinimumSize(520, 360);
-    dialog->setStyleSheet(
-        "QDialog{background:#181818;}"
-        "QLabel{color:#cccccc;}"
-        "QLabel#detailTitle{color:#f0f0f0;font-size:18px;font-weight:700;}"
-        "QLabel#detailMetaLabel{color:#777777;font-size:10px;}"
-        "QLabel#detailMetaValue{color:#d4d4d4;font-size:11px;}"
-        "QPlainTextEdit{background:#202020;color:#e5e5e5;border:1px solid #303030;border-radius:8px;padding:10px;}"
-        "QPushButton{background:#2d2d30;color:#f0f0f0;border:1px solid #454545;border-radius:6px;padding:7px 18px;}"
-        "QPushButton:hover{background:#3a3a3d;}");
     auto* dialog_layout = new QVBoxLayout(dialog);
     dialog_layout->setContentsMargins(20, 18, 20, 18);
     dialog_layout->setSpacing(13);

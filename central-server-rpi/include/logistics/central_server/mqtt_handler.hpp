@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
 
 namespace logistics::contracts::mqtt {
@@ -27,7 +28,7 @@ public:
     using ProcessMessageHandler = std::function<bool(const contracts::mqtt::MqttMessage& message)>;
 
     explicit MqttHandler(DeviceManager& device_manager, Logger logger = {},
-                         PersistenceService* persistence_service = nullptr);
+                         PersistenceService* persistence_service = nullptr, std::string default_destination = {});
     void SetWorkCreatedHandler(WorkCreatedHandler handler);
     void SetQtEventHandler(QtEventHandler handler);
     void SetCommandRouteHandler(MessageRouteHandler handler);
@@ -39,6 +40,7 @@ public:
 
     [[nodiscard]] bool Handle(std::string_view topic, std::string_view payload, std::string_view received_at = {});
     [[nodiscard]] bool CheckHeartbeatTimeouts(std::string_view checked_at = {});
+    [[nodiscard]] bool ReplayDeviceStatuses(std::string_view target_device_id, std::string_view replayed_at = {});
 
 private:
     void Log(MqttHandlerLogLevel level, std::string_view message) const;
@@ -46,6 +48,7 @@ private:
     DeviceManager& device_manager_;
     Logger logger_;
     PersistenceService* persistence_service_;
+    std::string default_destination_;
     WorkCreatedHandler work_created_handler_;
     QtEventHandler qt_event_handler_;
     MessageRouteHandler command_route_handler_;
@@ -55,6 +58,7 @@ private:
     ProcessMessageHandler process_message_guard_;
     ProcessMessageHandler process_message_handler_;
     std::uint64_t timeout_message_sequence_{};
+    std::uint64_t replay_message_sequence_{};
 };
 
 }  // namespace logistics::central_server

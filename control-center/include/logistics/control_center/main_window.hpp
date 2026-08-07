@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QMainWindow>
 #include <QQueue>
 #include <QSet>
@@ -17,14 +18,15 @@
 class QJsonObject;
 class QLabel;
 class QMediaPlayer;
+class QNetworkAccessManager;
 class QStackedLayout;
-class QTabWidget;
 class QTimer;
 class QWidget;
 
 namespace logistics::control_center {
 
 class MqttClient;
+class FactoryTopViewWidget;
 class OperationalLogPanel;
 class OperationsDashboardPanel;
 class ProductResultPanel;
@@ -54,11 +56,15 @@ private:
     void completePendingRecoveryFromDeviceState();
     void handleCommandTimeout();
     void clearPendingCommand();
+    void queueOperationalLogEntry(const OperationalLogEntry& entry);
+    void flushPendingOperationalLogs();
+    void requestOlderOperationalLogs();
+    void requestOperationalLogHistory(const QString& requested_cursor);
+    void resetOperationalLogHistory();
     void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,
                               const QString& code, const QString& message);
-    void refreshOperationalLogPanel();
-    void refreshOperationalLogBadge();
-
+    void refreshOperationsPresentation();
+    void selectControlTarget(const QString& device_id, const QString& display_name);
     std::vector<QMediaPlayer*> players_{};
     std::vector<std::unique_ptr<RtspStreamWorker>> video_stream_workers_{};
     std::vector<RtspH264Stream*> video_streams_{};
@@ -75,23 +81,29 @@ private:
     std::vector<bool> reconnecting_{};
     MqttClient* mqtt_client_{ nullptr };
     QLabel* mqtt_status_label_{ nullptr };
-    QTabWidget* detail_tabs_{ nullptr };
+    FactoryTopViewWidget* factory_top_view_{ nullptr };
     OperationalLogPanel* operational_log_panel_{ nullptr };
     OperationsDashboardPanel* operations_dashboard_panel_{ nullptr };
     ProductResultPanel* product_result_panel_{ nullptr };
     ProcessControlPanel* process_control_panel_{ nullptr };
     QTimer* command_response_timer_{ nullptr };
     QTimer* node_status_timer_{ nullptr };
+    QTimer* operational_log_flush_timer_{ nullptr };
+    QNetworkAccessManager* history_network_manager_{ nullptr };
     QString control_target_device_id_{ "SYSTEM" };
     QString pending_target_device_id_;
     QString pending_request_id_;
     QSet<QString> individual_command_request_ids_;
     QQueue<QString> individual_command_request_order_;
+    QQueue<OperationalLogEntry> pending_operational_log_entries_;
+    QUrl history_base_url_;
+    QString history_bearer_token_;
+    QString history_next_cursor_;
+    QSet<QString> history_current_page_ids_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
     CurrentProductState current_product_state_;
     OperationalLogState operational_log_state_;
     OperationsDashboardState operations_dashboard_state_;
-    std::size_t channel_count_{ 4 };
     int reconnect_interval_ms_{ 3000 };
     bool rtsp_low_latency_{ true };
     int rtsp_network_timeout_ms_{ 3000 };
@@ -100,6 +112,9 @@ private:
     bool onvif_metadata_enabled_{ true };
     bool onvif_log_payload_{ false };
     int metadata_stale_timeout_ms_{ 1500 };
+    bool history_request_in_flight_{ false };
+    bool history_page_loaded_{ false };
+    quint64 history_request_generation_{ 0 };
 };
 
 }  // namespace logistics::control_center

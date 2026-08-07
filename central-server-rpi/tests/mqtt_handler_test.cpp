@@ -46,6 +46,40 @@ struct LogEntry final {
     };
 }
 
+[[nodiscard]] mqtt::MqttMessage MakePositionStatus(std::string source_id = "PI-01") {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-POSITION-STATUS-01",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = std::move(source_id),
+        .timestamp = "2026-07-16T01:00:03Z",
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = mqtt::ConnectionState::kOnline,
+                .current_state = "FOLLOWING_LINE",
+                .job_id = std::string("WORK-103"),
+                .error_code = std::nullopt,
+                .departure_position = mqtt::LineTracerPositionPayload{ .area = "DEPARTURE", .location = "A" },
+                .target_position = mqtt::LineTracerPositionPayload{ .area = "DESTINATION", .location = "C" },
+                .confirmed_position = mqtt::LineTracerPositionPayload{ .area = "DEPARTURE", .location = "A" },
+                .movement_state = std::string("MOVING"),
+            },
+    };
+}
+
+void AssertPositionStatus(const mqtt::DeviceStatusPayload& status) {
+    assert(status.departure_position.has_value());
+    assert(status.departure_position->area == "DEPARTURE");
+    assert(status.departure_position->location == "A");
+    assert(status.target_position.has_value());
+    assert(status.target_position->area == "DESTINATION");
+    assert(status.target_position->location == "C");
+    assert(status.confirmed_position.has_value());
+    assert(status.confirmed_position->area == "DEPARTURE");
+    assert(status.confirmed_position->location == "A");
+    assert(status.movement_state == std::optional<std::string>("MOVING"));
+}
+
 [[nodiscard]] std::string Encode(const mqtt::MqttMessage& message) {
     const auto encoded = mqtt::SerializeMessage(message);
     assert(encoded.IsSuccess());
@@ -146,7 +180,7 @@ void TestUnknownMessageTypeLogIncludesReceivedTypeAndTopic() {
     assert(logs[0].message.find("topic=device/PI-01/event") != std::string::npos);
 }
 
-void TestBarcodeIsEnrichedFromProductCatalog() {
+void TestBarcodeUsesCatalogOrDefaultDestination() {
     const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path() / ("logistics-handler-test-" + unique);
     std::filesystem::create_directories(root);
@@ -164,7 +198,7 @@ void TestBarcodeIsEnrichedFromProductCatalog() {
         storage.image_root = root / "images";
         central_server::PersistenceService persistence(database, storage);
         central_server::DeviceManager device_manager;
-        central_server::MqttHandler handler(device_manager, {}, &persistence);
+        central_server::MqttHandler handler(device_manager, {}, &persistence, "3");
         std::string work_id;
         std::vector<mqtt::MqttMessage> qt_events;
         handler.SetWorkCreatedHandler([&work_id](std::string_view, std::string_view created_work_id) {
@@ -212,6 +246,39 @@ void TestBarcodeIsEnrichedFromProductCatalog() {
         assert(product->product_id == "VEDA107");
         assert(product->product_name == "VEDA107 기본 상품");
         assert(product->destination == "1");
+
+        const mqtt::MqttMessage unknown_box{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-BOX-UNKNOWN",
+            .message_type = mqtt::MessageType::kBoxDetected,
+            .source_id = "PI-VISION-01",
+            .timestamp = "2026-07-21T01:00:02Z",
+            .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "unknown-box.jpg" },
+        };
+        assert(handler.Handle("device/PI-VISION-01/event", Encode(unknown_box)));
+        const mqtt::MqttMessage unknown_barcode{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-BARCODE-UNKNOWN",
+            .message_type = mqtt::MessageType::kBarcodeDetected,
+            .source_id = "PI-VISION-01",
+            .timestamp = "2026-07-21T01:00:03Z",
+            .data =
+                mqtt::BarcodeDetectedPayload{
+                    .work_id = work_id,
+                    .recognition_status = "SUCCESS",
+                    .barcode = "0000000000000",
+                    .confidence = 0.95,
+                    .message = std::nullopt,
+                    .error_code = std::nullopt,
+                    .failure_stage = std::nullopt,
+                },
+        };
+        assert(handler.Handle("device/PI-VISION-01/event", Encode(unknown_barcode)));
+        assert(qt_events.size() == 4);
+        const auto* unknown_product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events.back());
+        assert(unknown_product != nullptr);
+        assert(unknown_product->product_id == "UNREGISTERED");
+        assert(unknown_product->destination == "3");
     }
     std::filesystem::remove_all(root);
 }
@@ -242,6 +309,9 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         });
 
         assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:01Z"));
+        assert(handler.Handle("device/PI-01/status", Encode(MakePositionStatus()), "2026-07-16T01:00:03Z"));
+        assert(qt_statuses.size() == 1);
+        qt_statuses.clear();
         const mqtt::MqttMessage heartbeat{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
             .message_id = "MSG-HEARTBEAT-QT-01",
@@ -266,6 +336,7 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         assert(status->status == mqtt::ConnectionState::kOnline);
         assert(status->current_state == "PICKING");
         assert(status->job_id == std::optional<std::string>("WORK-103"));
+        AssertPositionStatus(*status);
         assert(mqtt::ValidateTopicMessage(mqtt::QtStatusTopic("control-center"), qt_statuses[0]).IsSuccess());
     }
     std::filesystem::remove_all(root);
@@ -331,6 +402,8 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     });
 
     assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:00Z"));
+    assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), MakePositionStatus(),
+                                        "2026-07-16T01:00:01Z"));
     std::vector<mqtt::ConnectionState> process_previews;
     std::vector<mqtt::ConnectionState> process_commits;
     handler.SetProcessMessageGuard([&process_previews](const mqtt::MqttMessage& message) {
@@ -355,6 +428,7 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     assert(process_previews == std::vector{ mqtt::ConnectionState::kDelayed });
     assert(process_commits == std::vector{ mqtt::ConnectionState::kDelayed });
     assert(!delayed->error_code.has_value());
+    AssertPositionStatus(*delayed);
     assert(mqtt::ValidateTopicMessage(mqtt::QtStatusTopic("control-center"), qt_statuses[0]).IsSuccess());
 
     now += std::chrono::seconds(5);
@@ -364,12 +438,50 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     assert(offline != nullptr);
     assert(offline->status == mqtt::ConnectionState::kOffline);
     assert(offline->error_code == std::optional<std::string>("ERR-HEARTBEAT-TIMEOUT"));
+    AssertPositionStatus(*offline);
     const std::vector expected_process_states{ mqtt::ConnectionState::kDelayed, mqtt::ConnectionState::kOffline };
     assert(process_previews == expected_process_states);
     assert(process_commits == expected_process_states);
 
     assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:16Z"));
     assert(qt_statuses.size() == 2);
+}
+
+void TestRetainedPositionSnapshotReplay() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto registry_path =
+        std::filesystem::temp_directory_path() / ("logistics-position-replay-" + unique + ".json");
+
+    {
+        central_server::DeviceManager device_manager(registry_path);
+        assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/register"), MakeRegistration(),
+                                            "2026-07-16T01:00:01Z"));
+        assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), MakePositionStatus(),
+                                            "2026-07-16T01:00:03Z"));
+    }
+
+    {
+        central_server::DeviceManager restored(registry_path);
+        central_server::MqttHandler handler(restored);
+        std::vector<mqtt::MqttMessage> qt_statuses;
+        handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
+            qt_statuses.push_back(message);
+            return true;
+        });
+
+        assert(handler.ReplayDeviceStatuses("PI-01", "2026-07-16T01:05:00Z"));
+        assert(qt_statuses.size() == 1);
+        assert(qt_statuses[0].source_id == "PI-01");
+        assert(qt_statuses[0].timestamp == "2026-07-16T01:00:03Z");
+        const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
+        assert(status != nullptr);
+        assert(status->status == mqtt::ConnectionState::kOffline);
+        AssertPositionStatus(*status);
+        assert(!handler.ReplayDeviceStatuses("PI-NOT-REGISTERED", "2026-07-16T01:05:01Z"));
+    }
+
+    std::error_code error;
+    std::filesystem::remove(registry_path, error);
 }
 
 void TestMessageTypesUseDedicatedRouteHandlers() {
@@ -498,10 +610,11 @@ int main() {
     TestTopicMessageMismatchIsRejected();
     TestUnsupportedVersionAndMissingFieldsAreRejected();
     TestUnknownMessageTypeLogIncludesReceivedTypeAndTopic();
-    TestBarcodeIsEnrichedFromProductCatalog();
+    TestBarcodeUsesCatalogOrDefaultDestination();
     TestHeartbeatIsForwardedToQtAsDeviceStatus();
     TestSensorStatusIsAcceptedAndForwardedToQt();
     TestHeartbeatTimeoutChangesAreForwardedToQt();
+    TestRetainedPositionSnapshotReplay();
     TestMessageTypesUseDedicatedRouteHandlers();
     return 0;
 }

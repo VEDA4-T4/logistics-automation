@@ -77,7 +77,8 @@ bool ProcessOrchestratorConfig::IsValid() const noexcept {
     return mqtt::IsValidTopicLevel(server_id) && mqtt::IsValidTopicLevel(input_device_id) &&
            mqtt::IsValidTopicLevel(vision_device_id) && mqtt::IsValidTopicLevel(gripper_device_id) &&
            mqtt::IsValidTopicLevel(sorting_device_id) && mqtt::IsValidTopicLevel(line_tracer_device_id) &&
-           initial_position_valid && (!homography.enabled || homography.IsValid());
+           mqtt::IsValidTopicLevel(default_destination) && initial_position_valid &&
+           (!homography.enabled || homography.IsValid());
 }
 
 ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config)

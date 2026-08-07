@@ -168,10 +168,12 @@ int Application::Run(int argc, char* argv[]) {
     }
 
     PersistenceService persistence(database, server_config.storage);
-    MqttHandler mqtt_handler(*device_manager, {}, &persistence);
+    MqttHandler mqtt_handler(*device_manager, {}, &persistence, server_config.process.default_destination);
     CommandManager command_manager;
     ProcessOrchestrator process_orchestrator(server_config.process);
     ProcessStateStore process_state_store(database);
+    // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
+    std::mutex process_mutex;
 
     std::optional<StoredProcessState> stored_process_state;
     std::vector<InvalidatedRestoredWork> invalidated_restored_works;
@@ -341,9 +343,23 @@ int Application::Run(int argc, char* argv[]) {
         return false;
     });
 
-    const auto dispatch_command = [&mqtt_client, &device_manager, &command_manager, &process_orchestrator,
-                                   &server_config, &active_system_recovery_request_id,
+    const auto dispatch_command = [&mqtt_client, &mqtt_handler, &device_manager, &command_manager,
+                                   &process_orchestrator, &server_config, &active_system_recovery_request_id,
                                    &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
+        if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
+            command != nullptr && command->command == contracts::mqtt::ControlCommand::kStatusRequest &&
+            command->component_id == contracts::mqtt::kCentralSnapshotComponentId) {
+            const bool replayed =
+                mqtt_handler.ReplayDeviceStatuses(command->target_device_id, CurrentIso8601Timestamp());
+            const auto response = command_manager.MakeImmediateResult(
+                message,
+                replayed ? contracts::mqtt::CommandResult::kSuccess : contracts::mqtt::CommandResult::kRejected,
+                CurrentIso8601Timestamp(),
+                replayed ? std::nullopt : std::optional<std::string>{ "ERR-STATUS-SNAPSHOT-NOT-FOUND" },
+                replayed ? "latest device status snapshot replayed" : "no retained device status snapshot found");
+            return response.has_value() && publish_qt_response(*response);
+        }
+
         std::optional<contracts::mqtt::ControlCommand> system_command;
         if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
             command != nullptr && (command->target_device_id == "SYSTEM" || command->target_device_id == "ALL")) {
@@ -468,8 +484,9 @@ int Application::Run(int argc, char* argv[]) {
             return true;
         });
 
-    mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state](
+    mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state, &process_mutex](
                                       std::string_view topic, std::string_view payload) {
+        const std::lock_guard process_lock(process_mutex);
         const auto previous_revision = process_orchestrator.Revision();
         if (!mqtt_handler.Handle(topic, payload)) {
             std::cerr << "[server][ERROR] MQTT message processing failed; topic=" << topic << '\n';
@@ -502,7 +519,27 @@ int Application::Run(int argc, char* argv[]) {
     };
     bool recalibration_notifications_pending = !work_invalidations.empty();
 
-    HttpUploadServer upload_server(database, server_config.http);
+    Database upload_database;
+    database_status = upload_database.Open(server_config.database);
+    if (!database_status.ok()) {
+        mqtt_client.Stop();
+        std::cerr << "[server][ERROR] HTTP upload database open failed: " << database_status.message << '\n';
+        return 7;
+    }
+
+    Database maintenance_database;
+    database_status = maintenance_database.Open(server_config.database);
+    if (!database_status.ok()) {
+        mqtt_client.Stop();
+        static_cast<void>(upload_database.Close());
+        std::cerr << "[server][ERROR] maintenance database open failed: " << database_status.message << '\n';
+        return 7;
+    }
+    RetentionService scheduled_retention(maintenance_database, server_config.storage);
+    auto next_retention_cleanup =
+        std::chrono::steady_clock::now() + std::chrono::hours(server_config.storage.cleanup_interval_hours);
+
+    HttpUploadServer upload_server(upload_database, server_config.http);
     database_status = upload_server.Start();
     if (!database_status.ok()) {
         mqtt_client.Stop();
@@ -518,10 +555,25 @@ int Application::Run(int argc, char* argv[]) {
 
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        const auto loop_now = std::chrono::steady_clock::now();
+        if (loop_now >= next_retention_cleanup) {
+            next_retention_cleanup = loop_now + std::chrono::hours(server_config.storage.cleanup_interval_hours);
+            const auto retention_status = scheduled_retention.RunOnce(CurrentUnixTimeMilliseconds());
+            if (!retention_status.ok()) {
+                std::cerr << "[server][ERROR] scheduled retention cleanup failed: " << retention_status.message << '\n';
+            }
+        }
         if (recalibration_notifications_pending && mqtt_client.IsConnected()) {
             recalibration_notifications_pending = !publish_recalibration_notifications();
         }
-        static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
+        {
+            const std::lock_guard process_lock(process_mutex);
+            const auto previous_revision = process_orchestrator.Revision();
+            static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
+            if (process_orchestrator.Revision() != previous_revision) {
+                static_cast<void>(persist_process_state());
+            }
+        }
         for (const auto& timeout : command_manager.CheckTimeouts(CurrentIso8601Timestamp())) {
             if (!publish_qt_response(timeout)) {
                 std::cerr << "[server][ERROR] command timeout publish failed\n";
@@ -533,6 +585,18 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_client.Stop();
 
     bool shutdown_ok = persist_process_state();
+    database_status = maintenance_database.Close();
+    if (!database_status.ok()) {
+        std::cerr << "[server][ERROR] maintenance database close failed during shutdown: " << database_status.message
+                  << '\n';
+        shutdown_ok = false;
+    }
+    database_status = upload_database.Close();
+    if (!database_status.ok()) {
+        std::cerr << "[server][ERROR] HTTP upload database close failed during shutdown: " << database_status.message
+                  << '\n';
+        shutdown_ok = false;
+    }
     database_status = database.Checkpoint();
     if (!database_status.ok()) {
         std::cerr << "[server][ERROR] database checkpoint failed during shutdown: " << database_status.message << '\n';

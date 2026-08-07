@@ -14,10 +14,63 @@ namespace mqtt = logistics::contracts::mqtt;
 constexpr qsizetype kMaximumRememberedMessages = 2048;
 constexpr qsizetype kMaximumRetiredWorksPerProcess = 512;
 constexpr qsizetype kMaximumRememberedDestinations = 512;
+constexpr qsizetype kMaximumRetiredDeviceSessions = 512;
 
 QString StringValue(const QJsonObject& object, const char* key) {
     const auto value = object.value(QString::fromLatin1(key));
     return value.isString() ? value.toString().trimmed() : QString{};
+}
+
+struct LineTracerPositionSnapshot {
+    std::optional<LineTracerPositionStatus> departure;
+    std::optional<LineTracerPositionStatus> target;
+    std::optional<LineTracerPositionStatus> confirmed;
+    QString movement_state;
+};
+
+bool ParseLineTracerPosition(const QJsonValue& value, LineTracerPositionStatus& output) {
+    if (!value.isObject()) {
+        return false;
+    }
+    const auto position = value.toObject();
+    output.area = StringValue(position, "area").toUpper();
+    output.location = StringValue(position, "location").toUpper();
+    return (output.area == QStringLiteral("DEPARTURE") || output.area == QStringLiteral("DESTINATION")) &&
+           (output.location == QStringLiteral("A") || output.location == QStringLiteral("B") ||
+            output.location == QStringLiteral("C"));
+}
+
+bool ParseLineTracerPositionSnapshot(const QJsonObject& data, std::optional<LineTracerPositionSnapshot>& output,
+                                     QString& error) {
+    const auto departure = data.value(QStringLiteral("departurePosition"));
+    const auto target = data.value(QStringLiteral("targetPosition"));
+    const auto confirmed = data.value(QStringLiteral("confirmedPosition"));
+    const auto movement = data.value(QStringLiteral("movementState"));
+    if (departure.isUndefined() && target.isUndefined() && confirmed.isUndefined() && movement.isUndefined()) {
+        output.reset();
+        return true;
+    }
+    if (departure.isNull() && target.isNull() && confirmed.isNull() && movement.isNull()) {
+        output = LineTracerPositionSnapshot{};
+        return true;
+    }
+
+    LineTracerPositionStatus parsed_departure;
+    LineTracerPositionStatus parsed_target;
+    LineTracerPositionStatus parsed_confirmed;
+    const auto movement_state = movement.isString() ? movement.toString().trimmed().toUpper() : QString{};
+    if (!ParseLineTracerPosition(departure, parsed_departure) || !ParseLineTracerPosition(target, parsed_target) ||
+        !ParseLineTracerPosition(confirmed, parsed_confirmed) ||
+        (movement_state != QStringLiteral("IDLE") && movement_state != QStringLiteral("MOVING") &&
+         movement_state != QStringLiteral("ARRIVED"))) {
+        error = QStringLiteral("라인트레이서 위치 스냅샷이 올바르지 않습니다.");
+        return false;
+    }
+    output = LineTracerPositionSnapshot{ .departure = parsed_departure,
+                                         .target = parsed_target,
+                                         .confirmed = parsed_confirmed,
+                                         .movement_state = movement_state };
+    return true;
 }
 
 QDateTime ParseTimestamp(const QJsonObject& envelope) {
@@ -54,6 +107,66 @@ bool IsDashboardMessage(mqtt::MessageType type) {
 bool IsDeviceMessage(mqtt::MessageType type) {
     return type == mqtt::MessageType::kHeartbeat || type == mqtt::MessageType::kDeviceStatus ||
            type == mqtt::MessageType::kErrorOccurred;
+}
+
+struct DeviceMessageOrder {
+    enum class Stream {
+        kApplication,
+        kTransport,
+        kWill,
+    };
+
+    Stream stream;
+    QString session_id;
+    quint64 sequence;
+    int phase;
+};
+
+std::optional<DeviceMessageOrder> ParseDeviceMessageOrder(const QString& message_id, const QString& source_id,
+                                                          mqtt::MessageType type) {
+    const auto application_prefix = source_id + QStringLiteral("-MSG-");
+    const auto status_prefix = QStringLiteral("STATUS-") + application_prefix;
+    const auto offline_prefix = QStringLiteral("OFFLINE-") + application_prefix;
+    const auto will_prefix = QStringLiteral("WILL-") + application_prefix;
+    QString prefix;
+    DeviceMessageOrder::Stream stream;
+    int phase = 0;
+    if (message_id.startsWith(application_prefix)) {
+        prefix = application_prefix;
+        stream = DeviceMessageOrder::Stream::kApplication;
+    } else if (type == mqtt::MessageType::kDeviceStatus && message_id.startsWith(status_prefix)) {
+        prefix = status_prefix;
+        stream = DeviceMessageOrder::Stream::kTransport;
+    } else if (type == mqtt::MessageType::kDeviceStatus && message_id.startsWith(offline_prefix)) {
+        prefix = offline_prefix;
+        stream = DeviceMessageOrder::Stream::kTransport;
+        phase = 1;
+    } else if (type == mqtt::MessageType::kDeviceStatus && message_id.startsWith(will_prefix)) {
+        prefix = will_prefix;
+        stream = DeviceMessageOrder::Stream::kWill;
+    } else {
+        return std::nullopt;
+    }
+
+    const auto separator = message_id.lastIndexOf(QLatin1Char('-'));
+    if (separator <= prefix.size()) {
+        return std::nullopt;
+    }
+
+    const auto sequence_text = message_id.mid(separator + 1);
+    if (sequence_text.isEmpty() ||
+        !std::all_of(sequence_text.cbegin(), sequence_text.cend(), [](const QChar character) {
+            return character >= QLatin1Char('0') && character <= QLatin1Char('9');
+        })) {
+        return std::nullopt;
+    }
+
+    bool valid = false;
+    const auto sequence = sequence_text.toULongLong(&valid);
+    return valid
+               ? std::optional<DeviceMessageOrder>{ { stream, message_id.mid(prefix.size(), separator - prefix.size()),
+                                                      sequence, phase } }
+               : std::nullopt;
 }
 
 bool IsConnectionError(mqtt::ConnectionState state) {
@@ -427,6 +540,32 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             result.error = QStringLiteral("장치 상태에 currentState가 필요합니다.");
             return result;
         }
+        std::optional<LineTracerPositionSnapshot> position_snapshot;
+        if (type != mqtt::MessageType::kErrorOccurred &&
+            process.status.key == QString::fromLatin1(kLineTracerProcessKey) &&
+            !ParseLineTracerPositionSnapshot(data, position_snapshot, result.error)) {
+            return result;
+        }
+
+        const auto device_order = ParseDeviceMessageOrder(message_id, source_id, type);
+        DeviceMessageOrdering* device_ordering = nullptr;
+        if (device_order.has_value() && device_order->stream != DeviceMessageOrder::Stream::kWill) {
+            device_ordering = device_order->stream == DeviceMessageOrder::Stream::kApplication
+                                  ? &process.application_messages
+                                  : &process.transport_messages;
+            const bool same_session = device_ordering->session_id == device_order->session_id;
+            const bool stale_sequence =
+                same_session && (device_order->sequence < device_ordering->last_sequence ||
+                                 (device_order->sequence == device_ordering->last_sequence &&
+                                  (device_order->stream == DeviceMessageOrder::Stream::kApplication ||
+                                   device_order->phase <= device_ordering->last_phase)));
+            if (device_ordering->retired_sessions.contains(device_order->session_id) || stale_sequence) {
+                return result;
+            }
+        } else if (!device_order.has_value() && process.last_device_message_at.isValid() &&
+                   timestamp < process.last_device_message_at) {
+            return result;
+        }
 
         if (type == mqtt::MessageType::kErrorOccurred) {
             const auto error_code = StringValue(data, "errorCode");
@@ -498,11 +637,32 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             }
             process.status.updated_at = timestamp;
         }
+        if (position_snapshot.has_value()) {
+            process.status.departure_position = position_snapshot->departure;
+            process.status.target_position = position_snapshot->target;
+            process.status.confirmed_position = position_snapshot->confirmed;
+            process.status.movement_state = position_snapshot->movement_state;
+        }
+        if (device_ordering != nullptr) {
+            if (!device_ordering->session_id.isEmpty() && device_ordering->session_id != device_order->session_id) {
+                device_ordering->retired_sessions.enqueue(device_ordering->session_id);
+                // ponytail: 512 sessions bounds malformed-device memory; persist epochs for longer replay protection.
+                while (device_ordering->retired_sessions.size() > kMaximumRetiredDeviceSessions) {
+                    device_ordering->retired_sessions.dequeue();
+                }
+            }
+            device_ordering->session_id = device_order->session_id;
+            device_ordering->last_sequence = device_order->sequence;
+            device_ordering->last_phase = device_order->phase;
+        }
+        process.last_device_message_at = timestamp;
         process.last_received_at = effective_received_at;
 
         updateOverall(timestamp);
         publishProcessSnapshots();
-        rememberMessage(message_id);
+        if (!device_order.has_value() || device_order->stream != DeviceMessageOrder::Stream::kWill) {
+            rememberMessage(message_id);
+        }
         result.applied = true;
         return result;
     }
@@ -842,6 +1002,10 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         process.status.current_state = current_state;
         process.status.work_id.clear();
         process.status.destination.clear();
+        process.status.departure_position.reset();
+        process.status.target_position.reset();
+        process.status.confirmed_position.reset();
+        process.status.movement_state.clear();
         process.status.work_completed = false;
         process.status.error_code.clear();
         process.status.has_error = false;
@@ -849,6 +1013,9 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
         process.status.updated_at = timestamp;
         ResetSensors(process.status);
         process.last_received_at = {};
+        process.last_device_message_at = {};
+        process.application_messages = {};
+        process.transport_messages = {};
         process.last_event_at = {};
     }
 

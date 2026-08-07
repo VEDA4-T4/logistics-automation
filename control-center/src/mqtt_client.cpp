@@ -1,6 +1,8 @@
 #include "logistics/control_center/mqtt_client.hpp"
 
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QEventLoop>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -14,6 +16,7 @@
 #include <QTimer>
 #include <QUuid>
 #include <array>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -80,6 +83,9 @@ MqttClient::MqttClient(MqttClientConfig config, QObject* parent)
 
     connect(client_, &QMqttClient::messageReceived, this,
             [this](const QByteArray& payload, const QMqttTopicName& topic) { handleMessage(payload, topic.name()); });
+    if (auto* application = QCoreApplication::instance(); application != nullptr) {
+        connect(application, &QCoreApplication::aboutToQuit, this, &MqttClient::stop);
+    }
 }
 
 void MqttClient::start() {
@@ -90,13 +96,42 @@ void MqttClient::start() {
 void MqttClient::stop() {
     stopping_ = true;
     reconnect_timer_->stop();
+    if (client_->state() == QMqttClient::Disconnected) {
+        return;
+    }
+
+    client_->disconnectFromHost();
+    if (QCoreApplication::instance() == nullptr) {
+        return;
+    }
+
+    QEventLoop disconnect_loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    connect(client_, &QMqttClient::stateChanged, &disconnect_loop, [&disconnect_loop](QMqttClient::ClientState state) {
+        if (state == QMqttClient::Disconnected) {
+            disconnect_loop.quit();
+        }
+    });
+    connect(&timeout, &QTimer::timeout, &disconnect_loop, &QEventLoop::quit);
+    timeout.start(500);
     if (client_->state() != QMqttClient::Disconnected) {
-        client_->disconnectFromHost();
+        disconnect_loop.exec(QEventLoop::ExcludeUserInputEvents);
     }
 }
 
 qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& target_device_id,
                                   const QString& component_id) {
+    return publishCommand(command, target_device_id, component_id, true);
+}
+
+qint32 MqttClient::requestCentralSnapshots() {
+    return publishCommand(mqtt::ControlCommand::kStatusRequest, QStringLiteral("ALL"),
+                          ToQString(mqtt::kCentralSnapshotComponentId), false);
+}
+
+qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& target_device_id,
+                                  const QString& component_id, const bool track_response) {
     const auto target_text = target_device_id.toStdString();
     const auto component_text = component_id.toStdString();
     if (command == mqtt::ControlCommand::kUnknown || !mqtt::IsValidTopicLevel(target_text) ||
@@ -138,7 +173,9 @@ qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& t
         return -1;
     }
 
-    emit commandPublished(message_id, request_id, command);
+    if (track_response) {
+        emit commandPublished(message_id, request_id, command);
+    }
     return message_id;
 }
 
@@ -197,6 +234,7 @@ void MqttClient::subscribeRequiredTopics() {
         ToQString(mqtt::QtEventTopic(client_id)),    ToQString(mqtt::QtErrorTopic(client_id)),
         ToQString(mqtt::kServerStatusTopic),         ToQString(mqtt::kServerHeartbeatTopic),
     };
+    const auto remaining = std::make_shared<qsizetype>(topics.size());
 
     for (const auto& topic : topics) {
         auto* subscription = client_->subscribe(QMqttTopicFilter(topic), 1);
@@ -205,10 +243,16 @@ void MqttClient::subscribeRequiredTopics() {
             continue;
         }
         connect(subscription, &QMqttSubscription::stateChanged, this,
-                [this, subscription, topic](QMqttSubscription::SubscriptionState state) {
+                [this, subscription, topic, remaining,
+                 subscribed = false](QMqttSubscription::SubscriptionState state) mutable {
                     if (state == QMqttSubscription::Error) {
                         emit errorOccurred(
                             QStringLiteral("MQTT 토픽 구독 실패: %1 (%2)").arg(topic, subscription->reason()));
+                    } else if (state == QMqttSubscription::Subscribed && !subscribed) {
+                        subscribed = true;
+                        if (--*remaining == 0) {
+                            emit subscriptionsReady();
+                        }
                     }
                 });
     }

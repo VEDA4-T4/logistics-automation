@@ -786,17 +786,7 @@ void SortingNode::HandleCycleComplete(const uart_frame_t& frame) noexcept {
         return;
     }
 
-    const std::string completed_work_id = active_work_id_;
-    EmitReport({
-        .channel = SortingReportChannel::kEvent,
-        .message_type = mqtt::MessageType::kWorkCompleted,
-        .data =
-            mqtt::WorkCompletedPayload{
-                .work_id = completed_work_id,
-                .result = "SUCCESS",
-                .message = std::string("sorting gate returned home and the cycle completed"),
-            },
-    });
+    EmitStatus("CYCLE_COMPLETE");
     ClearActiveCycle();
     EmitStatus("IDLE");
 }

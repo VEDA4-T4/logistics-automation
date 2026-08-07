@@ -73,6 +73,7 @@ public:
     [[nodiscard]] LineTracerCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
     void HandleUartEvent(const UartSessionEvent& event) noexcept;
     void Tick(std::chrono::milliseconds elapsed) noexcept;
+    [[nodiscard]] bool TrySendStatusKeepalive() noexcept;
 
     [[nodiscard]] bool HasActiveJob() const noexcept;
     [[nodiscard]] bool HasPendingSafetyCommand() const noexcept;
@@ -80,6 +81,9 @@ public:
     [[nodiscard]] std::uint16_t ActiveUartJobId() const noexcept;
     [[nodiscard]] std::uint8_t ActiveRouteId() const noexcept;
     [[nodiscard]] std::uint8_t CurrentPosition() const noexcept;
+    [[nodiscard]] contracts::mqtt::DeviceStatusPayload MakeDeviceStatusPayload(
+        contracts::mqtt::ConnectionState status, std::string current_state, std::optional<std::string> job_id,
+        std::optional<std::string> error_code) const;
 
     [[nodiscard]] static std::optional<std::uint8_t> RouteFromDestination(std::string_view destination);
     [[nodiscard]] static std::optional<std::uint8_t> PositionFromDestination(std::string_view destination);
@@ -108,6 +112,7 @@ private:
         std::uint16_t uart_job_id{};
         std::uint8_t route_id{};
         std::uint8_t requested_position{ UART_LINETRACER_POSITION_NONE };
+        std::string requested_area;
     };
 
     struct PendingSafetyContext {
@@ -127,11 +132,14 @@ private:
     [[nodiscard]] std::uint16_t AllocateJobId() noexcept;
     void RememberPending(PendingEffect effect, const LineTracerCommandResult& result);
     void ClearPending() noexcept;
+    void ResetStatusKeepalive() noexcept;
     void HandleLineTracerFrame(const uart_frame_t& frame) noexcept;
     void EmitPendingResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
                              std::string message) const noexcept;
     void EmitSafetyResponse(contracts::mqtt::CommandResult result, std::optional<std::string> error_code,
                             std::string message) const noexcept;
+    void EmitDeviceStatus(contracts::mqtt::ConnectionState status, std::string current_state,
+                          std::optional<std::string> job_id, std::optional<std::string> error_code) const noexcept;
     void EmitReport(LineTracerReport report) const noexcept;
 
     std::string device_id_;
@@ -140,9 +148,17 @@ private:
     std::uint16_t active_uart_job_id_{};
     std::uint8_t active_route_id_{};
     std::uint8_t current_position_{ UART_LINETRACER_POSITION_NONE };
+    std::optional<contracts::mqtt::LineTracerPositionPayload> departure_position_;
+    std::optional<contracts::mqtt::LineTracerPositionPayload> target_position_;
+    std::optional<contracts::mqtt::LineTracerPositionPayload> confirmed_position_;
+    std::string movement_state_{ "IDLE" };
     std::uint16_t next_uart_job_id_{ UART_LINETRACER_JOB_ID_MIN };
     PendingContext pending_{};
     PendingSafetyContext pending_safety_{};
+    static constexpr auto kStatusKeepaliveInterval = std::chrono::milliseconds{ 1000 };
+    std::chrono::milliseconds keepalive_elapsed_{};
+    bool keepalive_pending_{};
+    std::uint8_t keepalive_sequence_{};
     std::uint8_t last_uart_state_{ UART_LINETRACER_STATE_IDLE };
     LineTracerReportHandler report_handler_;
 };

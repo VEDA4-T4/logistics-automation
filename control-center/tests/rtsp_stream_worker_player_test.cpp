@@ -1,11 +1,14 @@
 #include <QApplication>
 #include <QMediaPlayer>
 #include <QPlaybackOptions>
+#include <QTableView>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
 #include <QVideoSink>
 
+#include "logistics/control_center/operational_log_panel.hpp"
+#include "logistics/control_center/operational_log_state.hpp"
 #include "logistics/control_center/rtsp_stream_worker.hpp"
 
 namespace {
@@ -48,10 +51,22 @@ int main(int argc, char* argv[]) {
     }
 
     logistics::control_center::RtspStreamWorker worker(1000, 64 * 1024);
+    logistics::control_center::OperationalLogState log_state;
+    logistics::control_center::OperationalLogPanel log_panel;
+    log_panel.setEntryPageProvider(
+        [&log_state](qsizetype offset, qsizetype limit) { return log_state.entries().mid(offset, limit); });
+    log_panel.reloadEntries(log_state.activeAlertCount());
+    log_panel.show();
+    auto* log_table = log_panel.findChild<QTableView*>(QStringLiteral("operationalLogTable"));
+    if (log_table == nullptr) {
+        return 2;
+    }
     QMediaPlayer player;
     QVideoSink video_sink;
     player.setVideoSink(&video_sink);
     QTimer frame_timer;
+    QTimer log_timer;
+    log_timer.setInterval(5);
     QByteArray request_buffer;
     QTcpSocket* stream_socket = nullptr;
     quint16 sequence = 1;
@@ -62,7 +77,12 @@ int main(int argc, char* argv[]) {
     int exit_code = 4;
     bool stream_ready = false;
     bool player_attached = false;
+    bool load_started = false;
     bool cleanup_started = false;
+    int frame_tick_count = 0;
+    int generated_log_count = 0;
+    constexpr int kLoadTestEntryCount = 5000;
+    constexpr int kLoadTestBatchSize = 200;
 
     QObject::connect(&server, &QTcpServer::newConnection, &app, [&]() {
         stream_socket = server.nextPendingConnection();
@@ -105,6 +125,32 @@ int main(int argc, char* argv[]) {
     QObject::connect(&frame_timer, &QTimer::timeout, &app, [&]() {
         timestamp += 3000;
         stream_socket->write(interleavedH264Packet(idr_payload, sequence++, timestamp));
+        ++frame_tick_count;
+    });
+    QObject::connect(&log_timer, &QTimer::timeout, &app, [&]() {
+        QList<logistics::control_center::OperationalLogEntry> batch;
+        batch.reserve(kLoadTestBatchSize);
+        for (int index = 0; index < kLoadTestBatchSize && generated_log_count < kLoadTestEntryCount; ++index) {
+            log_state.appendLocal(logistics::control_center::OperationalLogSeverity::Info,
+                                  QStringLiteral("PI-LOAD-RTSP"), QStringLiteral("통합 부하"),
+                                  QStringLiteral("INCREMENTAL"), QStringLiteral("로그 %1").arg(generated_log_count));
+            batch.prepend(log_state.entries().front());
+            ++generated_log_count;
+        }
+        log_panel.prependEntries(batch, log_state.activeAlertCount());
+        if (generated_log_count < kLoadTestEntryCount || cleanup_started) {
+            return;
+        }
+        log_timer.stop();
+        cleanup_started = true;
+        QTimer::singleShot(100, &app, [&]() {
+            frame_timer.stop();
+            player.stop();
+            player.setSource({});
+            worker.stop();
+            exit_code = 0;
+            app.quit();
+        });
     });
     QObject::connect(worker.stream(), &logistics::control_center::RtspH264Stream::streamReady, &app, [&]() {
         stream_ready = true;
@@ -115,20 +161,13 @@ int main(int argc, char* argv[]) {
         player.setSourceDevice(worker.stream(), QUrl(QStringLiteral("active-stream.h264")));
         player.play();
         player_attached = player.sourceDevice() == worker.stream();
-        if (cleanup_started) {
+        if (load_started) {
             return;
         }
-        cleanup_started = true;
-        QTimer::singleShot(200, &app, [&]() {
-            frame_timer.stop();
-            player.stop();
-            player.setSource({});
-            worker.stop();
-            exit_code = 0;
-            app.quit();
-        });
+        load_started = true;
+        log_timer.start();
     });
-    QTimer::singleShot(3000, &app, [&]() { app.quit(); });
+    QTimer::singleShot(5000, &app, [&]() { app.quit(); });
 
     worker.start(QUrl(QStringLiteral("rtsp://127.0.0.1:%1/stream").arg(server.serverPort())));
     app.exec();
@@ -143,6 +182,16 @@ int main(int argc, char* argv[]) {
         if (!player_attached) {
             return 43;
         }
+        if (generated_log_count != kLoadTestEntryCount) {
+            return 44;
+        }
+        if (log_state.entries().size() != logistics::control_center::OperationalLogState::kDefaultMaximumEntries ||
+            log_table->model()->rowCount() != logistics::control_center::OperationalLogState::kDefaultMaximumEntries) {
+            return 45;
+        }
+        if (frame_tick_count < 5) {
+            return 46;
+        }
         return exit_code;
     }
     if (request_count != 3) {
@@ -151,5 +200,15 @@ int main(int argc, char* argv[]) {
     if (!stream_ready) {
         return 6;
     }
-    return player_attached ? 0 : 7;
+    if (!player_attached) {
+        return 7;
+    }
+    if (generated_log_count != kLoadTestEntryCount) {
+        return 8;
+    }
+    if (log_state.entries().size() != logistics::control_center::OperationalLogState::kDefaultMaximumEntries ||
+        log_table->model()->rowCount() != logistics::control_center::OperationalLogState::kDefaultMaximumEntries) {
+        return 9;
+    }
+    return frame_tick_count >= 5 ? 0 : 10;
 }

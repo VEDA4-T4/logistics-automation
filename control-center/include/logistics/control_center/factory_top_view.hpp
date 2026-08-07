@@ -62,13 +62,17 @@ public:
     explicit FactoryTopViewWidget(QWidget* parent = nullptr);
     ~FactoryTopViewWidget() override;
 
-    void setProcesses(const QList<ProcessUnitStatus>& processes);
+    void setProcesses(const QList<ProcessUnitStatus>& processes,
+                      OverallProcessState overall_state = OverallProcessState::Idle);
     void setSelectedDeviceId(const QString& device_id);
     [[nodiscard]] QString selectedDeviceId() const;
     [[nodiscard]] qreal nodeOpacity(const QString& process_key) const;
     [[nodiscard]] QColor nodeColor(const QString& process_key) const;
     [[nodiscard]] QString sensorText(const QString& process_key, int sensor_id) const;
     [[nodiscard]] QPointF boxPosition(const QString& process_key) const;
+    [[nodiscard]] QPointF lineTracerPickupPosition(int route) const;
+    [[nodiscard]] QPointF lineTracerJunctionPosition(int route) const;
+    [[nodiscard]] QPointF lineTracerDestinationPosition(int route) const;
     [[nodiscard]] qreal gripperAngle() const;
     [[nodiscard]] bool gripperProductVisible() const;
     [[nodiscard]] QPointF gripperProductPosition() const;

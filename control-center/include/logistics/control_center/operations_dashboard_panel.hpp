@@ -14,8 +14,6 @@ class QTimer;
 
 namespace logistics::control_center {
 
-class FactoryTopViewWidget;
-
 class OperationsDashboardPanel final : public QWidget {
     Q_OBJECT
 
@@ -56,7 +54,6 @@ private:
     QLabel* overall_work_count_{ nullptr };
     QLabel* overall_detail_{ nullptr };
     QLabel* overall_updated_at_{ nullptr };
-    FactoryTopViewWidget* factory_top_view_{ nullptr };
     QGridLayout* process_layout_{ nullptr };
     QTimer* timestamp_timer_{ nullptr };
     ProcessDashboardStatus overall_;

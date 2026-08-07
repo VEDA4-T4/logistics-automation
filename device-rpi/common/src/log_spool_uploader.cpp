@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <random>
@@ -163,12 +164,14 @@ std::filesystem::path MetadataPath(const std::filesystem::path& log_path) {
     return metadata_path;
 }
 
-std::vector<std::filesystem::path> PendingLogs(const std::filesystem::path& directory) {
+std::vector<std::filesystem::path> PendingLogs(const std::filesystem::path& directory,
+                                               const bool include_quarantined = false) {
     std::vector<std::filesystem::path> files;
     std::error_code error;
     for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
         const std::string name = entry.path().filename().string();
-        if (entry.is_regular_file() && name.ends_with(kPendingSuffix)) {
+        if (entry.is_regular_file() &&
+            (name.ends_with(kPendingSuffix) || (include_quarantined && name.ends_with(".orphaned")))) {
             files.push_back(entry.path());
         }
     }
@@ -359,8 +362,29 @@ public:
             }
             for (const auto& candidate : PendingLogs(config_.spool_directory)) {
                 LogFileMetadata candidate_metadata;
-                if (!ReadMetadata(MetadataPath(candidate), candidate_metadata) ||
-                    candidate_metadata.attempts >= config_.maximum_attempts) {
+                if (!ReadMetadata(MetadataPath(candidate), candidate_metadata)) {
+                    auto quarantined = candidate;
+                    quarantined += ".orphaned";
+                    std::error_code error;
+                    std::filesystem::rename(candidate, quarantined, error);
+                    if (!error) {
+                        const auto candidate_metadata_path = MetadataPath(candidate);
+                        if (std::filesystem::exists(candidate_metadata_path, error)) {
+                            auto quarantined_metadata = quarantined;
+                            quarantined_metadata += ".meta";
+                            error.clear();
+                            std::filesystem::rename(candidate_metadata_path, quarantined_metadata, error);
+                        }
+                        std::cerr << "[device][log-spool][ERROR] quarantined pending log with missing or invalid "
+                                     "metadata: "
+                                  << quarantined.string() << '\n';
+                    } else {
+                        std::cerr << "[device][log-spool][ERROR] failed to quarantine pending log: "
+                                  << candidate.string() << "; " << error.message() << '\n';
+                    }
+                    continue;
+                }
+                if (candidate_metadata.attempts >= config_.maximum_attempts) {
                     continue;
                 }
                 const auto retry = next_attempt_.find(candidate_metadata.message_id);
@@ -449,18 +473,20 @@ private:
         }
         const std::string message_id = GenerateMessageId();
         const auto pending = config_.spool_directory / (message_id + std::string(kPendingSuffix));
-        std::filesystem::rename(ActiveLogPath(), pending, error);
-        if (error) {
-            return false;
-        }
         LogFileMetadata metadata{ .device_id = config_.device_id,
                                   .message_id = message_id,
                                   .started_at = active_started_at_,
                                   .ended_at = UtcNow(),
-                                  .sha256 = Sha256File(pending),
-                                  .byte_size = std::filesystem::file_size(pending, error),
+                                  .sha256 = Sha256File(ActiveLogPath()),
+                                  .byte_size = std::filesystem::file_size(ActiveLogPath(), error),
                                   .attempts = 0 };
         if (error || metadata.sha256.empty() || !WriteMetadata(MetadataPath(pending), metadata)) {
+            return false;
+        }
+        std::filesystem::rename(ActiveLogPath(), pending, error);
+        if (error) {
+            std::error_code ignored;
+            std::filesystem::remove(MetadataPath(pending), ignored);
             return false;
         }
         active_started_at_ = UtcNow();
@@ -476,7 +502,7 @@ private:
     }
 
     void EnforceSpoolLimitLocked() {
-        auto files = PendingLogs(config_.spool_directory);
+        auto files = PendingLogs(config_.spool_directory, true);
         std::uintmax_t total = 0;
         std::error_code error;
         for (const auto& file : files) {

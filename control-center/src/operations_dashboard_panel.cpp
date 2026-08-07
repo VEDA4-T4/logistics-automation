@@ -8,14 +8,12 @@
 #include <QLabel>
 #include <QLayoutItem>
 #include <QMouseEvent>
-#include <QScrollArea>
 #include <QSizePolicy>
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include "logistics/contracts/mqtt_message.hpp"
-#include "logistics/control_center/factory_top_view.hpp"
 
 namespace logistics::control_center {
 namespace {
@@ -200,11 +198,17 @@ QString SensorIndicatorText(const SensorUnitStatus& sensor) {
     return text;
 }
 
+void SetElidedText(QLabel* label, const QString& text) {
+    label->setText(label->fontMetrics().elidedText(text, Qt::ElideRight, 140));
+    label->setToolTip(text);
+}
+
 }  // namespace
 
 OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("operationsDashboard"));
-    setMinimumHeight(250);
+    setMinimumHeight(104);
+    setMaximumHeight(132);
     setStyleSheet(
         "#operationsDashboard{background:#1f1f1f;border-bottom:1px solid #303030;}"
         "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #303030;border-radius:6px;}"
@@ -214,17 +218,12 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
         "#processStatusSection,#processStatusContent{background:#1f1f1f;border:0;}"
         "QLabel{color:#cccccc;}");
 
-    auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(10, 10, 10, 10);
-    layout->setSpacing(8);
-
-    factory_top_view_ = new FactoryTopViewWidget(this);
-    factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
-    layout->addWidget(factory_top_view_, 3);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(10, 6, 10, 6);
+    layout->setSpacing(4);
 
     overall_card_ = new QFrame(this);
     overall_card_->setObjectName(QStringLiteral("overallProcessCard"));
-    overall_card_->setMinimumWidth(250);
     overall_card_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     overall_card_->setCursor(Qt::PointingHandCursor);
     overall_card_->setProperty("controlTargetDeviceId", QStringLiteral("SYSTEM"));
@@ -256,19 +255,8 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     for (auto* label : overall_card_->findChildren<QLabel*>()) {
         label->setAttribute(Qt::WA_TransparentForMouseEvents);
     }
-    auto* scroll_area = new QScrollArea(this);
-    scroll_area->setObjectName(QStringLiteral("processStatusSection"));
-    scroll_area->setWidgetResizable(true);
-    scroll_area->setFrameShape(QFrame::NoFrame);
-    scroll_area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll_area->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    scroll_area->setStyleSheet(
-        "QScrollArea{background:#1f1f1f;border:0;}"
-        "QScrollArea>QWidget>QWidget{background:#1f1f1f;}");
-    scroll_area->viewport()->setStyleSheet("background:#1f1f1f;");
-
-    auto* process_section = new QWidget(scroll_area);
-    process_section->setObjectName(QStringLiteral("processStatusContent"));
+    auto* process_section = new QWidget(this);
+    process_section->setObjectName(QStringLiteral("processStatusSection"));
     process_section->setAttribute(Qt::WA_StyledBackground);
     auto* process_section_layout = new QVBoxLayout(process_section);
     process_section_layout->setContentsMargins(0, 0, 0, 0);
@@ -291,16 +279,9 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     process_layout_ = new QGridLayout(process_content);
     process_layout_->setContentsMargins(0, 0, 0, 0);
     process_layout_->setSpacing(8);
-    process_layout_->addWidget(overall_card_, 0, 0, 1, 2);
+    process_layout_->addWidget(overall_card_, 0, 0);
     process_section_layout->addWidget(process_content, 1);
-    scroll_area->setWidget(process_section);
-    layout->addWidget(scroll_area, 2);
-
-    connect(factory_top_view_, &FactoryTopViewWidget::controlTargetSelected, this,
-            [this](const QString& device_id, const QString& display_name) {
-                setControlTarget(device_id);
-                emit controlTargetSelected(device_id, display_name);
-            });
+    layout->addWidget(process_section);
 
     timestamp_timer_ = new QTimer(this);
     timestamp_timer_->setInterval(1000);
@@ -340,7 +321,6 @@ void OperationsDashboardPanel::setState(const OperationsDashboardState& state) {
     }
     refreshOverall();
     refreshProcesses();
-    factory_top_view_->setProcesses(processes_);
 }
 
 void OperationsDashboardPanel::setMqttConnected(bool connected) {
@@ -352,7 +332,6 @@ void OperationsDashboardPanel::setMqttConnected(bool connected) {
 void OperationsDashboardPanel::setControlTarget(const QString& target_device_id) {
     selected_control_target_ = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
     refreshControlTargetSelection();
-    factory_top_view_->setSelectedDeviceId(selected_control_target_);
 }
 
 bool OperationsDashboardPanel::eventFilter(QObject* watched, QEvent* event) {
@@ -380,7 +359,6 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.card = new QFrame(this);
     widgets.card->setObjectName(QStringLiteral("processUnitCard"));
     widgets.card->setAttribute(Qt::WA_StyledBackground);
-    widgets.card->setMinimumWidth(180);
     widgets.card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     widgets.card->setCursor(Qt::PointingHandCursor);
     widgets.card->setProperty("controlTargetDeviceId", process.device_id);
@@ -401,8 +379,12 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.current_state->setStyleSheet("color:#75beff;font-size:10px;font-weight:600;");
     widgets.work_or_error = new QLabel(widgets.card);
     widgets.work_or_error->setStyleSheet("color:#9d9d9d;font-size:9px;");
+    widgets.work_or_error->setMinimumWidth(0);
+    widgets.work_or_error->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     widgets.device_and_updated_at = new QLabel(widgets.card);
     widgets.device_and_updated_at->setStyleSheet("color:#7f7f7f;font-size:8px;");
+    widgets.device_and_updated_at->setMinimumWidth(0);
+    widgets.device_and_updated_at->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto* sensor_layout = new QHBoxLayout();
     sensor_layout->setContentsMargins(0, 0, 0, 0);
     sensor_layout->setSpacing(8);
@@ -438,7 +420,8 @@ void OperationsDashboardPanel::rebuildProcessCards() {
     for (qsizetype index = 0; index < processes_.size(); ++index) {
         const auto& process = processes_[index];
         auto widgets = createProcessCard(process);
-        process_layout_->addWidget(widgets.card, static_cast<int>(index / 2) + 1, static_cast<int>(index % 2));
+        process_layout_->addWidget(widgets.card, 0, static_cast<int>(index) + 1);
+        process_layout_->setColumnStretch(static_cast<int>(index) + 1, 1);
         process_cards_.insert(process.key, widgets);
     }
     refreshControlTargetSelection();
@@ -470,27 +453,25 @@ void OperationsDashboardPanel::refreshProcesses() {
         widgets.status->setStyleSheet(PillStyle(presentation));
         widgets.current_state->setText(CurrentStateText(process.current_state));
         widgets.current_state->setToolTip(process.current_state);
+        QString work_or_error;
         if (process.has_error) {
-            widgets.work_or_error->setText(process.error_code.isEmpty()
-                                               ? QStringLiteral("오류 발생")
-                                               : QStringLiteral("오류 · %1").arg(process.error_code));
+            work_or_error = process.error_code.isEmpty() ? QStringLiteral("오류 발생")
+                                                         : QStringLiteral("오류 · %1").arg(process.error_code);
             widgets.work_or_error->setStyleSheet("color:#f14c4c;font-size:9px;");
         } else if (process.has_warning) {
-            widgets.work_or_error->setText(IsSensorStaleErrorCode(process.error_code)
-                                               ? QStringLiteral("경고 · 센서 응답 지연")
-                                               : QStringLiteral("경고 · %1").arg(process.error_code));
+            work_or_error = IsSensorStaleErrorCode(process.error_code)
+                                ? QStringLiteral("경고 · 센서 응답 지연")
+                                : QStringLiteral("경고 · %1").arg(process.error_code);
             widgets.work_or_error->setStyleSheet("color:#cca700;font-size:9px;");
         } else {
-            widgets.work_or_error->setText(process.work_id.isEmpty()
-                                               ? QStringLiteral("작업 · 없음")
-                                               : QStringLiteral("작업 · %1").arg(process.work_id));
+            work_or_error = process.work_id.isEmpty() ? QStringLiteral("작업 · 없음")
+                                                      : QStringLiteral("작업 · %1").arg(process.work_id);
             widgets.work_or_error->setStyleSheet("color:#9d9d9d;font-size:9px;");
         }
-        widgets.work_or_error->setToolTip(process.has_error || process.has_warning ? process.error_code
-                                                                                   : process.work_id);
-        widgets.device_and_updated_at->setText(
-            QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
-        widgets.device_and_updated_at->setToolTip(process.updated_at.toLocalTime().toString(Qt::ISODateWithMs));
+        SetElidedText(widgets.work_or_error, work_or_error);
+        const auto device_and_updated_at =
+            QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at));
+        SetElidedText(widgets.device_and_updated_at, device_and_updated_at);
         for (const auto& sensor : process.sensors) {
             auto* indicator = widgets.sensor_indicators.value(sensor.sensor_id, nullptr);
             if (indicator == nullptr) {
@@ -517,8 +498,8 @@ void OperationsDashboardPanel::refreshTimestamps() {
     for (const auto& process : processes_) {
         auto iterator = process_cards_.find(process.key);
         if (iterator != process_cards_.end()) {
-            iterator->device_and_updated_at->setText(
-                QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
+            SetElidedText(iterator->device_and_updated_at,
+                          QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
         }
     }
 }
