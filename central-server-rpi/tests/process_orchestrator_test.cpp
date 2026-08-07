@@ -1,5 +1,6 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 
+#include <array>
 #include <cassert>
 #include <optional>
 #include <string>
@@ -28,12 +29,14 @@ mqtt::MqttMessage Message(std::string message_id, mqtt::MessageType type, std::s
     };
 }
 
-mqtt::MqttMessage Status(std::string id, std::string source, std::string state) {
+mqtt::MqttMessage Status(std::string id, std::string source, std::string state,
+                         mqtt::ConnectionState connection = mqtt::ConnectionState::kOnline,
+                         std::optional<std::string> work_id = std::string(kWorkId)) {
     return Message(std::move(id), mqtt::MessageType::kDeviceStatus, std::move(source),
                    mqtt::DeviceStatusPayload{
-                       .status = mqtt::ConnectionState::kOnline,
+                       .status = connection,
                        .current_state = std::move(state),
-                       .job_id = std::string(kWorkId),
+                       .job_id = std::move(work_id),
                        .error_code = std::nullopt,
                    });
 }
@@ -231,6 +234,54 @@ void TestInputOfflineStatusStopsTheProcess() {
                                  });
     assert(orchestrator.Handle(offline).transition.Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+}
+
+void TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess() {
+    struct FailureCase {
+        std::string_view device_id;
+        mqtt::ConnectionState connection;
+    };
+    constexpr std::array failures{
+        FailureCase{ "PI-INPUT-01", mqtt::ConnectionState::kOffline },
+        FailureCase{ "PI-VISION-01", mqtt::ConnectionState::kRtspError },
+        FailureCase{ "PI-GRIPPER-01", mqtt::ConnectionState::kMqttError },
+        FailureCase{ "PI-SORTING-01", mqtt::ConnectionState::kUartError },
+        FailureCase{ "PI-LT-01", mqtt::ConnectionState::kOffline },
+    };
+
+    for (std::size_t index = 0; index < failures.size(); ++index) {
+        central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+        assert(orchestrator.BeginWork("MSG-NODE-WORK-" + std::to_string(index), kWorkId, "PI-INPUT-01").Applied());
+        const auto result = orchestrator.Handle(Status("MSG-NODE-FAILURE-" + std::to_string(index),
+                                                       std::string(failures[index].device_id), "STOPPED",
+                                                       failures[index].connection, std::nullopt));
+        assert(result.handled && result.transition.Applied());
+        assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+        const auto failed = orchestrator.StateMachine().FindWork(kWorkId);
+        assert(failed->stage == central_server::WorkStage::kFailed);
+        assert(failed->suspended_stage == central_server::WorkStage::kInputDetected);
+
+        assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+        assert(orchestrator.CompleteSystemRecovery().Applied());
+        assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
+        assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
+    }
+}
+
+void TestHealthyStoppedNodesDoNotFailTheProcess() {
+    constexpr std::array device_ids{
+        "PI-INPUT-01", "PI-VISION-01", "PI-GRIPPER-01", "PI-SORTING-01", "PI-LT-01",
+    };
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    assert(orchestrator.BeginWork("MSG-HEALTHY-IDLE-WORK", kWorkId, "PI-INPUT-01").Applied());
+
+    for (std::size_t index = 0; index < device_ids.size(); ++index) {
+        const auto result = orchestrator.Handle(Status("MSG-HEALTHY-IDLE-" + std::to_string(index), device_ids[index],
+                                                       "STOPPED", mqtt::ConnectionState::kOnline, std::nullopt));
+        assert(!result.handled);
+        assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+        assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
+    }
 }
 
 void TestRestoredHomographyTargetCreatesGripperCommand() {
@@ -497,6 +548,8 @@ int main() {
     TestInvalidOrderAndDispatchFailureEnterError();
     TestInputFailureWithoutWorkIdStopsTheProcess();
     TestInputOfflineStatusStopsTheProcess();
+    TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess();
+    TestHealthyStoppedNodesDoNotFailTheProcess();
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();
     TestChangedCalibrationDiscardsRestoredTarget();

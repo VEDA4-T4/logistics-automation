@@ -337,12 +337,13 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         const auto role = DeviceRoleForSource(config_, message.source_id);
         const auto meaning = role.has_value() ? contracts::DeviceStateMeaningFor(*role, current_state)
                                               : contracts::DeviceStateMeaning::kUnknown;
-        if (role == contracts::DeviceRole::kInput &&
+        if (role.has_value() &&
             (IsConnectionFailure(status->status) || meaning == contracts::DeviceStateMeaning::kError ||
              meaning == contracts::DeviceStateMeaning::kEmergencyStop)) {
             return {
                 .handled = true,
-                .transition = machine.ApplySystemFailure("input node is unavailable: " + current_state),
+                .transition = machine.ApplySystemFailure(std::string(contracts::ToString(*role)) +
+                                                         " node is unavailable: " + current_state),
                 .commands = {},
             };
         }
