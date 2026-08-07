@@ -119,20 +119,12 @@ void UpdateDeviceStatus(const SortingReport& report, const std::shared_ptr<Devic
             outbox.erase(older_measurement);
         }
     }
-    if (outbox.size() >= kOutboundQueueCapacity) {
-        const auto stale_status = std::find_if(outbox.begin(), outbox.end(), [](const OutboundMessage& queued) {
+    if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
             return queued.channel == SortingReportChannel::kStatus ||
                    queued.message.message_type == mqtt::MessageType::kSensorStatus;
-        });
-        if (stale_status == outbox.end()) {
-            if (report.channel != SortingReportChannel::kResponse) {
-                std::cerr << "[sorting][mqtt][ERROR] outbound queue full; preserving queued command responses\n";
-                return false;
-            }
-            std::cerr << "[sorting][mqtt][WARN] outbound queue capacity exceeded to preserve a command response\n";
-        } else {
-            outbox.erase(stale_status);
-        }
+        })) {
+        std::cerr << "[sorting][mqtt][ERROR] outbound queue full; preserving queued messages\n";
+        return false;
     }
     outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
     return true;

@@ -33,6 +33,20 @@ QJsonObject DeviceStatus(const QString& status, const QString& current_state, co
     return data;
 }
 
+QJsonObject Position(const QString& area, const QString& location) {
+    return { { QStringLiteral("area"), area }, { QStringLiteral("location"), location } };
+}
+
+QJsonObject PositionStatus(const QString& current_state, const QJsonValue& departure, const QJsonValue& target,
+                           const QJsonValue& confirmed, const QJsonValue& movement) {
+    auto data = DeviceStatus(QStringLiteral("ONLINE"), current_state, QStringLiteral("WORK-LT"));
+    data.insert(QStringLiteral("departurePosition"), departure);
+    data.insert(QStringLiteral("targetPosition"), target);
+    data.insert(QStringLiteral("confirmedPosition"), confirmed);
+    data.insert(QStringLiteral("movementState"), movement);
+    return data;
+}
+
 QJsonObject WorkData(const QString& work_id, QJsonObject data = {}) {
     data.insert(QStringLiteral("workId"), work_id);
     return data;
@@ -69,8 +83,192 @@ int main() {
     assert(ProcessByKey(state, QStringLiteral("input")).sensors.size() == 1);
     assert(ProcessByKey(state, QStringLiteral("sorting")).sensors.size() == 3);
 
+    OperationsDashboardState position_state;
+    auto result = position_state.applyEnvelope(
+        Envelope("SNAPSHOT-PI-LT-01-1", "DEVICE_STATUS",
+                 PositionStatus(QStringLiteral("MOVING"), Position(QStringLiteral("DEPARTURE"), QStringLiteral("A")),
+                                Position(QStringLiteral("DESTINATION"), QStringLiteral("C")),
+                                Position(QStringLiteral("DEPARTURE"), QStringLiteral("A")), QStringLiteral("MOVING")),
+                 QStringLiteral("PI-LT-01")));
+    assert(result.applied);
+    const auto moving_line = ProcessByKey(position_state, QStringLiteral("linetracer"));
+    assert(moving_line.departure_position->location == QStringLiteral("A"));
+    assert(moving_line.target_position->location == QStringLiteral("C"));
+    assert(moving_line.confirmed_position->area == QStringLiteral("DEPARTURE"));
+    assert(moving_line.movement_state == QStringLiteral("MOVING"));
+
+    result = position_state.applyEnvelope(
+        Envelope("SNAPSHOT-PI-LT-01-2", "DEVICE_STATUS", DeviceStatus("ONLINE", "MOVING", "WORK-LT"),
+                 QStringLiteral("PI-LT-01"), QStringLiteral("2026-07-23T01:00:01.000Z")));
+    assert(result.applied);
+    assert(ProcessByKey(position_state, QStringLiteral("linetracer")).confirmed_position->location ==
+           QStringLiteral("A"));
+
+    auto partial_position = DeviceStatus(QStringLiteral("ONLINE"), QStringLiteral("MOVING"), QStringLiteral("WORK-LT"));
+    partial_position.insert(QStringLiteral("departurePosition"),
+                            Position(QStringLiteral("DEPARTURE"), QStringLiteral("B")));
+    result =
+        position_state.applyEnvelope(Envelope("SNAPSHOT-PI-LT-01-3", "DEVICE_STATUS", partial_position,
+                                              QStringLiteral("PI-LT-01"), QStringLiteral("2026-07-23T01:00:02.000Z")));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(position_state, QStringLiteral("linetracer")).confirmed_position->location ==
+           QStringLiteral("A"));
+
+    result =
+        position_state.applyEnvelope(Envelope("SNAPSHOT-PI-LT-01-4", "DEVICE_STATUS",
+                                              PositionStatus(QStringLiteral("POSITION_UNKNOWN"), QJsonValue::Null,
+                                                             QJsonValue::Null, QJsonValue::Null, QJsonValue::Null),
+                                              QStringLiteral("PI-LT-01"), QStringLiteral("2026-07-23T01:00:03.000Z")));
+    assert(result.applied);
+    assert(!ProcessByKey(position_state, QStringLiteral("linetracer")).confirmed_position.has_value());
+
+    OperationsDashboardState ordered_device_state;
+    result = ordered_device_state.applyEnvelope(Envelope("SORTING-NORMAL-NEWER", "DEVICE_STATUS",
+                                                         DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                         "2026-07-23T01:00:00.300Z"));
+    assert(result.applied);
+    result =
+        ordered_device_state.applyEnvelope(Envelope("SORTING-ERROR-OLDER", "ERROR_OCCURRED",
+                                                    { { QStringLiteral("errorCode"), QStringLiteral("ERR-OLD") },
+                                                      { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                    "PI-SORTING-01", "2026-07-23T01:00:00.200Z"));
+    assert(result.handled && !result.applied);
+    assert(!ProcessByKey(ordered_device_state, QStringLiteral("sorting")).has_error);
+    assert(ProcessByKey(ordered_device_state, QStringLiteral("sorting")).current_state == QStringLiteral("SORTING"));
+
+    result =
+        ordered_device_state.applyEnvelope(Envelope("SORTING-ERROR-NEWER", "ERROR_OCCURRED",
+                                                    { { QStringLiteral("errorCode"), QStringLiteral("ERR-NEW") },
+                                                      { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                    "PI-SORTING-01", "2026-07-23T01:00:00.400Z"));
+    assert(result.applied);
+    result = ordered_device_state.applyEnvelope(Envelope("SORTING-NORMAL-OLDER", "DEVICE_STATUS",
+                                                         DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                         "2026-07-23T01:00:00.350Z"));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(ordered_device_state, QStringLiteral("sorting")).has_error);
+    assert(ProcessByKey(ordered_device_state, QStringLiteral("sorting")).error_code == QStringLiteral("ERR-NEW"));
+
+    result = ordered_device_state.applyEnvelope(Envelope("SORTING-NORMAL-NEWEST", "DEVICE_STATUS",
+                                                         DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                         "2026-07-23T01:00:00.500Z"));
+    assert(result.applied);
+    assert(!ProcessByKey(ordered_device_state, QStringLiteral("sorting")).has_error);
+    assert(ProcessByKey(ordered_device_state, QStringLiteral("sorting")).error_code.isEmpty());
+
+    OperationsDashboardState sequenced_device_state;
+    result = sequenced_device_state.applyEnvelope(Envelope("PI-SORTING-01-MSG-SESSION-A-10", "DEVICE_STATUS",
+                                                           DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                           "2026-07-23T01:01:00Z"));
+    assert(result.applied);
+    result =
+        sequenced_device_state.applyEnvelope(Envelope("PI-SORTING-01-MSG-SESSION-A-9", "ERROR_OCCURRED",
+                                                      { { QStringLiteral("errorCode"), QStringLiteral("ERR-LATE") },
+                                                        { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                      "PI-SORTING-01", "2026-07-23T01:01:00Z"));
+    assert(result.handled && !result.applied);
+    assert(!ProcessByKey(sequenced_device_state, QStringLiteral("sorting")).has_error);
+
+    result =
+        sequenced_device_state.applyEnvelope(Envelope("PI-SORTING-01-MSG-SESSION-A-11", "ERROR_OCCURRED",
+                                                      { { QStringLiteral("errorCode"), QStringLiteral("ERR-NEW") },
+                                                        { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                      "PI-SORTING-01", "2026-07-23T01:01:00Z"));
+    assert(result.applied);
+    assert(ProcessByKey(sequenced_device_state, QStringLiteral("sorting")).has_error);
+
+    result = sequenced_device_state.applyEnvelope(Envelope("PI-SORTING-01-MSG-SESSION-B-1", "DEVICE_STATUS",
+                                                           DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                           "2026-07-23T01:00:59Z"));
+    assert(result.applied);
+    assert(!ProcessByKey(sequenced_device_state, QStringLiteral("sorting")).has_error);
+    result =
+        sequenced_device_state.applyEnvelope(Envelope("PI-SORTING-01-MSG-SESSION-A-12", "ERROR_OCCURRED",
+                                                      { { QStringLiteral("errorCode"), QStringLiteral("ERR-RETIRED") },
+                                                        { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                      "PI-SORTING-01", "2026-07-23T01:01:01Z"));
+    assert(result.handled && !result.applied);
+    assert(!ProcessByKey(sequenced_device_state, QStringLiteral("sorting")).has_error);
+
+    sequenced_device_state.markMqttDisconnected(
+        QDateTime::fromString(QStringLiteral("2026-07-23T02:00:00Z"), Qt::ISODate));
+    sequenced_device_state.markMqttConnectedAwaitingStatus(
+        QDateTime::fromString(QStringLiteral("2026-07-23T02:00:01Z"), Qt::ISODate));
+    result = sequenced_device_state.applyEnvelope(Envelope("PI-SORTING-01-MSG-SESSION-A-1", "DEVICE_STATUS",
+                                                           DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                           "2026-07-23T00:59:00Z"));
+    assert(result.applied);
+    assert(ProcessByKey(sequenced_device_state, QStringLiteral("sorting")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOnline);
+
+    OperationsDashboardState interleaved_device_state;
+    result = interleaved_device_state.applyEnvelope(Envelope("PI-SORTING-01-MSG-APPLICATION-A-10", "DEVICE_STATUS",
+                                                             DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                             "2026-07-23T01:02:00Z"));
+    assert(result.applied);
+    result = interleaved_device_state.applyEnvelope(Envelope("STATUS-PI-SORTING-01-MSG-LIFECYCLE-A-10", "DEVICE_STATUS",
+                                                             DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                             "2026-07-23T01:02:00Z"));
+    assert(result.applied);
+    result = interleaved_device_state.applyEnvelope(Envelope("OFFLINE-PI-SORTING-01-MSG-LIFECYCLE-A-9", "DEVICE_STATUS",
+                                                             DeviceStatus("OFFLINE", "DISCONNECTED"), "PI-SORTING-01",
+                                                             "2026-07-23T01:02:00Z"));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(interleaved_device_state, QStringLiteral("sorting")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOnline);
+
+    result = interleaved_device_state.applyEnvelope(
+        Envelope("PI-SORTING-01-MSG-APPLICATION-A-11", "ERROR_OCCURRED",
+                 { { QStringLiteral("errorCode"), QStringLiteral("ERR-APPLICATION") },
+                   { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                 "PI-SORTING-01", "2026-07-23T01:02:00Z"));
+    assert(result.applied);
+    result = interleaved_device_state.applyEnvelope(Envelope("OFFLINE-PI-SORTING-01-MSG-LIFECYCLE-A-10",
+                                                             "DEVICE_STATUS", DeviceStatus("OFFLINE", "DISCONNECTED"),
+                                                             "PI-SORTING-01", "2026-07-23T01:02:00Z"));
+    assert(result.applied);
+    assert(ProcessByKey(interleaved_device_state, QStringLiteral("sorting")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOffline);
+    result = interleaved_device_state.applyEnvelope(Envelope("STATUS-PI-SORTING-01-MSG-LIFECYCLE-A-11", "DEVICE_STATUS",
+                                                             DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                             "2026-07-23T01:02:00Z"));
+    assert(result.applied);
+    result = interleaved_device_state.applyEnvelope(Envelope("OFFLINE-PI-SORTING-01-MSG-LIFECYCLE-A-9", "DEVICE_STATUS",
+                                                             DeviceStatus("OFFLINE", "DISCONNECTED"), "PI-SORTING-01",
+                                                             "2026-07-23T01:02:00Z"));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(interleaved_device_state, QStringLiteral("sorting")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOnline);
+    result = interleaved_device_state.applyEnvelope(Envelope("PI-SORTING-01-MSG-APPLICATION-A-12", "DEVICE_STATUS",
+                                                             DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                             "2026-07-23T01:02:00Z"));
+    assert(result.applied);
+    assert(!ProcessByKey(interleaved_device_state, QStringLiteral("sorting")).has_error);
+    result = interleaved_device_state.applyEnvelope(Envelope("WILL-PI-SORTING-01-MSG-LIFECYCLE-A-0", "DEVICE_STATUS",
+                                                             DeviceStatus("OFFLINE", "DISCONNECTED"), "PI-SORTING-01",
+                                                             "2026-07-23T01:01:59Z"));
+    assert(result.applied);
+    assert(ProcessByKey(interleaved_device_state, QStringLiteral("sorting")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOffline);
+    result = interleaved_device_state.applyEnvelope(Envelope("STATUS-PI-SORTING-01-MSG-LIFECYCLE-A-12", "DEVICE_STATUS",
+                                                             DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                             "2026-07-23T01:02:00Z"));
+    assert(result.applied);
+    assert(ProcessByKey(interleaved_device_state, QStringLiteral("sorting")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOnline);
+    result = interleaved_device_state.applyEnvelope(Envelope("WILL-PI-SORTING-01-MSG-LIFECYCLE-A-0", "DEVICE_STATUS",
+                                                             DeviceStatus("OFFLINE", "DISCONNECTED"), "PI-SORTING-01",
+                                                             "2026-07-23T01:01:59Z"));
+    assert(result.applied);
+    result = interleaved_device_state.applyEnvelope(Envelope("STATUS-PI-SORTING-01-MSG-LIFECYCLE-A-13", "DEVICE_STATUS",
+                                                             DeviceStatus("ONLINE", "SORTING"), "PI-SORTING-01",
+                                                             "2026-07-23T01:02:01Z"));
+    assert(result.applied);
+    assert(ProcessByKey(interleaved_device_state, QStringLiteral("sorting")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOnline);
+
     OperationsDashboardState stopped_sensor_state;
-    auto result = stopped_sensor_state.applyEnvelope(
+    result = stopped_sensor_state.applyEnvelope(
         Envelope("SORTING-STOPPED", "DEVICE_STATUS", DeviceStatus("ONLINE", "STOPPED"), "PI-SORTING-01"));
     assert(result.applied);
     result = stopped_sensor_state.applyEnvelope(
@@ -178,6 +376,162 @@ int main() {
     assert(state.overall().active_unit_count == 5);
     assert(state.overall().active_work_count == 5);
 
+    OperationsDashboardState destination_state;
+    result = destination_state.applyEnvelope(Envelope(
+        "SORTING-ROUTE-ONLINE", "DEVICE_STATUS", DeviceStatus("ONLINE", "SORTING", "WORK-ROUTE"), "PI-SORTING-01"));
+    assert(result.applied);
+    result = destination_state.applyEnvelope(
+        Envelope("DESTINATION-2", "DESTINATION_SET",
+                 WorkData("WORK-ROUTE", { { QStringLiteral("destination"), QStringLiteral("2") } }), "central-server",
+                 "2026-07-23T01:00:01.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).work_id == QStringLiteral("WORK-ROUTE"));
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination == QStringLiteral("2"));
+
+    result = destination_state.applyEnvelope(
+        Envelope("DESTINATION-INVALID", "DESTINATION_SET",
+                 WorkData("WORK-ROUTE", { { QStringLiteral("destination"), QStringLiteral("4") } }), "central-server",
+                 "2026-07-23T01:00:02.000Z"));
+    assert(result.handled && !result.applied && !result.error.isEmpty());
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination == QStringLiteral("2"));
+
+    result = destination_state.applyEnvelope(Envelope("SORTING-NEW-WORK", "DEVICE_STATUS",
+                                                      DeviceStatus("ONLINE", "SORTING", "WORK-NEXT"), "PI-SORTING-01",
+                                                      "2026-07-23T01:00:03.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination.isEmpty());
+    result = destination_state.applyEnvelope(
+        Envelope("DESTINATION-LATE", "DESTINATION_SET",
+                 WorkData("WORK-ROUTE", { { QStringLiteral("destination"), QStringLiteral("route-1") } }),
+                 "central-server", "2026-07-23T01:00:04.000Z"));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).work_id == QStringLiteral("WORK-NEXT"));
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination.isEmpty());
+
+    result = destination_state.applyEnvelope(
+        Envelope("DESTINATION-3", "DESTINATION_SET",
+                 WorkData("WORK-NEXT", { { QStringLiteral("destination"), QStringLiteral("destination-3") } }),
+                 "central-server", "2026-07-23T01:00:05.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination == QStringLiteral("destination-3"));
+    result = destination_state.applyEnvelope(Envelope("SORTING-ROUTE-OFFLINE", "DEVICE_STATUS",
+                                                      DeviceStatus("OFFLINE", "DISCONNECTED", "WORK-NEXT"),
+                                                      "PI-SORTING-01", "2026-07-23T01:00:05.500Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination.isEmpty());
+    destination_state.markMqttDisconnected(
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:06.000Z"), Qt::ISODateWithMs));
+    assert(ProcessByKey(destination_state, QStringLiteral("sorting")).destination.isEmpty());
+    result = destination_state.applyEnvelope(Envelope("LINE-AFTER-ROUTE-RESET", "DEVICE_STATUS",
+                                                      DeviceStatus("ONLINE", "DELIVERING", "WORK-NEXT"), "PI-LT-01",
+                                                      "2026-07-23T01:00:07.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(destination_state, QStringLiteral("linetracer")).destination.isEmpty());
+
+    OperationsDashboardState concurrent_route_state;
+    result = concurrent_route_state.applyEnvelope(
+        Envelope("SORTING-A", "DEVICE_STATUS", DeviceStatus("ONLINE", "SORTING", "WORK-A"), "PI-SORTING-01"));
+    assert(result.applied);
+    result = concurrent_route_state.applyEnvelope(
+        Envelope("DESTINATION-A", "DESTINATION_SET",
+                 WorkData("WORK-A", { { QStringLiteral("destination"), QStringLiteral("route-1") } }), "central-server",
+                 "2026-07-23T01:00:01.000Z"));
+    assert(result.applied);
+    result = concurrent_route_state.applyEnvelope(Envelope("SORTING-B", "DEVICE_STATUS",
+                                                           DeviceStatus("ONLINE", "SORTING", "WORK-B"), "PI-SORTING-01",
+                                                           "2026-07-23T01:00:02.000Z"));
+    assert(result.applied);
+    assert(ProcessByKey(concurrent_route_state, QStringLiteral("sorting")).work_id == QStringLiteral("WORK-B"));
+    assert(ProcessByKey(concurrent_route_state, QStringLiteral("sorting")).destination.isEmpty());
+
+    result = concurrent_route_state.applyEnvelope(Envelope("LINE-A", "DEVICE_STATUS",
+                                                           DeviceStatus("ONLINE", "DELIVERING", "WORK-A"), "PI-LT-01",
+                                                           "2026-07-23T01:00:03.000Z"));
+    assert(result.applied);
+    const auto line_a = ProcessByKey(concurrent_route_state, QStringLiteral("linetracer"));
+    assert(line_a.work_id == QStringLiteral("WORK-A"));
+    assert(line_a.destination == QStringLiteral("route-1"));
+    assert(!line_a.work_completed);
+
+    result = concurrent_route_state.applyEnvelope(
+        Envelope("WORK-A-COMPLETE", "WORK_COMPLETED",
+                 WorkData("WORK-A", { { QStringLiteral("result"), QStringLiteral("SUCCESS") } }), "central-server",
+                 "2026-07-23T01:00:04.000Z"));
+    assert(result.applied);
+    const auto completed_line_a = ProcessByKey(concurrent_route_state, QStringLiteral("linetracer"));
+    assert(completed_line_a.current_state == QStringLiteral("배송 완료"));
+    assert(completed_line_a.destination == QStringLiteral("route-1"));
+    assert(completed_line_a.work_completed);
+
+    OperationsDashboardState failed_completion_state;
+    result = failed_completion_state.applyEnvelope(Envelope(
+        "DESTINATION-FAILED-WORK", "DESTINATION_SET",
+        WorkData("WORK-FAILED", { { QStringLiteral("destination"), QStringLiteral("2") } }), "central-server"));
+    assert(result.applied);
+    result = failed_completion_state.applyEnvelope(Envelope("LINE-FAILED-WORK", "DEVICE_STATUS",
+                                                            DeviceStatus("ONLINE", "DELIVERING", "WORK-FAILED"),
+                                                            "PI-LT-01", "2026-07-23T01:00:01.000Z"));
+    assert(result.applied);
+    result = failed_completion_state.applyEnvelope(
+        Envelope("WORK-FAILED-COMPLETE", "WORK_COMPLETED",
+                 WorkData("WORK-FAILED", { { QStringLiteral("result"), QStringLiteral("FAILED") } }), "central-server",
+                 "2026-07-23T01:00:02.000Z"));
+    assert(result.applied);
+    const auto failed_line = ProcessByKey(failed_completion_state, QStringLiteral("linetracer"));
+    assert(failed_line.destination == QStringLiteral("2"));
+    assert(failed_line.work_completed);
+    assert(failed_line.has_error);
+    failed_completion_state.markMqttDisconnected(
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:03.000Z"), Qt::ISODateWithMs));
+    const auto reset_failed_line = ProcessByKey(failed_completion_state, QStringLiteral("linetracer"));
+    assert(reset_failed_line.destination.isEmpty());
+    assert(!reset_failed_line.work_completed);
+
+    result = concurrent_route_state.applyEnvelope(Envelope("LINE-C", "DEVICE_STATUS",
+                                                           DeviceStatus("ONLINE", "DELIVERING", "WORK-C"), "PI-LT-01",
+                                                           "2026-07-23T01:00:05.000Z"));
+    assert(result.applied);
+    const auto line_c = ProcessByKey(concurrent_route_state, QStringLiteral("linetracer"));
+    assert(line_c.work_id == QStringLiteral("WORK-C"));
+    assert(line_c.destination.isEmpty());
+    assert(!line_c.work_completed);
+
+    OperationsDashboardState bounded_route_state;
+    const auto route_cache_start = QDateTime::fromString(QStringLiteral("2026-07-23T03:00:00.000Z"), Qt::ISODateWithMs);
+    for (int index = 0; index <= 512; ++index) {
+        const auto suffix = QString::number(index);
+        result = bounded_route_state.applyEnvelope(
+            Envelope(QStringLiteral("DESTINATION-CACHE-%1").arg(suffix), "DESTINATION_SET",
+                     WorkData(QStringLiteral("WORK-CACHE-%1").arg(suffix),
+                              { { QStringLiteral("destination"), QString::number((index % 3) + 1) } }),
+                     "central-server", route_cache_start.addMSecs(index).toString(Qt::ISODateWithMs)));
+        assert(result.applied);
+    }
+    result = bounded_route_state.applyEnvelope(
+        Envelope("LINE-EVICTED-ROUTE", "DEVICE_STATUS", DeviceStatus("ONLINE", "DELIVERING", "WORK-CACHE-0"),
+                 "PI-LT-01", route_cache_start.addSecs(1).toString(Qt::ISODateWithMs)));
+    assert(result.applied);
+    assert(ProcessByKey(bounded_route_state, QStringLiteral("linetracer")).destination.isEmpty());
+    result = bounded_route_state.applyEnvelope(
+        Envelope("LINE-RETAINED-ROUTE", "DEVICE_STATUS", DeviceStatus("ONLINE", "DELIVERING", "WORK-CACHE-512"),
+                 "PI-LT-01", route_cache_start.addSecs(2).toString(Qt::ISODateWithMs)));
+    assert(result.applied);
+    assert(ProcessByKey(bounded_route_state, QStringLiteral("linetracer")).destination == QStringLiteral("3"));
+
+    OperationsDashboardState stale_destination_state;
+    result = stale_destination_state.applyEnvelope(Envelope("SORTING-STALE-ROUTE", "DEVICE_STATUS",
+                                                            DeviceStatus("ONLINE", "SORTING", "WORK-STALE-ROUTE"),
+                                                            "PI-SORTING-01"));
+    assert(result.applied);
+    result = stale_destination_state.applyEnvelope(
+        Envelope("DESTINATION-STALE-ROUTE", "DESTINATION_SET",
+                 WorkData("WORK-STALE-ROUTE", { { QStringLiteral("destination"), QStringLiteral("start-1") } }),
+                 "central-server", "2026-07-23T01:00:01.000Z"));
+    assert(result.applied);
+    assert(stale_destination_state.expireStaleProcesses(
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:15.000Z"), Qt::ISODateWithMs)));
+    assert(ProcessByKey(stale_destination_state, QStringLiteral("sorting")).destination.isEmpty());
+
     result = state.applyEnvelope(
         Envelope("SORTING-SENSOR-STALE", "ERROR_OCCURRED",
                  { { QStringLiteral("errorCode"), QStringLiteral("err_health_sensor_stale") },
@@ -221,6 +575,8 @@ int main() {
         assert(process.connection_state == logistics::contracts::mqtt::ConnectionState::kUnknown);
         assert(process.current_state == QStringLiteral("DISCONNECTED"));
         assert(process.work_id.isEmpty());
+        assert(process.destination.isEmpty());
+        assert(!process.work_completed);
         assert(process.error_code.isEmpty());
         assert(!process.has_error);
         assert(!process.has_warning);
@@ -280,10 +636,32 @@ int main() {
     assert(result.applied);
     assert(!clock_skew_state.expireStaleProcesses(received_at.addMSecs(14999)));
     assert(clock_skew_state.expireStaleProcesses(received_at.addSecs(15)));
+    result = clock_skew_state.applyEnvelope(Envelope("VISION-SKEWED-STALE-ERROR", "ERROR_OCCURRED",
+                                                     { { QStringLiteral("errorCode"), QStringLiteral("ERR-OLD") },
+                                                       { QStringLiteral("currentState"), QStringLiteral("ERROR") } },
+                                                     "PI-VISION-01", "2026-07-23T01:54:59.000Z"),
+                                            received_at.addSecs(16));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).error_code ==
+           QStringLiteral("ERR-HEARTBEAT-TIMEOUT"));
+    result = clock_skew_state.applyEnvelope(
+        Envelope("VISION-SKEWED-STALE-STATUS", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"),
+                 "PI-VISION-01", "2026-07-23T01:54:58.000Z"),
+        received_at.addSecs(17));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOffline);
+    result = clock_skew_state.applyEnvelope(
+        Envelope("VISION-SKEWED-STALE-HEARTBEAT", "HEARTBEAT", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"),
+                 "PI-VISION-01", "2026-07-23T01:54:57.000Z"),
+        received_at.addSecs(18));
+    assert(result.handled && !result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).connection_state ==
+           logistics::contracts::mqtt::ConnectionState::kOffline);
     result = clock_skew_state.applyEnvelope(
         Envelope("VISION-SKEWED-RECOVERED", "DEVICE_STATUS", DeviceStatus("ONLINE", "WAITING_FOR_PRODUCT"),
                  "PI-VISION-01", "2026-07-23T01:55:05.000Z"),
-        received_at.addSecs(16));
+        received_at.addSecs(19));
     assert(result.applied);
     assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).connection_state ==
            logistics::contracts::mqtt::ConnectionState::kOnline);
@@ -377,6 +755,18 @@ int main() {
                                           "PI-INPUT-01", "2026-07-23T01:00:13.500Z"));
     assert(result.applied && state.overall().state == OverallProcessState::EmergencyStop);
 
+    result =
+        state.applyEnvelope(Envelope("VISION-AFTER-ESTOP", "DEVICE_STATUS", DeviceStatus("ONLINE", "EMERGENCY_STOP"),
+                                     "PI-VISION-01", "2026-07-23T01:00:13.750Z"));
+    assert(result.applied &&
+           ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("EMERGENCY_STOP"));
+    assert(state.markRecoveryCompleted(
+        QStringLiteral("PI-VISION-01"),
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:13.900Z"), Qt::ISODateWithMs)));
+    assert(ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("STOPPED"));
+    assert(state.overall().state == OverallProcessState::EmergencyStop);
+    assert(!state.markRecoveryCompleted(QStringLiteral("UNKNOWN"), QDateTime::currentDateTimeUtc()));
+
     result = state.applyEnvelope(Envelope("COMMAND-2-PROCESSING", "COMMAND_RESPONSE",
                                           { { QStringLiteral("requestId"), QStringLiteral("REQ-2") },
                                             { QStringLiteral("command"), QStringLiteral("RECOVERY") },
@@ -391,6 +781,10 @@ int main() {
                                           "central-server", "2026-07-23T01:00:14.250Z"));
     assert(result.applied && state.overall().state == OverallProcessState::Stopped);
     assert(state.overall().stage == QStringLiteral("복구 완료 · 시작 대기"));
+    for (const auto& process : state.processes()) {
+        assert(process.current_state != QStringLiteral("EMERGENCY_STOP"));
+        assert(process.current_state != QStringLiteral("ESTOP"));
+    }
 
     OperationsDashboardState individual_command_state;
     result = individual_command_state.applyEnvelope(

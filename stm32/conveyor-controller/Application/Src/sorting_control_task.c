@@ -145,8 +145,13 @@ static uint8_t sorting_control_task_send_tx(const sorting_control_task_response_
     }
 
     if (response->useProvidedSequence != 0U) {
-        sendResult = CommTx_SendWithSequence(COMM_TX_CH_SORTING, response->sequence, response->command,
-                                             response->payload, response->length);
+        /*
+         * urgent 큐를 쓴다. 요청에 대한 응답이라 Pi 쪽 재시도 예산이 걸려 있고,
+         * 일반 큐는 센서 텔레메트리·heartbeat가 상시 점유하고 있어 링버퍼가
+         * 밀리면 응답이 그 뒤에서 기다리게 된다.
+         */
+        sendResult = CommTx_SendUrgentWithSequence(COMM_TX_CH_SORTING, response->sequence, response->command,
+                                                   response->payload, response->length);
     } else {
         sendResult = CommTx_Send(COMM_TX_CH_SORTING, response->command, response->payload, response->length);
     }

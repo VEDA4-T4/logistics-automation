@@ -47,6 +47,7 @@ device_status_retention_days=11
 error_retention_days=12
 security_retention_days=13
 image_retention_days=14
+upload_retention_days=15
 [http]
 enabled=true
 port=8081
@@ -66,6 +67,7 @@ gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
 line_tracer_initial_position=A
+default_destination=3
 [homography]
 enabled=true
 pixel_to_conveyor=2,0,10,0,2,20,0,0,1
@@ -85,12 +87,14 @@ calibration_version=4
     assert(config.database.path == path.parent_path() / "data/server.db");
     assert(config.database.migration_dir == path.parent_path() / "migrations");
     assert(config.storage.image_root == path.parent_path() / "images");
+    assert(config.storage.upload_retention_days == 15);
     assert(config.http.upload_root == path.parent_path() / "uploads");
     assert(config.http.tls_certificate.empty());
     assert(config.http.tls_private_key.empty());
     assert(config.http.port == 8081);
     assert(config.process.enabled);
     assert(config.process.line_tracer_initial_position == "A");
+    assert(config.process.default_destination == "3");
     assert(config.process.homography.enabled);
     assert(config.process.homography.pixel_to_conveyor[0] == 2.0);
     assert(config.process.homography.pixel_to_conveyor[2] == 10.0);
@@ -126,6 +130,7 @@ void TestInvalidSettingsAreRejected() {
                    "[http]\nenabled=true\nbearer_token=token\ntls_enabled=true\n"
                    "tls_certificate=missing.crt\ntls_private_key=missing.key\n");
     ExpectRejected("line-tracer-position", "[process]\nline_tracer_initial_position=D\n");
+    ExpectRejected("default-destination", "[process]\ndefault_destination=bad/destination\n");
     ExpectRejected("homography-matrix", "[homography]\nenabled=true\npixel_to_conveyor=1,0,0\n");
     ExpectRejected("homography-number", "[homography]\nconveyor_plane_z_mm=850mm\n");
     ExpectRejected("homography-singular",

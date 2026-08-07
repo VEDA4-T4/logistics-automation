@@ -55,8 +55,6 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 ```
 
-카메라와 UART 장치 접근을 위해 배포 사용자에게 필요한 그룹만 부여합니다. 무조건 root로 실행하지 않습니다.
-
 ## 적용
 
 ```sh

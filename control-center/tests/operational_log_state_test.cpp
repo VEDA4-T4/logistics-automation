@@ -127,10 +127,80 @@ int main() {
     assert(state.activeAlertCount() == 0);
     assert(state.acknowledgeAllAlerts() == 0);
 
-    for (qsizetype index = 0; index < OperationalLogState::kMaximumEntries + 10; ++index) {
+    const auto older_timestamp = QDateTime::fromString(QStringLiteral("2026-07-01T00:00:00.000Z"), Qt::ISODateWithMs);
+    const logistics::control_center::OperationalLogEntry older_entry{
+        .id = QStringLiteral("HISTORY-1"),
+        .occurred_at = older_timestamp,
+        .severity = OperationalLogSeverity::Info,
+        .device_id = QStringLiteral("PI-INPUT-01"),
+        .category = QStringLiteral("서버 이력"),
+        .code = QStringLiteral("DEVICE_STATUS"),
+        .message = QStringLiteral("과거 장치 상태"),
+        .topic = QStringLiteral("server-history"),
+        .acknowledged = false,
+    };
+    const auto inserted_history = state.appendOlderEntries({ older_entry, older_entry });
+    assert(inserted_history.size() == 1);
+    assert(state.entries().back().id == QStringLiteral("HISTORY-1"));
+    assert(state.appendOlderEntries({ older_entry }).isEmpty());
+
+    for (qsizetype index = 0; index < OperationalLogState::kDefaultMaximumEntries + 10; ++index) {
         state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("test"), QStringLiteral("테스트"),
                           QStringLiteral("ENTRY"), QString::number(index));
     }
-    assert(state.entries().size() == OperationalLogState::kMaximumEntries);
+    assert(state.entries().size() == OperationalLogState::kDefaultMaximumEntries);
+    assert(state.maximumEntries() == OperationalLogState::kDefaultMaximumEntries);
+
+    OperationalLogState overflowing_entries;
+    for (qsizetype index = 0; index < OperationalLogState::kDefaultMaximumEntries + 10; ++index) {
+        const auto severity = static_cast<OperationalLogSeverity>(index % 4);
+        overflowing_entries.appendLocal(severity, QStringLiteral("PI-LOAD-01"), QStringLiteral("부하 로그"),
+                                        QStringLiteral("OVERFLOW_ENTRY"), QString::number(index));
+    }
+    assert(overflowing_entries.entries().size() == OperationalLogState::kDefaultMaximumEntries);
+    assert(overflowing_entries.unacknowledgedCount() == OperationalLogState::kDefaultMaximumEntries);
+    assert(overflowing_entries.activeAlertCount() == OperationalLogState::kDefaultMaximumEntries / 2);
+    const auto retained_oldest_entry_id = overflowing_entries.entries().back().id;
+    assert(overflowing_entries.acknowledge(retained_oldest_entry_id));
+    assert(overflowing_entries.unacknowledgedCount() == OperationalLogState::kDefaultMaximumEntries - 1);
+    assert(overflowing_entries.activeAlertCount() == OperationalLogState::kDefaultMaximumEntries / 2 - 1);
+    assert(overflowing_entries.acknowledgeAllAlerts() == OperationalLogState::kDefaultMaximumEntries / 2 - 1);
+    assert(overflowing_entries.unacknowledgedCount() == OperationalLogState::kDefaultMaximumEntries / 2);
+
+    OperationalLogState bounded_history(3);
+    bounded_history.appendLocal(OperationalLogSeverity::Info, QStringLiteral("test"), QStringLiteral("live"),
+                                QStringLiteral("LIVE"), QStringLiteral("1"));
+    bounded_history.appendLocal(OperationalLogSeverity::Info, QStringLiteral("test"), QStringLiteral("live"),
+                                QStringLiteral("LIVE"), QStringLiteral("2"));
+    auto second_older_entry = older_entry;
+    second_older_entry.id = QStringLiteral("HISTORY-2");
+    second_older_entry.occurred_at = older_timestamp.addMSecs(-1);
+    const auto bounded_inserted = bounded_history.appendOlderEntries({ older_entry, second_older_entry });
+    assert(bounded_inserted.size() == 1);
+    assert(bounded_history.entries().size() == 3);
+    assert(bounded_history.entries().back().id == QStringLiteral("HISTORY-1"));
+
+    OperationalLogState mqtt_overflow;
+    for (qsizetype index = 0; index < OperationalLogState::kDefaultMaximumEntries * 2 + 10; ++index) {
+        const auto id = QStringLiteral("LOAD-%1").arg(index);
+        const auto update =
+            mqtt_overflow.applyEnvelope(QStringLiteral("qt/control-center/error"),
+                                        Envelope(id, QStringLiteral("ERROR_OCCURRED"), QStringLiteral("PI-LOAD-01"),
+                                                 { { QStringLiteral("errorCode"), QStringLiteral("LOAD") },
+                                                   { QStringLiteral("errorLevel"), QStringLiteral("ERROR") },
+                                                   { QStringLiteral("currentState"), QStringLiteral("ERROR") },
+                                                   { QStringLiteral("message"), QStringLiteral("load") } }));
+        assert(update.applied);
+    }
+    assert(mqtt_overflow.entries().size() == OperationalLogState::kDefaultMaximumEntries);
+    assert(mqtt_overflow.processedMessageIdCount() <= OperationalLogState::kDefaultMaximumEntries * 2);
+    const auto duplicate_update = mqtt_overflow.applyEnvelope(
+        QStringLiteral("qt/control-center/error"),
+        Envelope(QStringLiteral("LOAD-1009"), QStringLiteral("ERROR_OCCURRED"), QStringLiteral("PI-LOAD-01"),
+                 { { QStringLiteral("errorCode"), QStringLiteral("LOAD") },
+                   { QStringLiteral("errorLevel"), QStringLiteral("ERROR") },
+                   { QStringLiteral("currentState"), QStringLiteral("ERROR") },
+                   { QStringLiteral("message"), QStringLiteral("duplicate") } }));
+    assert(duplicate_update.handled && !duplicate_update.applied);
     return 0;
 }

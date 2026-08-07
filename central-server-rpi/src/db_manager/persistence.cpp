@@ -1,6 +1,5 @@
 #include "logistics/central_server/persistence.hpp"
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -223,11 +222,12 @@ DatabaseStatus ImageStore::Store(std::string_view work_id, std::string_view mime
 }
 
 DatabaseStatus ImageStore::Remove(const std::filesystem::path& relative_path) const {
-    if (relative_path.empty() || relative_path.is_absolute()) {
+    const auto normalized = relative_path.lexically_normal();
+    if (normalized.empty() || normalized == "." || normalized.is_absolute() || *normalized.begin() == "..") {
         return { DatabaseStatusCode::kInvalidArgument, "image path must be relative" };
     }
     std::error_code error;
-    std::filesystem::remove(root_ / relative_path, error);
+    std::filesystem::remove(root_ / normalized, error);
     return error ? DatabaseStatus{ DatabaseStatusCode::kIoError, "cannot remove image: " + error.message() }
                  : DatabaseStatus::Ok();
 }
@@ -301,6 +301,26 @@ DatabaseStatus ProductRepository::Create(std::string_view work_id, std::int64_t 
         return status;
     bool row = false;
     return statement.Step(row);
+}
+
+DatabaseStatus ProductRepository::MarkError(std::string_view work_id, std::int64_t now_ms) {
+    Statement statement;
+    auto status =
+        database_.Prepare("UPDATE product SET lifecycle_state='ERROR',updated_at_ms=? WHERE work_id=?", statement);
+    if (!status.ok() || !(status = statement.Bind(1, now_ms)).ok() || !(status = statement.Bind(2, work_id)).ok()) {
+        return status;
+    }
+    bool row = false;
+    if (!(status = statement.Step(row)).ok()) {
+        return status;
+    }
+    Statement changes;
+    status = database_.Prepare("SELECT changes()", changes);
+    if (!status.ok() || !(status = changes.Step(row)).ok()) {
+        return status;
+    }
+    return changes.ColumnInt(0) == 0 ? DatabaseStatus{ DatabaseStatusCode::kNotFound, "work_id not found" }
+                                     : DatabaseStatus::Ok();
 }
 
 DatabaseStatus ProductRepository::ApplyEvent(std::string_view work_id, contracts::mqtt::MessageType type,
@@ -451,11 +471,7 @@ DatabaseStatus LogRepository::AppendSecurity(std::string_view event_type, std::s
 }
 
 PersistenceService::PersistenceService(Database& database, StorageConfig storage_config)
-    : database_(database),
-      storage_config_(std::move(storage_config)),
-      image_store_(storage_config_.image_root),
-      next_cleanup_at_ms_(CurrentUnixTimeMilliseconds() +
-                          std::max(1, storage_config_.cleanup_interval_hours) * 3'600'000LL) {}
+    : database_(database), image_store_(std::move(storage_config.image_root)) {}
 
 DatabaseStatus PersistenceService::FindActiveProductByBarcode(std::string_view barcode,
                                                               std::optional<CatalogProduct>& output) {
@@ -480,23 +496,9 @@ DatabaseStatus PersistenceService::FindActiveProductByBarcode(std::string_view b
     return DatabaseStatus::Ok();
 }
 
-DatabaseStatus PersistenceService::RunRetentionIfDue(std::int64_t now_ms) {
-    if (now_ms < next_cleanup_at_ms_)
-        return DatabaseStatus::Ok();
-    RetentionService retention(database_, storage_config_);
-    auto status = retention.RunOnce(now_ms);
-    if (status.ok()) {
-        next_cleanup_at_ms_ = now_ms + std::max(1, storage_config_.cleanup_interval_hours) * 3'600'000LL;
-    }
-    return status;
-}
-
 PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                             const EventPayload& payload,
                                                             const TransportMetadata& metadata) {
-    const auto cleanup_status = RunRetentionIfDue(CurrentUnixTimeMilliseconds());
-    if (!cleanup_status.ok())
-        return Failure(cleanup_status);
     const auto parsed_topic = contracts::mqtt::ParseTopic(metadata.topic);
     if (!envelope.IsValid() || !parsed_topic.IsValid() || metadata.received_at_ms < 0 ||
         (parsed_topic.endpoint_id.size() > 0 && parsed_topic.endpoint_id != envelope.source_id)) {
@@ -635,44 +637,108 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
     return { PersistenceStatus::kStored, "message stored", work_id };
 }
 
-RetentionService::RetentionService(Database& database, StorageConfig config)
-    : database_(database), config_(std::move(config)), image_store_(config_.image_root) {}
+DatabaseStatus PersistenceService::RecordWorkInvalidation(const WorkInvalidation& invalidation) {
+    if (!IsUuid(invalidation.work_id) || invalidation.message_id.empty() || invalidation.error_code.empty() ||
+        invalidation.reason.empty() || invalidation.cause.empty() || invalidation.occurred_at_ms < 0) {
+        return { DatabaseStatusCode::kInvalidArgument, "invalid work invalidation metadata" };
+    }
+
+    const EventPayload payload{
+        .work_id = invalidation.work_id,
+        .process_state = "ERROR",
+        .error_code = invalidation.error_code,
+        .severity = "ERROR",
+        .error_message = invalidation.reason,
+        .details_json = contracts::mqtt::Json{ { "cause", invalidation.cause } }.dump(),
+    };
+    Transaction transaction(database_);
+    if (!transaction.status().ok()) {
+        return transaction.status();
+    }
+    ProductRepository products(database_);
+    auto status = products.MarkError(invalidation.work_id, invalidation.occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    Statement existing;
+    status = database_.Prepare("SELECT 1 FROM error_log WHERE message_id=?", existing);
+    if (!status.ok() || !(status = existing.Bind(1, invalidation.message_id)).ok()) {
+        return status;
+    }
+    bool already_recorded = false;
+    if (!(status = existing.Step(already_recorded)).ok()) {
+        return status;
+    }
+    if (already_recorded) {
+        return transaction.Commit();
+    }
+    status = products.AppendHistory(invalidation.work_id, invalidation.message_id,
+                                    contracts::mqtt::MessageType::kErrorOccurred, "central-server", payload,
+                                    invalidation.occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    LogRepository logs(database_);
+    status = logs.AppendError(invalidation.message_id, "central-server", payload, invalidation.occurred_at_ms);
+    if (!status.ok()) {
+        return status;
+    }
+    return transaction.Commit();
+}
+
+RetentionService::RetentionService(Database& database, StorageConfig config, std::filesystem::path upload_root)
+    : database_(database),
+      config_(std::move(config)),
+      image_store_(config_.image_root),
+      upload_store_(std::move(upload_root)) {}
 
 DatabaseStatus RetentionService::RunOnce(std::int64_t now_ms) {
     if (now_ms < 0)
         return { DatabaseStatusCode::kInvalidArgument, "invalid cleanup time" };
-    const auto image_cutoff = now_ms - static_cast<std::int64_t>(config_.image_retention_days) * kMillisecondsPerDay;
     DatabaseStatus status;
     bool row = false;
-    while (true) {
-        Statement images;
-        status = database_.Prepare(
-            "SELECT id,relative_path FROM image_file WHERE created_at_ms<? ORDER BY id LIMIT 500", images);
-        if (!status.ok() || !(status = images.Bind(1, image_cutoff)).ok())
-            return status;
-        std::vector<std::pair<std::int64_t, std::string>> expired_images;
-        while ((status = images.Step(row)).ok() && row) {
-            expired_images.emplace_back(images.ColumnInt64(0), images.ColumnText(1));
+    const auto remove_expired_files = [&](std::string_view select_sql, std::string_view delete_sql, std::int64_t cutoff,
+                                          ImageStore& store) -> DatabaseStatus {
+        while (true) {
+            Statement files;
+            auto cleanup_status = database_.Prepare(select_sql, files);
+            if (!cleanup_status.ok() || !(cleanup_status = files.Bind(1, cutoff)).ok())
+                return cleanup_status;
+            std::vector<std::pair<std::int64_t, std::string>> expired_files;
+            while ((cleanup_status = files.Step(row)).ok() && row) {
+                expired_files.emplace_back(files.ColumnInt64(0), files.ColumnText(1));
+            }
+            if (!cleanup_status.ok() || expired_files.empty())
+                return cleanup_status;
+            std::size_t removed = 0;
+            for (const auto& [id, path] : expired_files) {
+                cleanup_status = store.Remove(path);
+                if (!cleanup_status.ok())
+                    continue;
+                Statement erase;
+                cleanup_status = database_.Prepare(delete_sql, erase);
+                if (!cleanup_status.ok() || !(cleanup_status = erase.Bind(1, id)).ok() ||
+                    !(cleanup_status = erase.Step(row)).ok())
+                    return cleanup_status;
+                ++removed;
+            }
+            // Every selected file failed deletion; retain metadata and retry on the next scheduled run.
+            if (removed == 0)
+                return DatabaseStatus::Ok();
         }
-        if (!status.ok())
-            return status;
-        if (expired_images.empty())
-            break;
-        std::size_t removed = 0;
-        for (const auto& [id, path] : expired_images) {
-            status = image_store_.Remove(path);
-            if (!status.ok())
-                continue;
-            Statement erase;
-            status = database_.Prepare("DELETE FROM image_file WHERE id=?", erase);
-            if (!status.ok() || !(status = erase.Bind(1, id)).ok() || !(status = erase.Step(row)).ok())
-                return status;
-            ++removed;
-        }
-        // Every selected file failed deletion; retain metadata and retry on the next scheduled run.
-        if (removed == 0)
-            break;
-    }
+    };
+    const auto image_cutoff = now_ms - static_cast<std::int64_t>(config_.image_retention_days) * kMillisecondsPerDay;
+    status = remove_expired_files("SELECT id,relative_path FROM image_file WHERE created_at_ms<? ORDER BY id LIMIT 500",
+                                  "DELETE FROM image_file WHERE id=?", image_cutoff, image_store_);
+    if (!status.ok())
+        return status;
+    const auto upload_cutoff = now_ms - static_cast<std::int64_t>(config_.upload_retention_days) * kMillisecondsPerDay;
+    status = remove_expired_files(
+        "SELECT rowid,relative_path FROM http_upload WHERE created_at_ms<? AND "
+        "(relative_path GLOB 'images/*' OR relative_path GLOB 'logs/*') ORDER BY created_at_ms LIMIT 500",
+        "DELETE FROM http_upload WHERE rowid=?", upload_cutoff, upload_store_);
+    if (!status.ok())
+        return status;
     struct RetentionSql {
         const char* sql;
         int days;

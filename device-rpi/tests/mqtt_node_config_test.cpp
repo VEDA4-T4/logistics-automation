@@ -27,14 +27,16 @@ void TestConfigLoading() {
 [device]
 device_id=PI-01
 node_name=vision-node-01
-ip_address=192.168.0.21
+ip_address=192.0.2.10
 
 [mqtt]
-host=192.168.0.10
+host=192.0.2.10
 port=1884
 client_id=PI-01
 username=device
 password=secret
+tls_enabled=false
+ca_certificate=
 keep_alive_seconds=45
 reconnect_min_delay_seconds=2
 reconnect_max_delay_seconds=20
@@ -74,8 +76,8 @@ allow_insecure_http=false
     const auto config = device::LoadMqttNodeConfig(path);
     assert(config.device_id == "PI-01");
     assert(config.node_name == "vision-node-01");
-    assert(config.ip_address == "192.168.0.21");
-    assert(config.host == "192.168.0.10");
+    assert(config.ip_address == "192.0.2.10");
+    assert(config.host == "192.0.2.10");
     assert(config.port == 1884);
     assert(config.client_id == "PI-01");
     assert(config.keep_alive_seconds == 45);
@@ -104,6 +106,47 @@ allow_insecure_http=false
     assert(device::MakeMessageId(config.device_id, first_session, 42) == "PI-01-MSG-" + first_session + "-42");
     assert(device::MakeMessageId(config.device_id, first_session, 1) !=
            device::MakeMessageId(config.device_id, second_session, 1));
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+void TestTlsWithoutCaIsRejected() {
+    const auto path = MakeTemporaryConfigPath();
+
+    {
+        std::ofstream output(path);
+        assert(output);
+        output << R"ini(
+[device]
+device_id=PI-TEST
+node_name=mqtt-security-test
+ip_address=192.0.2.10
+
+[mqtt]
+host=192.0.2.10
+port=8883
+client_id=PI-TEST
+username=PI-TEST
+password=test-only-password
+tls_enabled=true
+ca_certificate=
+keep_alive_seconds=30
+reconnect_min_delay_seconds=1
+reconnect_max_delay_seconds=30
+clean_session=true
+)ini";
+    }
+
+    bool rejected = false;
+
+    try {
+        static_cast<void>(device::LoadMqttNodeConfig(path));
+    } catch (const device::NodeConfigError&) {
+        rejected = true;
+    }
+
+    assert(rejected);
 
     std::error_code error;
     std::filesystem::remove(path, error);
@@ -141,5 +184,6 @@ client_id=PI-01
 int main() {
     TestConfigLoading();
     TestRegistrationFieldsAreRequired();
+    TestTlsWithoutCaIsRejected();
     return 0;
 }

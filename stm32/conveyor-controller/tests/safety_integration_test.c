@@ -258,6 +258,16 @@ int32_t CommTx_SendUrgent(comm_tx_channel_t channel, uint8_t command, const uint
     return 0;
 }
 
+int32_t CommTx_SendUrgentWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command,
+                                      const uint8_t* payload, uint8_t length) {
+    (void)channel;
+    (void)sequence;
+    (void)command;
+    (void)payload;
+    (void)length;
+    return 0;
+}
+
 /* ---- fake: HAL ---- */
 uint32_t HAL_GetTick(void) {
     return 0U;

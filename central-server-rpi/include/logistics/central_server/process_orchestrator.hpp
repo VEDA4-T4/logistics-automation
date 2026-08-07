@@ -20,6 +20,7 @@ struct ProcessOrchestratorConfig final {
     std::string sorting_device_id{ "PI-SORTING-01" };
     std::string line_tracer_device_id{ "PI-LT-01" };
     std::string line_tracer_initial_position;
+    std::string default_destination{ "3" };
     HomographyConfig homography;
 
     [[nodiscard]] bool IsValid() const noexcept;
@@ -35,6 +36,16 @@ struct ProcessOrchestrationResult final {
     bool handled{ false };
     ProcessTransition transition;
     std::vector<ProcessCommandIntent> commands;
+};
+
+struct InvalidatedRestoredWork final {
+    std::string work_id;
+    std::string reason;
+};
+
+struct ProcessRestoreResult final {
+    bool restored{ false };
+    std::vector<InvalidatedRestoredWork> invalidated_works;
 };
 
 class ProcessOrchestrator final {
@@ -54,9 +65,10 @@ public:
     [[nodiscard]] ProcessTransition PreviewSystemCommand(contracts::mqtt::ControlCommand command) const;
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
-    [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                 std::vector<WorkProcessSnapshot> works,
-                                                 std::uint64_t message_sequence);
+    [[nodiscard]] ProcessRestoreResult RestoreAfterServerRestart(
+        ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
+        std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence);
+    [[nodiscard]] const std::unordered_map<std::string, GripperTarget>& GripperTargets() const noexcept;
     [[nodiscard]] std::uint64_t MessageSequence() const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
 

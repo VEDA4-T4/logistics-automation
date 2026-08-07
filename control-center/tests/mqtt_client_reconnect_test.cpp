@@ -9,9 +9,11 @@ int main(int argc, char* argv[]) {
                                                    .client_id = QStringLiteral("control-center-reconnect-test"),
                                                    .username = {},
                                                    .password = {},
+                                                   .ca_certificate = {},
                                                    .port = 1,
                                                    .reconnect_interval_ms = 100,
-                                                   .keep_alive_seconds = 10 });
+                                                   .keep_alive_seconds = 10,
+                                                   .tls_enabled = false });
 
     bool reconnect_was_scheduled = false;
     QObject::connect(&client, &logistics::control_center::MqttClient::connectionStateChanged, &application,

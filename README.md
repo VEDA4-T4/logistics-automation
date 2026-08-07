@@ -28,24 +28,31 @@ Input → Vision → Gripper → Sorting → Line Tracer
 
 ## 빠른 시작
 
-Ubuntu/Raspberry Pi에서 중앙서버를 준비합니다.
+Ubuntu/Raspberry Pi에서 중앙서버를 준비합니다. MQTT 비밀번호는 shell history에 남기지 않도록 prompt로 입력합니다.
 
-```sh
+```bash
+read -rsp 'central-server MQTT password: ' LOGISTICS_MQTT_PASSWORD; printf '\n'
+export LOGISTICS_MQTT_PASSWORD
 export LOGISTICS_UPLOAD_TOKEN='충분히-긴-임의의-토큰'
-export LOGISTICS_MQTT_HOST='127.0.0.1'
+export LOGISTICS_MQTT_HOST='mqtt.logistics.local'
 export LOGISTICS_INSTALL_DEPENDENCIES=1
 ./deploy/scripts/setup-central-server.sh
+unset LOGISTICS_MQTT_PASSWORD
 ```
 
 Vision Raspberry Pi에서는 중앙서버의 실제 LAN 주소를 사용합니다.
 
-```sh
+```bash
+read -rsp 'PI-VISION-01 MQTT password: ' LOGISTICS_MQTT_PASSWORD; printf '\n'
+export LOGISTICS_MQTT_PASSWORD
 export LOGISTICS_CENTRAL_HOST='192.168.0.10'
+export LOGISTICS_MQTT_HOST='mqtt.logistics.local'
 export LOGISTICS_UPLOAD_TOKEN='중앙서버와-동일한-토큰'
 export LOGISTICS_DEVICE_ID='PI-VISION-01'
 export LOGISTICS_INSTALL_DEPENDENCIES=1
 export LOGISTICS_INSTALL_OPENCV=1
 ./deploy/scripts/setup-vision-node.sh
+unset LOGISTICS_MQTT_PASSWORD
 ```
 
 생성된 설정은 Git에서 제외되는 `runtime/` 아래에 보관됩니다. 전체 설치와 실행 순서는
@@ -84,5 +91,5 @@ ctest --test-dir build --output-on-failure
 
 - 실제 `.ini`, 비밀번호, 업로드 토큰, 개인키는 커밋하지 않습니다.
 - 다른 기기에서 중앙서버에 접속할 때 `127.0.0.1` 대신 중앙서버의 LAN 주소 또는 DNS 이름을 사용합니다.
-- 현재 애플리케이션 MQTT 클라이언트는 TLS 연결 옵션을 아직 지원하지 않습니다. 8883 전환 전에
-  [TLS 적용 순서](deploy/mosquitto/README.md#tls-적용-순서)를 먼저 확인하세요.
+- MQTT 클라이언트는 CA 검증을 사용하는 TLS `8883`을 지원합니다. 설정의 `host`는 broker 서버 인증서 SAN에 포함된
+  DNS 이름 또는 IP여야 합니다.

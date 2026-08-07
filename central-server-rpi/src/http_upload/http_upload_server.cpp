@@ -26,6 +26,7 @@ namespace {
 namespace contract = contracts::http;
 namespace mqtt = contracts::mqtt;
 using MhdResult = decltype(MHD_queue_response(nullptr, 0U, nullptr));
+constexpr std::string_view kHistoryPath = "/api/v1/history";
 constexpr std::string_view kWorkHistoryPrefix = "/api/v1/history/work/";
 constexpr std::string_view kDeviceHistoryPrefix = "/api/v1/history/device/";
 
@@ -173,14 +174,20 @@ std::size_t HistoryLimit(MHD_Connection* connection) {
     return ParseSize(value, parsed) ? parsed : 0;
 }
 
-std::string HistoryJson(const std::vector<HistoryEntry>& entries) {
+std::string_view HistoryCursor(MHD_Connection* connection) {
+    const char* value = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "cursor");
+    return value == nullptr ? std::string_view{} : std::string_view(value);
+}
+
+std::string HistoryJson(const HistoryPage& page) {
     mqtt::Json items = mqtt::Json::array();
-    for (const auto& entry : entries) {
+    for (const auto& entry : page.entries) {
         auto details = mqtt::Json::parse(entry.details_json, nullptr, false);
         if (details.is_discarded()) {
             details = entry.details_json;
         }
         items.push_back({
+            { "historyId", entry.history_id },
             { "messageId", entry.message_id },
             { "eventType", entry.event_type },
             { "sourceId", entry.source_id },
@@ -192,7 +199,9 @@ std::string HistoryJson(const std::vector<HistoryEntry>& entries) {
             { "occurredAtMs", entry.occurred_at_ms },
         });
     }
-    return mqtt::Json{ { "count", items.size() }, { "items", std::move(items) } }.dump();
+    mqtt::Json response{ { "count", items.size() }, { "items", std::move(items) } };
+    response["nextCursor"] = page.next_cursor ? mqtt::Json(*page.next_cursor) : mqtt::Json(nullptr);
+    return response.dump();
 }
 
 MhdResult ServeHistory(MHD_Connection* connection, HistoryService& service, std::string_view bearer_token,
@@ -203,12 +212,15 @@ MhdResult ServeHistory(MHD_Connection* connection, HistoryService& service, std:
     }
 
     const auto limit = HistoryLimit(connection);
-    std::vector<HistoryEntry> entries;
+    const auto cursor = HistoryCursor(connection);
+    HistoryPage page;
     DatabaseStatus status;
-    if (url.starts_with(kWorkHistoryPrefix)) {
-        status = service.FindByWorkId(url.substr(kWorkHistoryPrefix.size()), limit, entries);
+    if (url == kHistoryPath) {
+        status = service.FindAll(limit, cursor, page);
+    } else if (url.starts_with(kWorkHistoryPrefix)) {
+        status = service.FindByWorkId(url.substr(kWorkHistoryPrefix.size()), limit, cursor, page);
     } else if (url.starts_with(kDeviceHistoryPrefix)) {
-        status = service.FindByDeviceId(url.substr(kDeviceHistoryPrefix.size()), limit, entries);
+        status = service.FindByDeviceId(url.substr(kDeviceHistoryPrefix.size()), limit, cursor, page);
     } else {
         return QueueJson(connection, MHD_HTTP_NOT_FOUND,
                          "{\"error\":\"NOT_FOUND\",\"message\":\"unknown history endpoint\"}");
@@ -219,7 +231,7 @@ MhdResult ServeHistory(MHD_Connection* connection, HistoryService& service, std:
         return QueueJson(connection, http_status,
                          "{\"error\":\"HISTORY_QUERY_FAILED\",\"message\":\"" + JsonEscape(status.message) + "\"}");
     }
-    return QueueJson(connection, MHD_HTTP_OK, HistoryJson(entries));
+    return QueueJson(connection, MHD_HTTP_OK, HistoryJson(page));
 }
 
 bool ParseSize(std::string_view text, std::size_t& output) {
@@ -354,7 +366,7 @@ private:
                                    std::size_t* upload_data_size, void** context_pointer) {
         auto& server = *static_cast<Impl*>(server_pointer);
         if (std::string_view(method) == MHD_HTTP_METHOD_GET) {
-            if (std::string_view(url).starts_with(kWorkHistoryPrefix) ||
+            if (std::string_view(url) == kHistoryPath || std::string_view(url).starts_with(kWorkHistoryPrefix) ||
                 std::string_view(url).starts_with(kDeviceHistoryPrefix)) {
                 return ServeHistory(connection, server.history_service_, server.config_.bearer_token, url);
             }
@@ -373,6 +385,11 @@ private:
         } else {
             return QueueJson(connection, MHD_HTTP_NOT_FOUND,
                              "{\"error\":\"NOT_FOUND\",\"message\":\"unknown upload endpoint\"}");
+        }
+
+        if (!IsAuthorized(connection, server.config_.bearer_token)) {
+            return QueueJson(connection, MHD_HTTP_UNAUTHORIZED,
+                             "{\"error\":\"UNAUTHORIZED\",\"message\":\"invalid device token\"}");
         }
 
         if (*context_pointer == nullptr) {
@@ -396,16 +413,6 @@ private:
             return MHD_YES;
         }
         context.responded = true;
-
-        const char* authorization =
-            MHD_lookup_connection_value(connection, MHD_HEADER_KIND, contract::kAuthorizationHeader.data());
-        if (!server.config_.bearer_token.empty()) {
-            const std::string expected = std::string(contract::kBearerPrefix) + server.config_.bearer_token;
-            if (authorization == nullptr || std::string_view(authorization) != expected) {
-                return QueueJson(connection, MHD_HTTP_UNAUTHORIZED,
-                                 "{\"error\":\"UNAUTHORIZED\",\"message\":\"invalid device token\"}");
-            }
-        }
 
         const char* idempotency =
             MHD_lookup_connection_value(connection, MHD_HEADER_KIND, contract::kIdempotencyHeader.data());

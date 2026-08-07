@@ -77,7 +77,8 @@ bool ProcessOrchestratorConfig::IsValid() const noexcept {
     return mqtt::IsValidTopicLevel(server_id) && mqtt::IsValidTopicLevel(input_device_id) &&
            mqtt::IsValidTopicLevel(vision_device_id) && mqtt::IsValidTopicLevel(gripper_device_id) &&
            mqtt::IsValidTopicLevel(sorting_device_id) && mqtt::IsValidTopicLevel(line_tracer_device_id) &&
-           initial_position_valid && (!homography.enabled || homography.IsValid());
+           mqtt::IsValidTopicLevel(default_destination) && initial_position_valid &&
+           (!homography.enabled || homography.IsValid());
 }
 
 ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config)
@@ -234,15 +235,46 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
     return transition;
 }
 
-bool ProcessOrchestrator::RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                    std::vector<WorkProcessSnapshot> works,
-                                                    std::uint64_t message_sequence) {
-    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
-        return false;
+ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
+    ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
+    std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence) {
+    std::vector<InvalidatedRestoredWork> invalidated_works;
+    if (!homography_.Enabled()) {
+        gripper_targets.clear();
+    } else {
+        for (auto iterator = gripper_targets.begin(); iterator != gripper_targets.end();) {
+            const GripperTarget& target = iterator->second;
+            const bool current_calibration = target.calibration_version == config_.homography.calibration_version &&
+                                             target.coordinate_frame == config_.homography.coordinate_frame;
+            const auto work = std::ranges::find(works, iterator->first, &WorkProcessSnapshot::work_id);
+            if (work == works.end()) {
+                iterator = gripper_targets.erase(iterator);
+            } else if (!current_calibration) {
+                invalidated_works.push_back({
+                    .work_id = iterator->first,
+                    .reason = "stored gripper target uses stale homography calibration; detect the product again",
+                });
+                works.erase(work);
+                iterator = gripper_targets.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
     }
+    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
+        return {};
+    }
+    gripper_targets_ = std::move(gripper_targets);
     message_sequence_ = message_sequence;
     ++revision_;
-    return true;
+    return {
+        .restored = true,
+        .invalidated_works = std::move(invalidated_works),
+    };
+}
+
+const std::unordered_map<std::string, GripperTarget>& ProcessOrchestrator::GripperTargets() const noexcept {
+    return gripper_targets_;
 }
 
 std::uint64_t ProcessOrchestrator::MessageSequence() const noexcept {
@@ -349,7 +381,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         return result;
     }
     if (event.type == ProcessEventType::kProductInfoReady) {
-        const auto target = gripper_targets_.find(work->work_id);
+        const auto target = homography_.Enabled() ? gripper_targets_.find(work->work_id) : gripper_targets_.end();
         result.commands.push_back(MakeGripperCommand(work->work_id, work->destination,
                                                      target == gripper_targets_.end() ? nullptr : &target->second,
                                                      message.timestamp));
@@ -362,7 +394,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             MakeDestinationCommand(work->work_id, work->destination, config_.line_tracer_device_id,
                                    ProcessEventType::kTransportCommandDispatched, message.timestamp));
     }
-    if (event.type == ProcessEventType::kWorkCompleted || event.type == ProcessEventType::kWorkFailed) {
+    if (event.type == ProcessEventType::kWorkCompleted) {
         gripper_targets_.erase(event.work_id);
     }
     return result;

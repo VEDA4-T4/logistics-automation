@@ -7,6 +7,7 @@
 #include "logistics/control_center/operations_dashboard_state.hpp"
 
 class QFrame;
+class QGridLayout;
 class QHBoxLayout;
 class QLabel;
 class QTimer;
@@ -53,7 +54,7 @@ private:
     QLabel* overall_work_count_{ nullptr };
     QLabel* overall_detail_{ nullptr };
     QLabel* overall_updated_at_{ nullptr };
-    QHBoxLayout* process_layout_{ nullptr };
+    QGridLayout* process_layout_{ nullptr };
     QTimer* timestamp_timer_{ nullptr };
     ProcessDashboardStatus overall_;
     QList<ProcessUnitStatus> processes_;

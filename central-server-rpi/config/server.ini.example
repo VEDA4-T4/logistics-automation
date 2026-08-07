@@ -1,9 +1,11 @@
 [mqtt]
-host=127.0.0.1
-port=1883
+host=mqtt.logistics.local
+port=8883
 client_id=central-server
-username=
-password=
+username=central-server
+password=replace-with-central-server-mqtt-password
+tls_enabled=true
+ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
@@ -27,6 +29,7 @@ device_status_retention_days=30
 error_retention_days=180
 security_retention_days=180
 image_retention_days=30
+upload_retention_days=30
 
 [http]
 enabled=true
@@ -53,6 +56,8 @@ line_tracer_device_id=PI-LT-01
 # Physical parking position used when initializing the line tracer.
 # Allowed values: A, B, C
 line_tracer_initial_position=A
+# Product-catalog misses are routed here instead of stalling the work.
+default_destination=3
 
 [homography]
 # Keep disabled until pixel_to_conveyor is replaced with a matrix measured for the installed camera.

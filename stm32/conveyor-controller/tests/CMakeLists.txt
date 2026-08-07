@@ -101,6 +101,12 @@ add_executable(
     ../Application/Src/health_task.c
 )
 
+add_executable(
+    uart_rx_test
+    uart_rx_test.c
+    ../Application/Src/uart_rx.c
+)
+
 target_include_directories(
     input_control_test
     PRIVATE ../Application/Inc
@@ -207,6 +213,13 @@ target_include_directories(
         ../Application/Inc
 )
 
+target_include_directories(
+    uart_rx_test
+    PRIVATE
+        fakes
+        ../Application/Inc
+)
+
 set_target_properties(
     input_control_test
     PROPERTIES
@@ -329,6 +342,14 @@ set_target_properties(
 
 set_target_properties(
     health_task_test
+    PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+)
+
+set_target_properties(
+    uart_rx_test
     PROPERTIES
         C_STANDARD 11
         C_STANDARD_REQUIRED ON
@@ -350,6 +371,7 @@ target_link_libraries(sorting_control_task_test PRIVATE logistics::contracts)
 target_link_libraries(app_queues_test PRIVATE logistics::contracts)
 target_link_libraries(comm_rx_routing_test PRIVATE logistics::uart)
 target_link_libraries(app_comm_tx_test PRIVATE logistics::uart)
+target_link_libraries(uart_rx_test PRIVATE logistics::contracts)
 
 if(WIN32)
     get_filename_component(INPUT_CONTROL_COMPILER_RUNTIME_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
@@ -449,6 +471,12 @@ if(WIN32)
                 "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
                 $<TARGET_FILE:health_task_test>
     )
+    add_test(
+        NAME uart_rx_test
+        COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
+                $<TARGET_FILE:uart_rx_test>
+    )
 else()
     add_test(NAME input_control_test COMMAND input_control_test)
     add_test(NAME input_motor_tb6612_test COMMAND input_motor_tb6612_test)
@@ -466,4 +494,5 @@ else()
     add_test(NAME safety_integration_test COMMAND safety_integration_test)
     add_test(NAME sensor_integration_test COMMAND sensor_integration_test)
     add_test(NAME health_task_test COMMAND health_task_test)
+    add_test(NAME uart_rx_test COMMAND uart_rx_test)
 endif()

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "logistics/central_server/database.hpp"
+#include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_message.hpp"
 
 namespace logistics::central_server {
@@ -20,6 +21,7 @@ struct StorageConfig {
     int error_retention_days{ 180 };
     int security_retention_days{ 180 };
     int image_retention_days{ 30 };
+    int upload_retention_days{ 30 };
 };
 
 struct TransportMetadata {
@@ -109,6 +111,7 @@ class ProductRepository final {
 public:
     explicit ProductRepository(Database& database) : database_(database) {}
     [[nodiscard]] DatabaseStatus Create(std::string_view work_id, std::int64_t now_ms);
+    [[nodiscard]] DatabaseStatus MarkError(std::string_view work_id, std::int64_t now_ms);
     [[nodiscard]] DatabaseStatus ApplyEvent(std::string_view work_id, contracts::mqtt::MessageType type,
                                             const EventPayload& payload, std::int64_t now_ms);
     [[nodiscard]] DatabaseStatus AppendHistory(std::string_view work_id, std::string_view message_id,
@@ -148,26 +151,25 @@ public:
     [[nodiscard]] PersistenceResult PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                           const EventPayload& payload,
                                                           const TransportMetadata& metadata);
+    [[nodiscard]] DatabaseStatus RecordWorkInvalidation(const WorkInvalidation& invalidation);
     [[nodiscard]] DatabaseStatus FindActiveProductByBarcode(std::string_view barcode,
                                                             std::optional<CatalogProduct>& output);
 
 private:
-    [[nodiscard]] DatabaseStatus RunRetentionIfDue(std::int64_t now_ms);
     Database& database_;
-    StorageConfig storage_config_;
     ImageStore image_store_;
-    std::int64_t next_cleanup_at_ms_{};
 };
 
 class RetentionService final {
 public:
-    RetentionService(Database& database, StorageConfig config);
+    RetentionService(Database& database, StorageConfig config, std::filesystem::path upload_root);
     [[nodiscard]] DatabaseStatus RunOnce(std::int64_t now_ms);
 
 private:
     Database& database_;
     StorageConfig config_;
     ImageStore image_store_;
+    ImageStore upload_store_;
 };
 
 [[nodiscard]] std::int64_t CurrentUnixTimeMilliseconds();

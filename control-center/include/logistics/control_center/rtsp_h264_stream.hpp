@@ -106,6 +106,7 @@ private:
     qsizetype maximum_buffer_size_{ 2 * 1024 * 1024 };
     std::atomic_bool stopped_{ true };
     bool streaming_{ false };
+    bool awaiting_response_{ false };
     bool failure_reported_{ false };
     bool ready_emitted_{ false };
     bool current_contains_idr_{ false };

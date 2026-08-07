@@ -25,6 +25,20 @@ inline constexpr auto kLineTracerProcessKey = "linetracer";
     return normalized == QStringLiteral("ERR-HEALTH-SENSOR-STALE");
 }
 
+[[nodiscard]] inline std::optional<int> DestinationRouteIndex(QString destination) {
+    destination = destination.trimmed().toUpper();
+    destination.replace(QLatin1Char('-'), QLatin1Char('_'));
+    for (int route = 1; route <= 3; ++route) {
+        const auto suffix = QString::number(route);
+        if (destination == suffix || destination == QStringLiteral("ROUTE_") + suffix ||
+            destination == QStringLiteral("DESTINATION_") + suffix ||
+            destination == QStringLiteral("START_") + suffix) {
+            return route;
+        }
+    }
+    return std::nullopt;
+}
+
 enum class OverallProcessState {
     Idle,
     Running,
@@ -49,6 +63,13 @@ struct SensorUnitStatus {
     QDateTime updated_at;
 };
 
+struct LineTracerPositionStatus {
+    QString area;
+    QString location;
+
+    [[nodiscard]] bool operator==(const LineTracerPositionStatus&) const = default;
+};
+
 struct ProcessUnitStatus {
     QString key;
     QString display_name;
@@ -58,6 +79,12 @@ struct ProcessUnitStatus {
     };
     QString current_state{ QStringLiteral("상태 수신 대기") };
     QString work_id;
+    QString destination;
+    std::optional<LineTracerPositionStatus> departure_position;
+    std::optional<LineTracerPositionStatus> target_position;
+    std::optional<LineTracerPositionStatus> confirmed_position;
+    QString movement_state;
+    bool work_completed{ false };
     QString error_code;
     QDateTime updated_at;
     bool has_error{ false };
@@ -90,15 +117,26 @@ public:
     void markMqttConnectedAwaitingStatus(const QDateTime& timestamp);
     void markMqttDisconnected(const QDateTime& timestamp);
     [[nodiscard]] bool expireStaleProcesses(const QDateTime& timestamp);
+    [[nodiscard]] bool markRecoveryCompleted(const QString& target_device_id, const QDateTime& timestamp);
     [[nodiscard]] DashboardUpdateResult applyEnvelope(const QJsonObject& envelope, const QDateTime& received_at = {},
                                                       bool apply_command_to_overall = true);
     [[nodiscard]] const QList<ProcessUnitStatus>& processes() const noexcept;
     [[nodiscard]] const ProcessDashboardStatus& overall() const noexcept;
 
 private:
+    struct DeviceMessageOrdering {
+        QString session_id;
+        quint64 last_sequence{ 0 };
+        int last_phase{ -1 };
+        QQueue<QString> retired_sessions;
+    };
+
     struct ProcessRuntime {
         ProcessUnitStatus status;
         QDateTime last_received_at;
+        QDateTime last_device_message_at;
+        DeviceMessageOrdering application_messages;
+        DeviceMessageOrdering transport_messages;
         QDateTime last_event_at;
         QSet<QString> retired_work_ids;
         QQueue<QString> retired_work_order;
@@ -118,6 +156,8 @@ private:
     QList<ProcessUnitStatus> process_snapshots_;
     QHash<QString, int> process_index_by_device_;
     QHash<QString, int> process_index_by_key_;
+    QHash<QString, QString> destination_by_work_id_;
+    QQueue<QString> destination_work_order_;
     ProcessDashboardStatus overall_;
     QSet<QString> processed_message_ids_;
     QQueue<QString> processed_message_order_;

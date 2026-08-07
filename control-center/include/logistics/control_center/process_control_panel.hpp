@@ -35,12 +35,14 @@ signals:
 private:
     struct CommandPresentation {
         QString text;
+        QString detail;
         QString style;
     };
 
     void requestCommand(logistics::contracts::mqtt::ControlCommand command, const QString& confirmation);
     [[nodiscard]] bool hasBlockingSensorWarning() const;
-    void setCommandPresentation(const QString& target_device_id, const QString& text, const QString& style);
+    void setCommandPresentation(const QString& target_device_id, const QString& text, const QString& style,
+                                const QString& detail = {});
     void updateCommandPresentation();
     void updateTargetPresentation();
     void applySelectedTargetState();
