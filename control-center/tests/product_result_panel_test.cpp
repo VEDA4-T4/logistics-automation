@@ -126,6 +126,11 @@ int main(int argc, char* argv[]) {
     work_list->setCurrentRow(0);
     assert(tracking->text().contains(QStringLiteral("출발 A")));
     assert(tracking->text().contains(QStringLiteral("도착 A")));
+    line_tracer.work_completed = true;
+    product.processing_result = logistics::control_center::ProductProcessingResult::Success;
+    second_product.processing_result = logistics::control_center::ProductProcessingResult::Success;
+    panel.setActiveWorks({ product, second_product }, { line_tracer });
+    assert(work_list->count() == 0);
 
     QTcpServer image_server;
     assert(image_server.listen(QHostAddress::LocalHost));

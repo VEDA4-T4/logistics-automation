@@ -278,10 +278,6 @@ void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
         product.processing_result = ProductProcessingResult::Processing;
         active_products_.append(product);
     }
-    if (active_products_.isEmpty() && !products.isEmpty()) {
-        active_products_.append(products.back());
-    }
-
     const QSignalBlocker blocker(active_work_list_);
     active_work_list_->clear();
     for (const auto& product : active_products_) {
