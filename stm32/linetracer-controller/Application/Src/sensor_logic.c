@@ -464,10 +464,14 @@ void SensorLogic_UpdateLineCenter(sensor_logic_context_t* context, uint8_t line_
             SensorLogic_FilterLineNormalized(context->line_center_filtered, line_center_normalized);
     }
 
-    context->line_center_black =
-        SensorLogic_UpdateBlackHysteresis(context->line_center_filtered, context->line_center_black);
+    /*
+     * Keep the analog sample for diagnostics, but use the module's calibrated
+     * digital output as the black/white authority, just like the left and
+     * right sensors. The sensor_task caller has already normalized the GPIO
+     * polarity according to SENSOR_LINE_ACTIVE_LOW.
+     */
+    context->line_center_black = (line_center != 0U) ? 1U : 0U;
     context->snapshot.line_center = context->line_center_black;
-    (void)line_center;
 }
 
 void SensorLogic_UpdateFsr(sensor_logic_context_t* context, uint16_t raw_value, uint32_t now_ms,
