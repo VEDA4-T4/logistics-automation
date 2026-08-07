@@ -760,6 +760,12 @@ int main() {
                                      "PI-VISION-01", "2026-07-23T01:00:13.750Z"));
     assert(result.applied &&
            ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("EMERGENCY_STOP"));
+    assert(state.markRecoveryCompleted(
+        QStringLiteral("PI-VISION-01"),
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:13.900Z"), Qt::ISODateWithMs)));
+    assert(ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("STOPPED"));
+    assert(state.overall().state == OverallProcessState::EmergencyStop);
+    assert(!state.markRecoveryCompleted(QStringLiteral("UNKNOWN"), QDateTime::currentDateTimeUtc()));
 
     result = state.applyEnvelope(Envelope("COMMAND-2-PROCESSING", "COMMAND_RESPONSE",
                                           { { QStringLiteral("requestId"), QStringLiteral("REQ-2") },

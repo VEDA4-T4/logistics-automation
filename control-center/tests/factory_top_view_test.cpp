@@ -762,6 +762,9 @@ int main(int argc, char* argv[]) {
     safety_input.has_error = false;
     safety_sorting.has_error = false;
     safety_line.has_error = false;
+    safety_input.current_state = QStringLiteral("EMERGENCY_STOP");
+    safety_sorting.current_state = QStringLiteral("EMERGENCY_STOP");
+    safety_line.current_state = QStringLiteral("EMERGENCY_STOP");
     safety_view.setProcesses({ safety_input, safety_sorting, safety_line },
                              logistics::control_center::OverallProcessState::EmergencyStop);
     const auto stopped_input_position = safety_view.boxPosition(QStringLiteral("input"));
@@ -772,6 +775,11 @@ int main(int argc, char* argv[]) {
     assert(safety_view.boxPosition(QStringLiteral("input")) == stopped_input_position);
     assert(safety_view.boxPosition(QStringLiteral("sorting")) == stopped_sorting_position);
     assert(safety_view.boxPosition(QStringLiteral("linetracer")) == stopped_line_position);
+    safety_input.current_state = QStringLiteral("STOPPED");
+    safety_view.setProcesses({ safety_input, safety_sorting, safety_line },
+                             logistics::control_center::OverallProcessState::EmergencyStop);
+    assert(safety_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#ffffff")));
+    assert(safety_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#f14c4c")));
 
     logistics::control_center::FactoryTopViewWidget sensor_stale_view;
     auto sensor_stale_input = Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-STALE"),

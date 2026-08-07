@@ -619,15 +619,8 @@ struct FactoryTopViewWidget::Impl {
         node.moving_item->setPos(line_path.front());
     }
 
-    void setProcesses(const QList<ProcessUnitStatus>& processes, OverallProcessState overall_state) {
-        const auto visual_for = [overall_state](const ProcessUnitStatus& process) {
-            auto visual = BuildFactoryNodeVisual(process);
-            if (overall_state == OverallProcessState::EmergencyStop &&
-                visual.state != FactoryNodeVisualState::Disconnected) {
-                visual = EmergencyVisual(process);
-            }
-            return visual;
-        };
+    void setProcesses(const QList<ProcessUnitStatus>& processes, OverallProcessState) {
+        const auto visual_for = [](const ProcessUnitStatus& process) { return BuildFactoryNodeVisual(process); };
         QString input_work_id;
         QString vision_work_id;
         QString sorting_work_id;

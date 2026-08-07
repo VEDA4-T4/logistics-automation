@@ -1320,6 +1320,14 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
 
     if (logistics::contracts::mqtt::IsTerminal(response.result)) {
         command_response_timer_->stop();
+        if (response.command == logistics::contracts::mqtt::ControlCommand::kRecovery &&
+            response.result == logistics::contracts::mqtt::CommandResult::kSuccess &&
+            pending_target_device_id_ != QStringLiteral("SYSTEM") &&
+            pending_target_device_id_ != QStringLiteral("ALL") &&
+            operations_dashboard_state_.markRecoveryCompleted(pending_target_device_id_,
+                                                              QDateTime::currentDateTimeUtc())) {
+            refreshOperationsPresentation();
+        }
         process_control_panel_->setCommandFinished(response.command, response.result, detail);
         clearPendingCommand();
         return;

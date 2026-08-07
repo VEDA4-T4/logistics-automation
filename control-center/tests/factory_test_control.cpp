@@ -67,6 +67,9 @@ public:
         addButton(control_layout, QStringLiteral("도면 한 단계 이동"), QStringLiteral("testAdvanceButton"),
                   [this]() { top_view_->advanceAnimationsForTest(); });
         addButton(control_layout, QStringLiteral("비상정지"), QStringLiteral("testEmergencyButton"), [this]() {
+            for (auto& process : processes_) {
+                process.current_state = QStringLiteral("EMERGENCY_STOP");
+            }
             overall_state_ = OverallProcessState::EmergencyStop;
             render();
         });
