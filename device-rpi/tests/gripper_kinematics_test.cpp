@@ -153,8 +153,8 @@ void test_joint_limit_names_the_blocking_joint() {
 
 void test_base_yaw_follows_the_target_quadrant() {
     // 45 degrees off +X, at the same 150 mm radius the reach tests use. Note that
-    // a target straight along +Y would need 90 degrees of yaw and the firmware's
-    // base window stops at 1700, i.e. 80 degrees -- see the sibling test below.
+    // A target straight along +Y needs 90 degrees of yaw and reaches the newly
+    // calibrated 1800 endpoint; this diagonal remains comfortably inside it.
     const double diagonal_mm = 150.0 / std::sqrt(2.0);
 
     const auto solution =
@@ -171,17 +171,11 @@ void test_base_yaw_follows_the_target_quadrant() {
     assert(flipped.angles.base_deci_deg == 450U);
 }
 
-/*
- * The base's mechanical window is narrower than a full half-turn, so a target
- * off to the side is reachable in distance but not in yaw. Worth pinning down
- * because it is a limit the server has to design its layout around: the arm
- * cannot serve a conveyor at 90 degrees to its zero direction.
- */
-void test_yaw_beyond_the_base_window_is_a_joint_limit() {
+void test_base_yaw_accepts_calibrated_180_degree_endpoint() {
     const auto solution =
         SolveInverseKinematics(SymmetricGeometry(), PickPose{ .x_mm = 0.0, .y_mm = 150.0, .z_mm = 0.0 });
-    assert(solution.status == IkStatus::kJointLimit);
-    assert(solution.blocking_joint == std::string("base"));
+    assert(solution.Succeeded());
+    assert(solution.angles.base_deci_deg == 1800U);
 }
 
 /*
@@ -264,21 +258,20 @@ void test_minimum_duration_matches_the_firmware_formula() {
     const JointAngles home = geometry.HomeAngles();
     assert(MinimumArmDurationMs(geometry, home, home) == 0U);
 
-    // Shoulder travels 600 deci-degrees at 120 per second -> 5000 ms, and it is
-    // slower than the base's 600 at 300 per second (2000 ms).
+    // Shoulder travels 800 deci-degrees at 120 per second, rounded up to 6667 ms.
     const JointAngles shoulder_move{ 900U, 1500U, 900U };
-    assert(MinimumArmDurationMs(geometry, home, shoulder_move) == 5000U);
+    assert(MinimumArmDurationMs(geometry, home, shoulder_move) == 6667U);
 
     // The slowest joint sets the pace even when another moves further.
     const JointAngles combined{ 1700U, 1500U, 900U };
-    assert(MinimumArmDurationMs(geometry, home, combined) == 5000U);
+    assert(MinimumArmDurationMs(geometry, home, combined) == 6667U);
 
     // Direction must not matter.
-    assert(MinimumArmDurationMs(geometry, shoulder_move, home) == 5000U);
+    assert(MinimumArmDurationMs(geometry, shoulder_move, home) == 6667U);
 
     // The firmware rounds up, so a travel that does not divide evenly must not be
     // predicted a millisecond short.
-    const JointAngles uneven{ 900U, 901U, 900U };
+    const JointAngles uneven{ 1000U, 701U, 1200U };
     assert(MinimumArmDurationMs(geometry, home, uneven) == 9U);
 
     // 70 percent of claw travel at 40 percent per second, rounded up.
@@ -345,7 +338,7 @@ int main() {
     test_non_finite_target_is_rejected();
     test_joint_limit_names_the_blocking_joint();
     test_base_yaw_follows_the_target_quadrant();
-    test_yaw_beyond_the_base_window_is_a_joint_limit();
+    test_base_yaw_accepts_calibrated_180_degree_endpoint();
     test_solution_round_trips_through_forward_kinematics();
     test_near_and_high_targets_exceed_the_shoulder_reference();
     test_minimum_duration_matches_the_firmware_formula();

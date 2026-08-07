@@ -43,7 +43,7 @@ clean_session=true
 #
 # The controller clamps every target to its own mechanical limits from
 # stm32/gripper-controller/Application/Inc/gripper_calibration.h:
-#   base     10.0 - 170.0 degrees   (100 - 1700)
+#   base     10.0 - 180.0 degrees   (100 - 1800)
 #   shoulder 30.0 - 150.0 degrees   (300 - 1500)
 #   elbow    30.0 - 150.0 degrees   (300 - 1500)
 # Values outside those ranges are silently pulled back to the limit, so keep the
@@ -51,7 +51,7 @@ clean_session=true
 # ---------------------------------------------------------------------------
 
 # Neutral pose the arm returns to at the end of a cycle.
-home_pose=900,900,900
+home_pose=1000,700,1200
 
 # Directly above the box on the input conveyor; the claw descends from here.
 pick_approach_pose=600,700,900
@@ -60,15 +60,15 @@ pick_approach_pose=600,700,900
 pick_pose=600,1100,700
 
 # Directly above the drop point on the sorting conveyor.
-place_approach_pose=1200,700,900
+place_approach_pose=1800,700,900
 
 # Claw opened to release the box onto the sorting conveyor.
-place_pose=1200,1100,700
+place_pose=1800,1100,700
 
-# Claw travel. 0 is fully closed, 100 is fully open after calibration.
+# Calibrated claw travel for the assembled mechanism.
 # closed_position_percent must be smaller than open_position_percent; set it to
 # the value that grips a box firmly without stalling the servo.
-open_position_percent=100
+open_position_percent=60
 closed_position_percent=30
 
 # Nominal interpolation time for each motion, in milliseconds (100 - 10000).
@@ -173,7 +173,7 @@ min_target_z_mm=0.0
 # Retune these together with the firmware header, never one alone.
 # ---------------------------------------------------------------------------
 base_min_deci_deg=100
-base_max_deci_deg=1700
+base_max_deci_deg=1800
 shoulder_min_deci_deg=300
 shoulder_max_deci_deg=1500
 elbow_min_deci_deg=300
@@ -185,4 +185,4 @@ elbow_max_speed_deci_deg_per_sec=200
 claw_max_speed_percent_per_sec=40
 
 # Claw position the controller homes to (GRIPPER_HOME_POSITION_PERCENT).
-home_claw_percent=100
+home_claw_percent=60

@@ -929,7 +929,7 @@ void test_pose_config_parses_and_rejects_impossible_claw_travel() {
 device_id=PI-GRIPPER-01
 
 [gripper]
-home_pose=900,900,900
+home_pose=1000,700,1200
 pick_pose=600,1100,700
 open_position_percent=90
 closed_position_percent=20

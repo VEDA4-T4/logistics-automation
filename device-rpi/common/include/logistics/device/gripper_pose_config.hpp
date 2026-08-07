@@ -41,14 +41,14 @@ struct GripperPoseConfig {
     // Waypoints of one pick-and-place cycle. "approach" poses sit directly above
     // their target so the claw descends vertically instead of sweeping into the
     // conveyor side wall.
-    GripperPose home{ 900U, 900U, 900U };
+    GripperPose home{ 1000U, 700U, 1200U };
     GripperPose pick_approach{ 600U, 700U, 900U };
     GripperPose pick{ 600U, 1100U, 700U };
-    GripperPose place_approach{ 1200U, 700U, 900U };
-    GripperPose place{ 1200U, 1100U, 700U };
+    GripperPose place_approach{ 1800U, 700U, 900U };
+    GripperPose place{ 1800U, 1100U, 700U };
 
-    // Claw travel. 0 is fully closed and 100 is fully open after calibration.
-    std::uint8_t open_position_percent{ 100U };
+    // Calibrated operating positions for gripping and releasing the box.
+    std::uint8_t open_position_percent{ 60U };
     std::uint8_t closed_position_percent{ 30U };
 
     // Interpolation time the controller uses for each motion class.

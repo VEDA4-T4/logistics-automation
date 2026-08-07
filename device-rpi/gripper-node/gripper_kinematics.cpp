@@ -101,7 +101,7 @@ bool GripperGeometry::IsValid() const noexcept {
 JointAngles GripperGeometry::HomeAngles() const noexcept {
     // Mirrors GRIPPER_*_HOME_ANGLE_DECI_DEG, which the firmware also uses as its
     // power-on assumption before the first HOME completes.
-    return JointAngles{ 900U, 900U, 900U };
+    return JointAngles{ 1000U, 700U, 1200U };
 }
 
 bool GripperGeometry::AnglesWithinLimits(const JointAngles& angles) const noexcept {

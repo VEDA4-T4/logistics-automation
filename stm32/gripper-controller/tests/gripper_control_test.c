@@ -67,6 +67,10 @@ static void home_controller(gripper_control_t* controller, uint32_t start_tick) 
            GRIPPER_CONTROL_OK);
     gripper_control_tick(controller, start_tick + GRIPPER_HOME_DURATION_MS);
     assert(controller->homed == 1U);
+    assert(controller->base_angle == GRIPPER_BASE_HOME_ANGLE_DECI_DEG);
+    assert(controller->shoulder_angle == GRIPPER_SHOULDER_HOME_ANGLE_DECI_DEG);
+    assert(controller->elbow_angle == GRIPPER_ELBOW_HOME_ANGLE_DECI_DEG);
+    assert(controller->gripper_position == GRIPPER_HOME_POSITION_PERCENT);
     assert(gripper_control_take_completion(controller, &completion) == 1U);
 }
 
@@ -92,11 +96,11 @@ static void test_arm_motion_is_interpolated_and_completed(void) {
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
            GRIPPER_CONTROL_OK);
     assert(servo.enable_calls == 1U);
-    assert(controller.motion_duration_ms == 1000U);
+    assert(controller.motion_duration_ms == 2500U);
     gripper_control_tick(&controller, 2100U + (controller.motion_duration_ms / 2U));
-    assert(servo.base_angle == 1050U);
-    assert(servo.shoulder_angle == 950U);
-    assert(servo.elbow_angle == 850U);
+    assert(servo.base_angle == 1100U);
+    assert(servo.shoulder_angle == 850U);
+    assert(servo.elbow_angle == 1000U);
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_HOME, payload, UART_GRIPPER_HOME_PAYLOAD_SIZE,
                                            2100U + (controller.motion_duration_ms / 2U)) == GRIPPER_CONTROL_BUSY);
 
@@ -128,7 +132,7 @@ static void test_mechanical_limits_reject_unsafe_target(void) {
     assert(servo.enable_calls == 1U);
 }
 
-static void test_elbow_accepts_full_calibration_range(void) {
+static void test_arm_accepts_full_calibration_range(void) {
     fake_servo_t servo = { 0 };
     gripper_servo_port_t port = make_port(&servo);
     gripper_control_t controller;
@@ -137,7 +141,7 @@ static void test_elbow_accepts_full_calibration_range(void) {
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     home_controller(&controller, 0U);
     write_u16(payload, UART_GRIPPER_MOVE_MOTION_ID_LOW_INDEX, 19U);
-    write_u16(payload, UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, GRIPPER_BASE_HOME_ANGLE_DECI_DEG);
+    write_u16(payload, UART_GRIPPER_MOVE_BASE_ANGLE_LOW_INDEX, GRIPPER_BASE_MAX_ANGLE_DECI_DEG);
     write_u16(payload, UART_GRIPPER_MOVE_SHOULDER_ANGLE_LOW_INDEX, GRIPPER_SHOULDER_HOME_ANGLE_DECI_DEG);
     write_u16(payload, UART_GRIPPER_MOVE_ELBOW_ANGLE_LOW_INDEX, GRIPPER_ELBOW_MAX_ANGLE_DECI_DEG);
     write_u16(payload, UART_GRIPPER_MOVE_DURATION_LOW_INDEX, UART_GRIPPER_DURATION_MS_MIN);
@@ -145,6 +149,7 @@ static void test_elbow_accepts_full_calibration_range(void) {
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
            GRIPPER_CONTROL_OK);
     gripper_control_tick(&controller, 2100U + controller.motion_duration_ms);
+    assert(servo.base_angle == GRIPPER_BASE_MAX_ANGLE_DECI_DEG);
     assert(servo.elbow_angle == GRIPPER_ELBOW_MAX_ANGLE_DECI_DEG);
     assert(controller.state == UART_GRIPPER_STATE_IDLE);
 }
@@ -165,11 +170,12 @@ static void test_short_requested_duration_is_extended_to_safe_joint_speed(void) 
 
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_MOVE_ARM, payload, sizeof(payload), 2100U) ==
            GRIPPER_CONTROL_OK);
-    assert(controller.motion_duration_ms == 1250U);
+    assert(controller.motion_duration_ms == 2917U);
 
     gripper_control_tick(&controller, 3100U);
-    assert(servo.base_angle == 1140U);
-    assert(servo.shoulder_angle == 1020U);
+    assert(servo.base_angle == 1068U);
+    assert(servo.shoulder_angle == 819U);
+    assert(servo.elbow_angle == 1098U);
     assert(controller.state == UART_GRIPPER_STATE_MOVING_ARM);
 
     gripper_control_tick(&controller, 2100U + controller.motion_duration_ms);
@@ -224,11 +230,11 @@ static void test_gripper_motion_and_servo_fault(void) {
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     home_controller(&controller, 0U);
     write_u16(payload, UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, 9U);
-    payload[UART_GRIPPER_SET_POSITION_INDEX] = 20U;
+    payload[UART_GRIPPER_SET_POSITION_INDEX] = 30U;
     write_u16(payload, UART_GRIPPER_SET_DURATION_LOW_INDEX, 100U);
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_SET_GRIPPER, payload, sizeof(payload),
                                            2100U) == GRIPPER_CONTROL_OK);
-    assert(controller.motion_duration_ms == 2000U);
+    assert(controller.motion_duration_ms == 750U);
 
     servo.write_result = -1;
     gripper_control_tick(&controller, 2120U);
@@ -260,14 +266,31 @@ static void test_gripper_can_move_before_arm_home(void) {
     assert(controller.homed == 0U);
 }
 
+static void test_gripper_rejects_position_outside_calibrated_range(void) {
+    fake_servo_t servo = { 0 };
+    gripper_servo_port_t port = make_port(&servo);
+    gripper_control_t controller;
+    uint8_t payload[UART_GRIPPER_SET_GRIPPER_PAYLOAD_SIZE] = { 0 };
+
+    assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
+    write_u16(payload, UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, 11U);
+    payload[UART_GRIPPER_SET_POSITION_INDEX] = 61U;
+    write_u16(payload, UART_GRIPPER_SET_DURATION_LOW_INDEX, UART_GRIPPER_DURATION_MS_MIN);
+
+    assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_SET_GRIPPER, payload, sizeof(payload), 0U) ==
+           GRIPPER_CONTROL_INVALID_PAYLOAD);
+    assert(servo.enable_calls == 0U);
+}
+
 int main(void) {
     test_arm_motion_is_interpolated_and_completed();
     test_mechanical_limits_reject_unsafe_target();
-    test_elbow_accepts_full_calibration_range();
+    test_arm_accepts_full_calibration_range();
     test_short_requested_duration_is_extended_to_safe_joint_speed();
     test_safety_stop_requires_release_and_explicit_home();
     test_gripper_motion_and_servo_fault();
     test_gripper_can_move_before_arm_home();
+    test_gripper_rejects_position_outside_calibrated_range();
     puts("gripper_control_test: PASS");
     return 0;
 }

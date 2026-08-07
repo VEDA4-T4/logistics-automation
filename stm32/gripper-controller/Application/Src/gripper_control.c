@@ -189,6 +189,10 @@ gripper_control_result_t gripper_control_process_command(gripper_control_t* cont
             if (gripper_control_is_moving(controller) != 0U) {
                 return GRIPPER_CONTROL_BUSY;
             }
+            if (payload[UART_GRIPPER_SET_POSITION_INDEX] < GRIPPER_MIN_POSITION_PERCENT ||
+                payload[UART_GRIPPER_SET_POSITION_INDEX] > GRIPPER_MAX_POSITION_PERCENT) {
+                return GRIPPER_CONTROL_INVALID_PAYLOAD;
+            }
             if (gripper_control_enable_outputs(controller) != 0) {
                 controller->state = UART_GRIPPER_STATE_FAULT;
                 return GRIPPER_CONTROL_SERVO_ERROR;

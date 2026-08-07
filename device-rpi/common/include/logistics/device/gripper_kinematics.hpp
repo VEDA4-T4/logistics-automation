@@ -128,7 +128,7 @@ struct GripperGeometry {
 
     // Mirror of GRIPPER_*_{MIN,MAX}_ANGLE_DECI_DEG.
     std::uint16_t base_min_deci_deg{ 100U };
-    std::uint16_t base_max_deci_deg{ 1700U };
+    std::uint16_t base_max_deci_deg{ 1800U };
     std::uint16_t shoulder_min_deci_deg{ 300U };
     std::uint16_t shoulder_max_deci_deg{ 1500U };
     std::uint16_t elbow_min_deci_deg{ 300U };
@@ -143,7 +143,7 @@ struct GripperGeometry {
 
     // Mirror of GRIPPER_HOME_POSITION_PERCENT. Needed because a completed HOME is
     // the node's anchor for claw travel arithmetic as well as arm travel.
-    std::uint8_t home_claw_percent{ 100U };
+    std::uint8_t home_claw_percent{ 60U };
 
     [[nodiscard]] bool IsValid() const noexcept;
 
