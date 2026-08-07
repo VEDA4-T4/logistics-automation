@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "logistics/contracts/uart_protocol.h"
+#include "logistics/contracts/uart/conveyor_events.h"
 #include "stm32f4xx_hal.h"
 
 #ifdef __cplusplus
@@ -52,14 +52,11 @@ typedef struct {
 
 /*
  * ============================================================================
- * 애플리케이션 EVENT ID
+ * 애플리케이션 EVENT 계약
  * ============================================================================
  *
- * UART 계약(uart_protocol.h)의 UART_CMD_EVENT payload [0] = event_id.
- * 계약에는 event_id 값이 예약되어 있지 않으므로 애플리케이션에서 정의한다.
- * (Raspberry Pi 측과 공유해야 하는 값 - 변경 시 통보)
+ * ID, payload layout, validator는 Pi와 함께 쓰는 conveyor_events.h에 정의한다.
  */
-#define APP_EVENT_HEARTBEAT 0x01U
 
 /*
  * heartbeat Payload 구조 (UART_CMD_EVENT):
@@ -74,12 +71,6 @@ typedef struct {
  *   [7] 투입 센서 상태  (uart_sensor_state_t)
  *   [8] 분류 센서 상태  (uart_sensor_state_t)
  */
-#define APP_HEARTBEAT_STATE_INDEX 1U
-#define APP_HEARTBEAT_ERROR_INDEX 2U
-#define APP_HEARTBEAT_UPTIME_INDEX 3U
-#define APP_HEARTBEAT_INPUT_SENSOR_INDEX 7U
-#define APP_HEARTBEAT_SORTING_SENSOR_INDEX 8U
-#define APP_HEARTBEAT_PAYLOAD_SIZE 9U
 
 /* 송신 통계. 디버거 Live Expressions로 관찰한다. */
 typedef struct {

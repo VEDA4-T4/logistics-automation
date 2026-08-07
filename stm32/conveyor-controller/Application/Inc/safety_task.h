@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "app_messages.h"
+#include "logistics/contracts/uart/conveyor_events.h"
 
 /*
  * ============================================================================
@@ -43,14 +44,6 @@
  * 우선순위 ControlTask가 실행될 수 있게 한다.
  */
 
-/* E-Stop 원인 분류. 안전 EVENT payload의 cause 필드로 그대로 사용한다. */
-typedef enum {
-    SAFETY_CAUSE_NONE = 0U,
-    SAFETY_CAUSE_ESTOP_INPUT_PI = 1U,   /* USART1(투입 Pi)에서 수신한 E-Stop */
-    SAFETY_CAUSE_ESTOP_SORTING_PI = 2U, /* USART6(분류 Pi)에서 수신한 E-Stop */
-    SAFETY_CAUSE_FATAL_ERROR = 3U       /* 내부 치명 오류(HealthTask 등) */
-} safety_cause_t;
-
 /*
  * 각 공정 ControlTask의 안전 동기화 상태를 SafetyTask 내부에서 통일해 다루기
  * 위한 표현이다. input_control_task.h의 input_control_safety_sync_state_t,
@@ -69,10 +62,7 @@ typedef enum {
  * 안전 상태 변경 EVENT (UART_CMD_EVENT)
  * ============================================================================
  *
- * UART 계약의 UART_CMD_EVENT payload [0] = event_id. heartbeat(0x01),
- * SortingControlTask의 UART_SORTING_EVENT_CYCLE_COMPLETE(0x02)와 같은
- * 애플리케이션 확장 네임스페이스를 공유하므로 값은 Raspberry Pi 측과
- * 공유해야 한다(변경 시 통보). 0x01/0x02는 이미 사용 중이라 0x03을 쓴다.
+ * ID, payload layout, validator는 Pi와 함께 쓰는 conveyor_events.h에 정의한다.
  *
  * payload 구조:
  *   [0]    event_id = APP_EVENT_SAFETY
@@ -81,26 +71,6 @@ typedef enum {
  *   [3..6] timestamp_ms (Little-endian uint32, HAL_GetTick)
  *   [7]    result (RESET_COMPLETE/REJECTED에서 safety_reset_result_t, 그 외 0)
  */
-#define APP_EVENT_SAFETY 0x03U
-
-#define APP_SAFETY_EVENT_KIND_INDEX 1U
-#define APP_SAFETY_EVENT_CAUSE_INDEX 2U
-#define APP_SAFETY_EVENT_TIMESTAMP_INDEX 3U
-#define APP_SAFETY_EVENT_RESULT_INDEX 7U
-#define APP_SAFETY_EVENT_PAYLOAD_SIZE 8U
-
-typedef enum {
-    SAFETY_EVENT_ESTOP_LATCHED = 1U,
-    SAFETY_EVENT_RESET_COMPLETE = 2U,
-    SAFETY_EVENT_RESET_REJECTED = 3U
-} safety_event_kind_t;
-
-typedef enum {
-    SAFETY_RESET_OK = 0U,
-    SAFETY_RESET_INPUT_NOT_READY = 1U,
-    SAFETY_RESET_SORTING_NOT_READY = 2U,
-    SAFETY_RESET_TIMEOUT = 3U
-} safety_reset_result_t;
 
 /* 통계. 디버거 Live Expressions로 관찰한다. */
 typedef struct {

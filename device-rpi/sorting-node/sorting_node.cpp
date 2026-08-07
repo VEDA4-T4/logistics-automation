@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/uart/conveyor_events.h"
 #include "logistics/device/device_control_policy.hpp"
 
 namespace logistics::device {
@@ -16,28 +17,6 @@ namespace {
 
 namespace mqtt = contracts::mqtt;
 
-inline constexpr std::uint8_t kHeartbeatEvent = 0x01U;
-inline constexpr std::uint8_t kSafetyEvent = 0x03U;
-inline constexpr std::uint8_t kHealthEvent = 0x04U;
-inline constexpr std::uint8_t kHeartbeatStateIndex = 1U;
-inline constexpr std::uint8_t kHeartbeatErrorIndex = 2U;
-inline constexpr std::uint8_t kHeartbeatPayloadSize = 9U;
-inline constexpr std::uint8_t kSafetyKindIndex = 1U;
-inline constexpr std::uint8_t kSafetyCauseIndex = 2U;
-inline constexpr std::uint8_t kSafetyResultIndex = 7U;
-inline constexpr std::uint8_t kSafetyPayloadSize = 8U;
-inline constexpr std::uint8_t kSafetyEstopLatched = 1U;
-inline constexpr std::uint8_t kSafetyResetComplete = 2U;
-inline constexpr std::uint8_t kSafetyResetRejected = 3U;
-inline constexpr std::uint8_t kHealthKindIndex = 1U;
-inline constexpr std::uint8_t kHealthCauseIndex = 2U;
-inline constexpr std::uint8_t kHealthSensorIdIndex = 3U;
-inline constexpr std::uint8_t kHealthPayloadSize = 8U;
-inline constexpr std::uint8_t kHealthUartChannelTimeout = 1U;
-inline constexpr std::uint8_t kHealthQueueOverflow = 2U;
-inline constexpr std::uint8_t kHealthSensorStale = 3U;
-inline constexpr std::uint8_t kHealthUartRecovery = 4U;
-inline constexpr std::uint8_t kHealthSensorIdNone = 0xFFU;
 inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
 
 [[nodiscard]] SortingCommandStatus ToCommandStatus(UartSessionSendStatus status) noexcept {
@@ -715,11 +694,11 @@ void SortingNode::HandleSortingFrame(const uart_frame_t& frame) noexcept {
     const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
     if (event_id == UART_SORTING_EVENT_CYCLE_COMPLETE) {
         HandleCycleComplete(frame);
-    } else if (event_id == kHeartbeatEvent) {
+    } else if (event_id == APP_EVENT_HEARTBEAT) {
         HandleHeartbeat(frame);
-    } else if (event_id == kSafetyEvent) {
+    } else if (event_id == APP_EVENT_SAFETY) {
         HandleSafetyEvent(frame);
-    } else if (event_id == kHealthEvent) {
+    } else if (event_id == APP_EVENT_HEALTH) {
         HandleHealthEvent(frame);
     }
 }
@@ -792,14 +771,11 @@ void SortingNode::HandleCycleComplete(const uart_frame_t& frame) noexcept {
 }
 
 void SortingNode::HandleHeartbeat(const uart_frame_t& frame) noexcept {
-    if (frame.length != kHeartbeatPayloadSize) {
+    if (UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(frame.payload, frame.length) == 0U) {
         return;
     }
-    const std::uint8_t state = frame.payload[kHeartbeatStateIndex];
-    const std::uint8_t error = frame.payload[kHeartbeatErrorIndex];
-    if (state > UART_DEVICE_EMERGENCY_STOP) {
-        return;
-    }
+    const std::uint8_t state = frame.payload[APP_HEARTBEAT_STATE_INDEX];
+    const std::uint8_t error = frame.payload[APP_HEARTBEAT_ERROR_INDEX];
     const bool recovered = controller_heartbeat_timed_out_;
     controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
     controller_heartbeat_timed_out_ = false;
@@ -867,19 +843,19 @@ void SortingNode::HandleDeviceStatus(const uart_frame_t& frame) noexcept {
 }
 
 void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
-    if (frame.length != kSafetyPayloadSize) {
+    if (UART_IS_VALID_APP_SAFETY_PAYLOAD(frame.payload, frame.length) == 0U) {
         return;
     }
-    const std::uint8_t kind = frame.payload[kSafetyKindIndex];
-    const std::uint8_t cause = frame.payload[kSafetyCauseIndex];
-    const std::uint8_t result = frame.payload[kSafetyResultIndex];
+    const std::uint8_t kind = frame.payload[APP_SAFETY_EVENT_KIND_INDEX];
+    const std::uint8_t cause = frame.payload[APP_SAFETY_EVENT_CAUSE_INDEX];
+    const std::uint8_t result = frame.payload[APP_SAFETY_EVENT_RESULT_INDEX];
     if (pending_safety_.active) {
         const bool estopConfirmed =
-            pending_safety_.expected == PendingSafetyEvent::kEstopLatched && kind == kSafetyEstopLatched;
+            pending_safety_.expected == PendingSafetyEvent::kEstopLatched && kind == SAFETY_EVENT_ESTOP_LATCHED;
         const bool resetConfirmed =
-            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == kSafetyResetComplete;
+            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == SAFETY_EVENT_RESET_COMPLETE;
         const bool resetRejected =
-            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == kSafetyResetRejected;
+            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == SAFETY_EVENT_RESET_REJECTED;
         if (estopConfirmed || resetConfirmed || resetRejected) {
             EmitSafetyResponse(resetRejected ? mqtt::CommandResult::kRejected : mqtt::CommandResult::kSuccess,
                                resetRejected ? std::optional<std::string>{ "ERR-SAFETY-RESET-REJECTED" } : std::nullopt,
@@ -889,60 +865,60 @@ void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
             pending_safety_ = {};
         }
     }
-    if (IsRepeatedControllerEvent(kSafetyEvent, kind, cause, result)) {
+    if (IsRepeatedControllerEvent(APP_EVENT_SAFETY, kind, cause, result)) {
         return;
     }
-    if (kind == kSafetyEstopLatched) {
+    if (kind == SAFETY_EVENT_ESTOP_LATCHED) {
         last_device_state_ = UART_DEVICE_EMERGENCY_STOP;
         last_device_error_ = UART_ERROR_NONE;
         EmitStatus("EMERGENCY_STOP");
-    } else if (kind == kSafetyResetComplete) {
+    } else if (kind == SAFETY_EVENT_RESET_COMPLETE) {
         ClearActiveCycle();
         configured_speed_ = 0U;
         last_device_state_ = UART_DEVICE_STOPPED;
         last_device_error_ = UART_ERROR_NONE;
         EmitStatus("STOPPED");
-    } else if (kind == kSafetyResetRejected) {
+    } else if (kind == SAFETY_EVENT_RESET_REJECTED) {
         EmitError("ERR-SAFETY-RESET-REJECTED", "ERROR", "EMERGENCY_STOP",
                   "sorting controller rejected safety reset result " + std::to_string(result));
     }
 }
 
 void SortingNode::HandleHealthEvent(const uart_frame_t& frame) noexcept {
-    if (frame.length != kHealthPayloadSize) {
+    if (UART_IS_VALID_APP_HEALTH_PAYLOAD(frame.payload, frame.length) == 0U) {
         return;
     }
-    const std::uint8_t kind = frame.payload[kHealthKindIndex];
-    const std::uint8_t cause = frame.payload[kHealthCauseIndex];
-    const std::uint8_t sensor_id = frame.payload[kHealthSensorIdIndex];
+    const std::uint8_t kind = frame.payload[APP_HEALTH_EVENT_KIND_INDEX];
+    const std::uint8_t cause = frame.payload[APP_HEALTH_EVENT_CAUSE_INDEX];
+    const std::uint8_t sensor_id = frame.payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX];
     // UART timeout events are delivered to the opposite healthy channel.
     // Reporting one here would incorrectly mark this sorting Pi as faulty;
     // MQTT heartbeat expiry owns the affected node's offline state.
-    if (kind == kHealthUartChannelTimeout) {
+    if (kind == HEALTH_ISSUE_UART_CHANNEL_TIMEOUT) {
         return;
     }
-    if (IsRepeatedControllerEvent(kHealthEvent, kind, cause, sensor_id)) {
+    if (IsRepeatedControllerEvent(APP_EVENT_HEALTH, kind, cause, sensor_id)) {
         return;
     }
 
     std::string error_code;
     std::string message;
     switch (kind) {
-        case kHealthQueueOverflow:
+        case HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT:
             error_code = "ERR-HEALTH-QUEUE-OVERFLOW";
             message = "sorting controller reported a transient queue overflow";
             break;
-        case kHealthSensorStale:
+        case HEALTH_ISSUE_SENSOR_STALE:
             error_code = "ERR-HEALTH-SENSOR-STALE";
             message = "sorting controller reported a stale sensor";
             // cause only says which Pi channel (INPUT/SORTING); on the sorting side 3
             // sensors (US2/US3/US4) share that channel, so sensor_id is what actually
             // tells them apart.
-            if (sensor_id != kHealthSensorIdNone) {
+            if (sensor_id != HEALTH_ISSUE_SENSOR_ID_NONE) {
                 message += " sensorId=" + std::to_string(sensor_id);
             }
             break;
-        case kHealthUartRecovery:
+        case HEALTH_ISSUE_UART_RECOVERY:
             // Recovery started, not a confirmed loss - the frame is retried, and an
             // exhausted retry surfaces separately as a queue overflow. Still WARNING:
             // a line that keeps needing recovery is the precursor to those drops.

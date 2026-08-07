@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "logistics/contracts/uart/conveyor_events.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart/linetracer_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
@@ -123,6 +124,54 @@ void TestSortingPayloadValidation() {
     assert(UART_SORTING_CYCLE_EVENT_PAYLOAD_SIZE == 4U);
 }
 
+void TestConveyorEventContracts() {
+    std::array<std::uint8_t, APP_HEARTBEAT_PAYLOAD_SIZE> heartbeat{};
+    heartbeat[UART_EVENT_ID_INDEX] = APP_EVENT_HEARTBEAT;
+    heartbeat[APP_HEARTBEAT_STATE_INDEX] = UART_DEVICE_READY;
+    heartbeat[APP_HEARTBEAT_ERROR_INDEX] = UART_ERROR_NONE;
+    heartbeat[APP_HEARTBEAT_INPUT_SENSOR_INDEX] = UART_SENSOR_CLEAR;
+    heartbeat[APP_HEARTBEAT_SORTING_SENSOR_INDEX] = UART_SENSOR_DETECTED;
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(heartbeat.data(), heartbeat.size()) != 0U);
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(heartbeat.data(), heartbeat.size() - 1U) == 0U);
+    heartbeat[APP_HEARTBEAT_STATE_INDEX] = UART_DEVICE_EMERGENCY_STOP + 1U;
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(heartbeat.data(), heartbeat.size()) == 0U);
+    heartbeat[APP_HEARTBEAT_STATE_INDEX] = UART_DEVICE_READY;
+
+    std::array<std::uint8_t, APP_SAFETY_EVENT_PAYLOAD_SIZE> safety{};
+    safety[UART_EVENT_ID_INDEX] = APP_EVENT_SAFETY;
+    safety[APP_SAFETY_EVENT_KIND_INDEX] = SAFETY_EVENT_RESET_REJECTED;
+    safety[APP_SAFETY_EVENT_CAUSE_INDEX] = SAFETY_CAUSE_ESTOP_INPUT_PI;
+    safety[APP_SAFETY_EVENT_RESULT_INDEX] = SAFETY_RESET_INPUT_NOT_READY;
+    assert(UART_IS_VALID_APP_SAFETY_PAYLOAD(safety.data(), safety.size()) != 0U);
+    safety[APP_SAFETY_EVENT_KIND_INDEX] = SAFETY_EVENT_RESET_REJECTED + 1U;
+    assert(UART_IS_VALID_APP_SAFETY_PAYLOAD(safety.data(), safety.size()) == 0U);
+    safety[APP_SAFETY_EVENT_KIND_INDEX] = SAFETY_EVENT_RESET_REJECTED;
+
+    std::array<std::uint8_t, APP_HEALTH_EVENT_PAYLOAD_SIZE> health{};
+    health[UART_EVENT_ID_INDEX] = APP_EVENT_HEALTH;
+    health[APP_HEALTH_EVENT_KIND_INDEX] = HEALTH_ISSUE_SENSOR_STALE;
+    health[APP_HEALTH_EVENT_CAUSE_INDEX] = HEALTH_ISSUE_CAUSE_SORTING;
+    health[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = 3U;
+    assert(UART_IS_VALID_APP_HEALTH_PAYLOAD(health.data(), health.size()) != 0U);
+    health[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = HEALTH_ISSUE_SENSOR_ID_NONE;
+    assert(UART_IS_VALID_APP_HEALTH_PAYLOAD(health.data(), health.size()) == 0U);
+    health[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = 3U;
+
+    uart_frame_t source{};
+    source.version = UART_PROTOCOL_VERSION;
+    source.sequence = 9U;
+    source.command = UART_CMD_EVENT;
+    source.length = static_cast<std::uint8_t>(health.size());
+    std::memcpy(source.payload, health.data(), health.size());
+
+    std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+    std::size_t encoded_length{};
+    assert(uart_encode_frame(&source, encoded.data(), encoded.size(), &encoded_length) == UART_CODEC_OK);
+    uart_frame_t decoded{};
+    assert(uart_decode_frame(encoded.data(), encoded_length, &decoded) == UART_CODEC_OK);
+    assert(UART_IS_VALID_APP_HEALTH_PAYLOAD(decoded.payload, decoded.length) != 0U);
+}
+
 void TestLineTracerPayloadValidation() {
     constexpr std::array<std::uint8_t, 3> kAssignRouteB{ 0x34U, 0x12U, UART_LINETRACER_ROUTE_B };
     constexpr std::array<std::uint8_t, 3> kAssignWithoutJob{ 0x00U, 0x00U, UART_LINETRACER_ROUTE_B };
@@ -238,6 +287,7 @@ int main() {
     TestCommonValidationDoesNotTruncateWideValues();
     TestInputPayloadValidation();
     TestSortingPayloadValidation();
+    TestConveyorEventContracts();
     TestLineTracerPayloadValidation();
     TestCodecAndParserRoundTrip();
     TestParserTimeout();
