@@ -12,9 +12,9 @@
  *
  * HealthTask는 SensorTask/CommRxTask/InputControlTask/SortingControlTask/
  * SafetyTask/CommTxTask 6개 태스크의 생존 신호, stack high-water mark, Queue
- * overflow, 센서 갱신 지연, 두 UART 채널의 단절을 감시하고 모든 조건이 정상일
- * 때만 hardware IWDG를 갱신한다(우선순위 osPriorityBelowNormal, freertos.c 기존
- * 설정 그대로).
+ * overflow, 센서 갱신 지연, UART 오류 복구, 두 UART 채널의 단절을 감시하고 모든
+ * 조건이 정상일 때만 hardware IWDG를 갱신한다(우선순위 osPriorityBelowNormal,
+ * freertos.c 기존 설정 그대로).
  *
  * 태스크 생존 신호:
  *   모든 감시대상 태스크 루프가 bounded wait(<=100ms)라, 각 태스크가 루프
@@ -32,10 +32,18 @@
  *   SafetyTask까지 응답 불능) 결국 IWDG reset이 최종 backstop이 된다.
  *
  * 공정별(비치명) 저하:
- *   한쪽 UART 채널 단절이나 센서 갱신 지연, 일시적 Queue drop은 E-Stop 없이
- *   APP_EVENT_HEALTH로만 보고한다(완료조건 "한 공정 채널이 끊겨도 영향받지
- *   않는 공정은 계속 보고"). 지속적(연속 N사이클) Queue overflow만 치명으로
- *   승격한다.
+ *   한쪽 UART 채널 단절이나 센서 갱신 지연, 일시적 Queue drop, UART 오류 복구는
+ *   E-Stop 없이 APP_EVENT_HEALTH로만 보고한다(완료조건 "한 공정 채널이 끊겨도
+ *   영향받지 않는 공정은 계속 보고"). 지속적(연속 N사이클) Queue overflow만
+ *   치명으로 승격한다.
+ *
+ * 유실(Queue overflow) vs 복구(UART recovery):
+ *   치명 승격 판정에는 "최종적으로 버려진" 카운터만 넣는다. tx_error/tx_timeout/
+ *   uartRestarts는 오류를 감지해 재시도/복구를 시작한 횟수라, 재시도가 성공하면
+ *   유실이 아니다(실패해야 dropped_retry_exhausted로 잡힌다). 이걸 유실 합계에
+ *   섞으면 매번 재시도 후 성공하더라도 UART 오류가 연속 N사이클 이어지기만 하면
+ *   지속적 포화로 오판해 E-Stop이 걸린다. 그래서 복구 카운터는 별도 진단 지표
+ *   (HEALTH_ISSUE_UART_RECOVERY)로만 보고하고 치명 승격에는 관여시키지 않는다.
  *
  * heartbeat 누락 vs IWDG 정책:
  *   HEALTH_TASK_STALE_MS(태스크 하나라도 응답 없다고 보는 기준, 300ms)는
@@ -124,7 +132,10 @@ typedef struct {
 typedef enum {
     HEALTH_ISSUE_UART_CHANNEL_TIMEOUT = 1U,
     HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT = 2U,
-    HEALTH_ISSUE_SENSOR_STALE = 3U
+    HEALTH_ISSUE_SENSOR_STALE = 3U,
+    /* UART 오류를 감지해 복구(재시도/RX 재시작)를 시작했다는 진단 보고.
+     * 유실 여부와 무관하고 치명으로 승격되지 않는다. */
+    HEALTH_ISSUE_UART_RECOVERY = 4U
 } health_issue_kind_t;
 
 /* 통계. 디버거 Live Expressions로 관찰한다. */
@@ -135,6 +146,7 @@ typedef struct {
     uint32_t queueOverflowTransient;
     uint32_t queueOverflowFatal;
     uint32_t sensorStaleEvents;
+    uint32_t uartRecoveryEvents;
     uint32_t watchdogRefreshes;
     uint32_t watchdogRefreshSkips;
     uint32_t fatalTriggers;

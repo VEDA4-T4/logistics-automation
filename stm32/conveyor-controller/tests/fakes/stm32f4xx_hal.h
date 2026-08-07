@@ -13,19 +13,49 @@ typedef struct __DMA_HandleTypeDef {
     uint32_t ErrorCode;
 } DMA_HandleTypeDef;
 
+typedef enum {
+    HAL_UART_STATE_RESET = 0x00U,
+    HAL_UART_STATE_READY = 0x20U,
+    HAL_UART_STATE_BUSY = 0x24U,
+    HAL_UART_STATE_BUSY_TX = 0x21U,
+    HAL_UART_STATE_BUSY_RX = 0x22U,
+    HAL_UART_STATE_BUSY_TX_RX = 0x23U
+} HAL_UART_StateTypeDef;
+
 typedef struct __UART_HandleTypeDef {
     uint32_t ErrorCode;
     DMA_HandleTypeDef* hdmatx;
+    DMA_HandleTypeDef* hdmarx;
+    HAL_UART_StateTypeDef gState;
+    HAL_UART_StateTypeDef RxState;
 } UART_HandleTypeDef;
 
 #define HAL_UART_ERROR_NONE 0x00000000U
+#define HAL_UART_ERROR_PE 0x00000001U
+#define HAL_UART_ERROR_NE 0x00000002U
+#define HAL_UART_ERROR_FE 0x00000004U
 #define HAL_UART_ERROR_ORE 0x00000008U
 #define HAL_UART_ERROR_DMA 0x00000010U
 #define HAL_DMA_ERROR_NONE 0x00000000U
 #define HAL_DMA_ERROR_TE 0x00000001U
 
+/* 호스트 빌드에는 CMSIS 코어 인트린식이 없어 no-op으로 대체한다. */
+static inline uint32_t __get_PRIMASK(void) {
+    return 0U;
+}
+
+static inline void __disable_irq(void) {}
+
+static inline void __enable_irq(void) {}
+
 uint32_t HAL_GetTick(void);
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef* huart, const uint8_t* data, uint16_t length);
 HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef* huart);
+HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef* huart);
+HAL_StatusTypeDef HAL_UART_DMAStop(UART_HandleTypeDef* huart);
+HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef* huart, uint8_t* data, uint16_t size);
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart);
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t size);
 
 #endif /* TEST_FAKES_STM32F4XX_HAL_H */

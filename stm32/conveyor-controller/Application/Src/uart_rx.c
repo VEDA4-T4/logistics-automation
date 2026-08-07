@@ -8,6 +8,10 @@
 
 #define UART_RX_DMA_BUFFER_SIZE 256U
 
+/* 수신 쪽에서만 발생하는 UART 오류 비트 */
+#define UART_RX_ERROR_MASK \
+    (HAL_UART_ERROR_PE | HAL_UART_ERROR_NE | HAL_UART_ERROR_FE | HAL_UART_ERROR_ORE)
+
 static uint8_t uart1DmaBuffer[UART_RX_DMA_BUFFER_SIZE];
 static uint8_t uart6DmaBuffer[UART_RX_DMA_BUFFER_SIZE];
 
@@ -184,23 +188,33 @@ HAL_StatusTypeDef uart_rx_start(void)
 
     if (status != HAL_OK)
     {
-        (void)HAL_UART_DMAStop(&huart1);
+        (void)HAL_UART_AbortReceive(&huart1);
         return status;
     }
 
     return HAL_OK;
 }
 
+/*
+ * 수신만 중단하고 다시 시작한다.
+ *
+ * HAL_UART_DMAStop()은 같은 huart의 송신 DMA까지 함께 중단시킨다.
+ * 그래서 예전에는 RX를 복구할 때마다 전송 중이던 heartbeat/response가
+ * 프레임 중간에서 잘렸고, 송신 완료 콜백도 오지 않아 CommTx가
+ * COMM_TX_TX_TIMEOUT_MS를 기다린 뒤에야 재시도를 시작했다.
+ * HAL_UART_AbortReceive()는 RX 인터럽트와 RX DMA만 정리하므로
+ * 진행 중인 송신은 그대로 끝까지 나간다.
+ */
 HAL_StatusTypeDef uart_rx_restart(
     app_uart_channel_t channel)
 {
     if (channel == APP_UART_CHANNEL_1)
     {
-        (void)HAL_UART_DMAStop(&huart1);
+        (void)HAL_UART_AbortReceive(&huart1);
     }
     else if (channel == APP_UART_CHANNEL_6)
     {
-        (void)HAL_UART_DMAStop(&huart6);
+        (void)HAL_UART_AbortReceive(&huart6);
     }
     else
     {
@@ -269,20 +283,53 @@ void HAL_UARTEx_RxEventCallback(
     }
 }
 
+/*
+ * 이 오류로 수신을 다시 살려야 하는지 판정한다.
+ *
+ * HAL_UART_ErrorCallback은 송신 사고에도 똑같이 호출된다.
+ * 예전에는 그 구분 없이 복구 플래그를 세워서, 순수 TX DMA 오류가
+ * 멀쩡히 돌아가던 RX를 끊는 원인이 됐다.
+ */
+static uint8_t uart_rx_needs_restart(
+    const UART_HandleTypeDef *huart)
+{
+    if ((huart->ErrorCode & UART_RX_ERROR_MASK) != 0U)
+    {
+        return 1U;
+    }
+
+    /*
+     * DMA 오류는 ErrorCode만으로 송신/수신을 구분할 수 없다.
+     * HAL이 실제로 수신을 내렸는지(RxState)를 기준으로 판정하면
+     * RX DMA 오류와, TX DMA 오류가 RX까지 함께 끊어버린 경우를 모두 잡으면서
+     * RX가 살아 있는 순수 송신 사고에서는 재시작하지 않는다.
+     */
+    if (((huart->ErrorCode & HAL_UART_ERROR_DMA) != 0U) &&
+        (huart->RxState != HAL_UART_STATE_BUSY_RX))
+    {
+        return 1U;
+    }
+
+    return 0U;
+}
+
 void HAL_UART_ErrorCallback(
     UART_HandleTypeDef *huart)
 {
-    if (huart == &huart1)
+    if (uart_rx_needs_restart(huart) != 0U)
     {
-        uart_rx_set_error(
-            APP_UART_CHANNEL_1,
-            huart->ErrorCode);
-    }
-    else if (huart == &huart6)
-    {
-        uart_rx_set_error(
-            APP_UART_CHANNEL_6,
-            huart->ErrorCode);
+        if (huart == &huart1)
+        {
+            uart_rx_set_error(
+                APP_UART_CHANNEL_1,
+                huart->ErrorCode);
+        }
+        else if (huart == &huart6)
+        {
+            uart_rx_set_error(
+                APP_UART_CHANNEL_6,
+                huart->ErrorCode);
+        }
     }
 
     CommTx_HandleUartError(huart);

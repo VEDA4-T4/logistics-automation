@@ -195,6 +195,12 @@ int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uin
     return enqueue_tx(1U, sequence, command, payload, length);
 }
 
+int32_t CommTx_SendUrgentWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command,
+                                      const uint8_t* payload, uint8_t length) {
+    assert(channel == COMM_TX_CH_SORTING);
+    return enqueue_tx(1U, sequence, command, payload, length);
+}
+
 void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code) {
     assert(channel == COMM_TX_CH_SORTING);
     lastDeviceState = device_state;

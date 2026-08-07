@@ -151,8 +151,8 @@ osStatus_t osDelay(uint32_t ticks) {
     return osOK;
 }
 
-int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command, const uint8_t* payload,
-                                uint8_t length) {
+static int32_t fake_comm_tx_send_with_sequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command,
+                                               const uint8_t* payload, uint8_t length) {
     uart_tx_request_t request;
 
     if ((channel >= COMM_TX_CH_COUNT) || (length > UART_MAX_PAYLOAD_SIZE) || ((length != 0U) && (payload == NULL))) {
@@ -171,6 +171,16 @@ int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uin
     }
 
     return (osMessageQueuePut(&txQueue, &request, 0U, 0U) == osOK) ? 0 : -3;
+}
+
+int32_t CommTx_SendWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command, const uint8_t* payload,
+                                uint8_t length) {
+    return fake_comm_tx_send_with_sequence(channel, sequence, command, payload, length);
+}
+
+int32_t CommTx_SendUrgentWithSequence(comm_tx_channel_t channel, uint8_t sequence, uint8_t command,
+                                      const uint8_t* payload, uint8_t length) {
+    return fake_comm_tx_send_with_sequence(channel, sequence, command, payload, length);
 }
 
 void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code) {
