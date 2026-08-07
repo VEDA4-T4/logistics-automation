@@ -127,122 +127,125 @@ ProductUpdateResult CurrentProductState::applyEnvelope(const QJsonObject& envelo
         result.error = QStringLiteral("상품 메시지 timestamp가 올바르지 않습니다.");
         return result;
     }
-    if (retired_work_ids_.contains(work_id) ||
-        (product_.work_id == work_id && product_.updated_at.isValid() && timestamp < product_.updated_at)) {
+    auto* product = findProduct(work_id);
+    if (product != nullptr && product->updated_at.isValid() && timestamp < product->updated_at) {
         return result;
     }
 
-    if (product_.work_id.isEmpty()) {
-        resetForWork(work_id);
-        result.switched_work = true;
-    } else if (product_.work_id != work_id) {
-        const bool current_is_finished = product_.processing_result == ProductProcessingResult::Success ||
-                                         product_.processing_result == ProductProcessingResult::Failed;
-        const bool explicit_new_work = type == mqtt::MessageType::kWorkCreated;
-        if (!explicit_new_work && !current_is_finished) {
-            result.error = QStringLiteral("현재 상품과 다른 workId 메시지를 무시했습니다: %1").arg(work_id);
+    if (product == nullptr) {
+        if (!products_.isEmpty() && type != mqtt::MessageType::kWorkCreated) {
+            result.error = QStringLiteral("알 수 없는 workId의 상품 메시지를 무시했습니다: %1").arg(work_id);
             return result;
         }
-        if (!explicit_new_work && timestamp <= product_.updated_at) {
-            return result;
-        }
-        retired_work_ids_.insert(product_.work_id);
-        resetForWork(work_id);
+        product = &addProduct(work_id);
         result.switched_work = true;
     }
 
     if (type == mqtt::MessageType::kWorkCreated) {
-        product_.processing_result = ProductProcessingResult::Processing;
-        product_.recognition_state = ProductRecognitionState::Processing;
+        product->processing_result = ProductProcessingResult::Processing;
+        product->recognition_state = ProductRecognitionState::Processing;
     }
-    const auto previous_recognition_state = product_.recognition_state;
+    const auto previous_recognition_state = product->recognition_state;
 
-    SetIfPresent(product_.barcode, data, "barcode");
-    SetIfPresent(product_.product_id, data, "productId");
-    SetIfPresent(product_.product_name, data, "productName");
-    SetIfPresent(product_.destination, data, "destination");
-    SetIfPresent(product_.image_id, data, "imageId");
-    SetIfPresent(product_.image_path, data, "imageUrl");
-    if (product_.image_path.isEmpty()) {
-        SetIfPresent(product_.image_path, data, "imagePath");
+    SetIfPresent(product->barcode, data, "barcode");
+    SetIfPresent(product->product_id, data, "productId");
+    SetIfPresent(product->product_name, data, "productName");
+    SetIfPresent(product->destination, data, "destination");
+    SetIfPresent(product->image_id, data, "imageId");
+    SetIfPresent(product->image_path, data, "imageUrl");
+    if (product->image_path.isEmpty()) {
+        SetIfPresent(product->image_path, data, "imagePath");
     }
-    SetIfPresent(product_.image_checksum, data, "checksum");
-    SetIfPresent(product_.image_upload_status, data, "uploadStatus");
-    SetIfPresent(product_.detail, data, "message");
+    SetIfPresent(product->image_checksum, data, "checksum");
+    SetIfPresent(product->image_upload_status, data, "uploadStatus");
+    SetIfPresent(product->detail, data, "message");
 
     const auto image = data.value(QStringLiteral("image"));
     if (image.isObject()) {
         const auto image_object = image.toObject();
-        SetIfPresent(product_.image_id, image_object, "imageId");
-        SetIfPresent(product_.image_path, image_object, "url");
-        if (product_.image_path.isEmpty()) {
-            SetIfPresent(product_.image_path, image_object, "path");
+        SetIfPresent(product->image_id, image_object, "imageId");
+        SetIfPresent(product->image_path, image_object, "url");
+        if (product->image_path.isEmpty()) {
+            SetIfPresent(product->image_path, image_object, "path");
         }
-        SetIfPresent(product_.image_checksum, image_object, "checksum");
-        SetIfPresent(product_.image_upload_status, image_object, "uploadStatus");
+        SetIfPresent(product->image_checksum, image_object, "checksum");
+        SetIfPresent(product->image_upload_status, image_object, "uploadStatus");
     }
 
     const auto confidence = data.value(QStringLiteral("confidence"));
     if (confidence.isDouble() && confidence.toDouble() >= 0.0 && confidence.toDouble() <= 1.0) {
-        product_.confidence = confidence.toDouble();
+        product->confidence = confidence.toDouble();
     }
     if (type == mqtt::MessageType::kProductInfo) {
-        product_.product_info_received = true;
+        product->product_info_received = true;
     }
-    product_.processing_result =
-        ParseProcessingResult(StringValue(data, "processingResult"), product_.processing_result);
-    product_.processing_result = ParseProcessingResult(StringValue(data, "result"), product_.processing_result);
-    if (type == mqtt::MessageType::kWorkCompleted && product_.processing_result != ProductProcessingResult::Success &&
-        product_.processing_result != ProductProcessingResult::Failed) {
-        product_.processing_result = ProductProcessingResult::Success;
+    product->processing_result =
+        ParseProcessingResult(StringValue(data, "processingResult"), product->processing_result);
+    product->processing_result = ParseProcessingResult(StringValue(data, "result"), product->processing_result);
+    if (type == mqtt::MessageType::kWorkCompleted && product->processing_result != ProductProcessingResult::Success &&
+        product->processing_result != ProductProcessingResult::Failed) {
+        product->processing_result = ProductProcessingResult::Success;
     }
 
     const auto recognition_report = ParseRecognitionReport(data);
     if (recognition_report == RecognitionReport::Success &&
         previous_recognition_state == ProductRecognitionState::RecognitionFailed &&
         StringValue(data, "message").isEmpty()) {
-        product_.detail.clear();
+        product->detail.clear();
     }
     if (recognition_report == RecognitionReport::Failed) {
-        product_.recognition_state = ProductRecognitionState::RecognitionFailed;
+        product->recognition_state = ProductRecognitionState::RecognitionFailed;
     } else if (recognition_report == RecognitionReport::MissingData) {
-        product_.recognition_state = ProductRecognitionState::MissingData;
+        product->recognition_state = ProductRecognitionState::MissingData;
     } else if (recognition_report == RecognitionReport::Success) {
-        product_.recognition_state = MissingRequiredFields(product_).isEmpty() ? ProductRecognitionState::Recognized
-                                                                               : ProductRecognitionState::MissingData;
-    } else if (product_.recognition_state != ProductRecognitionState::RecognitionFailed &&
-               (product_.product_info_received || type == mqtt::MessageType::kDestinationSet)) {
-        product_.recognition_state = MissingRequiredFields(product_).isEmpty() ? ProductRecognitionState::Recognized
-                                                                               : ProductRecognitionState::MissingData;
-    } else if (type == mqtt::MessageType::kBarcodeDetected && !product_.barcode.isEmpty()) {
-        product_.recognition_state = ProductRecognitionState::Recognized;
+        product->recognition_state = MissingRequiredFields(*product).isEmpty() ? ProductRecognitionState::Recognized
+                                                                                : ProductRecognitionState::MissingData;
+    } else if (product->recognition_state != ProductRecognitionState::RecognitionFailed &&
+               (product->product_info_received || type == mqtt::MessageType::kDestinationSet)) {
+        product->recognition_state = MissingRequiredFields(*product).isEmpty() ? ProductRecognitionState::Recognized
+                                                                                : ProductRecognitionState::MissingData;
+    } else if (type == mqtt::MessageType::kBarcodeDetected && !product->barcode.isEmpty()) {
+        product->recognition_state = ProductRecognitionState::Recognized;
     }
 
-    if (product_.recognition_state == ProductRecognitionState::MissingData &&
-        (product_.detail.isEmpty() || product_.detail.startsWith(QStringLiteral("누락 항목:")))) {
-        product_.detail = QStringLiteral("누락 항목: %1").arg(MissingRequiredFields(product_));
-    } else if (product_.detail.startsWith(QStringLiteral("누락 항목:"))) {
-        product_.detail.clear();
+    if (product->recognition_state == ProductRecognitionState::MissingData &&
+        (product->detail.isEmpty() || product->detail.startsWith(QStringLiteral("누락 항목:")))) {
+        product->detail = QStringLiteral("누락 항목: %1").arg(MissingRequiredFields(*product));
+    } else if (product->detail.startsWith(QStringLiteral("누락 항목:"))) {
+        product->detail.clear();
     }
 
-    product_.message_id = message_id;
-    product_.source_id = source_id;
-    product_.updated_at = timestamp;
+    product->message_id = message_id;
+    product->source_id = source_id;
+    product->updated_at = timestamp;
     processed_message_ids_.insert(message_id);
     result.applied = true;
     return result;
 }
 
 const CurrentProduct& CurrentProductState::product() const noexcept {
-    return product_;
+    return products_.isEmpty() ? empty_product_ : products_.back();
 }
 
-void CurrentProductState::resetForWork(const QString& work_id) {
-    product_ = {};
-    product_.work_id = work_id;
-    product_.recognition_state = ProductRecognitionState::Processing;
-    product_.processing_result = ProductProcessingResult::Processing;
-    processed_message_ids_.clear();
+const QList<CurrentProduct>& CurrentProductState::products() const noexcept {
+    return products_;
+}
+
+CurrentProduct* CurrentProductState::findProduct(const QString& work_id) {
+    for (auto& product : products_) {
+        if (product.work_id == work_id) {
+            return &product;
+        }
+    }
+    return nullptr;
+}
+
+CurrentProduct& CurrentProductState::addProduct(const QString& work_id) {
+    auto& product = products_.emplaceBack();
+    product.work_id = work_id;
+    product.recognition_state = ProductRecognitionState::Processing;
+    product.processing_result = ProductProcessingResult::Processing;
+    return product;
 }
 
 }  // namespace logistics::control_center

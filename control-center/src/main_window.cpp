@@ -1286,7 +1286,8 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
         const auto product_update = current_product_state_.applyEnvelope(envelope);
         if (product_update.handled) {
             if (product_update.applied) {
-                product_result_panel_->setCurrentProduct(current_product_state_.product());
+                product_result_panel_->setActiveWorks(current_product_state_.products(),
+                                                      operations_dashboard_state_.processes());
             } else if (!product_update.error.isEmpty()) {
                 statusBar()->showMessage(product_update.error, 4000);
             }
@@ -1407,6 +1408,7 @@ void MainWindow::refreshOperationsPresentation() {
     operations_dashboard_panel_->setState(operations_dashboard_state_);
     factory_top_view_->setProcesses(operations_dashboard_state_.processes(),
                                     operations_dashboard_state_.overall().state);
+    product_result_panel_->setActiveWorks(current_product_state_.products(), operations_dashboard_state_.processes());
     process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
                                              operations_dashboard_state_.processes());
 }

@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QByteArray>
+#include <QComboBox>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -98,6 +99,27 @@ int main(int argc, char* argv[]) {
     for (const auto& value : expected_values) {
         AssertHasFullValueToolTip(panel, value);
     }
+
+    auto second_product = product;
+    second_product.work_id = QStringLiteral("work-second");
+    logistics::control_center::ProcessUnitStatus line_tracer;
+    line_tracer.key = QStringLiteral("linetracer");
+    line_tracer.display_name = QStringLiteral("라인트레이서");
+    line_tracer.work_id = product.work_id;
+    line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
+    line_tracer.departure_position = logistics::control_center::LineTracerPositionStatus{
+        .area = QStringLiteral("DEPARTURE"), .location = QStringLiteral("A") };
+    line_tracer.target_position = logistics::control_center::LineTracerPositionStatus{
+        .area = QStringLiteral("DESTINATION"), .location = QStringLiteral("A") };
+    line_tracer.confirmed_position = line_tracer.departure_position;
+    panel.setActiveWorks({ product, second_product }, { line_tracer });
+    auto* selector = panel.findChild<QComboBox*>(QStringLiteral("activeWorkSelector"));
+    auto* tracking = panel.findChild<QLabel*>(QStringLiteral("workTrackingStatus"));
+    assert(selector != nullptr && selector->count() == 2);
+    assert(tracking != nullptr);
+    selector->setCurrentIndex(0);
+    assert(tracking->text().contains(QStringLiteral("출발 A")));
+    assert(tracking->text().contains(QStringLiteral("도착 A")));
 
     QTcpServer image_server;
     assert(image_server.listen(QHostAddress::LocalHost));
