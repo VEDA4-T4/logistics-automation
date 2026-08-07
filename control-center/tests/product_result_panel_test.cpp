@@ -131,6 +131,10 @@ int main(int argc, char* argv[]) {
     second_product.processing_result = logistics::control_center::ProductProcessingResult::Success;
     panel.setActiveWorks({ product, second_product }, { line_tracer });
     assert(work_list->count() == 0);
+    for (const auto* label : panel.findChildren<QLabel*>()) {
+        assert(label->text() != product.work_id);
+        assert(label->text() != second_product.work_id);
+    }
 
     QTcpServer image_server;
     assert(image_server.listen(QHostAddress::LocalHost));

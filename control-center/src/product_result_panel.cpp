@@ -303,6 +303,7 @@ void ProductResultPanel::showSelectedWork() {
     const auto index = active_work_list_->currentRow();
     if (index < 0 || index >= active_products_.size()) {
         tracking_status_->setText(QStringLiteral("위치 · 확인 중  |  경로 · 확인 중"));
+        setCurrentProduct({});
         return;
     }
     const auto& product = active_products_[index];
