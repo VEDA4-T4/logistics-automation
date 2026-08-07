@@ -326,6 +326,17 @@ if(BUILD_TESTING)
     add_test(NAME control_center_factory_top_view_test COMMAND control_center_factory_top_view_test)
 
     add_executable(
+        control_center_factory_test_control
+        tests/factory_test_control.cpp
+        src/factory_top_view.cpp
+        include/logistics/control_center/factory_top_view.hpp
+    )
+    target_include_directories(control_center_factory_test_control PRIVATE include)
+    target_link_libraries(control_center_factory_test_control PRIVATE Qt6::Widgets logistics::contracts)
+    logistics_enable_warnings(control_center_factory_test_control)
+    add_test(NAME control_center_factory_test_control_test COMMAND control_center_factory_test_control --self-test)
+
+    add_executable(
         control_center_operations_dashboard_panel_test
         tests/operations_dashboard_panel_test.cpp
         src/factory_top_view.cpp
