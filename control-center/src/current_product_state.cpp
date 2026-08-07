@@ -199,11 +199,11 @@ ProductUpdateResult CurrentProductState::applyEnvelope(const QJsonObject& envelo
         product->recognition_state = ProductRecognitionState::MissingData;
     } else if (recognition_report == RecognitionReport::Success) {
         product->recognition_state = MissingRequiredFields(*product).isEmpty() ? ProductRecognitionState::Recognized
-                                                                                : ProductRecognitionState::MissingData;
+                                                                               : ProductRecognitionState::MissingData;
     } else if (product->recognition_state != ProductRecognitionState::RecognitionFailed &&
                (product->product_info_received || type == mqtt::MessageType::kDestinationSet)) {
         product->recognition_state = MissingRequiredFields(*product).isEmpty() ? ProductRecognitionState::Recognized
-                                                                                : ProductRecognitionState::MissingData;
+                                                                               : ProductRecognitionState::MissingData;
     } else if (type == mqtt::MessageType::kBarcodeDetected && !product->barcode.isEmpty()) {
         product->recognition_state = ProductRecognitionState::Recognized;
     }

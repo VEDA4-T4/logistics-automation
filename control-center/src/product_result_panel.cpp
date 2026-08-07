@@ -99,11 +99,10 @@ QString TrackingText(const QString& work_id, const QString& destination, const Q
 
     QString route;
     if (current->departure_position.has_value() || current->target_position.has_value()) {
-        const auto departure = current->departure_position.has_value()
-                                   ? PositionText(*current->departure_position)
-                                   : QStringLiteral("출발 확인 중");
+        const auto departure = current->departure_position.has_value() ? PositionText(*current->departure_position)
+                                                                       : QStringLiteral("출발 확인 중");
         const auto target = current->target_position.has_value() ? PositionText(*current->target_position)
-                                                                  : QStringLiteral("도착 확인 중");
+                                                                 : QStringLiteral("도착 확인 중");
         route = QStringLiteral("%1 → %2").arg(departure, target);
     } else {
         const auto target = DestinationText(current->destination.isEmpty() ? destination : current->destination);
@@ -254,9 +253,8 @@ void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
     }
     for (const auto& process : processes) {
         if (process.work_id.isEmpty() || process.work_completed ||
-            std::any_of(active_products_.cbegin(), active_products_.cend(), [&process](const auto& product) {
-                return product.work_id == process.work_id;
-            })) {
+            std::any_of(active_products_.cbegin(), active_products_.cend(),
+                        [&process](const auto& product) { return product.work_id == process.work_id; })) {
             continue;
         }
         CurrentProduct product;

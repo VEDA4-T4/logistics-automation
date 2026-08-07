@@ -2,7 +2,6 @@
 
 #include <QColor>
 #include <QGraphicsView>
-#include <QColor>
 #include <QList>
 #include <QPointF>
 #include <QString>

@@ -107,10 +107,12 @@ int main(int argc, char* argv[]) {
     line_tracer.display_name = QStringLiteral("라인트레이서");
     line_tracer.work_id = product.work_id;
     line_tracer.current_state = QStringLiteral("FOLLOWING_LINE");
-    line_tracer.departure_position = logistics::control_center::LineTracerPositionStatus{
-        .area = QStringLiteral("DEPARTURE"), .location = QStringLiteral("A") };
-    line_tracer.target_position = logistics::control_center::LineTracerPositionStatus{
-        .area = QStringLiteral("DESTINATION"), .location = QStringLiteral("A") };
+    line_tracer.departure_position =
+        logistics::control_center::LineTracerPositionStatus{ .area = QStringLiteral("DEPARTURE"),
+                                                             .location = QStringLiteral("A") };
+    line_tracer.target_position =
+        logistics::control_center::LineTracerPositionStatus{ .area = QStringLiteral("DESTINATION"),
+                                                             .location = QStringLiteral("A") };
     line_tracer.confirmed_position = line_tracer.departure_position;
     panel.setActiveWorks({ product, second_product }, { line_tracer });
     auto* selector = panel.findChild<QComboBox*>(QStringLiteral("activeWorkSelector"));

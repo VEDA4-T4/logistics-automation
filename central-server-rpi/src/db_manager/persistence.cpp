@@ -697,8 +697,8 @@ DatabaseStatus RetentionService::RunOnce(std::int64_t now_ms) {
         return { DatabaseStatusCode::kInvalidArgument, "invalid cleanup time" };
     DatabaseStatus status;
     bool row = false;
-    const auto remove_expired_files = [&](std::string_view select_sql, std::string_view delete_sql,
-                                          std::int64_t cutoff, ImageStore& store) -> DatabaseStatus {
+    const auto remove_expired_files = [&](std::string_view select_sql, std::string_view delete_sql, std::int64_t cutoff,
+                                          ImageStore& store) -> DatabaseStatus {
         while (true) {
             Statement files;
             auto cleanup_status = database_.Prepare(select_sql, files);
@@ -728,13 +728,11 @@ DatabaseStatus RetentionService::RunOnce(std::int64_t now_ms) {
         }
     };
     const auto image_cutoff = now_ms - static_cast<std::int64_t>(config_.image_retention_days) * kMillisecondsPerDay;
-    status = remove_expired_files(
-        "SELECT id,relative_path FROM image_file WHERE created_at_ms<? ORDER BY id LIMIT 500",
-        "DELETE FROM image_file WHERE id=?", image_cutoff, image_store_);
+    status = remove_expired_files("SELECT id,relative_path FROM image_file WHERE created_at_ms<? ORDER BY id LIMIT 500",
+                                  "DELETE FROM image_file WHERE id=?", image_cutoff, image_store_);
     if (!status.ok())
         return status;
-    const auto upload_cutoff =
-        now_ms - static_cast<std::int64_t>(config_.upload_retention_days) * kMillisecondsPerDay;
+    const auto upload_cutoff = now_ms - static_cast<std::int64_t>(config_.upload_retention_days) * kMillisecondsPerDay;
     status = remove_expired_files(
         "SELECT rowid,relative_path FROM http_upload WHERE created_at_ms<? AND "
         "(relative_path GLOB 'images/*' OR relative_path GLOB 'logs/*') ORDER BY created_at_ms LIMIT 500",

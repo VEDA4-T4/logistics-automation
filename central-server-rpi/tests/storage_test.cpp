@@ -357,10 +357,8 @@ int main() {
     storage.error_retention_days = 30;
     storage.security_retention_days = 30;
     assert(database.Execute("UPDATE http_upload SET created_at_ms=" + std::to_string(base_time)).ok());
-    const auto uploaded_image_file =
-        root / "uploads" / uploaded.path.substr(std::string("/uploads/").size());
-    const auto uploaded_log_file =
-        root / "uploads" / uploaded_log.path.substr(std::string("/uploads/").size());
+    const auto uploaded_image_file = root / "uploads" / uploaded.path.substr(std::string("/uploads/").size());
+    const auto uploaded_log_file = root / "uploads" / uploaded_log.path.substr(std::string("/uploads/").size());
     assert(std::filesystem::exists(uploaded_image_file));
     assert(std::filesystem::exists(uploaded_log_file));
     server::RetentionService retention(database, storage, root / "uploads");
