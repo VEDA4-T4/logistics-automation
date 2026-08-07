@@ -21,6 +21,7 @@ struct StorageConfig {
     int error_retention_days{ 180 };
     int security_retention_days{ 180 };
     int image_retention_days{ 30 };
+    int upload_retention_days{ 30 };
 };
 
 struct TransportMetadata {
@@ -161,13 +162,14 @@ private:
 
 class RetentionService final {
 public:
-    RetentionService(Database& database, StorageConfig config);
+    RetentionService(Database& database, StorageConfig config, std::filesystem::path upload_root);
     [[nodiscard]] DatabaseStatus RunOnce(std::int64_t now_ms);
 
 private:
     Database& database_;
     StorageConfig config_;
     ImageStore image_store_;
+    ImageStore upload_store_;
 };
 
 [[nodiscard]] std::int64_t CurrentUnixTimeMilliseconds();

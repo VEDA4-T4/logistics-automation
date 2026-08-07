@@ -165,6 +165,21 @@ int main() {
     };
     const auto uploaded = upload_service.Store(image_upload);
     assert(uploaded.status == server::UploadStatus::kCreated);
+    const std::vector<std::uint8_t> log_bytes{ 'o', 'k', '\n' };
+    const server::UploadRequest log_upload{
+        .kind = logistics::contracts::http::UploadKind::kLog,
+        .device_id = "PI-VISION-01",
+        .work_id = {},
+        .message_id = "UPLOAD-LOG-1",
+        .captured_at = {},
+        .started_at = "2026-07-15T00:00:00Z",
+        .ended_at = "2026-07-15T00:01:00Z",
+        .sha256 = server::Sha256Hex(log_bytes),
+        .mime_type = "text/plain",
+        .bytes = log_bytes,
+    };
+    const auto uploaded_log = upload_service.Store(log_upload);
+    assert(uploaded_log.status == server::UploadStatus::kCreated);
 
     server::EventPayload image;
     image.work_id = work_id;
@@ -341,10 +356,20 @@ int main() {
 
     storage.error_retention_days = 30;
     storage.security_retention_days = 30;
-    server::RetentionService retention(database, storage);
+    assert(database.Execute("UPDATE http_upload SET created_at_ms=" + std::to_string(base_time)).ok());
+    const auto uploaded_image_file =
+        root / "uploads" / uploaded.path.substr(std::string("/uploads/").size());
+    const auto uploaded_log_file =
+        root / "uploads" / uploaded_log.path.substr(std::string("/uploads/").size());
+    assert(std::filesystem::exists(uploaded_image_file));
+    assert(std::filesystem::exists(uploaded_log_file));
+    server::RetentionService retention(database, storage, root / "uploads");
     assert(retention.RunOnce(base_time + 40 * 86'400'000LL).ok());
     assert(Scalar(database, "SELECT count(*) FROM device_status WHERE device_id='PI-INPUT-01'") == 1);
     assert(Scalar(database, "SELECT count(*) FROM image_file") == 0);
+    assert(Scalar(database, "SELECT count(*) FROM http_upload") == 0);
+    assert(!std::filesystem::exists(uploaded_image_file));
+    assert(!std::filesystem::exists(uploaded_log_file));
     assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-ERROR-OLD'") == 0);
     assert(Scalar(database, "SELECT count(*) FROM error_log WHERE message_id='MSG-ERROR-OLD'") == 0);
     assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-ERROR-NEW'") == 1);

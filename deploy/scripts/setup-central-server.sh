@@ -126,6 +126,7 @@ device_status_retention_days=30
 error_retention_days=180
 security_retention_days=180
 image_retention_days=30
+upload_retention_days=30
 
 [http]
 enabled=true

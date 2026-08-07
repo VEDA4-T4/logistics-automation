@@ -47,6 +47,7 @@ device_status_retention_days=11
 error_retention_days=12
 security_retention_days=13
 image_retention_days=14
+upload_retention_days=15
 [http]
 enabled=true
 port=8081
@@ -86,6 +87,7 @@ calibration_version=4
     assert(config.database.path == path.parent_path() / "data/server.db");
     assert(config.database.migration_dir == path.parent_path() / "migrations");
     assert(config.storage.image_root == path.parent_path() / "images");
+    assert(config.storage.upload_retention_days == 15);
     assert(config.http.upload_root == path.parent_path() / "uploads");
     assert(config.http.tls_certificate.empty());
     assert(config.http.tls_private_key.empty());
