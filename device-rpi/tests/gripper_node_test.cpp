@@ -843,8 +843,9 @@ void test_full_server_target_pose_payload_is_accepted() {
  * moving correctly.
  *
  * The default taught waypoints happen to stay under the old budget, which is why
- * this needs a waypoint with a long shoulder travel to reproduce: 600
- * deci-degrees at the shoulder's 120 deci-degrees per second is 5 s, well past
+ * this needs a waypoint with a long shoulder travel to reproduce: 800
+ * deci-degrees at the shoulder's 120
+ * deci-degrees per second is 6.667 s, well past
  * the old 3.5 s.
  */
 void test_motion_duration_follows_the_controller_speed_limits() {
@@ -858,16 +859,16 @@ void test_motion_duration_follows_the_controller_speed_limits() {
     fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_GRIPPER);
 
     assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
-    // Homing leaves the shoulder at 900, so this move travels 600 deci-degrees.
-    assert(uart_gripper_move_duration_ms(fixture.backend->last_written.payload) == 5000U);
+    // Homing leaves the shoulder at 700, so this move travels 800 deci-degrees.
+    assert(uart_gripper_move_duration_ms(fixture.backend->last_written.payload) == 6667U);
 
     // Past the old budget but inside the real travel time: the cycle must survive.
-    fixture.node->Tick(std::chrono::milliseconds{ 4000 });
+    fixture.node->Tick(std::chrono::milliseconds{ 6000 });
     assert(fixture.node->HasActiveCycle());
     assert(!fixture.AnyErrorEquals("ERR-GRIPPER-MOTION-TIMEOUT"));
 
     // Past the real travel time plus slack: now it is genuinely a lost event.
-    fixture.node->Tick(std::chrono::milliseconds{ 4000 });
+    fixture.node->Tick(std::chrono::milliseconds{ 3000 });
     assert(!fixture.node->HasActiveCycle());
     assert(fixture.AnyErrorEquals("ERR-GRIPPER-MOTION-TIMEOUT"));
 }
@@ -917,10 +918,10 @@ void test_status_request_reanchors_the_motion_budget() {
 
     /*
      * Claw travel is now known: the status reported 0 percent and the cycle opens
-     * to 100, which at 40 percent per second is 2500 ms rather than the worst-case
+     * to 60, which at 40 percent per second is 1500 ms rather than the worst-case
      * 10 s the previous test saw.
      */
-    assert(uart_gripper_set_duration_ms(fixture.backend->last_written.payload) == 2500U);
+    assert(uart_gripper_set_duration_ms(fixture.backend->last_written.payload) == 1500U);
 }
 
 void test_pose_config_parses_and_rejects_impossible_claw_travel() {
