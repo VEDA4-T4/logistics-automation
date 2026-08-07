@@ -150,7 +150,7 @@ int Application::Run(int argc, char* argv[]) {
         return 3;
     }
 
-    RetentionService retention(database, server_config.storage);
+    RetentionService retention(database, server_config.storage, server_config.http.upload_root);
     database_status = retention.RunOnce(CurrentUnixTimeMilliseconds());
 
     if (!database_status.ok()) {
@@ -535,7 +535,7 @@ int Application::Run(int argc, char* argv[]) {
         std::cerr << "[server][ERROR] maintenance database open failed: " << database_status.message << '\n';
         return 7;
     }
-    RetentionService scheduled_retention(maintenance_database, server_config.storage);
+    RetentionService scheduled_retention(maintenance_database, server_config.storage, server_config.http.upload_root);
     auto next_retention_cleanup =
         std::chrono::steady_clock::now() + std::chrono::hours(server_config.storage.cleanup_interval_hours);
 

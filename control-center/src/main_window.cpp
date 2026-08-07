@@ -1286,7 +1286,8 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
         const auto product_update = current_product_state_.applyEnvelope(envelope);
         if (product_update.handled) {
             if (product_update.applied) {
-                product_result_panel_->setCurrentProduct(current_product_state_.product());
+                product_result_panel_->setActiveWorks(current_product_state_.products(),
+                                                      operations_dashboard_state_.processes());
             } else if (!product_update.error.isEmpty()) {
                 statusBar()->showMessage(product_update.error, 4000);
             }
@@ -1319,6 +1320,14 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
 
     if (logistics::contracts::mqtt::IsTerminal(response.result)) {
         command_response_timer_->stop();
+        if (response.command == logistics::contracts::mqtt::ControlCommand::kRecovery &&
+            response.result == logistics::contracts::mqtt::CommandResult::kSuccess &&
+            pending_target_device_id_ != QStringLiteral("SYSTEM") &&
+            pending_target_device_id_ != QStringLiteral("ALL") &&
+            operations_dashboard_state_.markRecoveryCompleted(pending_target_device_id_,
+                                                              QDateTime::currentDateTimeUtc())) {
+            refreshOperationsPresentation();
+        }
         process_control_panel_->setCommandFinished(response.command, response.result, detail);
         clearPendingCommand();
         return;
@@ -1407,6 +1416,7 @@ void MainWindow::refreshOperationsPresentation() {
     operations_dashboard_panel_->setState(operations_dashboard_state_);
     factory_top_view_->setProcesses(operations_dashboard_state_.processes(),
                                     operations_dashboard_state_.overall().state);
+    product_result_panel_->setActiveWorks(current_product_state_.products(), operations_dashboard_state_.processes());
     process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
                                              operations_dashboard_state_.processes());
 }

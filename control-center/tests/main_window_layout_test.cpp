@@ -468,20 +468,20 @@ int main(int argc, char* argv[]) {
                                                  { QStringLiteral("destination"), QStringLiteral("2") } } } });
     emit_device_status(QStringLiteral("LAYOUT-SORTING-LIVE"), QStringLiteral("PI-SORTING-01"),
                        QStringLiteral("SORTING"), 4);
-    emit_device_status(QStringLiteral("LAYOUT-LINETRACER-LIVE"), QStringLiteral("PI-LT-01"),
-                       QStringLiteral("DELIVERING"), 5);
+    emit_device_status(QStringLiteral("LAYOUT-LINETRACER-LIVE"), QStringLiteral("PI-LT-01"), QStringLiteral("STOPPED"),
+                       5);
     application.processEvents();
 
     const auto input_before_tick = factory->boxPosition(QStringLiteral("input"));
     const auto sorting_before_tick = factory->boxPosition(QStringLiteral("sorting"));
-    const auto line_before_tick = factory->boxPosition(QStringLiteral("linetracer"));
+    const auto line_arrows_before_tick = factory->lineArrowPositions();
     factory->advanceAnimationsForTest();
     if (!check(factory->boxPosition(QStringLiteral("input")) != input_before_tick,
                "input node was not moving before global emergency stop") ||
         !check(factory->boxPosition(QStringLiteral("sorting")) != sorting_before_tick,
                "sorting node was not moving before global emergency stop") ||
-        !check(factory->boxPosition(QStringLiteral("linetracer")) != line_before_tick,
-               "line-tracer node was not moving before global emergency stop")) {
+        !check(!line_arrows_before_tick.isEmpty() && factory->lineArrowPositions() == line_arrows_before_tick,
+               "stopped line-tracer route arrows were missing or moving")) {
         return 2;
     }
 
@@ -497,10 +497,10 @@ int main(int argc, char* argv[]) {
     emit_device_status(QStringLiteral("LAYOUT-LINETRACER-RETURN"), QStringLiteral("PI-LT-01"),
                        QStringLiteral("FOLLOWING_LINE"), 7);
     application.processEvents();
-    const auto return_before_tick = factory->boxPosition(QStringLiteral("linetracer"));
+    const auto return_arrows_before_tick = factory->lineArrowPositions();
     factory->advanceAnimationsForTest();
-    if (!check(factory->boxPosition(QStringLiteral("linetracer")) != return_before_tick,
-               "line-tracer did not resume its return leg after pickup-ready")) {
+    if (!check(factory->lineArrowPositions() != return_arrows_before_tick,
+               "line-tracer route arrows did not resume after pickup-ready")) {
         return 2;
     }
 

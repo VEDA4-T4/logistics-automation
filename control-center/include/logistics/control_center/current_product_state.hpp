@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QJsonObject>
+#include <QList>
 #include <QSet>
 #include <QString>
 
@@ -41,13 +42,15 @@ class CurrentProductState final {
 public:
     [[nodiscard]] ProductUpdateResult applyEnvelope(const QJsonObject& envelope);
     [[nodiscard]] const CurrentProduct& product() const noexcept;
+    [[nodiscard]] const QList<CurrentProduct>& products() const noexcept;
 
 private:
-    void resetForWork(const QString& work_id);
+    [[nodiscard]] CurrentProduct* findProduct(const QString& work_id);
+    [[nodiscard]] CurrentProduct& addProduct(const QString& work_id);
 
-    CurrentProduct product_;
+    QList<CurrentProduct> products_;
+    CurrentProduct empty_product_;
     QSet<QString> processed_message_ids_;
-    QSet<QString> retired_work_ids_;
 };
 
 }  // namespace logistics::control_center

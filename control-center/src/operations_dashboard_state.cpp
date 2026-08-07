@@ -676,12 +676,20 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             return result;
         }
         updateOverallForCommand(data, timestamp);
+        publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
         return result;
     }
 
     if (type == mqtt::MessageType::kEmergencyStop) {
+        for (auto& process : process_runtime_) {
+            if (process.status.connection_state != mqtt::ConnectionState::kOffline &&
+                process.status.connection_state != mqtt::ConnectionState::kUnknown) {
+                process.status.current_state = QStringLiteral("EMERGENCY_STOP");
+                process.status.updated_at = timestamp;
+            }
+        }
         command_override_ = OverallProcessState::EmergencyStop;
         command_override_stage_ = QStringLiteral("비상정지");
         command_override_detail_ = QStringLiteral("비상정지 명령 수신");
@@ -689,6 +697,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         overall_.stage = command_override_stage_;
         overall_.detail = command_override_detail_;
         overall_.updated_at = timestamp;
+        publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
         return result;
@@ -774,6 +783,27 @@ const QList<ProcessUnitStatus>& OperationsDashboardState::processes() const noex
 
 const ProcessDashboardStatus& OperationsDashboardState::overall() const noexcept {
     return overall_;
+}
+
+bool OperationsDashboardState::markRecoveryCompleted(const QString& target_device_id, const QDateTime& timestamp) {
+    const auto process_index = processIndexForDevice(target_device_id);
+    if (process_index < 0 || !timestamp.isValid()) {
+        return false;
+    }
+    auto& process = process_runtime_[process_index].status;
+    process.current_state = QStringLiteral("STOPPED");
+    process.error_code.clear();
+    process.has_error = false;
+    process.has_warning = false;
+    process.updated_at = timestamp;
+    if (command_override_ == OverallProcessState::EmergencyStop) {
+        command_override_.reset();
+        command_override_stage_.clear();
+        command_override_detail_.clear();
+    }
+    updateOverall(timestamp);
+    publishProcessSnapshots();
+    return true;
 }
 
 void OperationsDashboardState::rememberMessage(const QString& message_id) {
@@ -910,11 +940,28 @@ void OperationsDashboardState::updateOverallForCommand(const QJsonObject& data, 
         command_override_detail_ = overall_.detail;
         overall_.state = OverallProcessState::Stopped;
     } else if (command == QStringLiteral("EMERGENCY_STOP")) {
+        for (auto& process : process_runtime_) {
+            if (process.status.connection_state != mqtt::ConnectionState::kOffline &&
+                process.status.connection_state != mqtt::ConnectionState::kUnknown) {
+                process.status.current_state = QStringLiteral("EMERGENCY_STOP");
+                process.status.updated_at = timestamp;
+            }
+        }
         command_override_ = OverallProcessState::EmergencyStop;
         command_override_stage_ = stage;
         command_override_detail_ = overall_.detail;
         overall_.state = OverallProcessState::EmergencyStop;
     } else if (command == QStringLiteral("RECOVERY")) {
+        for (auto& process : process_runtime_) {
+            if (process.status.connection_state != mqtt::ConnectionState::kOffline &&
+                process.status.connection_state != mqtt::ConnectionState::kUnknown) {
+                process.status.current_state = QStringLiteral("STOPPED");
+                process.status.error_code.clear();
+                process.status.has_error = false;
+                process.status.has_warning = false;
+                process.status.updated_at = timestamp;
+            }
+        }
         command_override_ = OverallProcessState::Stopped;
         command_override_stage_ = QStringLiteral("복구 완료 · 시작 대기");
         command_override_detail_ = overall_.detail;

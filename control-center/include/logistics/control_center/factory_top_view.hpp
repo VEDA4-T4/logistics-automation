@@ -54,6 +54,7 @@ struct FactoryNodeVisual {
 [[nodiscard]] QString FactoryDistanceText(int distance_cm);
 [[nodiscard]] std::optional<int> FactoryRouteIndex(const QString& current_state);
 [[nodiscard]] FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process);
+[[nodiscard]] QColor FactoryNodeColor(FactoryNodeVisualState state);
 
 class FactoryTopViewWidget final : public QGraphicsView {
     Q_OBJECT
@@ -73,6 +74,7 @@ public:
     [[nodiscard]] QPointF lineTracerPickupPosition(int route) const;
     [[nodiscard]] QPointF lineTracerJunctionPosition(int route) const;
     [[nodiscard]] QPointF lineTracerDestinationPosition(int route) const;
+    [[nodiscard]] QList<QPointF> lineArrowPositions() const;
     [[nodiscard]] qreal gripperAngle() const;
     [[nodiscard]] bool gripperProductVisible() const;
     [[nodiscard]] QPointF gripperProductPosition() const;

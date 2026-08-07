@@ -13,12 +13,10 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-#include "logistics/contracts/mqtt_message.hpp"
+#include "logistics/control_center/factory_top_view.hpp"
 
 namespace logistics::control_center {
 namespace {
-
-namespace mqtt = logistics::contracts::mqtt;
 
 struct StatusPresentation {
     QString text;
@@ -62,47 +60,26 @@ StatusPresentation OverallPresentation(OverallProcessState state) {
 }
 
 StatusPresentation ProcessPresentation(const ProcessUnitStatus& process) {
-    if (process.has_error) {
-        return { QStringLiteral("오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                 QStringLiteral("#6e2b2f") };
+    const auto state = BuildFactoryNodeVisual(process).state;
+    const auto foreground = FactoryNodeColor(state).name();
+    switch (state) {
+        case FactoryNodeVisualState::Disconnected:
+            return { QStringLiteral("연결 끊김"), QStringLiteral("#252526"), foreground, QStringLiteral("#3c3c3c") };
+        case FactoryNodeVisualState::EmergencyStop:
+            return { QStringLiteral("비상정지"), QStringLiteral("#521b20"), foreground, QStringLiteral("#a1262f") };
+        case FactoryNodeVisualState::Error:
+            return { QStringLiteral("오류"), QStringLiteral("#3b1f22"), foreground, QStringLiteral("#6e2b2f") };
+        case FactoryNodeVisualState::Working:
+            return { process.has_warning ? QStringLiteral("센서 경고") : QStringLiteral("작업 중"),
+                     QStringLiteral("#17324a"), foreground, QStringLiteral("#285a7e") };
+        case FactoryNodeVisualState::Running:
+            return { process.has_warning ? QStringLiteral("센서 경고") : QStringLiteral("가동 중"),
+                     QStringLiteral("#1f3325"), foreground, QStringLiteral("#385a40") };
+        case FactoryNodeVisualState::Waiting:
+            return { process.has_warning ? QStringLiteral("센서 경고") : QStringLiteral("대기"),
+                     QStringLiteral("#252526"), foreground, QStringLiteral("#3c3c3c") };
     }
-    if (process.has_warning) {
-        return { QStringLiteral("센서 경고"), QStringLiteral("#3a3000"), QStringLiteral("#cca700"),
-                 QStringLiteral("#6b5d00") };
-    }
-    switch (process.connection_state) {
-        case mqtt::ConnectionState::kOnline:
-            return { QStringLiteral("온라인"), QStringLiteral("#1f3325"), QStringLiteral("#89d185"),
-                     QStringLiteral("#385a40") };
-        case mqtt::ConnectionState::kDelayed:
-            return { QStringLiteral("응답 지연"), QStringLiteral("#3a3000"), QStringLiteral("#cca700"),
-                     QStringLiteral("#6b5d00") };
-        case mqtt::ConnectionState::kReconnecting:
-            return { QStringLiteral("재연결 중"), QStringLiteral("#3a2a20"), QStringLiteral("#ce9178"),
-                     QStringLiteral("#6b4938") };
-        case mqtt::ConnectionState::kOffline:
-            return { QStringLiteral("오프라인"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kRtspError:
-            return { QStringLiteral("RTSP 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kMqttError:
-            return { QStringLiteral("MQTT 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kMqttAuthError:
-            return { QStringLiteral("인증 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kTlsError:
-            return { QStringLiteral("TLS 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kUartError:
-            return { QStringLiteral("UART 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kUnknown:
-            break;
-    }
-    return { QStringLiteral("수신 대기"), QStringLiteral("#252526"), QStringLiteral("#9d9d9d"),
-             QStringLiteral("#3c3c3c") };
+    return {};
 }
 
 QString UpdatedAtText(const QDateTime& updated_at) {
@@ -372,6 +349,7 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     auto* title = new QLabel(process.display_name, widgets.card);
     title->setStyleSheet("color:#f0f0f0;font-size:10px;font-weight:700;");
     widgets.status = new QLabel(widgets.card);
+    widgets.status->setObjectName(QStringLiteral("processVisualStatus"));
     header->addWidget(title);
     header->addStretch();
     header->addWidget(widgets.status);

@@ -217,6 +217,8 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
             config.storage.security_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else if (key == "image_retention_days") {
             config.storage.image_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
+        } else if (key == "upload_retention_days") {
+            config.storage.upload_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else {
             ThrowLineError(path, line_number, "unknown [storage] setting: " + std::string(key));
         }

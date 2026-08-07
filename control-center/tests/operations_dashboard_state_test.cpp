@@ -755,6 +755,18 @@ int main() {
                                           "PI-INPUT-01", "2026-07-23T01:00:13.500Z"));
     assert(result.applied && state.overall().state == OverallProcessState::EmergencyStop);
 
+    result =
+        state.applyEnvelope(Envelope("VISION-AFTER-ESTOP", "DEVICE_STATUS", DeviceStatus("ONLINE", "EMERGENCY_STOP"),
+                                     "PI-VISION-01", "2026-07-23T01:00:13.750Z"));
+    assert(result.applied &&
+           ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("EMERGENCY_STOP"));
+    assert(state.markRecoveryCompleted(
+        QStringLiteral("PI-VISION-01"),
+        QDateTime::fromString(QStringLiteral("2026-07-23T01:00:13.900Z"), Qt::ISODateWithMs)));
+    assert(ProcessByKey(state, QStringLiteral("vision")).current_state == QStringLiteral("STOPPED"));
+    assert(state.overall().state == OverallProcessState::EmergencyStop);
+    assert(!state.markRecoveryCompleted(QStringLiteral("UNKNOWN"), QDateTime::currentDateTimeUtc()));
+
     result = state.applyEnvelope(Envelope("COMMAND-2-PROCESSING", "COMMAND_RESPONSE",
                                           { { QStringLiteral("requestId"), QStringLiteral("REQ-2") },
                                             { QStringLiteral("command"), QStringLiteral("RECOVERY") },
@@ -769,6 +781,10 @@ int main() {
                                           "central-server", "2026-07-23T01:00:14.250Z"));
     assert(result.applied && state.overall().state == OverallProcessState::Stopped);
     assert(state.overall().stage == QStringLiteral("복구 완료 · 시작 대기"));
+    for (const auto& process : state.processes()) {
+        assert(process.current_state != QStringLiteral("EMERGENCY_STOP"));
+        assert(process.current_state != QStringLiteral("ESTOP"));
+    }
 
     OperationsDashboardState individual_command_state;
     result = individual_command_state.applyEnvelope(

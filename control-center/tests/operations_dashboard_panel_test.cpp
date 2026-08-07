@@ -81,6 +81,19 @@ int main(int argc, char* argv[]) {
     assert(panel.findChild<QWidget*>(QStringLiteral("processCardGrid")) != nullptr);
     assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
     assert(panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator")).size() == 4);
+    int working_statuses = 0;
+    int running_statuses = 0;
+    for (const auto* status : panel.findChildren<QLabel*>(QStringLiteral("processVisualStatus"))) {
+        if (status->text() == QStringLiteral("작업 중")) {
+            assert(status->styleSheet().contains(QStringLiteral("#75beff")));
+            ++working_statuses;
+        } else if (status->text() == QStringLiteral("가동 중")) {
+            assert(status->styleSheet().contains(QStringLiteral("#89d185")));
+            ++running_statuses;
+        }
+    }
+    assert(working_statuses == 4);
+    assert(running_statuses == 1);
     QLabel* sorting_sensor_2 = nullptr;
     for (auto* indicator : panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator"))) {
         if (indicator->property("sensorId").toInt() == 2) {
@@ -217,13 +230,13 @@ int main(int argc, char* argv[]) {
     assert(live_status->text() == QStringLiteral("● MQTT 연결 끊김"));
     assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("UNKNOWN"));
     assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
-    int waiting_count = 0;
-    int disconnected_count = 0;
-    for (const auto* label : panel.findChildren<QLabel*>()) {
-        waiting_count += label->text() == QStringLiteral("수신 대기") ? 1 : 0;
-        disconnected_count += label->text() == QStringLiteral("연결 끊김") ? 1 : 0;
+    int disconnected_status_count = 0;
+    for (const auto* status : panel.findChildren<QLabel*>(QStringLiteral("processVisualStatus"))) {
+        if (status->text() == QStringLiteral("연결 끊김")) {
+            assert(status->styleSheet().contains(QStringLiteral("#777777")));
+            ++disconnected_status_count;
+        }
     }
-    assert(waiting_count == 5);
-    assert(disconnected_count == 5);
+    assert(disconnected_status_count == 5);
     return 0;
 }

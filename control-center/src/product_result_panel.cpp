@@ -5,15 +5,18 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPixmap>
 #include <QPointer>
 #include <QResizeEvent>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <utility>
 
 namespace logistics::control_center {
@@ -60,6 +63,54 @@ QString ProcessingText(ProductProcessingResult result) {
     return QStringLiteral("처리 상태 없음");
 }
 
+QString PositionText(const LineTracerPositionStatus& position) {
+    const auto area = position.area.compare(QStringLiteral("DEPARTURE"), Qt::CaseInsensitive) == 0
+                          ? QStringLiteral("출발")
+                          : QStringLiteral("도착");
+    return QStringLiteral("%1 %2").arg(area, position.location);
+}
+
+QString DestinationText(const QString& destination) {
+    const auto normalized = destination.trimmed().toUpper();
+    if (normalized.size() == 1 && normalized.front() >= QLatin1Char('A') && normalized.front() <= QLatin1Char('C')) {
+        return normalized;
+    }
+    const auto route = DestinationRouteIndex(normalized);
+    return route.has_value() ? QString(QChar(QLatin1Char('A').unicode() + *route - 1)) : normalized;
+}
+
+QString TrackingText(const QString& work_id, const QString& destination, const QList<ProcessUnitStatus>& processes) {
+    const ProcessUnitStatus* current = nullptr;
+    for (const auto& process : processes) {
+        if (process.work_id == work_id && !process.work_completed) {
+            current = &process;
+        }
+    }
+    if (current == nullptr) {
+        const auto target = DestinationText(destination);
+        return QStringLiteral("위치 · 확인 중  |  경로 · %1")
+            .arg(target.isEmpty() ? QStringLiteral("확인 중") : QStringLiteral("도착 %1").arg(target));
+    }
+
+    QString location = QStringLiteral("%1 · %2").arg(current->display_name, current->current_state);
+    if (current->confirmed_position.has_value()) {
+        location = PositionText(*current->confirmed_position);
+    }
+
+    QString route;
+    if (current->departure_position.has_value() || current->target_position.has_value()) {
+        const auto departure = current->departure_position.has_value() ? PositionText(*current->departure_position)
+                                                                       : QStringLiteral("출발 확인 중");
+        const auto target = current->target_position.has_value() ? PositionText(*current->target_position)
+                                                                 : QStringLiteral("도착 확인 중");
+        route = QStringLiteral("%1 → %2").arg(departure, target);
+    } else {
+        const auto target = DestinationText(current->destination.isEmpty() ? destination : current->destination);
+        route = target.isEmpty() ? QStringLiteral("확인 중") : QStringLiteral("도착 %1").arg(target);
+    }
+    return QStringLiteral("위치 · %1  |  경로 · %2").arg(location, route);
+}
+
 }  // namespace
 
 ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
@@ -86,8 +137,14 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     eyebrow->setStyleSheet("color:#4daafc;font-size:9px;font-weight:700;letter-spacing:1px;");
     auto* title = new QLabel(QStringLiteral("현재 상품"), this);
     title->setStyleSheet("color:#e7eef3;font-size:17px;font-weight:700;");
+    tracking_status_ = new QLabel(QStringLiteral("위치 · 확인 중  |  경로 · 확인 중"), this);
+    tracking_status_->setObjectName(QStringLiteral("workTrackingStatus"));
+    tracking_status_->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:600;");
+    tracking_status_->setMinimumWidth(0);
+    tracking_status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     header_text_layout->addWidget(eyebrow);
     header_text_layout->addWidget(title);
+    header_text_layout->addWidget(tracking_status_);
     header_layout->addLayout(header_text_layout);
     header_layout->addStretch();
 
@@ -165,11 +222,94 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     auto* content_layout = new QHBoxLayout();
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(8);
+    auto* work_list_panel = new QWidget(this);
+    auto* work_list_layout = new QVBoxLayout(work_list_panel);
+    work_list_layout->setContentsMargins(0, 0, 0, 0);
+    work_list_layout->setSpacing(4);
+    auto* work_list_title = new QLabel(QStringLiteral("작업 중"), work_list_panel);
+    work_list_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
+    active_work_list_ = new QListWidget(work_list_panel);
+    active_work_list_->setObjectName(QStringLiteral("activeWorkList"));
+    active_work_list_->setMinimumWidth(110);
+    active_work_list_->setMaximumWidth(170);
+    active_work_list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    active_work_list_->setToolTip(QStringLiteral("현재 작업 중인 항목"));
+    active_work_list_->setStyleSheet(
+        "QListWidget{background:#141d26;color:#e7eef3;border:1px solid #24313d;border-radius:6px;outline:0;}"
+        "QListWidget::item{padding:7px 6px;border-bottom:1px solid #24313d;}"
+        "QListWidget::item:selected{background:#264f78;color:#ffffff;}");
+    work_list_layout->addWidget(work_list_title);
+    work_list_layout->addWidget(active_work_list_, 1);
+    content_layout->addWidget(work_list_panel);
     content_layout->addWidget(image_label_, 3);
     content_layout->addWidget(metadata, 2);
 
     layout->addLayout(header_layout);
     layout->addLayout(content_layout, 1);
+
+    connect(active_work_list_, &QListWidget::currentRowChanged, this, [this]() { showSelectedWork(); });
+}
+
+void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
+                                        const QList<ProcessUnitStatus>& processes) {
+    const auto selected_work_id = active_work_list_->currentItem() == nullptr
+                                      ? QString{}
+                                      : active_work_list_->currentItem()->data(Qt::UserRole).toString();
+    active_products_.clear();
+    processes_ = processes;
+    for (const auto& product : products) {
+        const bool active = std::any_of(processes.cbegin(), processes.cend(), [&product](const auto& process) {
+            return process.work_id == product.work_id && !process.work_completed;
+        });
+        if (active || (product.processing_result != ProductProcessingResult::Success &&
+                       product.processing_result != ProductProcessingResult::Failed)) {
+            active_products_.append(product);
+        }
+    }
+    for (const auto& process : processes) {
+        if (process.work_id.isEmpty() || process.work_completed ||
+            std::any_of(active_products_.cbegin(), active_products_.cend(),
+                        [&process](const auto& product) { return product.work_id == process.work_id; })) {
+            continue;
+        }
+        CurrentProduct product;
+        product.work_id = process.work_id;
+        product.destination = process.destination;
+        product.processing_result = ProductProcessingResult::Processing;
+        active_products_.append(product);
+    }
+    const QSignalBlocker blocker(active_work_list_);
+    active_work_list_->clear();
+    for (const auto& product : active_products_) {
+        auto* item = new QListWidgetItem(product.work_id, active_work_list_);
+        item->setData(Qt::UserRole, product.work_id);
+        item->setToolTip(product.work_id);
+    }
+    auto selected_index = -1;
+    for (int index = 0; index < active_work_list_->count(); ++index) {
+        if (active_work_list_->item(index)->data(Qt::UserRole).toString() == selected_work_id) {
+            selected_index = index;
+            break;
+        }
+    }
+    if (selected_index < 0 && active_work_list_->count() > 0) {
+        selected_index = active_work_list_->count() - 1;
+    }
+    active_work_list_->setCurrentRow(selected_index);
+    showSelectedWork();
+}
+
+void ProductResultPanel::showSelectedWork() {
+    const auto index = active_work_list_->currentRow();
+    if (index < 0 || index >= active_products_.size()) {
+        tracking_status_->setText(QStringLiteral("위치 · 확인 중  |  경로 · 확인 중"));
+        setCurrentProduct({});
+        return;
+    }
+    const auto& product = active_products_[index];
+    tracking_status_->setText(TrackingText(product.work_id, product.destination, processes_));
+    tracking_status_->setToolTip(tracking_status_->text());
+    setCurrentProduct(product);
 }
 
 void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
@@ -271,6 +411,7 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
                                  image_url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) != 0)) {
         const QString detail = QStringLiteral("이미지 경로 오류: %1").arg(product.image_path);
         qWarning().noquote() << "[control-center][http] image download failed:" << detail;
+        setImagePlaceholder(QStringLiteral("이미지 경로를 확인할 수 없습니다"), true);
         image_label_->setToolTip(detail);
         return;
     }
@@ -303,6 +444,9 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
                                        .arg(http_status == 0 ? QStringLiteral("N/A") : QString::number(http_status))
                                        .arg(reply->errorString());
             qWarning().noquote() << "[control-center][http] image download failed:" << detail;
+            setImagePlaceholder(http_status == 404 ? QStringLiteral("이미지가 만료되었거나 존재하지 않습니다")
+                                                   : QStringLiteral("이미지를 불러오지 못했습니다"),
+                                true);
             image_label_->setToolTip(detail);
             return;
         }
@@ -311,6 +455,7 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
         if (payload.size() > kMaximumProductImageBytes || !image.loadFromData(payload)) {
             const QString detail = QStringLiteral("이미지 형식 오류: %1").arg(reply->url().toString());
             qWarning().noquote() << "[control-center][http] image decode failed:" << detail;
+            setImagePlaceholder(QStringLiteral("이미지 형식을 확인할 수 없습니다"), true);
             image_label_->setToolTip(detail);
             return;
         }

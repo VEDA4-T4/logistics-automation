@@ -106,7 +106,8 @@ int main(int argc, char* argv[]) {
     panel.setCommandPending(logistics::contracts::mqtt::ControlCommand::kStart);
     panel.setCommandFinished(logistics::contracts::mqtt::ControlCommand::kStart,
                              logistics::contracts::mqtt::CommandResult::kSuccess, QStringLiteral("비전 시작 완료"));
-    assert(command_status->text().contains(QStringLiteral("비전 시작 완료")));
+    assert(command_status->text() == QStringLiteral("공정 시작 · 완료"));
+    assert(!command_status->text().contains(QStringLiteral("비전 시작 완료")));
     assert(!command_status->text().contains(QLatin1Char('\n')));
     assert(command_status->toolTip().contains(QStringLiteral("비전 시작 완료")));
 
@@ -115,10 +116,11 @@ int main(int argc, char* argv[]) {
     panel.setCommandPending(logistics::contracts::mqtt::ControlCommand::kStop);
     panel.setCommandFinished(logistics::contracts::mqtt::ControlCommand::kStop,
                              logistics::contracts::mqtt::CommandResult::kRejected, QStringLiteral("분류 정지 거부"));
-    assert(command_status->text().contains(QStringLiteral("분류 정지 거부")));
+    assert(command_status->text() == QStringLiteral("공정 정지 · NACK · 거부됨"));
+    assert(!command_status->text().contains(QStringLiteral("분류 정지 거부")));
 
     panel.setControlTarget(QStringLiteral("PI-VISION-01"), QStringLiteral("비전 처리"));
-    assert(command_status->text().contains(QStringLiteral("비전 시작 완료")));
+    assert(command_status->text() == QStringLiteral("공정 시작 · 완료"));
     assert(command_status->toolTip().contains(QLatin1Char('\n')));
 
     panel.setMqttConnected(false);
