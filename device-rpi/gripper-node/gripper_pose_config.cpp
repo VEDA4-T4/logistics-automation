@@ -90,6 +90,8 @@ void AssignGripperValue(GripperPoseConfig& config, std::string_view origin, std:
         config.pick_approach = ParsePose(origin, line_number, key, value);
     } else if (key == "pick_pose") {
         config.pick = ParsePose(origin, line_number, key, value);
+    } else if (key == "pick_lift_pose") {
+        config.pick_lift = ParsePose(origin, line_number, key, value);
     } else if (key == "transfer_pose") {
         config.transfer = ParsePose(origin, line_number, key, value);
     } else if (key == "place_approach_pose") {
@@ -178,7 +180,7 @@ void AssignGripperValue(GripperPoseConfig& config, std::string_view origin, std:
 }  // namespace
 
 bool GripperPoseConfig::IsValid() const noexcept {
-    return home.IsValid() && pick_approach.IsValid() && pick.IsValid() && transfer.IsValid() &&
+    return home.IsValid() && pick_approach.IsValid() && pick.IsValid() && pick_lift.IsValid() && transfer.IsValid() &&
            place_approach.IsValid() && place.IsValid() &&
            uart_gripper_position_is_valid(open_position_percent) != 0U &&
            uart_gripper_position_is_valid(closed_position_percent) != 0U &&

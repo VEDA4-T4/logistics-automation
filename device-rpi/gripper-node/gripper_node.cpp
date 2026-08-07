@@ -209,12 +209,15 @@ std::string_view ToString(GripperCycleStep step) noexcept {
         case GripperCycleStep::kCloseClaw:
             return "PICKING";
         case GripperCycleStep::kPickRetreat:
+        case GripperCycleStep::kTransfer:
         case GripperCycleStep::kPlaceApproach:
             return "TRANSFERRING";
         case GripperCycleStep::kPlaceDescend:
         case GripperCycleStep::kReleaseClaw:
         case GripperCycleStep::kPlaceRetreat:
             return "PLACING";
+        case GripperCycleStep::kReturnTransfer:
+        case GripperCycleStep::kReturnPickSide:
         case GripperCycleStep::kReturnHome:
             return "HOMING";
         case GripperCycleStep::kCompleted:
@@ -735,6 +738,8 @@ GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step
             // separate TRANSFER command can continue from there.
             return (phase == GripperPhase::kPick) ? GripperCycleStep::kCompleted : GripperCycleStep::kPickRetreat;
         case GripperCycleStep::kPickRetreat:
+            return GripperCycleStep::kTransfer;
+        case GripperCycleStep::kTransfer:
             return GripperCycleStep::kPlaceApproach;
         case GripperCycleStep::kPlaceApproach:
             return (phase == GripperPhase::kTransfer) ? GripperCycleStep::kCompleted : GripperCycleStep::kPlaceDescend;
@@ -743,7 +748,12 @@ GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step
         case GripperCycleStep::kReleaseClaw:
             return GripperCycleStep::kPlaceRetreat;
         case GripperCycleStep::kPlaceRetreat:
-            return (phase == GripperPhase::kPlace) ? GripperCycleStep::kCompleted : GripperCycleStep::kReturnHome;
+            return (phase == GripperPhase::kPlace) ? GripperCycleStep::kCompleted
+                                                   : GripperCycleStep::kReturnTransfer;
+        case GripperCycleStep::kReturnTransfer:
+            return GripperCycleStep::kReturnPickSide;
+        case GripperCycleStep::kReturnPickSide:
+            return GripperCycleStep::kReturnHome;
         case GripperCycleStep::kReturnHome:
             return GripperCycleStep::kCompleted;
         case GripperCycleStep::kIdle:
@@ -830,6 +840,12 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
             break;
 
         case GripperCycleStep::kPickRetreat:
+        case GripperCycleStep::kReturnPickSide:
+            send_arm(poses_.pick_lift);
+            break;
+
+        case GripperCycleStep::kTransfer:
+        case GripperCycleStep::kReturnTransfer:
             send_arm(poses_.transfer);
             break;
 

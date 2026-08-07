@@ -44,7 +44,8 @@ struct GripperPoseConfig {
     GripperPose home{ 1000U, 700U, 1200U };
     GripperPose pick_approach{ 1000U, 900U, 1400U };
     GripperPose pick{ 1000U, 1000U, 1300U };
-    GripperPose transfer{ 1800U, 700U, 1200U };
+    GripperPose pick_lift{ 1000U, 500U, 1500U };
+    GripperPose transfer{ 1800U, 500U, 1500U };
     GripperPose place_approach{ 1800U, 900U, 1400U };
     GripperPose place{ 1800U, 1000U, 1300U };
 

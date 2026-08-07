@@ -326,10 +326,13 @@ void test_full_cycle_walks_every_motion_and_reports_completion_once() {
         { GripperCycleStep::kPickDescend, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kCloseClaw, UART_GRIPPER_MOTION_GRIPPER },
         { GripperCycleStep::kPickRetreat, UART_GRIPPER_MOTION_ARM },
+        { GripperCycleStep::kTransfer, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kPlaceApproach, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kPlaceDescend, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kReleaseClaw, UART_GRIPPER_MOTION_GRIPPER },
         { GripperCycleStep::kPlaceRetreat, UART_GRIPPER_MOTION_ARM },
+        { GripperCycleStep::kReturnTransfer, UART_GRIPPER_MOTION_ARM },
+        { GripperCycleStep::kReturnPickSide, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kReturnHome, UART_GRIPPER_MOTION_HOME },
     };
 
@@ -626,9 +629,10 @@ void test_pick_phase_stops_with_the_box_held() {
     assert(!fixture.AnyStatusEquals("PLACING"));
 }
 
-void test_full_cycle_uses_the_taught_transfer_pose_after_gripping() {
+void test_full_cycle_uses_the_taught_clearance_poses_after_gripping() {
     GripperPoseConfig config;
-    config.transfer = { 1800U, 700U, 1200U };
+    config.pick_lift = { 1000U, 500U, 1500U };
+    config.transfer = { 1800U, 500U, 1500U };
     Fixture fixture{ config };
     fixture.Home();
 
@@ -643,9 +647,15 @@ void test_full_cycle_uses_the_taught_transfer_pose_after_gripping() {
 
     assert(fixture.node->ActiveStep() == GripperCycleStep::kPickRetreat);
     assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
+    assert(uart_gripper_move_base_angle(fixture.backend->last_written.payload) == 1000U);
+    assert(uart_gripper_move_shoulder_angle(fixture.backend->last_written.payload) == 500U);
+    assert(uart_gripper_move_elbow_angle(fixture.backend->last_written.payload) == 1500U);
+
+    fixture.CompleteCurrentMotion(++motion_id, UART_GRIPPER_MOTION_ARM);
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kTransfer);
     assert(uart_gripper_move_base_angle(fixture.backend->last_written.payload) == 1800U);
-    assert(uart_gripper_move_shoulder_angle(fixture.backend->last_written.payload) == 700U);
-    assert(uart_gripper_move_elbow_angle(fixture.backend->last_written.payload) == 1200U);
+    assert(uart_gripper_move_shoulder_angle(fixture.backend->last_written.payload) == 500U);
+    assert(uart_gripper_move_elbow_angle(fixture.backend->last_written.payload) == 1500U);
 }
 
 void test_vision_offset_shifts_the_pick_pose_within_its_limit() {
@@ -953,16 +963,20 @@ device_id=PI-GRIPPER-01
 [gripper]
 home_pose=1000,700,1200
 pick_pose=600,1100,700
-transfer_pose=1800,700,1200
+pick_lift_pose=1000,500,1500
+transfer_pose=1800,500,1500
 open_position_percent=90
 closed_position_percent=20
 arm_duration_ms=1200
 )");
     assert(parsed.pick.base_deci_deg == 600U);
     assert(parsed.pick.shoulder_deci_deg == 1100U);
+    assert(parsed.pick_lift.base_deci_deg == 1000U);
+    assert(parsed.pick_lift.shoulder_deci_deg == 500U);
+    assert(parsed.pick_lift.elbow_deci_deg == 1500U);
     assert(parsed.transfer.base_deci_deg == 1800U);
-    assert(parsed.transfer.shoulder_deci_deg == 700U);
-    assert(parsed.transfer.elbow_deci_deg == 1200U);
+    assert(parsed.transfer.shoulder_deci_deg == 500U);
+    assert(parsed.transfer.elbow_deci_deg == 1500U);
     assert(parsed.open_position_percent == 90U);
     assert(parsed.arm_duration_ms == 1200U);
 
@@ -998,7 +1012,7 @@ int main() {
     test_status_request_reports_the_controller_state();
     test_commands_for_another_device_are_ignored();
     test_pick_phase_stops_with_the_box_held();
-    test_full_cycle_uses_the_taught_transfer_pose_after_gripping();
+    test_full_cycle_uses_the_taught_clearance_poses_after_gripping();
     test_vision_offset_shifts_the_pick_pose_within_its_limit();
     test_pose_config_parses_and_rejects_impossible_claw_travel();
     test_cartesian_pick_pose_drives_the_arm_through_kinematics();

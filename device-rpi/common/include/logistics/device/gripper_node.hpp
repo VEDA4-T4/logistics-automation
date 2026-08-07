@@ -80,10 +80,13 @@ enum class GripperCycleStep {
     kPickDescend,
     kCloseClaw,
     kPickRetreat,
+    kTransfer,
     kPlaceApproach,
     kPlaceDescend,
     kReleaseClaw,
     kPlaceRetreat,
+    kReturnTransfer,
+    kReturnPickSide,
     kReturnHome,
     kCompleted,
 };

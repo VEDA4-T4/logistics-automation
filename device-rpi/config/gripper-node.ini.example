@@ -59,8 +59,11 @@ pick_approach_pose=1000,900,1400
 # Claw closed around the box on the input conveyor.
 pick_pose=1000,1000,1300
 
-# Safe transfer pose used immediately after gripping the box.
-transfer_pose=1800,700,1200
+# Lift the box clear of the input conveyor before rotating the base.
+pick_lift_pose=1000,500,1500
+
+# Rotate to the sorting conveyor while holding the lifted arm posture.
+transfer_pose=1800,500,1500
 
 # Directly above the drop point on the sorting conveyor.
 place_approach_pose=1800,900,1400
