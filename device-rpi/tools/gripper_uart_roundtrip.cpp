@@ -514,8 +514,7 @@ void PrintStatus(const StatusSnapshot& status) {
 
     const bool reached_home = status.state == UART_GRIPPER_STATE_IDLE && status.homed == 1U &&
                               status.base_angle == kHomeBaseAngle && status.shoulder_angle == kHomeShoulderAngle &&
-                              status.elbow_angle == kHomeElbowAngle &&
-                              status.gripper_position == kHomeGripperPosition;
+                              status.elbow_angle == kHomeElbowAngle && status.gripper_position == kHomeGripperPosition;
     PrintStatus(status);
     std::printf("\nGRIPPER DIRECT HOME: %s\n", reached_home ? "PASS" : "FAIL");
     return reached_home ? 0 : 1;
@@ -693,22 +692,22 @@ void PrintStatus(const StatusSnapshot& status) {
 
     std::printf("[2/4] Move Base to %.1f degrees\n", static_cast<double>(low_angle) / 10.0);
     if (!RunArmMotion(roundtrip, sequence, kLowMotionId, low_angle, kHomeShoulderAngle, kHomeElbowAngle,
-                      ArmDuration(kCenterAngle, kHomeShoulderAngle, kHomeElbowAngle, low_angle,
-                                  kHomeShoulderAngle, kHomeElbowAngle))) {
+                      ArmDuration(kCenterAngle, kHomeShoulderAngle, kHomeElbowAngle, low_angle, kHomeShoulderAngle,
+                                  kHomeElbowAngle))) {
         return 1;
     }
 
     std::printf("[3/4] Move Base to %.1f degrees\n", static_cast<double>(high_angle) / 10.0);
     if (!RunArmMotion(roundtrip, sequence, kHighMotionId, high_angle, kHomeShoulderAngle, kHomeElbowAngle,
-                      ArmDuration(low_angle, kHomeShoulderAngle, kHomeElbowAngle, high_angle,
-                                  kHomeShoulderAngle, kHomeElbowAngle))) {
+                      ArmDuration(low_angle, kHomeShoulderAngle, kHomeElbowAngle, high_angle, kHomeShoulderAngle,
+                                  kHomeElbowAngle))) {
         return 1;
     }
 
     std::printf("[4/4] Return Base to 100.0 degrees\n");
     if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, kCenterAngle, kHomeShoulderAngle, kHomeElbowAngle,
-                      ArmDuration(high_angle, kHomeShoulderAngle, kHomeElbowAngle, kCenterAngle,
-                                  kHomeShoulderAngle, kHomeElbowAngle))) {
+                      ArmDuration(high_angle, kHomeShoulderAngle, kHomeElbowAngle, kCenterAngle, kHomeShoulderAngle,
+                                  kHomeElbowAngle))) {
         return 1;
     }
 
@@ -717,8 +716,7 @@ void PrintStatus(const StatusSnapshot& status) {
     if (!roundtrip.Transact(sequence, UART_CMD_GRIPPER_GET_STATUS, {}, UART_STATUS_SUCCESS, &response) ||
         !DecodeStatus(response, &status) || status.state != UART_GRIPPER_STATE_IDLE ||
         status.base_angle != kCenterAngle || status.shoulder_angle != kHomeShoulderAngle ||
-        status.elbow_angle != kHomeElbowAngle ||
-        status.homed != 1U) {
+        status.elbow_angle != kHomeElbowAngle || status.homed != 1U) {
         return 1;
     }
     PrintStatus(status);
@@ -747,16 +745,16 @@ void PrintStatus(const StatusSnapshot& status) {
     }
 
     std::printf("[2/4] Move Shoulder to %.1f degrees\n", static_cast<double>(first_angle) / 10.0);
-    if (!RunArmMotion(roundtrip, sequence, kLowMotionId, kHomeBaseAngle, first_angle, kHomeElbowAngle,
-                      ArmDuration(kHomeBaseAngle, kCenterAngle, kHomeElbowAngle, kHomeBaseAngle, first_angle,
-                                  kHomeElbowAngle))) {
+    if (!RunArmMotion(
+            roundtrip, sequence, kLowMotionId, kHomeBaseAngle, first_angle, kHomeElbowAngle,
+            ArmDuration(kHomeBaseAngle, kCenterAngle, kHomeElbowAngle, kHomeBaseAngle, first_angle, kHomeElbowAngle))) {
         return 1;
     }
 
     std::printf("[3/4] Move Shoulder to %.1f degrees\n", static_cast<double>(second_angle) / 10.0);
-    if (!RunArmMotion(roundtrip, sequence, kHighMotionId, kHomeBaseAngle, second_angle, kHomeElbowAngle,
-                      ArmDuration(kHomeBaseAngle, first_angle, kHomeElbowAngle, kHomeBaseAngle, second_angle,
-                                  kHomeElbowAngle))) {
+    if (!RunArmMotion(
+            roundtrip, sequence, kHighMotionId, kHomeBaseAngle, second_angle, kHomeElbowAngle,
+            ArmDuration(kHomeBaseAngle, first_angle, kHomeElbowAngle, kHomeBaseAngle, second_angle, kHomeElbowAngle))) {
         return 1;
     }
 
@@ -801,22 +799,22 @@ void PrintStatus(const StatusSnapshot& status) {
 
     std::printf("[2/4] Move Elbow to %.1f degrees\n", static_cast<double>(first_angle) / 10.0);
     if (!RunArmMotion(roundtrip, sequence, kLowMotionId, kHomeBaseAngle, kHomeShoulderAngle, first_angle,
-                      ArmDuration(kHomeBaseAngle, kHomeShoulderAngle, kCenterAngle, kHomeBaseAngle,
-                                  kHomeShoulderAngle, first_angle))) {
+                      ArmDuration(kHomeBaseAngle, kHomeShoulderAngle, kCenterAngle, kHomeBaseAngle, kHomeShoulderAngle,
+                                  first_angle))) {
         return 1;
     }
 
     std::printf("[3/4] Move Elbow to %.1f degrees\n", static_cast<double>(second_angle) / 10.0);
     if (!RunArmMotion(roundtrip, sequence, kHighMotionId, kHomeBaseAngle, kHomeShoulderAngle, second_angle,
-                      ArmDuration(kHomeBaseAngle, kHomeShoulderAngle, first_angle, kHomeBaseAngle,
-                                  kHomeShoulderAngle, second_angle))) {
+                      ArmDuration(kHomeBaseAngle, kHomeShoulderAngle, first_angle, kHomeBaseAngle, kHomeShoulderAngle,
+                                  second_angle))) {
         return 1;
     }
 
     std::printf("[4/4] Return Elbow to 120.0 degrees\n");
     if (!RunArmMotion(roundtrip, sequence, kCenterMotionId, kHomeBaseAngle, kHomeShoulderAngle, kCenterAngle,
-                      ArmDuration(kHomeBaseAngle, kHomeShoulderAngle, second_angle, kHomeBaseAngle,
-                                  kHomeShoulderAngle, kCenterAngle))) {
+                      ArmDuration(kHomeBaseAngle, kHomeShoulderAngle, second_angle, kHomeBaseAngle, kHomeShoulderAngle,
+                                  kCenterAngle))) {
         return 1;
     }
 
