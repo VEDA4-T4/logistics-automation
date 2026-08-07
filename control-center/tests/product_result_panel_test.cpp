@@ -2,11 +2,11 @@
 
 #include <QApplication>
 #include <QByteArray>
-#include <QComboBox>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QHostAddress>
 #include <QLabel>
+#include <QListWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -37,20 +37,24 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
     QApplication::processEvents();
 
     auto* image = panel.findChild<QLabel*>(QStringLiteral("productImage"));
+    auto* work_list = panel.findChild<QListWidget*>(QStringLiteral("activeWorkList"));
     auto* metadata = panel.findChild<QWidget*>(QStringLiteral("productMetadata"));
     auto* status_row = panel.findChild<QWidget*>(QStringLiteral("productStatusRow"));
     assert(image != nullptr);
+    assert(work_list != nullptr);
     assert(metadata != nullptr);
     assert(status_row != nullptr);
     assert(panel.size() == size);
 
     const auto image_rect = PanelRect(panel, *image);
+    const auto work_list_rect = PanelRect(panel, *work_list);
     const auto metadata_rect = PanelRect(panel, *metadata);
     const auto status_rect = PanelRect(panel, *status_row);
-    for (const auto& rect : { image_rect, metadata_rect, status_rect }) {
+    for (const auto& rect : { work_list_rect, image_rect, metadata_rect, status_rect }) {
         assert(!rect.isEmpty());
         assert(panel.rect().contains(rect));
     }
+    assert(work_list_rect.right() < image_rect.left());
     assert(image_rect.right() < metadata_rect.left());
     assert(image_rect.width() > metadata_rect.width());
     const auto ratio_error = image_rect.width() * 2 - metadata_rect.width() * 3;
@@ -115,11 +119,11 @@ int main(int argc, char* argv[]) {
                                                              .location = QStringLiteral("A") };
     line_tracer.confirmed_position = line_tracer.departure_position;
     panel.setActiveWorks({ product, second_product }, { line_tracer });
-    auto* selector = panel.findChild<QComboBox*>(QStringLiteral("activeWorkSelector"));
+    auto* work_list = panel.findChild<QListWidget*>(QStringLiteral("activeWorkList"));
     auto* tracking = panel.findChild<QLabel*>(QStringLiteral("workTrackingStatus"));
-    assert(selector != nullptr && selector->count() == 2);
+    assert(work_list != nullptr && work_list->count() == 2);
     assert(tracking != nullptr);
-    selector->setCurrentIndex(0);
+    work_list->setCurrentRow(0);
     assert(tracking->text().contains(QStringLiteral("출발 A")));
     assert(tracking->text().contains(QStringLiteral("도착 A")));
 

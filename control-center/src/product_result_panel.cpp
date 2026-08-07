@@ -1,11 +1,11 @@
 #include "logistics/control_center/product_result_panel.hpp"
 
-#include <QComboBox>
 #include <QDebug>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -146,12 +146,6 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     header_text_layout->addWidget(title);
     header_text_layout->addWidget(tracking_status_);
     header_layout->addLayout(header_text_layout);
-    active_work_selector_ = new QComboBox(this);
-    active_work_selector_->setObjectName(QStringLiteral("activeWorkSelector"));
-    active_work_selector_->setMinimumWidth(150);
-    active_work_selector_->setMaximumWidth(220);
-    active_work_selector_->setToolTip(QStringLiteral("현재 작업 중인 항목 선택"));
-    header_layout->addWidget(active_work_selector_);
     header_layout->addStretch();
 
     auto* status_row = new QWidget(this);
@@ -228,18 +222,39 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     auto* content_layout = new QHBoxLayout();
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(8);
+    auto* work_list_panel = new QWidget(this);
+    auto* work_list_layout = new QVBoxLayout(work_list_panel);
+    work_list_layout->setContentsMargins(0, 0, 0, 0);
+    work_list_layout->setSpacing(4);
+    auto* work_list_title = new QLabel(QStringLiteral("작업 중"), work_list_panel);
+    work_list_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
+    active_work_list_ = new QListWidget(work_list_panel);
+    active_work_list_->setObjectName(QStringLiteral("activeWorkList"));
+    active_work_list_->setMinimumWidth(110);
+    active_work_list_->setMaximumWidth(170);
+    active_work_list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    active_work_list_->setToolTip(QStringLiteral("현재 작업 중인 항목"));
+    active_work_list_->setStyleSheet(
+        "QListWidget{background:#141d26;color:#e7eef3;border:1px solid #24313d;border-radius:6px;outline:0;}"
+        "QListWidget::item{padding:7px 6px;border-bottom:1px solid #24313d;}"
+        "QListWidget::item:selected{background:#264f78;color:#ffffff;}");
+    work_list_layout->addWidget(work_list_title);
+    work_list_layout->addWidget(active_work_list_, 1);
+    content_layout->addWidget(work_list_panel);
     content_layout->addWidget(image_label_, 3);
     content_layout->addWidget(metadata, 2);
 
     layout->addLayout(header_layout);
     layout->addLayout(content_layout, 1);
 
-    connect(active_work_selector_, &QComboBox::currentIndexChanged, this, [this]() { showSelectedWork(); });
+    connect(active_work_list_, &QListWidget::currentRowChanged, this, [this]() { showSelectedWork(); });
 }
 
 void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
                                         const QList<ProcessUnitStatus>& processes) {
-    const auto selected_work_id = active_work_selector_->currentData().toString();
+    const auto selected_work_id = active_work_list_->currentItem() == nullptr
+                                      ? QString{}
+                                      : active_work_list_->currentItem()->data(Qt::UserRole).toString();
     active_products_.clear();
     processes_ = processes;
     for (const auto& product : products) {
@@ -267,21 +282,29 @@ void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
         active_products_.append(products.back());
     }
 
-    const QSignalBlocker blocker(active_work_selector_);
-    active_work_selector_->clear();
+    const QSignalBlocker blocker(active_work_list_);
+    active_work_list_->clear();
     for (const auto& product : active_products_) {
-        active_work_selector_->addItem(product.work_id, product.work_id);
+        auto* item = new QListWidgetItem(product.work_id, active_work_list_);
+        item->setData(Qt::UserRole, product.work_id);
+        item->setToolTip(product.work_id);
     }
-    auto selected_index = active_work_selector_->findData(selected_work_id);
-    if (selected_index < 0 && active_work_selector_->count() > 0) {
-        selected_index = active_work_selector_->count() - 1;
+    auto selected_index = -1;
+    for (int index = 0; index < active_work_list_->count(); ++index) {
+        if (active_work_list_->item(index)->data(Qt::UserRole).toString() == selected_work_id) {
+            selected_index = index;
+            break;
+        }
     }
-    active_work_selector_->setCurrentIndex(selected_index);
+    if (selected_index < 0 && active_work_list_->count() > 0) {
+        selected_index = active_work_list_->count() - 1;
+    }
+    active_work_list_->setCurrentRow(selected_index);
     showSelectedWork();
 }
 
 void ProductResultPanel::showSelectedWork() {
-    const auto index = active_work_selector_->currentIndex();
+    const auto index = active_work_list_->currentRow();
     if (index < 0 || index >= active_products_.size()) {
         tracking_status_->setText(QStringLiteral("위치 · 확인 중  |  경로 · 확인 중"));
         return;

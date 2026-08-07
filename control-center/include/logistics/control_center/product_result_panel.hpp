@@ -7,8 +7,8 @@
 #include "logistics/control_center/current_product_state.hpp"
 #include "logistics/control_center/operations_dashboard_state.hpp"
 
-class QComboBox;
 class QLabel;
+class QListWidget;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QResizeEvent;
@@ -34,7 +34,7 @@ private:
     QUrl image_base_url_;
     QNetworkAccessManager* network_manager_{ nullptr };
     QNetworkReply* active_image_reply_{ nullptr };
-    QComboBox* active_work_selector_{ nullptr };
+    QListWidget* active_work_list_{ nullptr };
     QLabel* tracking_status_{ nullptr };
     QLabel* recognition_status_{ nullptr };
     QLabel* processing_status_{ nullptr };
