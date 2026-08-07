@@ -65,6 +65,8 @@ static uint8_t healthStackMarginLatched[HEALTH_TASK_MONITORED_COUNT];
 static uint32_t healthQueueDropSnapshot[HEALTH_TASK_MONITORED_COUNT];
 static uint32_t healthQueueOverflowStreak[HEALTH_TASK_MONITORED_COUNT];
 static uint8_t healthQueueOverflowFatalLatched;
+static uint32_t healthUartRecoverySnapshot;
+static health_latch_t healthUartRecoveryLatch;
 
 static health_latch_t healthUartLatch[COMM_TX_CH_COUNT];
 static health_latch_t healthSensorLatch[HEALTH_SENSOR_MAX_CHANNELS];
@@ -149,15 +151,21 @@ static uint8_t health_report_cause(health_task_id_t id) {
     return HEALTH_ISSUE_CAUSE_DEVICE_WIDE;
 }
 
+/*
+ * 치명(FATAL) 승격 판정에 쓰는 "최종 유실" 합계.
+ *
+ * 여기에는 실제로 버려진 메시지만 넣는다. UART 오류 감지/재시도/복구 횟수
+ * (comm_rx의 uartRestarts, comm_tx의 tx_error/tx_timeout)는 재시도가 성공하면
+ * 유실이 아니므로 제외한다 - 그건 health_uart_recovery_count()가 별도 진단
+ * 지표로 따로 본다. 재시도까지 실패한 경우는 dropped_retry_exhausted로 이미
+ * 이 합계에 잡힌다.
+ */
 static uint32_t health_task_drop_count(health_task_id_t id) {
     switch (id) {
         case HEALTH_TASK_COMM_RX: {
             comm_rx_stats_t stats;
             comm_rx_get_stats(&stats);
-            /* uartRestarts: DMA 오류로 RX가 재시작되면 재시작 구간 동안 도착한 바이트는
-             * 유실된다 - 파서/큐 카운터에는 아무 흔적도 안 남지만 요청 프레임 하나를
-             * 통째로 놓친 것과 같은 효과라 여기 포함해야 감시망에 걸린다. */
-            return stats.controlQueueDrops + stats.rxQueueDrops + stats.responseDrops + stats.uartRestarts;
+            return stats.controlQueueDrops + stats.rxQueueDrops + stats.responseDrops;
         }
         case HEALTH_TASK_INPUT_CONTROL: {
             input_control_task_stats_t stats;
@@ -176,14 +184,8 @@ static uint32_t health_task_drop_count(health_task_id_t id) {
         }
         case HEALTH_TASK_COMM_TX: {
             const comm_tx_stats_t* stats = CommTx_GetStats();
-            /* tx_error/tx_timeout: ST HAL은 TX DMA 오류 시 진행 중이던 RX도 함께
-             * 중단시킨다(UART_DMAError가 huart 단위로 TX/RX를 함께 정리) - TX 쪽
-             * 카운터만 보이는 사고여도 실제로는 RX 재시작(uartRestarts)과 같은
-             * 조합으로 요청이 유실될 수 있어 dropped_* 옆에 같이 감시해야 한다. */
             return stats->dropped_queue_full + stats->dropped_urgent_queue_full + stats->dropped_ring_full +
-                   stats->dropped_retry_exhausted + stats->dropped_invalid + stats->dropped_encode_error +
-                   stats->tx_error[COMM_TX_CH_INPUT] + stats->tx_error[COMM_TX_CH_SORTING] +
-                   stats->tx_timeout[COMM_TX_CH_INPUT] + stats->tx_timeout[COMM_TX_CH_SORTING];
+                   stats->dropped_retry_exhausted + stats->dropped_invalid + stats->dropped_encode_error;
         }
         case HEALTH_TASK_SENSOR:
         default:
@@ -250,6 +252,51 @@ static void health_check_queue_overflow(void) {
         } else {
             healthQueueOverflowStreak[id] = 0U;
         }
+    }
+}
+
+/*
+ * UART 오류를 감지해 복구를 시작한 횟수의 합.
+ *
+ * uartRestarts는 RX DMA 재시작, tx_error/tx_timeout은 송신 프레임을 유지한 채
+ * 재시도를 거는 경로다(app_comm_tx.c comm_tx_service_restarts). 셋 다 "무언가
+ * 잘못돼서 복구를 돌렸다"는 신호일 뿐 메시지가 버려졌다는 뜻이 아니라서
+ * health_task_drop_count의 유실 합계와 섞지 않는다.
+ */
+static uint32_t health_uart_recovery_count(void) {
+    comm_rx_stats_t rxStats;
+    const comm_tx_stats_t* txStats = CommTx_GetStats();
+
+    comm_rx_get_stats(&rxStats);
+
+    return rxStats.uartRestarts + txStats->tx_error[COMM_TX_CH_INPUT] + txStats->tx_error[COMM_TX_CH_SORTING] +
+           txStats->tx_timeout[COMM_TX_CH_INPUT] + txStats->tx_timeout[COMM_TX_CH_SORTING];
+}
+
+/*
+ * UART 복구 발생을 비치명 EVENT로만 보고한다. 치명 승격도, IWDG 게이트 관여도
+ * 없다 - 재시도가 성공하는 한 시스템은 정상 동작 중이기 때문이다. 재시도까지
+ * 실패해 실제로 유실되면 그건 dropped_retry_exhausted로 queue overflow 감시망에
+ * 잡힌다.
+ *
+ * latch를 쓰는 이유: 복구가 매 사이클 이어지는 동안 100ms마다 EVENT를 쏘면
+ * 가뜩이나 불안정한 UART에 보고 트래픽을 더 얹게 된다. 한 번 보고한 뒤에는
+ * 카운터가 한 사이클이라도 멈춰야(=복구가 잦아들어야) 다시 보고한다.
+ */
+static void health_check_uart_recovery(void) {
+    uint32_t current = health_uart_recovery_count();
+
+    if (current != healthUartRecoverySnapshot) {
+        healthUartRecoverySnapshot = current;
+
+        if (healthUartRecoveryLatch.reported == 0U) {
+            healthUartRecoveryLatch.reported = 1U;
+            healthStats.uartRecoveryEvents++;
+            health_report_event(HEALTH_ISSUE_UART_RECOVERY, HEALTH_ISSUE_CAUSE_DEVICE_WIDE,
+                                HEALTH_ISSUE_SENSOR_ID_NONE);
+        }
+    } else {
+        healthUartRecoveryLatch.reported = 0U;
     }
 }
 
@@ -330,10 +377,12 @@ void HealthTask_Init(void) {
     memset(healthStackMarginLatched, 0, sizeof(healthStackMarginLatched));
     memset(healthQueueDropSnapshot, 0, sizeof(healthQueueDropSnapshot));
     memset(healthQueueOverflowStreak, 0, sizeof(healthQueueOverflowStreak));
+    memset(&healthUartRecoveryLatch, 0, sizeof(healthUartRecoveryLatch));
     memset(healthUartLatch, 0, sizeof(healthUartLatch));
     memset(healthSensorLatch, 0, sizeof(healthSensorLatch));
     memset(&healthStats, 0, sizeof(healthStats));
     healthQueueOverflowFatalLatched = 0U;
+    healthUartRecoverySnapshot = 0U;
     healthAnyFatalLatched = 0U;
 
     {
@@ -353,6 +402,7 @@ void HealthTask_RunCycle(void) {
     health_check_task_alive(now);
     health_check_stack_margin();
     health_check_queue_overflow();
+    health_check_uart_recovery();
     health_check_uart_channels();
     health_check_sensor_staleness();
 

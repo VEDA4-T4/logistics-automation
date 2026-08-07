@@ -36,6 +36,7 @@ inline constexpr std::uint8_t kHealthPayloadSize = 8U;
 inline constexpr std::uint8_t kHealthUartChannelTimeout = 1U;
 inline constexpr std::uint8_t kHealthQueueOverflow = 2U;
 inline constexpr std::uint8_t kHealthSensorStale = 3U;
+inline constexpr std::uint8_t kHealthUartRecovery = 4U;
 inline constexpr std::uint8_t kHealthSensorIdNone = 0xFFU;
 inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
 
@@ -950,6 +951,13 @@ void SortingNode::HandleHealthEvent(const uart_frame_t& frame) noexcept {
             if (sensor_id != kHealthSensorIdNone) {
                 message += " sensorId=" + std::to_string(sensor_id);
             }
+            break;
+        case kHealthUartRecovery:
+            // Recovery started, not a confirmed loss - the frame is retried, and an
+            // exhausted retry surfaces separately as a queue overflow. Still WARNING:
+            // a line that keeps needing recovery is the precursor to those drops.
+            error_code = "ERR-HEALTH-UART-RECOVERY";
+            message = "sorting controller recovered from a UART error";
             break;
         default:
             error_code = "ERR-HEALTH-EVENT-" + std::to_string(kind);

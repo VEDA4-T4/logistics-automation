@@ -446,11 +446,11 @@ static void test_sustained_queue_overflow_escalates_to_fatal(void) {
 }
 
 /*
- * RX DMA 재시작(uartRestarts)은 파서/큐 카운터에 아무 흔적도 안 남기지만
- * 재시작 구간에 도착한 요청 프레임은 그대로 유실된다. health_task_drop_count가
- * 이 카운터를 놓치면 이 유실은 어떤 EVENT도 없이 조용히 사라진다.
+ * RX DMA 재시작(uartRestarts)은 오류를 감지해 복구를 돌렸다는 신호지 메시지가
+ * 버려졌다는 뜻이 아니다. queue overflow(유실)가 아니라 UART_RECOVERY 진단으로
+ * 보고돼야 한다.
  */
-static void test_uart_restart_reports_transient_queue_overflow(void) {
+static void test_uart_restart_reports_recovery_not_overflow(void) {
     reset_all();
     HealthTask_Init();
     health_ping_all();
@@ -462,17 +462,24 @@ static void test_uart_restart_reports_transient_queue_overflow(void) {
     HealthTask_RunCycle();
 
     assert(safetyTriggerCalls == 0U);
-    assert(commTxSendCallCount == 2U); /* DEVICE_WIDE(COMM_RX) -> 양쪽 채널 모두 보고 */
-    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] ==
-           (uint8_t)HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT);
+    assert(commTxSendCallCount == 2U); /* DEVICE_WIDE -> 양쪽 채널 모두 보고 */
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] == (uint8_t)HEALTH_ISSUE_UART_RECOVERY);
+    assert(commTxSendCalls[1].payload[APP_HEALTH_EVENT_KIND_INDEX] == (uint8_t)HEALTH_ISSUE_UART_RECOVERY);
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] == HEALTH_ISSUE_SENSOR_ID_NONE);
+
+    {
+        health_task_stats_t stats;
+        Health_GetStats(&stats);
+        assert(stats.uartRecoveryEvents == 1U);
+        assert(stats.queueOverflowTransient == 0U); /* 유실 집계에는 안 잡혀야 한다 */
+    }
 }
 
 /*
- * ST HAL은 TX DMA 오류 시 진행 중이던 RX도 함께 중단시키므로, tx_error만
- * 늘어도 실제로는 요청 프레임을 놓쳤을 수 있다. dropped_* 카운터만 보던
- * 기존 로직은 이 경우를 전혀 못 잡았다.
+ * tx_error/tx_timeout도 마찬가지다. 프레임을 유지한 채 재시도를 거는 경로라
+ * (app_comm_tx.c comm_tx_service_restarts) 재시도가 성공하면 유실이 아니다.
  */
-static void test_tx_error_reports_transient_queue_overflow(void) {
+static void test_tx_error_reports_recovery_not_overflow(void) {
     reset_all();
     HealthTask_Init();
     health_ping_all();
@@ -484,9 +491,131 @@ static void test_tx_error_reports_transient_queue_overflow(void) {
     HealthTask_RunCycle();
 
     assert(safetyTriggerCalls == 0U);
-    assert(commTxSendCallCount == 2U); /* DEVICE_WIDE(COMM_TX) -> 양쪽 채널 모두 보고 */
-    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] ==
-           (uint8_t)HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT);
+    assert(commTxSendCallCount == 2U); /* DEVICE_WIDE -> 양쪽 채널 모두 보고 */
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] == (uint8_t)HEALTH_ISSUE_UART_RECOVERY);
+
+    {
+        health_task_stats_t stats;
+        Health_GetStats(&stats);
+        assert(stats.uartRecoveryEvents == 1U);
+        assert(stats.queueOverflowTransient == 0U);
+    }
+}
+
+/*
+ * 이 테스트가 이번 수정의 핵심이다.
+ *
+ * 재시도가 매번 성공하더라도 UART 오류가 주기적으로 계속 발생할 수 있다. 예전에는
+ * tx_error/tx_timeout/uartRestarts가 유실 합계에 섞여 있어서, 이 상황이
+ * HEALTH_QUEUE_OVERFLOW_SUSTAIN_CYCLES(5) 사이클만 이어져도 지속적 포화로 오판해
+ * E-Stop을 걸고 IWDG 갱신까지 멈췄다. 실제로 버려진 메시지는 하나도 없는데
+ * 시스템이 종료되는 셈이었다.
+ */
+static void test_sustained_uart_recovery_never_escalates_to_fatal(void) {
+    uint32_t i;
+    uint32_t refreshesBefore;
+
+    reset_all();
+    memset(&fakePersistedRecord, 0, sizeof(fakePersistedRecord)); /* 앞선 테스트의 기록과 섞이지 않게 */
+    HealthTask_Init();
+    health_ping_all();
+    HealthTask_RunCycle(); /* baseline */
+
+    refreshesBefore = iwdgRefreshCalls;
+
+    /* 승격 기준(5)의 4배를 넘겨도 - 전송은 매번 재시도 끝에 성공한다. */
+    for (i = 0U; i < 20U; i++) {
+        fakeCommTxStats.tx_timeout[COMM_TX_CH_INPUT]++;
+        fakeCommTxStats.tx_error[COMM_TX_CH_SORTING]++;
+        fakeCommRxStats.uartRestarts++;
+        fakeTick += 100U;
+        health_ping_all();
+        HealthTask_RunCycle();
+    }
+
+    assert(safetyTriggerCalls == 0U);
+
+    {
+        health_task_stats_t stats;
+        Health_GetStats(&stats);
+        assert(stats.queueOverflowFatal == 0U);
+        assert(stats.queueOverflowTransient == 0U);
+        assert(stats.fatalTriggers == 0U);
+        /* 진단 자체는 남되, latch 때문에 100ms마다 도배되지는 않는다. */
+        assert(stats.uartRecoveryEvents == 1U);
+    }
+
+    /* 치명이 아니므로 IWDG 갱신도 계속돼야 한다. */
+    assert(iwdgRefreshCalls == refreshesBefore + 20U);
+
+    {
+        health_persisted_record_t record;
+        Health_GetLastPersistedRecord(&record);
+        assert(record.reason == (uint32_t)HEALTH_FATAL_NONE);
+    }
+}
+
+/*
+ * 반대로, 재시도까지 소진해 실제로 버려진 경우(dropped_retry_exhausted)는
+ * 그대로 유실로 잡혀 지속되면 치명으로 승격돼야 한다 - 이번 수정이 감시망에
+ * 구멍을 내지 않았는지 확인한다.
+ */
+static void test_retry_exhausted_still_escalates_to_fatal(void) {
+    uint32_t i;
+
+    reset_all();
+    HealthTask_Init();
+    health_ping_all();
+    HealthTask_RunCycle(); /* baseline */
+
+    for (i = 0U; i < 5U; i++) {
+        fakeCommTxStats.dropped_retry_exhausted++;
+        fakeTick += 100U;
+        health_ping_all();
+        HealthTask_RunCycle();
+    }
+
+    assert(safetyTriggerCalls == 1U);
+
+    {
+        health_persisted_record_t record;
+        Health_GetLastPersistedRecord(&record);
+        assert(record.reason == (uint32_t)HEALTH_FATAL_QUEUE_OVERFLOW);
+        assert(record.offendingTask == (uint32_t)HEALTH_TASK_COMM_TX);
+    }
+}
+
+/*
+ * 복구가 한 사이클이라도 잦아들면 latch가 풀려 다음 발생을 다시 보고한다
+ * (진단이 첫 1회만 보이고 영영 침묵하지 않는지 확인).
+ */
+static void test_uart_recovery_reports_again_after_quiet_cycle(void) {
+    reset_all();
+    HealthTask_Init();
+    health_ping_all();
+    HealthTask_RunCycle(); /* baseline */
+
+    fakeCommRxStats.uartRestarts = 1U;
+    fakeTick += 100U;
+    health_ping_all();
+    HealthTask_RunCycle();
+
+    /* 조용한 사이클 - 카운터 변화 없음 */
+    fakeTick += 100U;
+    health_ping_all();
+    HealthTask_RunCycle();
+
+    fakeCommRxStats.uartRestarts = 2U;
+    fakeTick += 100U;
+    health_ping_all();
+    HealthTask_RunCycle();
+
+    {
+        health_task_stats_t stats;
+        Health_GetStats(&stats);
+        assert(stats.uartRecoveryEvents == 2U);
+    }
+    assert(safetyTriggerCalls == 0U);
 }
 
 /*
@@ -514,8 +643,11 @@ int main(void) {
     test_late_health_cycle_does_not_underflow_sensor_age();
     test_transient_queue_overflow_reports_without_fatal();
     test_sustained_queue_overflow_escalates_to_fatal();
-    test_uart_restart_reports_transient_queue_overflow();
-    test_tx_error_reports_transient_queue_overflow();
+    test_uart_restart_reports_recovery_not_overflow();
+    test_tx_error_reports_recovery_not_overflow();
+    test_sustained_uart_recovery_never_escalates_to_fatal();
+    test_retry_exhausted_still_escalates_to_fatal();
+    test_uart_recovery_reports_again_after_quiet_cycle();
     test_no_persisted_record_reports_none();
     return 0;
 }
