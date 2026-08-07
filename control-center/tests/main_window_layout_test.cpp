@@ -10,6 +10,7 @@
 #include <QHostAddress>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMediaPlayer>
 #include <QMouseEvent>
 #include <QPalette>
 #include <QRegularExpression>
@@ -22,13 +23,14 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QVideoSink>
 #include <QWidget>
-#include <algorithm>
 #include <cstdio>
 
 #include "logistics/control_center/factory_top_view.hpp"
 #include "logistics/control_center/main_window.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
+#include "logistics/control_center/onvif_rtsp_metadata_client.hpp"
 #include "logistics/control_center/operational_log_panel.hpp"
 #include "logistics/control_center/process_control_panel.hpp"
 
@@ -195,20 +197,19 @@ bool CheckHistoryPaging(QApplication& application) {
                        "history paging did not retain loaded rows or stop after null nextCursor");
 }
 
-bool WriteChannelConfig(const QString& path, int channel_count) {
+bool WriteSingleChannelConfig(const QString& path) {
     QFile config(path);
     if (!config.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
     }
-    QByteArray contents =
+    const QByteArray contents =
         "[mqtt]\nhost=127.0.0.1\nport=1\n"
         "[http]\nimage_base_url=http://127.0.0.1:1/\n"
-        "[rtsp]\nchannel_count=" +
-        QByteArray::number(channel_count) + "\nonvif_metadata_enabled=false\n";
-    for (int channel = 1; channel <= channel_count; ++channel) {
-        contents += "channel_" + QByteArray::number(channel) + "_url=rtsp://127.0.0.1:1/channel" +
-                    QByteArray::number(channel) + "\n";
-    }
+        "[rtsp]\nchannel_count=4\nonvif_metadata_enabled=true\n"
+        "channel_1_url=rtsp://127.0.0.1:1/channel1\n"
+        "channel_2_url=rtsp://127.0.0.1:1/channel2\n"
+        "channel_3_url=rtsp://127.0.0.1:1/channel3\n"
+        "channel_4_url=rtsp://127.0.0.1:1/channel4\n";
     return config.write(contents) == contents.size();
 }
 
@@ -235,13 +236,13 @@ bool CheckVideoCells(logistics::control_center::MainWindow& window, QWidget& vid
         "videoWorkspace is outside centralWidget");
 }
 
-bool CheckConfiguredChannelGrid(QApplication& application, int channel_count) {
+bool CheckConfiguredSingleChannel(QApplication& application) {
     QTemporaryDir directory;
     if (!LayoutCheck(directory.isValid(), "channel-grid temporary directory is invalid")) {
         return false;
     }
     const auto config_path = directory.filePath(QStringLiteral("control-centor.ini"));
-    if (!LayoutCheck(WriteChannelConfig(config_path, channel_count), "could not write complete channel config")) {
+    if (!LayoutCheck(WriteSingleChannelConfig(config_path), "could not write single-channel config")) {
         return false;
     }
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
@@ -252,51 +253,30 @@ bool CheckConfiguredChannelGrid(QApplication& application, int channel_count) {
     if (!LayoutCheck(video != nullptr && factory != nullptr, "configured workspace widgets are missing")) {
         return false;
     }
-    QList<QWidget*> cells;
-    for (int channel = 1; channel <= channel_count; ++channel) {
-        auto* cell = window.findChild<QWidget*>(QStringLiteral("videoChannel%1").arg(channel));
-        if (!LayoutCheck(cell != nullptr, "configured video cell is missing")) {
-            return false;
-        }
-        cells.append(cell);
+    auto* cell = window.findChild<QWidget*>(QStringLiteral("videoChannel1"));
+    if (!LayoutCheck(cell != nullptr, "configured video cell is missing") ||
+        !LayoutCheck(window.findChild<QWidget*>(QStringLiteral("videoChannel2")) == nullptr,
+                     "legacy channel count created an extra video cell") ||
+        !LayoutCheck(window.findChildren<QMediaPlayer*>().size() == 1, "expected exactly one media player") ||
+        !LayoutCheck(window.findChildren<QVideoSink*>().size() == 1, "expected exactly one detection video sink") ||
+        !LayoutCheck(window.findChildren<logistics::control_center::OnvifRtspMetadataClient*>().size() == 1,
+                     "expected exactly one ONVIF metadata client")) {
+        return false;
     }
+    const QList<QWidget*> cells{ cell };
 
     for (const auto size : { QSize(1280, 720), QSize(1600, 900) }) {
         window.resize(size);
         window.show();
         application.processEvents();
         if (qAbs(video->width() - factory->width()) > 2) {
-            std::fprintf(stderr, "main_window_layout_test: %d channels at %dx%d produced %d/%d workspace widths\n",
-                         channel_count, size.width(), size.height(), video->width(), factory->width());
+            std::fprintf(stderr, "main_window_layout_test: single channel at %dx%d produced %d/%d workspace widths\n",
+                         size.width(), size.height(), video->width(), factory->width());
             return false;
         }
         if (!LayoutCheck(window.size() == size, "configured window did not keep the requested geometry") ||
             !LayoutCheck(factory->isVisible(), "factoryTopView is hidden for configured channels") ||
             !CheckVideoCells(window, *video, cells)) {
-            return false;
-        }
-
-        auto* focused = cells.back();
-        QMouseEvent focus(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
-                          Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(focused, &focus);
-        application.processEvents();
-        for (auto* cell : cells) {
-            if (!LayoutCheck(cell->isVisible() == (cell == focused),
-                             "configured focus did not isolate the selected channel")) {
-                return false;
-            }
-        }
-        const QRect focused_rect(focused->mapTo(video, QPoint{}), focused->size());
-        if (!LayoutCheck(factory->isVisible(), "factoryTopView is hidden by configured channel focus") ||
-            !LayoutCheck(!focused_rect.isEmpty() && video->rect().contains(focused_rect),
-                         "focused configured channel is clipped")) {
-            return false;
-        }
-
-        QApplication::sendEvent(focused, &focus);
-        application.processEvents();
-        if (!CheckVideoCells(window, *video, cells)) {
             return false;
         }
     }
@@ -365,15 +345,11 @@ int main(int argc, char* argv[]) {
             video_cells.append(widget);
         }
     }
-    if (!check(video_cells.size() == 4, "expected four stacked video channel cells")) {
+    if (!check(video_cells.size() == 1, "expected one stacked video channel cell")) {
         return 1;
     }
     auto* video_viewport = video_cells.front()->parentWidget();
-    if (!check(video_viewport != nullptr, "video grid viewport is missing") ||
-        !check(
-            std::ranges::all_of(
-                video_cells, [video_viewport](const QWidget* cell) { return cell->parentWidget() == video_viewport; }),
-            "video channel cells do not share the grid viewport")) {
+    if (!check(video_viewport != nullptr, "video grid viewport is missing")) {
         return 1;
     }
 
@@ -595,8 +571,8 @@ int main(int argc, char* argv[]) {
     }
     for (const auto* cell : video_cells) {
         const QRect rect(cell->mapTo(video, QPoint{}), cell->size());
-        if (!check(cell->minimumSize() == QSize(240, 135), "video cell minimum is not 240x135") ||
-            !check(cell->width() >= 240 && cell->height() >= 135, "video cell is smaller than 240x135") ||
+        if (!check(cell->minimumSize() == QSize(480, 270), "video cell minimum is not 480x270") ||
+            !check(cell->width() >= 480 && cell->height() >= 270, "video cell is smaller than 480x270") ||
             !check(video->rect().contains(rect), "video cell is clipped by videoWorkspace")) {
             return 4;
         }
@@ -605,24 +581,10 @@ int main(int argc, char* argv[]) {
     auto* channel_two = window.findChild<QWidget*>(QStringLiteral("videoChannel2"));
     auto* channel_three = window.findChild<QWidget*>(QStringLiteral("videoChannel3"));
     auto* channel_four = window.findChild<QWidget*>(QStringLiteral("videoChannel4"));
-    if (!check(channel_one != nullptr && channel_two != nullptr && channel_three != nullptr && channel_four != nullptr,
-               "named video channel cells are missing")) {
-        return 4;
-    }
-    QMouseEvent focus(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
-                      Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(channel_two, &focus);
-    application.processEvents();
-    if (!check(channel_two->isVisible(), "focused channel is not visible") ||
-        !check(!channel_one->isVisible() && !channel_three->isVisible() && !channel_four->isVisible(),
-               "unfocused channels remain visible") ||
-        !check(factory->isVisible(), "factoryTopView is hidden while a channel is focused")) {
-        return 4;
-    }
-    QApplication::sendEvent(channel_two, &focus);
-    application.processEvents();
-    if (!check(channel_one->isVisible() && channel_three->isVisible() && channel_four->isVisible(),
-               "all channels do not return after toggling focus")) {
+    if (!check(channel_one != nullptr, "video channel one is missing") ||
+        !check(channel_two == nullptr && channel_three == nullptr && channel_four == nullptr,
+               "unexpected additional video channels were created") ||
+        !check(window.findChildren<QMediaPlayer*>().size() == 1, "expected exactly one media player")) {
         return 4;
     }
     const auto overlaps_vertically = [](const QRect& left, const QRect& right) {
@@ -676,10 +638,8 @@ int main(int argc, char* argv[]) {
     if (!history_paging_ok) {
         return 9;
     }
-    for (const int channel_count : { 1, 5, 9, 16 }) {
-        if (!CheckConfiguredChannelGrid(application, channel_count)) {
-            return 10;
-        }
+    if (!CheckConfiguredSingleChannel(application)) {
+        return 10;
     }
     return 0;
 }

@@ -8,7 +8,6 @@
 #include <QUrl>
 #include <cstddef>
 #include <memory>
-#include <optional>
 #include <vector>
 
 #include "logistics/contracts/mqtt_message.hpp"
@@ -20,7 +19,6 @@ class QJsonObject;
 class QLabel;
 class QMediaPlayer;
 class QNetworkAccessManager;
-class QGridLayout;
 class QStackedLayout;
 class QTimer;
 class QWidget;
@@ -67,9 +65,6 @@ private:
                               const QString& code, const QString& message);
     void refreshOperationsPresentation();
     void selectControlTarget(const QString& device_id, const QString& display_name);
-    void setFocusedChannel(std::optional<std::size_t> channel);
-    bool eventFilter(QObject* watched, QEvent* event) override;
-
     std::vector<QMediaPlayer*> players_{};
     std::vector<std::unique_ptr<RtspStreamWorker>> video_stream_workers_{};
     std::vector<RtspH264Stream*> video_streams_{};
@@ -84,11 +79,6 @@ private:
     std::vector<QUrl> metadata_stream_urls_{};
     std::vector<ChannelState> channel_states_{};
     std::vector<bool> reconnecting_{};
-    std::optional<std::size_t> focused_channel_;
-    QGridLayout* video_grid_{ nullptr };
-    std::vector<QWidget*> channel_panels_{};
-    int grid_row_count_{ 0 };
-    int grid_column_count_{ 0 };
     MqttClient* mqtt_client_{ nullptr };
     QLabel* mqtt_status_label_{ nullptr };
     FactoryTopViewWidget* factory_top_view_{ nullptr };
@@ -114,7 +104,6 @@ private:
     CurrentProductState current_product_state_;
     OperationalLogState operational_log_state_;
     OperationsDashboardState operations_dashboard_state_;
-    std::size_t channel_count_{ 4 };
     int reconnect_interval_ms_{ 3000 };
     bool rtsp_low_latency_{ true };
     int rtsp_network_timeout_ms_{ 3000 };

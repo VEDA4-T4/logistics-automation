@@ -34,8 +34,6 @@ image_base_url=http://central-server.logistics.local:8080/
 bearer_token=
 
 [rtsp]
-; Supported channel count: 1-16
-channel_count=4
 reconnect_interval_ms=3000
 ; Video RTP is forced over the RTSP TCP control connection.
 transport=tcp
@@ -59,11 +57,8 @@ metadata_stale_timeout_ms=1500
 ; Qt connects directly to each CCTV RTSP stream. RTSP is not encrypted; use a trusted LAN or VPN.
 ; Keep real credentials only in control-centor.ini.
 ; Replace cctv-user/cctv-password and percent-encode reserved password characters.
-channel_1_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/0/profile2/media.smp
-channel_2_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/1/profile2/media.smp
-channel_3_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/2/profile2/media.smp
-channel_4_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/3/profile2/media.smp
-; Leave channel_N_metadata_url unset when video and ONVIF metadata use the same CCTV endpoint.
+channel_1_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/profile2/media.smp
+; Leave channel_1_metadata_url unset when video and ONVIF metadata use the same CCTV endpoint.
 
 [ui]
 language=ko_KR

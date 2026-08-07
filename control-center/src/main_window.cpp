@@ -3,7 +3,6 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
-#include <QEvent>
 #include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
@@ -14,7 +13,6 @@
 #include <QJsonParseError>
 #include <QLabel>
 #include <QMediaPlayer>
-#include <QMouseEvent>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -34,8 +32,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include "logistics/contracts/mqtt_topic.hpp"
@@ -67,9 +65,8 @@ constexpr qsizetype kMinimumRtspMaximumBufferSizeBytes = 64 * 1024;
 constexpr qsizetype kMaximumRtspMaximumBufferSizeBytes = 16 * 1024 * 1024;
 constexpr int kDefaultMetadataStaleTimeoutMs = 1500;
 constexpr int kMaximumRtspNetworkTimeoutMs = 60000;
-constexpr int kDefaultChannelCount = 4;
-constexpr int kMaximumChannelCount = 16;
 constexpr int kDefaultVideoGridMinimumWidth = 480;
+constexpr std::size_t kChannelCount = 1;
 constexpr int kDefaultMqttPort = 1883;
 constexpr int kOperationalLogBatchIntervalMs = 100;
 constexpr qsizetype kOperationalLogBatchSize = 200;
@@ -92,7 +89,6 @@ struct ControlCenterConfig {
     qsizetype operational_log_maximum_entries{ OperationalLogState::kDefaultMaximumEntries };
     QString control_target_device_id{ "SYSTEM" };
     QList<ProcessDefinition> process_definitions{ DefaultProcessDefinitions() };
-    int channel_count{ kDefaultChannelCount };
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     bool low_latency{ true };
     bool mqtt_tls_enabled{ false };
@@ -310,15 +306,6 @@ ControlCenterConfig loadControlCenterConfig() {
             QStringLiteral("logs/max_buffer_entries는 100~5000이어야 하므로 기본값 500을 사용합니다."));
     }
 
-    bool channel_count_is_valid = false;
-    const auto channel_count =
-        settings.value("rtsp/channel_count", kDefaultChannelCount).toInt(&channel_count_is_valid);
-    if (channel_count_is_valid && channel_count > 0 && channel_count <= kMaximumChannelCount) {
-        config.channel_count = channel_count;
-    } else {
-        config.warnings.append(QStringLiteral("rtsp/channel_count는 1~16이어야 하므로 4를 사용합니다."));
-    }
-
     bool reconnect_interval_is_valid = false;
     const auto reconnect_interval =
         settings.value("rtsp/reconnect_interval_ms", kDefaultReconnectIntervalMs).toInt(&reconnect_interval_is_valid);
@@ -412,38 +399,21 @@ ControlCenterConfig loadControlCenterConfig() {
             QStringLiteral("rtsp/metadata_stale_timeout_ms는 100~60000ms여야 하므로 1500ms를 사용합니다."));
     }
 
-    QStringList invalid_channels;
-    config.stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
-    config.metadata_stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
-    for (int channel = 1; channel <= config.channel_count; ++channel) {
-        const auto key = QStringLiteral("rtsp/channel_%1_url").arg(channel);
-        const QUrl stream_url(settings.value(key).toString().trimmed());
-        if (isValidRtspUrl(stream_url)) {
-            config.stream_urls.push_back(stream_url);
-        } else {
-            config.stream_urls.emplace_back();
-            invalid_channels.append(QString::number(channel));
-        }
-
-        const auto metadata_key = QStringLiteral("rtsp/channel_%1_metadata_url").arg(channel);
-        const auto metadata_value = settings.value(metadata_key).toString().trimmed();
-        if (metadata_value.isEmpty()) {
-            config.metadata_stream_urls.push_back(config.stream_urls.back());
-        } else {
-            const QUrl metadata_url(metadata_value);
-            if (isValidRtspUrl(metadata_url)) {
-                config.metadata_stream_urls.push_back(metadata_url);
-            } else {
-                config.metadata_stream_urls.emplace_back();
-                config.warnings.append(
-                    QStringLiteral("%1이 잘못되어 해당 채널의 ONVIF 메타데이터를 끕니다.").arg(metadata_key));
-            }
-        }
+    const QUrl stream_url(settings.value(QStringLiteral("rtsp/channel_1_url")).toString().trimmed());
+    config.stream_urls.push_back(isValidRtspUrl(stream_url) ? stream_url : QUrl{});
+    if (config.stream_urls.front().isEmpty()) {
+        config.warnings.append(QStringLiteral("RTSP URL이 누락되었거나 잘못되었습니다: channel_1_url"));
     }
 
-    if (!invalid_channels.isEmpty()) {
-        config.warnings.append(
-            QStringLiteral("RTSP URL이 누락되었거나 잘못된 채널: %1").arg(invalid_channels.join(", ")));
+    const auto metadata_value = settings.value(QStringLiteral("rtsp/channel_1_metadata_url")).toString().trimmed();
+    if (metadata_value.isEmpty()) {
+        config.metadata_stream_urls.push_back(config.stream_urls.front());
+    } else {
+        const QUrl metadata_url(metadata_value);
+        config.metadata_stream_urls.push_back(isValidRtspUrl(metadata_url) ? metadata_url : QUrl{});
+        if (config.metadata_stream_urls.front().isEmpty()) {
+            config.warnings.append(QStringLiteral("rtsp/channel_1_metadata_url이 잘못되어 ONVIF 메타데이터를 끕니다."));
+        }
     }
 
     if (settings.status() == QSettings::AccessError) {
@@ -467,7 +437,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operational_log_state_.setMaximumEntries(config.operational_log_maximum_entries);
     control_target_device_id_ = config.control_target_device_id;
     operations_dashboard_state_.configureProcesses(config.process_definitions);
-    channel_count_ = static_cast<std::size_t>(config.channel_count);
     reconnect_interval_ms_ = config.reconnect_interval_ms;
     rtsp_low_latency_ = config.low_latency;
     rtsp_network_timeout_ms_ = config.network_timeout_ms;
@@ -480,18 +449,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     history_bearer_token_ = config.history_bearer_token;
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
-    players_.resize(channel_count_);
-    video_stream_workers_.resize(channel_count_);
-    video_streams_.resize(channel_count_);
-    status_labels_.resize(channel_count_);
-    channel_stacks_.resize(channel_count_);
-    video_layers_.resize(channel_count_);
-    state_overlays_.resize(channel_count_);
-    reconnect_timers_.resize(channel_count_);
-    detection_overlays_.resize(channel_count_);
-    metadata_clients_.resize(channel_count_);
-    channel_states_.assign(channel_count_, ChannelState::Connecting);
-    reconnecting_.assign(channel_count_, false);
+    players_.resize(kChannelCount);
+    video_stream_workers_.resize(kChannelCount);
+    video_streams_.resize(kChannelCount);
+    status_labels_.resize(kChannelCount);
+    channel_stacks_.resize(kChannelCount);
+    video_layers_.resize(kChannelCount);
+    state_overlays_.resize(kChannelCount);
+    reconnect_timers_.resize(kChannelCount);
+    detection_overlays_.resize(kChannelCount);
+    metadata_clients_.resize(kChannelCount);
+    channel_states_.assign(kChannelCount, ChannelState::Connecting);
+    reconnecting_.assign(kChannelCount, false);
 
     auto* central_widget = new QWidget(this);
     central_widget->setObjectName(QStringLiteral("centralSurface"));
@@ -514,7 +483,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     app_title->setStyleSheet("color:#f0f0f0;font-size:18px;font-weight:700;");
     app_title_layout->addWidget(app_eyebrow);
     app_title_layout->addWidget(app_title);
-    auto* channel_badge = new QLabel(QStringLiteral("%1 CHANNELS").arg(channel_count_), app_header);
+    auto* channel_badge = new QLabel(QStringLiteral("1 CHANNEL"), app_header);
     channel_badge->setAlignment(Qt::AlignCenter);
     channel_badge->setStyleSheet(
         "background:#252526;color:#cccccc;border:1px solid #3c3c3c;border-radius:4px;"
@@ -532,10 +501,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operations_workspace->setHandleWidth(7);
     auto* video_container = new QWidget(operations_workspace);
     video_container->setObjectName(QStringLiteral("videoWorkspace"));
-    video_grid_ = new QGridLayout(video_container);
-    video_grid_->setContentsMargins(10, 0, 0, 0);
-    video_grid_->setHorizontalSpacing(8);
-    video_grid_->setVerticalSpacing(0);
+    auto* video_grid = new QGridLayout(video_container);
+    video_grid->setContentsMargins(10, 0, 0, 0);
+    video_grid->setHorizontalSpacing(8);
+    video_grid->setVerticalSpacing(0);
     factory_top_view_ = new FactoryTopViewWidget(operations_workspace);
     factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
     operations_workspace->addWidget(video_container);
@@ -726,14 +695,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_ERROR"), detail);
     });
 
-    grid_column_count_ = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(channel_count_))));
-    grid_row_count_ = static_cast<int>(std::ceil(static_cast<double>(channel_count_) / grid_column_count_));
-    const int channel_minimum_width = kDefaultVideoGridMinimumWidth / grid_column_count_;
-    const QSize channel_minimum_size(
-        channel_minimum_width, static_cast<int>(std::lround(static_cast<double>(channel_minimum_width) * 9.0 / 16.0)));
-    channel_panels_.reserve(channel_count_);
+    const QSize channel_minimum_size(kDefaultVideoGridMinimumWidth, kDefaultVideoGridMinimumWidth * 9 / 16);
 
-    for (std::size_t channel = 0; channel < channel_count_; ++channel) {
+    for (std::size_t channel = 0; channel < kChannelCount; ++channel) {
         players_[channel] = new QMediaPlayer(this);
         video_stream_workers_[channel] =
             std::make_unique<RtspStreamWorker>(rtsp_network_timeout_ms_, rtsp_maximum_buffer_size_bytes_);
@@ -746,9 +710,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         players_[channel]->setPlaybackOptions(playback_options);
         auto* channel_panel = new QWidget(central_widget);
         channel_panel->setObjectName(QStringLiteral("videoChannel%1").arg(channel + 1));
-        channel_panel->setProperty("channelIndex", static_cast<qulonglong>(channel));
-        channel_panel->installEventFilter(this);
-        channel_panels_.push_back(channel_panel);
         channel_stacks_[channel] = new QStackedLayout(channel_panel);
         video_layers_[channel] = new QWidget(channel_panel);
         auto* video_layout = new QGridLayout(video_layers_[channel]);
@@ -976,8 +937,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             }
         }
 
-        const auto grid_index = static_cast<int>(channel);
-        video_grid_->addWidget(channel_panel, grid_index / grid_column_count_, grid_index % grid_column_count_);
+        video_grid->addWidget(channel_panel, 0, 0);
     }
 
     if (!config.warnings.isEmpty()) {
@@ -1456,36 +1416,6 @@ void MainWindow::selectControlTarget(const QString& device_id, const QString& di
     operations_dashboard_panel_->setControlTarget(control_target_device_id_);
     factory_top_view_->setSelectedDeviceId(control_target_device_id_);
     process_control_panel_->setControlTarget(control_target_device_id_, display_name);
-}
-
-void MainWindow::setFocusedChannel(std::optional<std::size_t> channel) {
-    focused_channel_ = channel;
-    for (std::size_t index = 0; index < channel_panels_.size(); ++index) {
-        video_grid_->removeWidget(channel_panels_[index]);
-        channel_panels_[index]->setVisible(!channel || index == *channel);
-    }
-    if (channel) {
-        video_grid_->addWidget(channel_panels_[*channel], 0, 0, grid_row_count_, grid_column_count_);
-        return;
-    }
-    for (std::size_t index = 0; index < channel_panels_.size(); ++index) {
-        video_grid_->addWidget(channel_panels_[index], static_cast<int>(index) / grid_column_count_,
-                               static_cast<int>(index) % grid_column_count_);
-    }
-}
-
-bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::MouseButtonRelease) {
-        const auto* mouse_event = static_cast<QMouseEvent*>(event);
-        const auto channel = watched->property("channelIndex").toULongLong();
-        if (mouse_event->button() == Qt::LeftButton && channel < channel_panels_.size() &&
-            watched == channel_panels_[channel]) {
-            setFocusedChannel(focused_channel_ && *focused_channel_ == channel ? std::nullopt
-                                                                               : std::optional{ channel });
-            return true;
-        }
-    }
-    return QMainWindow::eventFilter(watched, event);
 }
 
 }  // namespace logistics::control_center
