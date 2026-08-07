@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_queues.h"
+#include "fault_trap.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -302,6 +303,40 @@ __weak void StartHealthTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+
+/*
+ * 스택 오버플로 훅(configCHECK_FOR_STACK_OVERFLOW=2).
+ *
+ * FreeRTOS는 이 훅에서 돌아오는 것을 기대하지 않는다. 어느 태스크가 넘쳤는지
+ * .noinit에 남기고 멈추면, IWDG가 리셋한 뒤에도 태스크 이름이 남는다.
+ * 검사가 꺼져 있던 동안에는 넘친 태스크가 남의 메모리를 조용히 망가뜨리다
+ * 한참 뒤 엉뚱한 곳에서 HardFault로 터졌을 것이다.
+ */
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+  (void)xTask;
+
+  FaultTrap_CaptureTask(FAULT_TRAP_STACK_OVERFLOW, pcTaskName);
+
+  taskDISABLE_INTERRUPTS();
+  for (;;)
+  {
+  }
+}
+
+/* 힙 할당 실패 훅(configUSE_MALLOC_FAILED_HOOK=1). 같은 이유로 기록 후 정지한다.
+ * 태스크 이름은 남기지 않는다 - pcTaskGetName()은 INCLUDE_pcTaskGetTaskName이
+ * 필요한데, 그 정의는 CubeMX가 관리하는 영역이라 .ioc 재생성 때 사라지면
+ * 링크가 깨진다. 힙 고갈은 대개 초기화 중에 나므로 종류만으로도 충분하다. */
+void vApplicationMallocFailedHook(void)
+{
+  FaultTrap_CaptureTask(FAULT_TRAP_MALLOC_FAILED, NULL);
+
+  taskDISABLE_INTERRUPTS();
+  for (;;)
+  {
+  }
+}
 
 /* USER CODE END Application */
 
