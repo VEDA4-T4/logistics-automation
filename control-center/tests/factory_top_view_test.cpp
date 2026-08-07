@@ -545,11 +545,9 @@ int main(int argc, char* argv[]) {
 
     const auto input_before = view.boxPosition(QStringLiteral("input"));
     const auto sorting_pinned = view.boxPosition(QStringLiteral("sorting"));
-    const auto input_step = view.conveyorActiveStep(QStringLiteral("input"));
     assert(sorting_pinned == QPointF(504, 345));
     view.advanceAnimationsForTest();
     assert(view.boxPosition(QStringLiteral("input")) != input_before);
-    assert(view.conveyorActiveStep(QStringLiteral("input")) != input_step);
     assert(view.boxPosition(QStringLiteral("sorting")) == sorting_pinned);
 
     input.current_state = QStringLiteral("STOPPED");

@@ -74,7 +74,6 @@ public:
     [[nodiscard]] QPointF lineTracerPickupPosition(int route) const;
     [[nodiscard]] QPointF lineTracerJunctionPosition(int route) const;
     [[nodiscard]] QPointF lineTracerDestinationPosition(int route) const;
-    [[nodiscard]] int conveyorActiveStep(const QString& process_key) const;
     [[nodiscard]] QList<QPointF> lineArrowPositions() const;
     [[nodiscard]] qreal gripperAngle() const;
     [[nodiscard]] bool gripperProductVisible() const;

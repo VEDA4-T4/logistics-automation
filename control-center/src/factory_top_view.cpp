@@ -352,7 +352,6 @@ struct FactoryTopViewWidget::Impl {
         QGraphicsItem* moving_item{ nullptr };
         QList<QGraphicsLineItem*> state_lines;
         QList<QAbstractGraphicsShapeItem*> state_shapes;
-        QList<QGraphicsRectItem*> conveyor_indicators;
         QHash<int, QGraphicsSimpleTextItem*> sensor_labels;
         QHash<int, QString> sensor_text;
         FactoryNodeVisual visual;
@@ -406,28 +405,6 @@ struct FactoryTopViewWidget::Impl {
         return box;
     }
 
-    static void addConveyorIndicators(NodeItems& node, const QPointF (&positions)[3]) {
-        for (int index = 0; index < 3; ++index) {
-            auto* indicator = new QGraphicsRectItem(QRectF(-14, -10, 28, 20), node.group);
-            indicator->setBrush(QColor(QStringLiteral("#2d2d30")));
-            indicator->setPen(QPen(QColor(QStringLiteral("#5a5a5a")), 1));
-            indicator->setPos(positions[index]);
-            indicator->setZValue(1);
-            auto* label = new QGraphicsSimpleTextItem(QString::number(index + 1), indicator);
-            label->setBrush(QColor(QStringLiteral("#cccccc")));
-            label->setPos(-4, -9);
-            node.conveyor_indicators.append(indicator);
-        }
-    }
-
-    static void updateConveyorIndicators(NodeItems& node, int active_index) {
-        for (int index = 0; index < node.conveyor_indicators.size(); ++index) {
-            const bool active = index == active_index;
-            node.conveyor_indicators[index]->setBrush(
-                QColor(active ? QStringLiteral("#ffd866") : QStringLiteral("#2d2d30")));
-        }
-    }
-
     static void finalizeNode(NodeItems& node) {
         for (auto* child : node.group->childItems()) {
             child->setAcceptedMouseButtons(Qt::NoButton);
@@ -447,10 +424,7 @@ struct FactoryTopViewWidget::Impl {
     void buildScene() {
         auto& input = addNode(QString::fromLatin1(kInputProcessKey), QStringLiteral("Input"), QPointF(32, 35));
         addStateLine(input, QLineF(kInputPositions[0], kInputPositions[3]), 6);
-        const QPointF input_indicator_positions[]{ kInputPositions[0], kInputPositions[1], kInputPositions[2] };
-        addConveyorIndicators(input, input_indicator_positions);
         addBox(input, kInputPositions[0]);
-        input.moving_item->setZValue(2);
         auto* input_sensor = new QGraphicsSimpleTextItem(QStringLiteral("US1 -- cm"), input.group);
         input_sensor->setBrush(QColor(QStringLiteral("#cccccc")));
         input_sensor->setPos(356, 92);
@@ -488,9 +462,7 @@ struct FactoryTopViewWidget::Impl {
 
         auto& sorting = addNode(QString::fromLatin1(kSortingProcessKey), QStringLiteral("Sorting"), QPointF(530, 85));
         addStateLine(sorting, QLineF(kSortingFeed, kSortingPositions[2]), 6);
-        addConveyorIndicators(sorting, kSortingPositions);
         addBox(sorting, kSortingPositions[0]);
-        sorting.moving_item->setZValue(2);
         for (int sensor_id = 1; sensor_id <= 3; ++sensor_id) {
             auto* sensor = new QGraphicsSimpleTextItem(QStringLiteral("US%1 -- cm").arg(sensor_id + 1), sorting.group);
             sensor->setBrush(QColor(QStringLiteral("#cccccc")));
@@ -516,8 +488,8 @@ struct FactoryTopViewWidget::Impl {
         for (int index = 0; index < 8; ++index) {
             auto* arrow = new QGraphicsSimpleTextItem(QStringLiteral(">"), line_tracer.group);
             QFont font = arrow->font();
-            font.setBold(true);
-            font.setPointSize(13);
+            font.setWeight(QFont::Black);
+            font.setPointSize(16);
             arrow->setFont(font);
             arrow->setBrush(QColor(QStringLiteral("#dcdcaa")));
             arrow->setTransformOriginPoint(arrow->boundingRect().center());
@@ -727,7 +699,6 @@ struct FactoryTopViewWidget::Impl {
             const bool motion_telemetry_live = telemetry_live && !stale_motion_telemetry;
 
             if (process.key == QString::fromLatin1(kInputProcessKey)) {
-                updateConveyorIndicators(node, node.motion_enabled ? node.animation_phase % 3 : -1);
                 if (motion_telemetry_live && DetectedSensor(node.visual).has_value()) {
                     node.moving_item->setPos(kInputPositions[3]);
                 }
@@ -741,7 +712,6 @@ struct FactoryTopViewWidget::Impl {
                                            node.visual.motion_phase == FactoryMotionPhase::GripperTransfer || placed;
                 applyGripperProduct(node.visual.motion_phase, telemetry_live && product_phase && trusted_work);
             } else if (process.key == QString::fromLatin1(kSortingProcessKey)) {
-                updateConveyorIndicators(node, node.motion_enabled ? node.animation_phase % 3 : -1);
                 if (motion_telemetry_live) {
                     sorting_target_route = FactoryRouteIndex(process.destination);
                     if (const auto sensor = DetectedSensor(node.visual);
@@ -911,9 +881,6 @@ struct FactoryTopViewWidget::Impl {
             }
 
             if (!node.motion_enabled) {
-                if (!node.conveyor_indicators.isEmpty()) {
-                    updateConveyorIndicators(node, -1);
-                }
                 continue;
             }
             if (!animation_enabled) {
@@ -922,7 +889,6 @@ struct FactoryTopViewWidget::Impl {
             }
             if (iterator.key() == QString::fromLatin1(kInputProcessKey)) {
                 ++node.animation_phase;
-                updateConveyorIndicators(node, node.animation_phase % 3);
                 if (DetectedSensor(node.visual).has_value()) {
                     node.moving_item->setPos(kInputPositions[3]);
                 } else {
@@ -931,7 +897,6 @@ struct FactoryTopViewWidget::Impl {
                 }
             } else if (iterator.key() == QString::fromLatin1(kSortingProcessKey)) {
                 ++node.animation_phase;
-                updateConveyorIndicators(node, node.animation_phase % 3);
                 if (const auto sensor = DetectedSensor(node.visual);
                     sensor.has_value() && *sensor >= 1 && *sensor <= 3) {
                     node.moving_item->setPos(kSortingPositions[*sensor - 1]);
@@ -1028,19 +993,6 @@ QPointF FactoryTopViewWidget::lineTracerJunctionPosition(int route) const {
 
 QPointF FactoryTopViewWidget::lineTracerDestinationPosition(int route) const {
     return route >= 1 && route <= 3 ? kLineDestinations[route - 1] : QPointF{};
-}
-
-int FactoryTopViewWidget::conveyorActiveStep(const QString& process_key) const {
-    const auto iterator = impl_->nodes.constFind(process_key);
-    if (iterator == impl_->nodes.cend()) {
-        return 0;
-    }
-    for (int index = 0; index < iterator->conveyor_indicators.size(); ++index) {
-        if (iterator->conveyor_indicators[index]->brush().color() == QColor(QStringLiteral("#ffd866"))) {
-            return index + 1;
-        }
-    }
-    return 0;
 }
 
 QList<QPointF> FactoryTopViewWidget::lineArrowPositions() const {
