@@ -307,6 +307,9 @@ void test_initialize_resets_then_homes() {
     fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_HOME);
     assert(fixture.node->IsHomed());
     assert(!fixture.node->HasActiveCycle());
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr && response->command == mqtt::ControlCommand::kInitialize &&
+           response->request_id == "req-init" && response->result == mqtt::CommandResult::kSuccess);
     const auto* status = fixture.LastStatus();
     assert(status != nullptr && status->current_state == "READY");
 }
@@ -501,6 +504,9 @@ void test_recovery_homes_the_arm_after_a_safety_release() {
 
     fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_HOME);
     assert(fixture.node->IsHomed());
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr && response->command == mqtt::ControlCommand::kRecovery &&
+           response->request_id == "req-home" && response->result == mqtt::CommandResult::kSuccess);
 }
 
 void test_missing_completion_event_times_out_the_cycle() {

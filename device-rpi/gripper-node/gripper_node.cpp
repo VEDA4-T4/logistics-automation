@@ -521,6 +521,7 @@ GripperCommandResult GripperNode::StartCycle(const mqtt::ControlCommandPayload& 
 
     cycle_ = ActiveCycle{
         .active = true,
+        .mqtt_command = command.command,
         .phase = phase,
         .step = FirstStepOf(phase),
         .work_id = result.work_id,
@@ -596,6 +597,7 @@ GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayloa
 
     cycle_ = ActiveCycle{
         .active = true,
+        .mqtt_command = command.command,
         .phase = GripperPhase::kHome,
         .step = GripperCycleStep::kReturnHome,
         .work_id = {},
@@ -659,6 +661,7 @@ GripperCommandResult GripperNode::RunRecovery(const mqtt::ControlCommandPayload&
 
     cycle_ = ActiveCycle{
         .active = true,
+        .mqtt_command = command.command,
         .phase = GripperPhase::kHome,
         .step = GripperCycleStep::kReturnHome,
         .work_id = {},
@@ -931,12 +934,13 @@ void GripperNode::AdvanceCycle() {
 void GripperNode::FinishCycle() {
     const std::string work_id = cycle_.work_id;
     const std::string request_id = cycle_.request_id;
+    const mqtt::ControlCommand mqtt_command = cycle_.mqtt_command;
     const bool was_home_only = cycle_.phase == GripperPhase::kHome;
 
     cycle_ = ActiveCycle{};
 
     if (was_home_only) {
-        EmitCommandResponse(request_id, mqtt::ControlCommand::kRecovery, mqtt::CommandResult::kSuccess, std::nullopt,
+        EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kSuccess, std::nullopt,
                             "gripper returned home");
         EmitDeviceStatus("READY");
         return;
@@ -962,11 +966,11 @@ void GripperNode::AbortCycle(std::string error_code, std::string message) {
     angles_known_ = false;
     const std::string work_id = cycle_.work_id;
     const std::string request_id = cycle_.request_id;
+    const mqtt::ControlCommand mqtt_command = cycle_.mqtt_command;
     cycle_ = ActiveCycle{};
 
     const std::optional<std::string> job_id = work_id.empty() ? std::nullopt : std::optional{ work_id };
-    EmitCommandResponse(request_id, mqtt::ControlCommand::kStart, mqtt::CommandResult::kFailed,
-                        std::optional{ error_code }, message);
+    EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kFailed, std::optional{ error_code }, message);
     EmitError(std::move(error_code), "ERROR", std::move(message), job_id);
 }
 
