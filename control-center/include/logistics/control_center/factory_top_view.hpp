@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QGraphicsView>
+#include <QColor>
 #include <QList>
 #include <QPointF>
 #include <QString>
@@ -54,6 +55,7 @@ struct FactoryNodeVisual {
 [[nodiscard]] QString FactoryDistanceText(int distance_cm);
 [[nodiscard]] std::optional<int> FactoryRouteIndex(const QString& current_state);
 [[nodiscard]] FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process);
+[[nodiscard]] QColor FactoryNodeColor(FactoryNodeVisualState state);
 
 class FactoryTopViewWidget final : public QGraphicsView {
     Q_OBJECT

@@ -210,6 +210,23 @@ FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
     return WaitingVisual(process);
 }
 
+QColor FactoryNodeColor(FactoryNodeVisualState state) {
+    switch (state) {
+        case FactoryNodeVisualState::Disconnected:
+            return QColor(QStringLiteral("#777777"));
+        case FactoryNodeVisualState::EmergencyStop:
+        case FactoryNodeVisualState::Error:
+            return QColor(QStringLiteral("#f14c4c"));
+        case FactoryNodeVisualState::Working:
+            return QColor(QStringLiteral("#75beff"));
+        case FactoryNodeVisualState::Running:
+            return QColor(QStringLiteral("#89d185"));
+        case FactoryNodeVisualState::Waiting:
+            return QColor(QStringLiteral("#ffffff"));
+    }
+    return QColor(QStringLiteral("#9d9d9d"));
+}
+
 namespace {
 
 constexpr QRectF kFactoryScene{ 0, 0, 700, 500 };
@@ -297,23 +314,6 @@ private:
     QString process_key_;
     std::function<void(const QString&)> selected_;
 };
-
-QColor ColorFor(FactoryNodeVisualState state) {
-    switch (state) {
-        case FactoryNodeVisualState::Disconnected:
-            return QColor(QStringLiteral("#777777"));
-        case FactoryNodeVisualState::EmergencyStop:
-        case FactoryNodeVisualState::Error:
-            return QColor(QStringLiteral("#f14c4c"));
-        case FactoryNodeVisualState::Working:
-            return QColor(QStringLiteral("#75beff"));
-        case FactoryNodeVisualState::Running:
-            return QColor(QStringLiteral("#89d185"));
-        case FactoryNodeVisualState::Waiting:
-            return QColor(QStringLiteral("#ffffff"));
-    }
-    return QColor(QStringLiteral("#9d9d9d"));
-}
 
 bool AllowsMotion(const QString& process_key, const FactoryNodeVisual& visual) {
     if (visual.motion_enabled) {
@@ -496,7 +496,7 @@ struct FactoryTopViewWidget::Impl {
     }
 
     void applyVisual(NodeItems& node) {
-        node.color = ColorFor(node.visual.state);
+        node.color = FactoryNodeColor(node.visual.state);
         node.group->setOpacity(node.visual.opacity);
         node.state_marker->setPen(QPen(node.color, 1));
         node.state_marker->setBrush(node.color);
