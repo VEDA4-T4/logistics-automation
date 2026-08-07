@@ -41,9 +41,9 @@ int main(void) {
     memset(compareValues, 0, sizeof(compareValues));
     assert(port->enable(port->context) == 0);
     assert(pwmStartCount == 4U);
-    assert(compareValues[TIM_CHANNEL_1] == 1500U);
-    assert(compareValues[TIM_CHANNEL_2] == 1500U);
-    assert(compareValues[TIM_CHANNEL_3] == 1500U);
+    assert(compareValues[TIM_CHANNEL_1] == 1600U);
+    assert(compareValues[TIM_CHANNEL_2] == 1300U);
+    assert(compareValues[TIM_CHANNEL_3] == 1800U);
     assert(compareValues[TIM_CHANNEL_4] == 1680U);
     puts("gripper_servo_test: PASS");
     return 0;
