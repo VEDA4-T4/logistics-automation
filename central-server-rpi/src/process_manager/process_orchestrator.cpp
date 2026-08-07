@@ -337,7 +337,11 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         const auto role = DeviceRoleForSource(config_, message.source_id);
         const auto meaning = role.has_value() ? contracts::DeviceStateMeaningFor(*role, current_state)
                                               : contracts::DeviceStateMeaning::kUnknown;
-        if (role.has_value() &&
+        const bool expected_position_reset =
+            machine.SystemState() == ProcessSystemState::kRecovery && role == contracts::DeviceRole::kLineTracer &&
+            current_state == "POSITION_UNKNOWN" && status->status == mqtt::ConnectionState::kOnline &&
+            !status->error_code.has_value() && status->position_reset;
+        if (role.has_value() && !expected_position_reset &&
             (IsConnectionFailure(status->status) || meaning == contracts::DeviceStateMeaning::kError ||
              meaning == contracts::DeviceStateMeaning::kEmergencyStop)) {
             return {

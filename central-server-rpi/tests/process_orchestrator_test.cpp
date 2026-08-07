@@ -31,13 +31,14 @@ mqtt::MqttMessage Message(std::string message_id, mqtt::MessageType type, std::s
 
 mqtt::MqttMessage Status(std::string id, std::string source, std::string state,
                          mqtt::ConnectionState connection = mqtt::ConnectionState::kOnline,
-                         std::optional<std::string> work_id = std::string(kWorkId)) {
+                         std::optional<std::string> work_id = std::string(kWorkId), bool position_reset = false) {
     return Message(std::move(id), mqtt::MessageType::kDeviceStatus, std::move(source),
                    mqtt::DeviceStatusPayload{
                        .status = connection,
                        .current_state = std::move(state),
                        .job_id = std::move(work_id),
                        .error_code = std::nullopt,
+                       .position_reset = position_reset,
                    });
 }
 
@@ -262,6 +263,12 @@ void TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess() {
         assert(failed->suspended_stage == central_server::WorkStage::kInputDetected);
 
         assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+        if (failures[index].device_id == "PI-LT-01") {
+            const auto reset = orchestrator.Handle(Status("MSG-LINE-RESET", "PI-LT-01", "POSITION_UNKNOWN",
+                                                          mqtt::ConnectionState::kOnline, std::nullopt, true));
+            assert(!reset.handled);
+            assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
+        }
         assert(orchestrator.CompleteSystemRecovery().Applied());
         assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
         assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
