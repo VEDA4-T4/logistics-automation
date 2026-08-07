@@ -67,6 +67,27 @@ int main(int argc, char* argv[]) {
     assert(visual.motion_enabled);
     assert(visual.motion_phase == FactoryMotionPhase::GripperTransfer);
 
+    ProcessUnitStatus ready_gripper = active;
+    ready_gripper.current_state = QStringLiteral("READY");
+    ready_gripper.work_id.clear();
+    visual = BuildFactoryNodeVisual(ready_gripper);
+    assert(visual.state == FactoryNodeVisualState::Waiting);
+    assert(!visual.motion_enabled);
+
+    ProcessUnitStatus inactive_completion = active;
+    inactive_completion.key = QStringLiteral("sorting");
+    inactive_completion.current_state = QStringLiteral("CYCLE_COMPLETE");
+    visual = BuildFactoryNodeVisual(inactive_completion);
+    assert(visual.state == FactoryNodeVisualState::Waiting);
+    assert(!visual.motion_enabled);
+    inactive_completion.current_state = QStringLiteral("HOME");
+    assert(BuildFactoryNodeVisual(inactive_completion).state == FactoryNodeVisualState::Waiting);
+    inactive_completion.key = QStringLiteral("input");
+    inactive_completion.current_state = QStringLiteral("COMPLETED");
+    assert(BuildFactoryNodeVisual(inactive_completion).state == FactoryNodeVisualState::Waiting);
+    inactive_completion.key = QStringLiteral("vision");
+    assert(BuildFactoryNodeVisual(inactive_completion).state == FactoryNodeVisualState::Waiting);
+
     ProcessUnitStatus estop = active;
     estop.current_state = QStringLiteral("  estop  ");
     visual = BuildFactoryNodeVisual(estop);
@@ -91,6 +112,13 @@ int main(int argc, char* argv[]) {
     visual = BuildFactoryNodeVisual(lifecycle);
     assert(visual.state == FactoryNodeVisualState::Waiting);
     assert(visual.opacity == 1.0);
+    lifecycle.current_state = QStringLiteral("POSITION_UNKNOWN");
+    visual = BuildFactoryNodeVisual(lifecycle);
+    assert(visual.state == FactoryNodeVisualState::Error);
+    lifecycle.current_state = QStringLiteral("FUTURE_STATE");
+    visual = BuildFactoryNodeVisual(lifecycle);
+    assert(visual.state == FactoryNodeVisualState::Waiting);
+    assert(!visual.motion_enabled);
 
     ProcessUnitStatus sorting;
     sorting.key = QStringLiteral("sorting");

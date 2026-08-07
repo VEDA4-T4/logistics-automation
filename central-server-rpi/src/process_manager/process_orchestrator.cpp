@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 
 namespace logistics::central_server {
@@ -26,6 +27,26 @@ namespace mqtt = contracts::mqtt;
     return state == mqtt::ConnectionState::kOffline || state == mqtt::ConnectionState::kRtspError ||
            state == mqtt::ConnectionState::kMqttError || state == mqtt::ConnectionState::kMqttAuthError ||
            state == mqtt::ConnectionState::kTlsError || state == mqtt::ConnectionState::kUartError;
+}
+
+[[nodiscard]] std::optional<contracts::DeviceRole> DeviceRoleForSource(const ProcessOrchestratorConfig& config,
+                                                                       std::string_view source_id) noexcept {
+    if (source_id == config.input_device_id) {
+        return contracts::DeviceRole::kInput;
+    }
+    if (source_id == config.vision_device_id) {
+        return contracts::DeviceRole::kVision;
+    }
+    if (source_id == config.gripper_device_id) {
+        return contracts::DeviceRole::kGripper;
+    }
+    if (source_id == config.sorting_device_id) {
+        return contracts::DeviceRole::kSorting;
+    }
+    if (source_id == config.line_tracer_device_id) {
+        return contracts::DeviceRole::kLineTracer;
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] ProcessOrchestrationResult NotHandled() {
@@ -313,8 +334,12 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         event.destination = product->destination;
     } else if (const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(message)) {
         const std::string current_state = Uppercase(status->current_state);
-        if (message.source_id == config_.input_device_id &&
-            (IsConnectionFailure(status->status) || IsOneOf(current_state, { "FAULT", "ERROR", "ESTOP" }))) {
+        const auto role = DeviceRoleForSource(config_, message.source_id);
+        const auto meaning = role.has_value() ? contracts::DeviceStateMeaningFor(*role, current_state)
+                                              : contracts::DeviceStateMeaning::kUnknown;
+        if (role == contracts::DeviceRole::kInput &&
+            (IsConnectionFailure(status->status) || meaning == contracts::DeviceStateMeaning::kError ||
+             meaning == contracts::DeviceStateMeaning::kEmergencyStop)) {
             return {
                 .handled = true,
                 .transition = machine.ApplySystemFailure("input node is unavailable: " + current_state),
@@ -325,16 +350,25 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             return NotHandled();
         }
         if (message.source_id == config_.gripper_device_id) {
-            event =
-                Event(IsOneOf(current_state, { "COMPLETED", "PLACED", "READY" }) ? ProcessEventType::kGripperCompleted
-                                                                                 : ProcessEventType::kGripperStarted,
-                      message, *status->job_id);
+            if (meaning != contracts::DeviceStateMeaning::kWorking &&
+                meaning != contracts::DeviceStateMeaning::kCompleted) {
+                return NotHandled();
+            }
+            event = Event(meaning == contracts::DeviceStateMeaning::kCompleted ? ProcessEventType::kGripperCompleted
+                                                                               : ProcessEventType::kGripperStarted,
+                          message, *status->job_id);
         } else if (message.source_id == config_.sorting_device_id) {
-            event = Event(IsOneOf(current_state, { "COMPLETED", "CYCLE_COMPLETE", "HOME" })
-                              ? ProcessEventType::kSortingCompleted
-                              : ProcessEventType::kSortingStarted,
+            if (meaning != contracts::DeviceStateMeaning::kWorking &&
+                meaning != contracts::DeviceStateMeaning::kCompleted) {
+                return NotHandled();
+            }
+            event = Event(meaning == contracts::DeviceStateMeaning::kCompleted ? ProcessEventType::kSortingCompleted
+                                                                               : ProcessEventType::kSortingStarted,
                           message, *status->job_id);
         } else if (message.source_id == config_.line_tracer_device_id) {
+            if (meaning != contracts::DeviceStateMeaning::kWorking) {
+                return NotHandled();
+            }
             event = Event(ProcessEventType::kTransportStarted, message, *status->job_id);
         } else {
             mapped = false;

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <string>
 
+#include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
 namespace logistics::control_center {
@@ -221,36 +222,14 @@ QString StageFor(mqtt::MessageType type) {
     }
 }
 
-bool IsIdleState(const QString& current_state) {
-    const auto state = current_state.trimmed().toUpper();
-    return state.isEmpty() || state == QStringLiteral("IDLE") || state == QStringLiteral("READY") ||
-           state == QStringLiteral("WAITING") || state == QStringLiteral("STOPPED") ||
-           state == QStringLiteral("DISCONNECTED") || state == QStringLiteral("ONLINE") ||
-           state == QStringLiteral("COMPLETED") || current_state == QStringLiteral("배송 완료");
+contracts::DeviceStateMeaning StateMeaning(const ProcessUnitStatus& process, const QString& current_state) {
+    const auto role = contracts::DeviceRoleFromString(process.key.toStdString());
+    return role.has_value() ? contracts::DeviceStateMeaningFor(*role, current_state.trimmed().toUpper().toStdString())
+                            : contracts::DeviceStateMeaning::kUnknown;
 }
 
 bool IsOperationalWaitingState(const QString& current_state) {
     return current_state.trimmed().compare(QStringLiteral("WAITING_FOR_PRODUCT"), Qt::CaseInsensitive) == 0;
-}
-
-bool IsEmergencyState(const QString& current_state) {
-    const auto state = current_state.trimmed().toUpper();
-    return state == QStringLiteral("ESTOP") || state == QStringLiteral("EMERGENCY_STOP");
-}
-
-bool IsRecoveryState(const QString& current_state) {
-    const auto state = current_state.trimmed().toUpper();
-    return state == QStringLiteral("RECOVERY");
-}
-
-bool IsStoppedState(const QString& current_state) {
-    const auto state = current_state.trimmed().toUpper();
-    return state == QStringLiteral("STOPPED") || state == QStringLiteral("RECOVERY_READY");
-}
-
-bool IsProcessErrorState(const QString& current_state) {
-    const auto state = current_state.trimmed().toUpper();
-    return state == QStringLiteral("ERROR") || state.endsWith(QStringLiteral("_ERROR"));
 }
 
 QString SensorMeasurementForCurrentState(const QString& current_state) {
@@ -330,8 +309,10 @@ bool IsBusy(const ProcessUnitStatus& process) {
         process.current_state.compare(QStringLiteral("COMPLETED"), Qt::CaseInsensitive) == 0) {
         return false;
     }
+    const auto meaning = StateMeaning(process, process.current_state);
     return !process.work_id.isEmpty() ||
-           (!IsIdleState(process.current_state) && !IsOperationalWaitingState(process.current_state));
+           (meaning != contracts::DeviceStateMeaning::kUnknown && meaning != contracts::DeviceStateMeaning::kIdle &&
+            meaning != contracts::DeviceStateMeaning::kStopped && meaning != contracts::DeviceStateMeaning::kCompleted);
 }
 
 QString CommandStage(const QString& command) {
@@ -631,7 +612,8 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             process.status.has_warning = sensor_stale;
             process.status.has_error =
                 !sensor_stale && (IsConnectionError(connection_state) || !process.status.error_code.isEmpty() ||
-                                  (!sensor_telemetry && IsProcessErrorState(current_state)));
+                                  (!sensor_telemetry && StateMeaning(process.status, current_state) ==
+                                                            contracts::DeviceStateMeaning::kError));
             if (IsConnectionError(process.status.connection_state)) {
                 process.status.destination.clear();
             }
@@ -831,9 +813,10 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
             continue;
         }
         ++received_processes;
-        emergency_stop = emergency_stop || IsEmergencyState(process.current_state);
-        recovery = recovery || IsRecoveryState(process.current_state);
-        stopped = stopped || IsStoppedState(process.current_state);
+        const auto meaning = StateMeaning(process, process.current_state);
+        emergency_stop = emergency_stop || meaning == contracts::DeviceStateMeaning::kEmergencyStop;
+        recovery = recovery || meaning == contracts::DeviceStateMeaning::kRecovery;
+        stopped = stopped || meaning == contracts::DeviceStateMeaning::kStopped;
         if (IsOperationalWaitingState(process.current_state)) {
             ++operational_waiting_processes;
         }

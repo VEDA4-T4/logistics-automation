@@ -823,5 +823,29 @@ int main() {
     assert(result.applied);
     assert(ProcessByKey(configured_state, QStringLiteral("input")).work_id == QStringLiteral("WORK-CUSTOM"));
 
+    OperationsDashboardState ready_gripper_state;
+    result = ready_gripper_state.applyEnvelope(
+        Envelope("GRIPPER-READY", "DEVICE_STATUS", DeviceStatus("ONLINE", "READY"), "PI-GRIPPER-01"));
+    assert(result.applied);
+    const auto gripper_key = QStringLiteral("gripper");
+    const auto& ready_gripper = ProcessByKey(ready_gripper_state, gripper_key);
+    assert(ready_gripper.current_state == QStringLiteral("READY"));
+    assert(ready_gripper.work_id.isEmpty());
+    assert(ready_gripper_state.overall().active_unit_count == 0);
+    assert(ready_gripper_state.overall().state == OverallProcessState::Idle);
+
+    OperationsDashboardState unknown_state;
+    result = unknown_state.applyEnvelope(
+        Envelope("LINE-FUTURE", "DEVICE_STATUS", DeviceStatus("ONLINE", "FUTURE_STATE"), "PI-LT-01"));
+    assert(result.applied);
+    assert(ProcessByKey(unknown_state, QStringLiteral("linetracer")).current_state == QStringLiteral("FUTURE_STATE"));
+    assert(!ProcessByKey(unknown_state, QStringLiteral("linetracer")).has_error);
+    assert(unknown_state.overall().state == OverallProcessState::Idle);
+    result = unknown_state.applyEnvelope(
+        Envelope("LINE-POSITION-UNKNOWN", "DEVICE_STATUS", DeviceStatus("ONLINE", "POSITION_UNKNOWN"), "PI-LT-01"));
+    assert(result.applied);
+    assert(ProcessByKey(unknown_state, QStringLiteral("linetracer")).has_error);
+    assert(unknown_state.overall().state == OverallProcessState::Error);
+
     return 0;
 }

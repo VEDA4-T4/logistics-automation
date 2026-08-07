@@ -17,6 +17,8 @@
 #include <QTimer>
 #include <functional>
 
+#include "logistics/contracts/device.hpp"
+
 namespace logistics::control_center {
 namespace {
 
@@ -31,14 +33,6 @@ std::optional<int> RouteSuffix(const QString& state, QStringView prefix) {
     const auto suffix = state.back();
     return suffix >= QLatin1Char('A') && suffix <= QLatin1Char('C') ? std::optional<int>(suffix.unicode() - 'A' + 1)
                                                                     : std::nullopt;
-}
-
-bool HasDestinationSuffix(const QString& state, QStringView prefix) {
-    if (!state.startsWith(prefix) || state.size() != prefix.size() + 1) {
-        return false;
-    }
-    const auto suffix = state.back();
-    return suffix >= QLatin1Char('1') && suffix <= QLatin1Char('3');
 }
 
 FactoryMotionPhase MotionPhaseFor(const ProcessUnitStatus& process, const QString& state) {
@@ -86,33 +80,13 @@ FactoryMotionPhase MotionPhaseFor(const ProcessUnitStatus& process, const QStrin
     return FactoryMotionPhase::InputConveyor;
 }
 
-bool IsWorkingState(const ProcessUnitStatus& process, const QString& state) {
-    if (process.key == QString::fromLatin1(kVisionProcessKey)) {
-        return state == QStringLiteral("WORK_ASSIGNED") || state == QStringLiteral("AWAITING_WORK_ID") ||
-               state == QStringLiteral("VISION_PROCESSING");
-    }
-    if (process.key == QString::fromLatin1(kInputProcessKey)) {
-        return state == QStringLiteral("BUSY");
-    }
-    if (process.key == QString::fromLatin1(kGripperProcessKey)) {
-        return state == QStringLiteral("PICKING") || state == QStringLiteral("TRANSFERRING") ||
-               state == QStringLiteral("PLACED") || state == QStringLiteral("COMPLETED");
-    }
-    if (process.key == QString::fromLatin1(kSortingProcessKey)) {
-        return state == QStringLiteral("BUSY") || state == QStringLiteral("SORTING") ||
-               state == QStringLiteral("ROUTING") || state == QStringLiteral("RETURNING_HOME") ||
-               HasDestinationSuffix(state, u"GATE_MOVING_DEST_") || HasDestinationSuffix(state, u"WAITING_ITEM_DEST_");
-    }
-    if (process.key == QString::fromLatin1(kLineTracerProcessKey)) {
-        return state == QStringLiteral("DELIVERING") || state == QStringLiteral("FOLLOWING_LINE") ||
-               state == QStringLiteral("CORRECTING") || RouteSuffix(state, u"PICKUP_READY_").has_value() ||
-               RouteSuffix(state, u"ARRIVED_").has_value() || RouteSuffix(state, u"UNLOADING_").has_value() ||
-               RouteSuffix(state, u"LOAD_ON_").has_value() || RouteSuffix(state, u"LOAD_OFF_").has_value();
-    }
-    return false;
+contracts::DeviceStateMeaning StateMeaning(const ProcessUnitStatus& process, const QString& state) {
+    const auto role = contracts::DeviceRoleFromString(process.key.toStdString());
+    return role.has_value() ? contracts::DeviceStateMeaningFor(*role, state.toStdString())
+                            : contracts::DeviceStateMeaning::kUnknown;
 }
 
-bool IsRunningState(const ProcessUnitStatus& process, const QString& state) {
+bool UsesRunningVisual(const ProcessUnitStatus& process, const QString& state) {
     return state == QStringLiteral("RUNNING") || state == QStringLiteral("ONLINE") ||
            (process.key == QString::fromLatin1(kVisionProcessKey) && state == QStringLiteral("WAITING_FOR_PRODUCT")) ||
            (process.key == QString::fromLatin1(kLineTracerProcessKey) && RouteSuffix(state, u"PARKED_").has_value());
@@ -190,22 +164,25 @@ std::optional<int> FactoryRouteIndex(const QString& current_state) {
 
 FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
     const auto state = NormalizedState(process.current_state);
+    const auto meaning = StateMeaning(process, state);
     if (process.connection_state != logistics::contracts::mqtt::ConnectionState::kOnline ||
         state == QStringLiteral("DISCONNECTED")) {
         return DisconnectedVisual(process);
     }
-    if (state == QStringLiteral("EMERGENCY_STOP") || state == QStringLiteral("ESTOP")) {
+    if (meaning == contracts::DeviceStateMeaning::kEmergencyStop) {
         return EmergencyVisual(process);
     }
-    if (process.has_error) {
+    if (process.has_error || meaning == contracts::DeviceStateMeaning::kError) {
         return ErrorVisual(process);
     }
-    if ((process.work_completed && process.key == QString::fromLatin1(kLineTracerProcessKey)) ||
-        IsWorkingState(process, state)) {
-        return WorkingVisual(process, state);
-    }
-    if (IsRunningState(process, state)) {
+    if (UsesRunningVisual(process, state)) {
         return RunningVisual(process);
+    }
+    if ((process.work_completed && process.key == QString::fromLatin1(kLineTracerProcessKey)) ||
+        meaning == contracts::DeviceStateMeaning::kWorking ||
+        (meaning == contracts::DeviceStateMeaning::kCompleted &&
+         process.key == QString::fromLatin1(kGripperProcessKey))) {
+        return WorkingVisual(process, state);
     }
     return WaitingVisual(process);
 }

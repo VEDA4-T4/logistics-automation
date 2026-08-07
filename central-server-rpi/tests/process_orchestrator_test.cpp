@@ -132,6 +132,12 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-GRIPPER-01"), gripper.message).IsSuccess());
     assert(orchestrator.ConfirmDispatch(gripper).Applied());
 
+    const auto unknown_gripper = orchestrator.Handle(Status("MSG-GRIPPER-FUTURE", "PI-GRIPPER-01", "FUTURE_STATE"));
+    assert(!unknown_gripper.handled);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kGripperRequested);
+    const auto idle_gripper = orchestrator.Handle(Status("MSG-GRIPPER-READY", "PI-GRIPPER-01", "READY"));
+    assert(!idle_gripper.handled);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kGripperRequested);
     assert(orchestrator.Handle(Status("MSG-GRIPPER-START", "PI-GRIPPER-01", "TRANSFERRING")).transition.Applied());
     const auto gripper_done = orchestrator.Handle(Status("MSG-GRIPPER-DONE", "PI-GRIPPER-01", "COMPLETED"));
     assert(gripper_done.transition.Applied() && gripper_done.commands.size() == 1);
