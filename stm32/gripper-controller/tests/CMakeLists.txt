@@ -21,15 +21,15 @@ endif()
 
 add_test(NAME gripper_control_test COMMAND gripper_control_test)
 
-add_executable(uart_rx_test uart_rx_test.c)
+add_executable(gripper_uart_rx_test uart_rx_test.c)
 target_include_directories(
-    uart_rx_test
+    gripper_uart_rx_test
     PRIVATE
         fakes
         ../Application/Inc
         ${PROJECT_SOURCE_DIR}/shared/include
 )
-target_compile_features(uart_rx_test PRIVATE c_std_11)
+target_compile_features(gripper_uart_rx_test PRIVATE c_std_11)
 
 add_executable(gripper_servo_test gripper_servo_test.c)
 target_include_directories(
@@ -70,7 +70,7 @@ target_include_directories(
 )
 target_compile_features(gripper_control_task_test PRIVATE c_std_11)
 
-foreach(target uart_rx_test gripper_servo_test gripper_app_comm_tx_test gripper_control_task_test)
+foreach(target gripper_uart_rx_test gripper_servo_test gripper_app_comm_tx_test gripper_control_task_test)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /WX)
     else()
@@ -78,7 +78,7 @@ foreach(target uart_rx_test gripper_servo_test gripper_app_comm_tx_test gripper_
     endif()
 endforeach()
 
-add_test(NAME uart_rx_test COMMAND uart_rx_test)
+add_test(NAME gripper_uart_rx_test COMMAND gripper_uart_rx_test)
 add_test(NAME gripper_servo_test COMMAND gripper_servo_test)
 add_test(NAME gripper_app_comm_tx_test COMMAND gripper_app_comm_tx_test)
 add_test(NAME gripper_control_task_test COMMAND gripper_control_task_test)
