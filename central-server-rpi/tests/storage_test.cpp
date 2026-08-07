@@ -233,13 +233,20 @@ int main() {
         persistence.PersistValidatedEvent(Envelope("MSG-ERROR-OLD", mqtt::MessageType::kErrorOccurred, "PI-VISION-01"),
                                           device_error, Metadata(base_time + 7, "device/PI-VISION-01/error"));
     assert(result.status == server::PersistenceStatus::kStored);
+    assert(database
+               .Execute("INSERT INTO mqtt_event_log(message_id,topic,protocol_version,message_type,source_id,"
+                        "payload_json,qos,retained,processing_state,received_at_ms,last_received_at_ms) VALUES("
+                        "'MSG-SAME-TIME','device/PI-VISION-01/event','1.0','HEARTBEAT','PI-VISION-01','{}',1,0,"
+                        "'STORED'," +
+                        std::to_string(base_time + 7) + "," + std::to_string(base_time + 7) + ")")
+               .ok());
 
     server::HistoryService history(database);
-    std::vector<server::HistoryEntry> history_entries;
-    assert(history.FindByWorkId(work_id, 100, history_entries).ok());
-    assert(!history_entries.empty());
+    server::HistoryPage history_page;
+    assert(history.FindByWorkId(work_id, 100, {}, history_page).ok());
+    assert(!history_page.entries.empty());
     bool found_error = false;
-    for (const auto& entry : history_entries) {
+    for (const auto& entry : history_page.entries) {
         if (entry.event_type == "ERROR_OCCURRED") {
             found_error = entry.error_code == "ERR-BARCODE-CAMERA" &&
                           entry.message == "camera focus prevented barcode recognition" &&
@@ -247,12 +254,61 @@ int main() {
         }
     }
     assert(found_error);
-    assert(history.FindByDeviceId("PI-VISION-01", 100, history_entries).ok());
-    assert(history_entries.size() == 3);
-    assert(history_entries.front().event_type == "ERROR_OCCURRED");
-    assert(history.FindByWorkId(work_id, 0, history_entries).code == server::DatabaseStatusCode::kInvalidArgument);
-    assert(history.FindByDeviceId("invalid/device", 10, history_entries).code ==
+    assert(history.FindByDeviceId("PI-VISION-01", 100, {}, history_page).ok());
+    assert(history_page.entries.size() == 4);
+    assert(history_page.entries.front().message_id == "MSG-SAME-TIME");
+    assert(history_page.entries[1].event_type == "ERROR_OCCURRED");
+    assert(!history_page.next_cursor);
+
+    server::HistoryPage first_history_page;
+    assert(history.FindByDeviceId("PI-VISION-01", 2, {}, first_history_page).ok());
+    assert(first_history_page.entries.size() == 2);
+    assert(first_history_page.next_cursor);
+    server::HistoryPage retried_first_history_page;
+    assert(history.FindByDeviceId("PI-VISION-01", 2, {}, retried_first_history_page).ok());
+    assert(retried_first_history_page.next_cursor == first_history_page.next_cursor);
+    assert(retried_first_history_page.entries.size() == first_history_page.entries.size());
+    for (std::size_t index = 0; index < first_history_page.entries.size(); ++index) {
+        assert(retried_first_history_page.entries[index].history_id == first_history_page.entries[index].history_id);
+    }
+    assert(database
+               .Execute("INSERT INTO mqtt_event_log(message_id,topic,protocol_version,message_type,source_id,"
+                        "payload_json,qos,retained,processing_state,received_at_ms,last_received_at_ms) VALUES("
+                        "'MSG-NEW-BETWEEN-PAGES','device/PI-VISION-01/event','1.0','HEARTBEAT','PI-VISION-01','{}',"
+                        "1,0,'STORED'," +
+                        std::to_string(base_time + 8) + "," + std::to_string(base_time + 8) + ")")
+               .ok());
+    server::HistoryPage second_history_page;
+    assert(history.FindByDeviceId("PI-VISION-01", 2, *first_history_page.next_cursor, second_history_page).ok());
+    assert(second_history_page.entries.size() == 2);
+    assert(!second_history_page.next_cursor);
+    assert(second_history_page.entries.front().message_id != "MSG-NEW-BETWEEN-PAGES");
+    for (const auto& first_entry : first_history_page.entries) {
+        for (const auto& second_entry : second_history_page.entries) {
+            assert(first_entry.history_id != second_entry.history_id);
+        }
+    }
+    server::HistoryPage refreshed_history_page;
+    assert(history.FindByDeviceId("PI-VISION-01", 1, {}, refreshed_history_page).ok());
+    assert(refreshed_history_page.entries.front().message_id == "MSG-NEW-BETWEEN-PAGES");
+
+    server::HistoryPage first_global_history_page;
+    assert(history.FindAll(2, {}, first_global_history_page).ok());
+    assert(first_global_history_page.entries.size() == 2);
+    assert(first_global_history_page.next_cursor);
+    server::HistoryPage retried_global_history_page;
+    assert(history.FindAll(2, {}, retried_global_history_page).ok());
+    assert(retried_global_history_page.next_cursor == first_global_history_page.next_cursor);
+    for (std::size_t index = 0; index < first_global_history_page.entries.size(); ++index) {
+        assert(retried_global_history_page.entries[index].history_id ==
+               first_global_history_page.entries[index].history_id);
+    }
+    assert(history.FindByWorkId(work_id, 0, {}, history_page).code == server::DatabaseStatusCode::kInvalidArgument);
+    assert(history.FindAll(server::HistoryService::kMaximumLimit + 1, {}, history_page).code ==
            server::DatabaseStatusCode::kInvalidArgument);
+    assert(history.FindByDeviceId("invalid/device", 10, {}, history_page).code ==
+           server::DatabaseStatusCode::kInvalidArgument);
+    assert(history.FindAll(10, "not-a-cursor", history_page).code == server::DatabaseStatusCode::kInvalidArgument);
 
     server::EventPayload device;
     device.device_role = "input";
@@ -296,12 +352,12 @@ int main() {
     assert(Scalar(database, "SELECT count(*) FROM security_log WHERE event_type='OLD_SECURITY_EVENT'") == 0);
     assert(Scalar(database, "SELECT count(*) FROM security_log WHERE event_type='NEW_SECURITY_EVENT'") == 1);
     assert(Scalar(database, "SELECT count(*) FROM work_history WHERE work_id='" + work_id + "'") >= 1);
-    assert(history.FindByDeviceId("PI-VISION-01", 100, history_entries).ok());
-    assert(history_entries.size() == 1);
-    assert(history_entries.front().event_type == "ERROR_OCCURRED");
-    assert(history_entries.front().message_id == "MSG-ERROR-NEW");
-    assert(history_entries.front().error_code == "ERR-RECENT");
-    assert(history_entries.front().details_json == R"({"cause":"RECENT_TEST_ERROR"})");
+    assert(history.FindByDeviceId("PI-VISION-01", 100, {}, history_page).ok());
+    assert(history_page.entries.size() == 1);
+    assert(history_page.entries.front().event_type == "ERROR_OCCURRED");
+    assert(history_page.entries.front().message_id == "MSG-ERROR-NEW");
+    assert(history_page.entries.front().error_code == "ERR-RECENT");
+    assert(history_page.entries.front().details_json == R"({"cause":"RECENT_TEST_ERROR"})");
 
     const auto migration_copy = root / "migrations";
     std::filesystem::create_directories(migration_copy);

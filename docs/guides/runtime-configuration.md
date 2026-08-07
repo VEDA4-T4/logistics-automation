@@ -122,9 +122,18 @@ password=replace-me
 
 [http]
 image_base_url=http://192.168.0.10:8080/
+bearer_token=중앙서버-http-bearer-token과-동일한-값
+
+[logs]
+max_buffer_entries=500
 ```
 
-`dashboard/*_device_id` 값은 각 노드가 MQTT `sourceId`로 보내는 ID와 정확히 같아야 합니다.
+`http/bearer_token`을 설정하면 운영 로그가 중앙 서버의 과거 이력을 cursor 기반으로 500건씩 조회합니다. 메인
+화면은 최신 500건으로 시작하고, 표의 맨 아래에서 계속 아래로 스크롤하면 기존 행을 유지한 채 과거 로그를
+500건씩 이어 붙입니다. 한 화면 세션의 누적 표시 상한은 5,000건입니다. 토큰을 비워 두면 실시간 MQTT 로그만
+표시합니다. `logs/max_buffer_entries`는 실시간 로그 상태의 롤링 버퍼 크기이며 100~5,000 범위에서 설정할 수
+있고 기본값은 500입니다. `dashboard/*_device_id` 값은 각 노드가 MQTT `sourceId`로 보내는 ID와 정확히 같아야
+합니다.
 
 ## 환경 변수로 설정 경로 지정
 

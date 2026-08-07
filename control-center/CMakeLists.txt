@@ -214,15 +214,19 @@ if(BUILD_TESTING)
     add_executable(
         control_center_rtsp_stream_worker_player_test
         tests/rtsp_stream_worker_player_test.cpp
+        src/operational_log_panel.cpp
+        src/operational_log_state.cpp
         src/rtsp_h264_stream.cpp
         src/rtsp_stream_worker.cpp
+        include/logistics/control_center/operational_log_panel.hpp
+        include/logistics/control_center/operational_log_state.hpp
         include/logistics/control_center/rtsp_h264_stream.hpp
         include/logistics/control_center/rtsp_stream_worker.hpp
     )
     target_include_directories(control_center_rtsp_stream_worker_player_test PRIVATE include)
     target_link_libraries(
         control_center_rtsp_stream_worker_player_test
-        PRIVATE Qt6::Core Qt6::Multimedia Qt6::Network Qt6::Widgets
+        PRIVATE Qt6::Core Qt6::Multimedia Qt6::Network Qt6::Widgets logistics::contracts
     )
     logistics_enable_warnings(control_center_rtsp_stream_worker_player_test)
     add_test(
@@ -255,6 +259,22 @@ if(BUILD_TESTING)
     )
     logistics_enable_warnings(control_center_process_control_panel_test)
     add_test(NAME control_center_process_control_panel_test COMMAND control_center_process_control_panel_test)
+
+    add_executable(
+        control_center_product_result_panel_test
+        tests/product_result_panel_test.cpp
+        src/product_result_panel.cpp
+        src/current_product_state.cpp
+        include/logistics/control_center/product_result_panel.hpp
+        include/logistics/control_center/current_product_state.hpp
+    )
+    target_include_directories(control_center_product_result_panel_test PRIVATE include)
+    target_link_libraries(
+        control_center_product_result_panel_test
+        PRIVATE Qt6::Network Qt6::Widgets logistics::contracts
+    )
+    logistics_enable_warnings(control_center_product_result_panel_test)
+    add_test(NAME control_center_product_result_panel_test COMMAND control_center_product_result_panel_test)
 
     add_executable(
         control_center_operational_log_state_test
@@ -352,6 +372,25 @@ if(BUILD_TESTING)
     )
     logistics_enable_warnings(control_center_mqtt_reconnect_test)
     add_test(NAME control_center_mqtt_reconnect_test COMMAND control_center_mqtt_reconnect_test)
+
+    add_executable(
+        control_center_mqtt_graceful_disconnect_test
+        tests/mqtt_client_graceful_disconnect_test.cpp
+        src/mqtt_client.cpp
+        src/mqtt_message_validator.cpp
+        include/logistics/control_center/mqtt_client.hpp
+        include/logistics/control_center/mqtt_message_validator.hpp
+    )
+    target_include_directories(control_center_mqtt_graceful_disconnect_test PRIVATE include)
+    target_link_libraries(
+        control_center_mqtt_graceful_disconnect_test
+        PRIVATE Qt6::Core Qt6::Mqtt Qt6::Network logistics::contracts
+    )
+    logistics_enable_warnings(control_center_mqtt_graceful_disconnect_test)
+    add_test(
+        NAME control_center_mqtt_graceful_disconnect_test
+        COMMAND control_center_mqtt_graceful_disconnect_test
+    )
 
     add_executable(
         control_center_mqtt_integration_test

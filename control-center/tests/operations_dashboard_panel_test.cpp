@@ -5,9 +5,9 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QRegularExpression>
+#include <QScrollArea>
 #include <cassert>
-
-#include "logistics/control_center/factory_top_view.hpp"
 
 namespace {
 
@@ -69,22 +69,16 @@ int main(int argc, char* argv[]) {
     panel.show();
     application.processEvents();
 
-    auto* top_view =
-        panel.findChild<logistics::control_center::FactoryTopViewWidget*>(QStringLiteral("factoryTopView"));
-    assert(top_view != nullptr);
-    assert(panel.minimumHeight() == 250);
-    assert(panel.maximumHeight() == QWIDGETSIZE_MAX);
-    assert(panel.findChildren<QFrame*>(QStringLiteral("processUnitCard")).size() == 5);
+    assert(panel.findChild<QScrollArea*>(QStringLiteral("processStatusSection")) == nullptr);
+    const auto cards =
+        panel.findChildren<QFrame*>(QRegularExpression(QStringLiteral("(overallProcessCard|processUnitCard)")));
+    assert(cards.size() == 6);
+    const int top = cards.front()->mapTo(&panel, QPoint{}).y();
+    for (const auto* card : cards) {
+        assert(qAbs(card->mapTo(&panel, QPoint{}).y() - top) <= 2);
+    }
+    assert(panel.maximumHeight() <= 140);
     assert(panel.findChild<QWidget*>(QStringLiteral("processCardGrid")) != nullptr);
-    const auto assert_scene_fits = [&application, top_view, &panel](const QSize& panel_size) {
-        panel.resize(panel_size);
-        application.processEvents();
-        assert(top_view->viewport()->rect().contains(top_view->mapFromScene(top_view->sceneRect().topLeft())));
-        assert(top_view->viewport()->rect().contains(top_view->mapFromScene(top_view->sceneRect().bottomRight())));
-        assert(qFuzzyCompare(qAbs(top_view->transform().m11()), qAbs(top_view->transform().m22())));
-    };
-    assert_scene_fits(QSize(1280, 250));
-    assert_scene_fits(QSize(1600, 300));
     assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
     assert(panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator")).size() == 4);
     QLabel* sorting_sensor_2 = nullptr;
@@ -212,19 +206,6 @@ int main(int argc, char* argv[]) {
     QApplication::sendEvent(vision_card, &select_vision);
     assert(selected_target == QStringLiteral("PI-VISION-01"));
     assert(vision_card->property("selectedControlTarget").toBool());
-    assert(top_view->selectedDeviceId() == QStringLiteral("PI-VISION-01"));
-
-    QFrame* input_card = nullptr;
-    for (auto* card : panel.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
-        if (card->property("controlTargetDeviceId").toString() == QStringLiteral("PI-INPUT-01")) {
-            input_card = card;
-            break;
-        }
-    }
-    assert(input_card != nullptr);
-    top_view->selectProcessForTest(QStringLiteral("input"));
-    assert(selected_target == QStringLiteral("PI-INPUT-01"));
-    assert(input_card->property("selectedControlTarget").toBool());
 
     state.markMqttDisconnected(QDateTime::currentDateTimeUtc());
     panel.setState(state);

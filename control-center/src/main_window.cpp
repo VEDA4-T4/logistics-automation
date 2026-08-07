@@ -7,31 +7,40 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QLabel>
 #include <QMediaPlayer>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPlaybackOptions>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedLayout>
 #include <QStatusBar>
 #include <QStringList>
-#include <QTabWidget>
+#include <QTimeZone>
 #include <QTimer>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QVBoxLayout>
 #include <QVideoSink>
 #include <QWidget>
+#include <algorithm>
 #include <array>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/control_center/command_response.hpp"
 #include "logistics/control_center/control_center_theme.hpp"
 #include "logistics/control_center/detection_overlay.hpp"
+#include "logistics/control_center/factory_top_view.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
 #include "logistics/control_center/onvif_metadata.hpp"
 #include "logistics/control_center/onvif_rtsp_metadata_client.hpp"
@@ -56,9 +65,14 @@ constexpr qsizetype kMinimumRtspMaximumBufferSizeBytes = 64 * 1024;
 constexpr qsizetype kMaximumRtspMaximumBufferSizeBytes = 16 * 1024 * 1024;
 constexpr int kDefaultMetadataStaleTimeoutMs = 1500;
 constexpr int kMaximumRtspNetworkTimeoutMs = 60000;
-constexpr int kDefaultChannelCount = 4;
-constexpr int kMaximumChannelCount = 16;
+constexpr int kDefaultVideoGridMinimumWidth = 480;
+constexpr std::size_t kChannelCount = 1;
 constexpr int kDefaultMqttPort = 1883;
+constexpr int kOperationalLogBatchIntervalMs = 100;
+constexpr qsizetype kOperationalLogBatchSize = 200;
+constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kDefaultMaximumEntries);
+constexpr qsizetype kMinimumOperationalLogEntries = OperationalLogState::kPageSize;
+constexpr qsizetype kMaximumOperationalLogEntries = 5000;
 
 struct ControlCenterConfig {
     QString path;
@@ -71,9 +85,10 @@ struct ControlCenterConfig {
     int mqtt_reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     int mqtt_keep_alive_seconds{ 30 };
     QUrl image_base_url{ QStringLiteral("http://127.0.0.1:8080/") };
+    QString history_bearer_token;
+    qsizetype operational_log_maximum_entries{ OperationalLogState::kDefaultMaximumEntries };
     QString control_target_device_id{ "SYSTEM" };
     QList<ProcessDefinition> process_definitions{ DefaultProcessDefinitions() };
-    int channel_count{ kDefaultChannelCount };
     int reconnect_interval_ms{ kDefaultReconnectIntervalMs };
     bool low_latency{ true };
     bool mqtt_tls_enabled{ false };
@@ -277,14 +292,18 @@ ControlCenterConfig loadControlCenterConfig() {
         }
         config.image_base_url = image_base_url;
     }
+    config.history_bearer_token = settings.value(QStringLiteral("http/bearer_token")).toString().trimmed();
 
-    bool channel_count_is_valid = false;
-    const auto channel_count =
-        settings.value("rtsp/channel_count", kDefaultChannelCount).toInt(&channel_count_is_valid);
-    if (channel_count_is_valid && channel_count > 0 && channel_count <= kMaximumChannelCount) {
-        config.channel_count = channel_count;
+    bool operational_log_maximum_entries_is_valid = false;
+    const auto operational_log_maximum_entries =
+        settings.value(QStringLiteral("logs/max_buffer_entries"), OperationalLogState::kDefaultMaximumEntries)
+            .toLongLong(&operational_log_maximum_entries_is_valid);
+    if (operational_log_maximum_entries_is_valid && operational_log_maximum_entries >= kMinimumOperationalLogEntries &&
+        operational_log_maximum_entries <= kMaximumOperationalLogEntries) {
+        config.operational_log_maximum_entries = static_cast<qsizetype>(operational_log_maximum_entries);
     } else {
-        config.warnings.append(QStringLiteral("rtsp/channel_count는 1~16이어야 하므로 4를 사용합니다."));
+        config.warnings.append(
+            QStringLiteral("logs/max_buffer_entries는 100~5000이어야 하므로 기본값 500을 사용합니다."));
     }
 
     bool reconnect_interval_is_valid = false;
@@ -380,38 +399,21 @@ ControlCenterConfig loadControlCenterConfig() {
             QStringLiteral("rtsp/metadata_stale_timeout_ms는 100~60000ms여야 하므로 1500ms를 사용합니다."));
     }
 
-    QStringList invalid_channels;
-    config.stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
-    config.metadata_stream_urls.reserve(static_cast<std::size_t>(config.channel_count));
-    for (int channel = 1; channel <= config.channel_count; ++channel) {
-        const auto key = QStringLiteral("rtsp/channel_%1_url").arg(channel);
-        const QUrl stream_url(settings.value(key).toString().trimmed());
-        if (isValidRtspUrl(stream_url)) {
-            config.stream_urls.push_back(stream_url);
-        } else {
-            config.stream_urls.emplace_back();
-            invalid_channels.append(QString::number(channel));
-        }
-
-        const auto metadata_key = QStringLiteral("rtsp/channel_%1_metadata_url").arg(channel);
-        const auto metadata_value = settings.value(metadata_key).toString().trimmed();
-        if (metadata_value.isEmpty()) {
-            config.metadata_stream_urls.push_back(config.stream_urls.back());
-        } else {
-            const QUrl metadata_url(metadata_value);
-            if (isValidRtspUrl(metadata_url)) {
-                config.metadata_stream_urls.push_back(metadata_url);
-            } else {
-                config.metadata_stream_urls.emplace_back();
-                config.warnings.append(
-                    QStringLiteral("%1이 잘못되어 해당 채널의 ONVIF 메타데이터를 끕니다.").arg(metadata_key));
-            }
-        }
+    const QUrl stream_url(settings.value(QStringLiteral("rtsp/channel_1_url")).toString().trimmed());
+    config.stream_urls.push_back(isValidRtspUrl(stream_url) ? stream_url : QUrl{});
+    if (config.stream_urls.front().isEmpty()) {
+        config.warnings.append(QStringLiteral("RTSP URL이 누락되었거나 잘못되었습니다: channel_1_url"));
     }
 
-    if (!invalid_channels.isEmpty()) {
-        config.warnings.append(
-            QStringLiteral("RTSP URL이 누락되었거나 잘못된 채널: %1").arg(invalid_channels.join(", ")));
+    const auto metadata_value = settings.value(QStringLiteral("rtsp/channel_1_metadata_url")).toString().trimmed();
+    if (metadata_value.isEmpty()) {
+        config.metadata_stream_urls.push_back(config.stream_urls.front());
+    } else {
+        const QUrl metadata_url(metadata_value);
+        config.metadata_stream_urls.push_back(isValidRtspUrl(metadata_url) ? metadata_url : QUrl{});
+        if (config.metadata_stream_urls.front().isEmpty()) {
+            config.warnings.append(QStringLiteral("rtsp/channel_1_metadata_url이 잘못되어 ONVIF 메타데이터를 끕니다."));
+        }
     }
 
     if (settings.status() == QSettings::AccessError) {
@@ -432,9 +434,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setStyleSheet(ControlCenterStyleSheet());
 
     const auto config = loadControlCenterConfig();
+    operational_log_state_.setMaximumEntries(config.operational_log_maximum_entries);
     control_target_device_id_ = config.control_target_device_id;
     operations_dashboard_state_.configureProcesses(config.process_definitions);
-    channel_count_ = static_cast<std::size_t>(config.channel_count);
     reconnect_interval_ms_ = config.reconnect_interval_ms;
     rtsp_low_latency_ = config.low_latency;
     rtsp_network_timeout_ms_ = config.network_timeout_ms;
@@ -443,20 +445,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     onvif_metadata_enabled_ = config.onvif_metadata_enabled;
     onvif_log_payload_ = config.onvif_log_payload;
     metadata_stale_timeout_ms_ = config.metadata_stale_timeout_ms;
+    history_base_url_ = config.image_base_url;
+    history_bearer_token_ = config.history_bearer_token;
     stream_urls_ = config.stream_urls;
     metadata_stream_urls_ = config.metadata_stream_urls;
-    players_.resize(channel_count_);
-    video_stream_workers_.resize(channel_count_);
-    video_streams_.resize(channel_count_);
-    status_labels_.resize(channel_count_);
-    channel_stacks_.resize(channel_count_);
-    video_layers_.resize(channel_count_);
-    state_overlays_.resize(channel_count_);
-    reconnect_timers_.resize(channel_count_);
-    detection_overlays_.resize(channel_count_);
-    metadata_clients_.resize(channel_count_);
-    channel_states_.assign(channel_count_, ChannelState::Connecting);
-    reconnecting_.assign(channel_count_, false);
+    players_.resize(kChannelCount);
+    video_stream_workers_.resize(kChannelCount);
+    video_streams_.resize(kChannelCount);
+    status_labels_.resize(kChannelCount);
+    channel_stacks_.resize(kChannelCount);
+    video_layers_.resize(kChannelCount);
+    state_overlays_.resize(kChannelCount);
+    reconnect_timers_.resize(kChannelCount);
+    detection_overlays_.resize(kChannelCount);
+    metadata_clients_.resize(kChannelCount);
+    channel_states_.assign(kChannelCount, ChannelState::Connecting);
+    reconnecting_.assign(kChannelCount, false);
 
     auto* central_widget = new QWidget(this);
     central_widget->setObjectName(QStringLiteral("centralSurface"));
@@ -466,8 +470,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* app_header = new QFrame(central_widget);
     app_header->setObjectName(QStringLiteral("appHeader"));
-    app_header->setMinimumHeight(54);
-    app_header->setMaximumHeight(54);
+    app_header->setMinimumHeight(76);
+    app_header->setMaximumHeight(92);
     auto* app_header_layout = new QHBoxLayout(app_header);
     app_header_layout->setContentsMargins(16, 7, 16, 7);
     auto* app_title_layout = new QVBoxLayout();
@@ -479,51 +483,55 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     app_title->setStyleSheet("color:#f0f0f0;font-size:18px;font-weight:700;");
     app_title_layout->addWidget(app_eyebrow);
     app_title_layout->addWidget(app_title);
-    auto* channel_badge = new QLabel(QStringLiteral("%1 CHANNELS").arg(channel_count_), app_header);
+    auto* channel_badge = new QLabel(QStringLiteral("1 CHANNEL"), app_header);
     channel_badge->setAlignment(Qt::AlignCenter);
     channel_badge->setStyleSheet(
         "background:#252526;color:#cccccc;border:1px solid #3c3c3c;border-radius:4px;"
         "font-size:10px;font-weight:700;padding:5px 10px;");
+    process_control_panel_ = new ProcessControlPanel(app_header);
     app_header_layout->addLayout(app_title_layout);
-    app_header_layout->addStretch();
+    app_header_layout->addWidget(process_control_panel_, 1);
     app_header_layout->addWidget(channel_badge);
     root_layout->addWidget(app_header);
 
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
-    operations_dashboard_panel_->setState(operations_dashboard_state_);
-    operations_dashboard_panel_->setControlTarget(config.control_target_device_id);
-
-    auto* content = new QWidget(central_widget);
-    auto* content_layout = new QHBoxLayout(content);
-    content_layout->setContentsMargins(10, 0, 10, 0);
-    content_layout->setSpacing(0);
-
-    auto* content_splitter = new QSplitter(Qt::Horizontal, content);
-    content_splitter->setObjectName(QStringLiteral("contentSplitter"));
-    content_splitter->setChildrenCollapsible(false);
-    content_splitter->setHandleWidth(7);
-
-    auto* video_container = new QWidget(content_splitter);
+    auto* operations_workspace = new QSplitter(Qt::Horizontal, central_widget);
+    operations_workspace->setObjectName(QStringLiteral("operationsWorkspaceSplitter"));
+    operations_workspace->setChildrenCollapsible(false);
+    operations_workspace->setHandleWidth(7);
+    auto* video_container = new QWidget(operations_workspace);
+    video_container->setObjectName(QStringLiteral("videoWorkspace"));
     auto* video_grid = new QGridLayout(video_container);
-    video_grid->setContentsMargins(0, 0, 0, 0);
+    video_grid->setContentsMargins(10, 0, 0, 0);
     video_grid->setHorizontalSpacing(8);
     video_grid->setVerticalSpacing(0);
+    factory_top_view_ = new FactoryTopViewWidget(operations_workspace);
+    factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
+    operations_workspace->addWidget(video_container);
+    operations_workspace->addWidget(factory_top_view_);
+    operations_workspace->setStretchFactor(0, 1);
+    operations_workspace->setStretchFactor(1, 1);
+    operations_workspace->setSizes({ 640, 640 });
 
-    auto* side_panel = new QWidget(content_splitter);
-    side_panel->setObjectName(QStringLiteral("sidePanel"));
-    side_panel->setMinimumWidth(450);
-    side_panel->setStyleSheet("#sidePanel{background:transparent;}");
-    auto* side_layout = new QVBoxLayout(side_panel);
-    side_layout->setContentsMargins(0, 0, 0, 0);
-    side_layout->setSpacing(8);
-    detail_tabs_ = new QTabWidget(side_panel);
-    detail_tabs_->setObjectName(QStringLiteral("detailTabs"));
-    detail_tabs_->setDocumentMode(false);
-    product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_tabs_);
-    operational_log_panel_ = new OperationalLogPanel(detail_tabs_);
-    detail_tabs_->addTab(product_result_panel_, QStringLiteral("현재 상품"));
-    detail_tabs_->addTab(operational_log_panel_, QStringLiteral("운영 로그"));
-    process_control_panel_ = new ProcessControlPanel(side_panel);
+    auto* detail_splitter = new QSplitter(Qt::Horizontal, central_widget);
+    detail_splitter->setObjectName(QStringLiteral("detailSplitter"));
+    detail_splitter->setChildrenCollapsible(false);
+    detail_splitter->setHandleWidth(7);
+    product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_splitter);
+    operational_log_panel_ = new OperationalLogPanel(detail_splitter);
+    operational_log_panel_->setMaximumEntries(kMaximumOperationalLogEntries);
+    operational_log_panel_->setEntryPageProvider(
+        [this](qsizetype offset, qsizetype limit) { return operational_log_state_.entries().mid(offset, limit); });
+    history_network_manager_ = new QNetworkAccessManager(this);
+    if (!history_bearer_token_.isEmpty()) {
+        operational_log_panel_->setOlderEntriesRequestHandler([this]() { requestOlderOperationalLogs(); });
+    }
+    detail_splitter->addWidget(product_result_panel_);
+    detail_splitter->addWidget(operational_log_panel_);
+    detail_splitter->setStretchFactor(0, 2);
+    detail_splitter->setStretchFactor(1, 3);
+    detail_splitter->setSizes({ 480, 720 });
+
     QString initial_control_target_name = QStringLiteral("전체 공정");
     for (const auto& process : config.process_definitions) {
         if (process.device_id == config.control_target_device_id) {
@@ -531,30 +539,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             break;
         }
     }
-    process_control_panel_->setControlTarget(config.control_target_device_id, initial_control_target_name);
-    process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                             operations_dashboard_state_.processes());
-    side_layout->addWidget(detail_tabs_, 1);
-    side_layout->addWidget(process_control_panel_, 0);
-    content_splitter->addWidget(video_container);
-    content_splitter->addWidget(side_panel);
-    content_splitter->setStretchFactor(0, 3);
-    content_splitter->setStretchFactor(1, 2);
-    content_splitter->setSizes({ 740, 500 });
-    content_layout->addWidget(content_splitter);
+    refreshOperationsPresentation();
+    selectControlTarget(config.control_target_device_id, initial_control_target_name);
 
-    auto* workspace_splitter = new QSplitter(Qt::Vertical, central_widget);
-    workspace_splitter->setObjectName(QStringLiteral("workspaceSplitter"));
-    workspace_splitter->setChildrenCollapsible(false);
-    workspace_splitter->setHandleWidth(7);
-    operations_dashboard_panel_->setMinimumHeight(250);
-    content->setMinimumHeight(360);
-    workspace_splitter->addWidget(operations_dashboard_panel_);
-    workspace_splitter->addWidget(content);
-    workspace_splitter->setStretchFactor(0, 0);
-    workspace_splitter->setStretchFactor(1, 1);
-    workspace_splitter->setSizes({ 300, 520 });
-    root_layout->addWidget(workspace_splitter, 1);
+    root_layout->addWidget(operations_workspace, 1);
+    root_layout->addWidget(operations_dashboard_panel_);
+    root_layout->addWidget(detail_splitter, 1);
     setCentralWidget(central_widget);
 
     mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
@@ -572,27 +562,30 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         if (!operations_dashboard_state_.expireStaleProcesses(QDateTime::currentDateTimeUtc())) {
             return;
         }
-        operations_dashboard_panel_->setState(operations_dashboard_state_);
-        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                 operations_dashboard_state_.processes());
+        refreshOperationsPresentation();
     });
     node_status_timer_->start();
+    operational_log_flush_timer_ = new QTimer(this);
+    operational_log_flush_timer_->setObjectName(QStringLiteral("operationalLogFlushTimer"));
+    operational_log_flush_timer_->setInterval(kOperationalLogBatchIntervalMs);
+    connect(operational_log_flush_timer_, &QTimer::timeout, this, &MainWindow::flushPendingOperationalLogs);
     connect(process_control_panel_, &ProcessControlPanel::commandRequested, this, &MainWindow::sendControlCommand);
     connect(operations_dashboard_panel_, &OperationsDashboardPanel::controlTargetSelected, this,
             [this](const QString& target_device_id, const QString& display_name) {
-                control_target_device_id_ = target_device_id;
-                process_control_panel_->setControlTarget(target_device_id, display_name);
+                selectControlTarget(target_device_id, display_name);
+            });
+    connect(factory_top_view_, &FactoryTopViewWidget::controlTargetSelected, this,
+            [this](const QString& target_device_id, const QString& display_name) {
+                selectControlTarget(target_device_id, display_name);
             });
     operational_log_panel_->setAcknowledgeHandler([this](const QString& id) {
-        if (operational_log_state_.acknowledge(id)) {
-            operational_log_panel_->setEntryAcknowledged(id);
-            refreshOperationalLogBadge();
-        }
+        static_cast<void>(operational_log_state_.acknowledge(id));
+        operational_log_panel_->setEntryAcknowledged(id, operational_log_state_.activeAlertCount());
     });
     operational_log_panel_->setAcknowledgeAllHandler([this]() {
         const auto count = operational_log_state_.acknowledgeAllAlerts();
+        operational_log_panel_->setAllAlertsAcknowledged(operational_log_state_.activeAlertCount());
         if (count > 0) {
-            refreshOperationalLogPanel();
             statusBar()->showMessage(QStringLiteral("오류 로그 %1건을 확인 처리했습니다.").arg(count), 3000);
         }
     });
@@ -617,9 +610,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     case MqttClient::ConnectionState::Connected:
                         process_control_panel_->setMqttConnected(true);
                         operations_dashboard_state_.markMqttConnectedAwaitingStatus(QDateTime::currentDateTimeUtc());
-                        operations_dashboard_panel_->setState(operations_dashboard_state_);
-                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                                 operations_dashboard_state_.processes());
+                        refreshOperationsPresentation();
                         operations_dashboard_panel_->setMqttConnected(true);
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
                         mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
@@ -636,9 +627,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     case MqttClient::ConnectionState::Reconnecting:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
-                        operations_dashboard_panel_->setState(operations_dashboard_state_);
-                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                                 operations_dashboard_state_.processes());
+                        refreshOperationsPresentation();
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
@@ -649,9 +638,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     case MqttClient::ConnectionState::Error:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
-                        operations_dashboard_panel_->setState(operations_dashboard_state_);
-                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                                 operations_dashboard_state_.processes());
+                        refreshOperationsPresentation();
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
@@ -660,9 +647,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     case MqttClient::ConnectionState::Disconnected:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
-                        operations_dashboard_panel_->setState(operations_dashboard_state_);
-                        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                                 operations_dashboard_state_.processes());
+                        refreshOperationsPresentation();
                         operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
                         mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
@@ -691,6 +676,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 command_response_timer_->start(
                     static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
             });
+    connect(mqtt_client_, &MqttClient::subscriptionsReady, this, [this]() {
+        if (mqtt_client_->requestCentralSnapshots() < 0) {
+            statusBar()->showMessage(QStringLiteral("라인트레이서 위치 스냅샷 요청에 실패했습니다."), 5000);
+        }
+    });
     connect(mqtt_client_, &MqttClient::messageReceived, this, &MainWindow::handleMqttMessage);
     connect(mqtt_client_, &MqttClient::messageRejected, this, [this](const QString& topic, const QString& reason) {
         statusBar()->showMessage(QStringLiteral("MQTT 메시지 거부 [%1]: %2").arg(topic, reason), 5000);
@@ -705,9 +695,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_ERROR"), detail);
     });
 
-    const auto grid_column_count = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(channel_count_))));
+    const QSize channel_minimum_size(kDefaultVideoGridMinimumWidth, kDefaultVideoGridMinimumWidth * 9 / 16);
 
-    for (std::size_t channel = 0; channel < channel_count_; ++channel) {
+    for (std::size_t channel = 0; channel < kChannelCount; ++channel) {
         players_[channel] = new QMediaPlayer(this);
         video_stream_workers_[channel] =
             std::make_unique<RtspStreamWorker>(rtsp_network_timeout_ms_, rtsp_maximum_buffer_size_bytes_);
@@ -719,6 +709,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         playback_options.setProbeSize(rtsp_probe_size_bytes_);
         players_[channel]->setPlaybackOptions(playback_options);
         auto* channel_panel = new QWidget(central_widget);
+        channel_panel->setObjectName(QStringLiteral("videoChannel%1").arg(channel + 1));
         channel_stacks_[channel] = new QStackedLayout(channel_panel);
         video_layers_[channel] = new QWidget(channel_panel);
         auto* video_layout = new QGridLayout(video_layers_[channel]);
@@ -729,7 +720,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         detection_overlays_[channel] = new DetectionOverlay(video_layers_[channel]);
         reconnect_timers_[channel] = new QTimer(this);
 
-        channel_panel->setMinimumSize(320, 180);
+        channel_panel->setMinimumSize(channel_minimum_size);
         channel_panel->setStyleSheet("background-color:#181818;border:1px solid #303030;border-radius:6px;");
         channel_stacks_[channel]->setContentsMargins(0, 0, 0, 0);
         video_layout->setContentsMargins(0, 0, 0, 0);
@@ -750,7 +741,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel]->addWidget(video_layers_[channel]);
         channel_stacks_[channel]->addWidget(state_overlays_[channel]);
 
-        detection_overlays_[channel]->setMinimumSize(320, 180);
+        detection_overlays_[channel]->setMinimumSize(channel_minimum_size);
         players_[channel]->setVideoSink(detection_overlays_[channel]->videoSink());
         reconnect_timers_[channel]->setInterval(reconnect_interval_ms_);
         detection_overlays_[channel]->setStaleTimeout(metadata_stale_timeout_ms_);
@@ -946,8 +937,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             }
         }
 
-        const auto grid_index = static_cast<int>(channel);
-        video_grid->addWidget(channel_panel, grid_index / grid_column_count, grid_index % grid_column_count);
+        video_grid->addWidget(channel_panel, 0, 0);
     }
 
     if (!config.warnings.isEmpty()) {
@@ -963,7 +953,214 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         });
     }
 
+    if (!history_bearer_token_.isEmpty()) {
+        requestOlderOperationalLogs();
+    }
     mqtt_client_->start();
+}
+
+namespace {
+
+OperationalLogSeverity HistorySeverity(const QString& severity, const QString& state) {
+    const auto normalized = severity.trimmed().toUpper();
+    if (normalized == QStringLiteral("CRITICAL"))
+        return OperationalLogSeverity::Critical;
+    if (normalized == QStringLiteral("ERROR"))
+        return OperationalLogSeverity::Error;
+    if (normalized == QStringLiteral("WARNING"))
+        return OperationalLogSeverity::Warning;
+    return state.trimmed().compare(QStringLiteral("REJECTED"), Qt::CaseInsensitive) == 0
+               ? OperationalLogSeverity::Warning
+               : OperationalLogSeverity::Info;
+}
+
+QString HistoryCategory(const QString& event_type) {
+    const auto normalized = event_type.trimmed().toUpper();
+    if (normalized == QStringLiteral("ERROR_OCCURRED"))
+        return QStringLiteral("장치 오류");
+    if (normalized == QStringLiteral("EMERGENCY_STOP"))
+        return QStringLiteral("비상정지");
+    if (normalized == QStringLiteral("DEVICE_STATUS"))
+        return QStringLiteral("장치 상태");
+    if (normalized == QStringLiteral("COMMAND_RESPONSE"))
+        return QStringLiteral("관제 명령");
+    if (normalized.contains(QStringLiteral("WORK")))
+        return QStringLiteral("작업");
+    return QStringLiteral("서버 이력");
+}
+
+std::optional<OperationalLogEntry> ParseHistoryEntry(const QJsonValue& value) {
+    if (!value.isObject()) {
+        return std::nullopt;
+    }
+    const auto object = value.toObject();
+    const auto history_id = object.value(QStringLiteral("historyId")).toString().trimmed();
+    const auto occurred_at_value = object.value(QStringLiteral("occurredAtMs"));
+    if (history_id.isEmpty() || !occurred_at_value.isDouble() || occurred_at_value.toDouble() < 0) {
+        return std::nullopt;
+    }
+
+    const auto event_type = object.value(QStringLiteral("eventType")).toString().trimmed();
+    const auto state = object.value(QStringLiteral("state")).toString().trimmed();
+    const auto server_message = object.value(QStringLiteral("message")).toString().trimmed();
+    auto message_id = object.value(QStringLiteral("messageId")).toString().trimmed();
+    if (message_id.isEmpty()) {
+        message_id = QStringLiteral("HISTORY-%1").arg(history_id);
+    }
+    const auto message = !server_message.isEmpty()
+                             ? server_message
+                             : (!state.isEmpty() ? QStringLiteral("%1 · 상태 %2").arg(event_type, state)
+                                                 : QStringLiteral("%1 이력").arg(event_type));
+    return OperationalLogEntry{
+        .id = message_id,
+        .occurred_at =
+            QDateTime::fromMSecsSinceEpoch(static_cast<qint64>(occurred_at_value.toDouble()), QTimeZone::UTC),
+        .severity = HistorySeverity(object.value(QStringLiteral("severity")).toString(), state),
+        .device_id = object.value(QStringLiteral("sourceId")).toString().trimmed(),
+        .category = HistoryCategory(event_type),
+        .code = object.value(QStringLiteral("errorCode")).toString().trimmed().isEmpty()
+                    ? event_type
+                    : object.value(QStringLiteral("errorCode")).toString().trimmed(),
+        .message = message,
+        .topic = QStringLiteral("server-history"),
+        .acknowledged = false,
+    };
+}
+
+}  // namespace
+
+void MainWindow::resetOperationalLogHistory() {
+    ++history_request_generation_;
+    history_request_in_flight_ = false;
+    history_page_loaded_ = false;
+    history_next_cursor_.clear();
+    history_current_page_ids_.clear();
+    operational_log_panel_->reloadEntries(operational_log_state_.activeAlertCount());
+    if (!history_bearer_token_.isEmpty()) {
+        QTimer::singleShot(0, this, [this]() { requestOlderOperationalLogs(); });
+    }
+}
+
+void MainWindow::requestOlderOperationalLogs() {
+    if (history_request_in_flight_ || history_bearer_token_.isEmpty() || history_network_manager_ == nullptr) {
+        return;
+    }
+    if (history_page_loaded_ && history_next_cursor_.isEmpty()) {
+        operational_log_panel_->setOlderEntriesLoading(false);
+        return;
+    }
+    requestOperationalLogHistory(history_next_cursor_);
+}
+
+void MainWindow::requestOperationalLogHistory(const QString& requested_cursor) {
+    if (history_request_in_flight_ || history_bearer_token_.isEmpty() || history_network_manager_ == nullptr) {
+        operational_log_panel_->setOlderEntriesLoading(false);
+        return;
+    }
+    QUrl history_url = history_base_url_.resolved(QUrl(QStringLiteral("api/v1/history")));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("limit"), QString::number(kOperationalLogHistoryPageSize));
+    const auto request_generation = ++history_request_generation_;
+    if (!requested_cursor.isEmpty()) {
+        query.addQueryItem(QStringLiteral("cursor"), requested_cursor);
+    }
+    history_url.setQuery(query);
+
+    QNetworkRequest request(history_url);
+    request.setRawHeader("Accept", "application/json");
+    request.setRawHeader("Authorization", QByteArray("Bearer ") + history_bearer_token_.toUtf8());
+    request.setTransferTimeout(10000);
+    history_request_in_flight_ = true;
+    operational_log_panel_->setOlderEntriesLoading(true);
+    auto* reply = history_network_manager_->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requested_cursor, request_generation]() {
+        if (request_generation != history_request_generation_) {
+            reply->deleteLater();
+            return;
+        }
+        const auto body = reply->readAll();
+        const auto fail = [this, reply](const QString& reason) {
+            history_request_in_flight_ = false;
+            operational_log_panel_->setOlderEntriesLoading(false);
+            statusBar()->showMessage(QStringLiteral("서버 과거 로그를 불러오지 못했습니다: %1").arg(reason), 6000);
+            qWarning().noquote() << QStringLiteral("[HISTORY] %1").arg(reason);
+            reply->deleteLater();
+        };
+        if (reply->error() != QNetworkReply::NoError) {
+            const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            fail(status > 0 ? QStringLiteral("HTTP %1 · %2").arg(status).arg(reply->errorString())
+                            : reply->errorString());
+            return;
+        }
+
+        QJsonParseError parse_error;
+        const auto document = QJsonDocument::fromJson(body, &parse_error);
+        if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+            fail(QStringLiteral("응답 JSON 형식이 올바르지 않습니다."));
+            return;
+        }
+        const auto response = document.object();
+        const auto items_value = response.value(QStringLiteral("items"));
+        const auto next_cursor_value = response.value(QStringLiteral("nextCursor"));
+        if (!items_value.isArray() ||
+            (!next_cursor_value.isUndefined() && !next_cursor_value.isNull() && !next_cursor_value.isString())) {
+            fail(QStringLiteral("응답 페이지 형식이 올바르지 않습니다."));
+            return;
+        }
+
+        QList<OperationalLogEntry> entries;
+        const auto items = items_value.toArray();
+        entries.reserve(items.size());
+        for (const auto& item : items) {
+            if (auto entry = ParseHistoryEntry(item)) {
+                entries.append(std::move(*entry));
+            }
+        }
+        if (!items.isEmpty() && entries.isEmpty()) {
+            fail(QStringLiteral("유효한 이력 항목이 없습니다."));
+            return;
+        }
+
+        const auto next_cursor = next_cursor_value.isString() ? next_cursor_value.toString().trimmed() : QString{};
+        if (!next_cursor.isEmpty() && next_cursor == requested_cursor) {
+            fail(QStringLiteral("서버가 동일한 cursor를 반환했습니다."));
+            return;
+        }
+        const bool repeats_current_page = history_page_loaded_ && !entries.isEmpty() &&
+                                          std::all_of(entries.cbegin(), entries.cend(), [this](const auto& entry) {
+                                              return history_current_page_ids_.contains(entry.id);
+                                          });
+        if (repeats_current_page) {
+            history_request_in_flight_ = false;
+            history_next_cursor_ = next_cursor;
+            operational_log_panel_->appendOlderEntries({}, !next_cursor.isEmpty(),
+                                                       operational_log_state_.activeAlertCount());
+            reply->deleteLater();
+            if (!next_cursor.isEmpty()) {
+                QTimer::singleShot(0, this, [this]() { requestOlderOperationalLogs(); });
+            }
+            return;
+        }
+        history_request_in_flight_ = false;
+        if (entries.isEmpty()) {
+            operational_log_panel_->setOlderEntriesLoading(false);
+            reply->deleteLater();
+            if (!next_cursor.isEmpty()) {
+                history_next_cursor_ = next_cursor;
+                QTimer::singleShot(0, this, [this]() { requestOlderOperationalLogs(); });
+            }
+            return;
+        }
+        history_next_cursor_ = next_cursor;
+        history_page_loaded_ = true;
+        history_current_page_ids_.clear();
+        for (const auto& entry : entries) {
+            history_current_page_ids_.insert(entry.id);
+        }
+        operational_log_panel_->appendOlderEntries(entries, !history_next_cursor_.isEmpty(),
+                                                   operational_log_state_.activeAlertCount());
+        reply->deleteLater();
+    });
 }
 
 MainWindow::~MainWindow() {
@@ -1071,16 +1268,14 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
                                         individual_command_request_ids_.contains(response_request_id);
     const auto log_update = operational_log_state_.applyEnvelope(topic, envelope);
     if (log_update.applied) {
-        refreshOperationalLogPanel();
+        queueOperationalLogEntry(operational_log_state_.entries().front());
     } else if (log_update.handled && !log_update.error.isEmpty()) {
         statusBar()->showMessage(log_update.error, 4000);
     }
     const auto dashboard_update =
         operations_dashboard_state_.applyEnvelope(envelope, QDateTime::currentDateTimeUtc(), !is_individual_response);
     if (dashboard_update.applied) {
-        operations_dashboard_panel_->setState(operations_dashboard_state_);
-        process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
-                                                 operations_dashboard_state_.processes());
+        refreshOperationsPresentation();
         completePendingRecoveryFromDeviceState();
     } else if (dashboard_update.handled && !dashboard_update.error.isEmpty()) {
         statusBar()->showMessage(dashboard_update.error, 4000);
@@ -1180,24 +1375,47 @@ void MainWindow::clearPendingCommand() {
 void MainWindow::appendOperationalLog(OperationalLogSeverity severity, const QString& device_id,
                                       const QString& category, const QString& code, const QString& message) {
     operational_log_state_.appendLocal(severity, device_id, category, code, message);
-    refreshOperationalLogPanel();
+    queueOperationalLogEntry(operational_log_state_.entries().front());
 }
 
-void MainWindow::refreshOperationalLogPanel() {
-    if (operational_log_panel_ == nullptr || detail_tabs_ == nullptr) {
-        return;
+void MainWindow::queueOperationalLogEntry(const OperationalLogEntry& entry) {
+    pending_operational_log_entries_.enqueue(entry);
+    while (pending_operational_log_entries_.size() > operational_log_state_.maximumEntries()) {
+        pending_operational_log_entries_.dequeue();
     }
-    operational_log_panel_->setState(operational_log_state_);
-    refreshOperationalLogBadge();
+    if (!operational_log_flush_timer_->isActive()) {
+        operational_log_flush_timer_->start();
+    }
 }
 
-void MainWindow::refreshOperationalLogBadge() {
-    if (detail_tabs_ == nullptr) {
-        return;
+void MainWindow::flushPendingOperationalLogs() {
+    const auto count = std::min(kOperationalLogBatchSize, pending_operational_log_entries_.size());
+    QList<OperationalLogEntry> entries;
+    entries.reserve(count);
+    for (qsizetype index = 0; index < count; ++index) {
+        entries.prepend(pending_operational_log_entries_.dequeue());
     }
-    const auto alert_count = operational_log_state_.activeAlertCount();
-    detail_tabs_->setTabText(
-        1, alert_count > 0 ? QStringLiteral("운영 로그 (%1)").arg(alert_count) : QStringLiteral("운영 로그"));
+    if (!entries.isEmpty()) {
+        operational_log_panel_->prependEntries(entries, operational_log_state_.activeAlertCount());
+    }
+    if (pending_operational_log_entries_.isEmpty()) {
+        operational_log_flush_timer_->stop();
+    }
+}
+
+void MainWindow::refreshOperationsPresentation() {
+    operations_dashboard_panel_->setState(operations_dashboard_state_);
+    factory_top_view_->setProcesses(operations_dashboard_state_.processes(),
+                                    operations_dashboard_state_.overall().state);
+    process_control_panel_->setProcessStates(operations_dashboard_state_.overall().state,
+                                             operations_dashboard_state_.processes());
+}
+
+void MainWindow::selectControlTarget(const QString& device_id, const QString& display_name) {
+    control_target_device_id_ = device_id.isEmpty() ? QStringLiteral("SYSTEM") : device_id;
+    operations_dashboard_panel_->setControlTarget(control_target_device_id_);
+    factory_top_view_->setSelectedDeviceId(control_target_device_id_);
+    process_control_panel_->setControlTarget(control_target_device_id_, display_name);
 }
 
 }  // namespace logistics::control_center
