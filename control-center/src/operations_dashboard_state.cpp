@@ -676,6 +676,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             return result;
         }
         updateOverallForCommand(data, timestamp);
+        publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
         return result;
@@ -915,6 +916,12 @@ void OperationsDashboardState::updateOverallForCommand(const QJsonObject& data, 
         command_override_detail_ = overall_.detail;
         overall_.state = OverallProcessState::EmergencyStop;
     } else if (command == QStringLiteral("RECOVERY")) {
+        for (auto& process : process_runtime_) {
+            if (IsEmergencyState(process.status.current_state)) {
+                process.status.current_state = QStringLiteral("STOPPED");
+                process.status.updated_at = timestamp;
+            }
+        }
         command_override_ = OverallProcessState::Stopped;
         command_override_stage_ = QStringLiteral("복구 완료 · 시작 대기");
         command_override_detail_ = overall_.detail;

@@ -360,7 +360,7 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.nodeOpacity(QStringLiteral("input")) == 1.0);
     const auto emergency_input_position = concurrent_view.boxPosition(QStringLiteral("input"));
     concurrent_view.advanceAnimationsForTest();
-    assert(concurrent_view.nodeOpacity(QStringLiteral("input")) < 1.0);
+    assert(concurrent_view.nodeOpacity(QStringLiteral("input")) == 1.0);
     assert(concurrent_view.boxPosition(QStringLiteral("input")) == emergency_input_position);
 
     logistics::control_center::FactoryTopViewWidget view;

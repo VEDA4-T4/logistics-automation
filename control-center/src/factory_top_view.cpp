@@ -850,8 +850,6 @@ struct FactoryTopViewWidget::Impl {
             ++node.pulse_phase;
             if (animation_enabled && node.visual.state == FactoryNodeVisualState::Working) {
                 node.group->setOpacity(pulseOpacity(node.pulse_phase, 0.65));
-            } else if (animation_enabled && node.visual.state == FactoryNodeVisualState::EmergencyStop) {
-                node.group->setOpacity(pulseOpacity(node.pulse_phase, 0.55));
             } else {
                 node.group->setOpacity(node.visual.opacity);
             }
