@@ -281,8 +281,7 @@ void ProcessControlPanel::setCommandPending(mqtt::ControlCommand command) {
         command_target_device_id_ = selectedTargetDeviceId();
     }
     control_state_.setCommandPending();
-    setCommandPresentation(command_target_device_id_,
-                           QStringLiteral("%1 명령 전송됨\n응답 대기 중").arg(CommandLabel(command)),
+    setCommandPresentation(command_target_device_id_, QStringLiteral("%1 · 응답 대기 중").arg(CommandLabel(command)),
                            PendingCommandStyle());
     updateButtonStates();
 }
@@ -290,25 +289,19 @@ void ProcessControlPanel::setCommandPending(mqtt::ControlCommand command) {
 void ProcessControlPanel::setCommandProgress(mqtt::ControlCommand command, mqtt::CommandResult result,
                                              const QString& detail) {
     control_state_.setCommandPending();
-    auto text = QStringLiteral("%1\n%2").arg(CommandLabel(command), ResultLabel(result));
-    if (!detail.isEmpty()) {
-        text.append(QStringLiteral("\n%1").arg(detail));
-    }
+    const auto text = QStringLiteral("%1 · %2").arg(CommandLabel(command), ResultLabel(result));
     const auto target = command_target_device_id_.isEmpty() ? selectedTargetDeviceId() : command_target_device_id_;
-    setCommandPresentation(target, text, ProgressCommandStyle());
+    setCommandPresentation(target, text, ProgressCommandStyle(), detail);
     updateButtonStates();
 }
 
 void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt::CommandResult result,
                                              const QString& detail) {
     control_state_.setCommandFinished();
-    auto text = QStringLiteral("%1\n%2").arg(CommandLabel(command), ResultLabel(result));
-    if (!detail.isEmpty()) {
-        text.append(QStringLiteral("\n%1").arg(detail));
-    }
+    const auto text = QStringLiteral("%1 · %2").arg(CommandLabel(command), ResultLabel(result));
     const bool succeeded = result == mqtt::CommandResult::kSuccess;
     const auto target = command_target_device_id_.isEmpty() ? selectedTargetDeviceId() : command_target_device_id_;
-    setCommandPresentation(target, text, succeeded ? SuccessCommandStyle() : FailureCommandStyle());
+    setCommandPresentation(target, text, succeeded ? SuccessCommandStyle() : FailureCommandStyle(), detail);
     const bool applies_to_selected_target =
         command_target_device_id_.isEmpty() || command_target_device_id_ == selectedTargetDeviceId();
     if (succeeded && applies_to_selected_target) {
@@ -368,9 +361,9 @@ bool ProcessControlPanel::hasBlockingSensorWarning() const {
 }
 
 void ProcessControlPanel::setCommandPresentation(const QString& target_device_id, const QString& text,
-                                                 const QString& style) {
+                                                 const QString& style, const QString& detail) {
     const auto target = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
-    const CommandPresentation presentation{ .text = text, .style = style };
+    const CommandPresentation presentation{ .text = text, .detail = detail, .style = style };
     if (target == QStringLiteral("SYSTEM") || target == QStringLiteral("ALL")) {
         command_presentations_.insert(QStringLiteral("SYSTEM"), presentation);
         command_presentations_.insert(selectedTargetDeviceId(), presentation);
@@ -394,10 +387,10 @@ void ProcessControlPanel::updateCommandPresentation() {
         command_status_->setStyleSheet(IdleCommandStyle());
         return;
     }
-    auto compact_text = presentation->text;
-    compact_text.replace(QLatin1Char('\n'), QStringLiteral(" · "));
-    command_status_->setText(compact_text);
-    command_status_->setToolTip(presentation->text);
+    command_status_->setText(presentation->text);
+    command_status_->setToolTip(presentation->detail.isEmpty()
+                                    ? presentation->text
+                                    : QStringLiteral("%1\n%2").arg(presentation->text, presentation->detail));
     command_status_->setStyleSheet(presentation->style);
 }
 
