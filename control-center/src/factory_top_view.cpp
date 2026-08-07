@@ -491,7 +491,7 @@ struct FactoryTopViewWidget::Impl {
             font.setWeight(QFont::Black);
             font.setPointSize(16);
             arrow->setFont(font);
-            arrow->setBrush(QColor(QStringLiteral("#dcdcaa")));
+            arrow->setBrush(QColor(QStringLiteral("#ffffff")));
             arrow->setTransformOriginPoint(arrow->boundingRect().center());
             arrow->hide();
             line_arrows.append(arrow);
