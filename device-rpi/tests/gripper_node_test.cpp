@@ -626,6 +626,28 @@ void test_pick_phase_stops_with_the_box_held() {
     assert(!fixture.AnyStatusEquals("PLACING"));
 }
 
+void test_full_cycle_uses_the_taught_transfer_pose_after_gripping() {
+    GripperPoseConfig config;
+    config.transfer = { 1800U, 700U, 1200U };
+    Fixture fixture{ config };
+    fixture.Home();
+
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
+    assert(result.status == GripperCommandStatus::kAccepted);
+
+    std::uint16_t motion_id = result.motion_id;
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_GRIPPER);
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
+    fixture.CompleteCurrentMotion(motion_id, UART_GRIPPER_MOTION_GRIPPER);
+
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kPickRetreat);
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
+    assert(uart_gripper_move_base_angle(fixture.backend->last_written.payload) == 1800U);
+    assert(uart_gripper_move_shoulder_angle(fixture.backend->last_written.payload) == 700U);
+    assert(uart_gripper_move_elbow_angle(fixture.backend->last_written.payload) == 1200U);
+}
+
 void test_vision_offset_shifts_the_pick_pose_within_its_limit() {
     GripperPoseConfig config;
     config.pick = { 900U, 1100U, 700U };
@@ -931,12 +953,16 @@ device_id=PI-GRIPPER-01
 [gripper]
 home_pose=1000,700,1200
 pick_pose=600,1100,700
+transfer_pose=1800,700,1200
 open_position_percent=90
 closed_position_percent=20
 arm_duration_ms=1200
 )");
     assert(parsed.pick.base_deci_deg == 600U);
     assert(parsed.pick.shoulder_deci_deg == 1100U);
+    assert(parsed.transfer.base_deci_deg == 1800U);
+    assert(parsed.transfer.shoulder_deci_deg == 700U);
+    assert(parsed.transfer.elbow_deci_deg == 1200U);
     assert(parsed.open_position_percent == 90U);
     assert(parsed.arm_duration_ms == 1200U);
 
@@ -972,6 +998,7 @@ int main() {
     test_status_request_reports_the_controller_state();
     test_commands_for_another_device_are_ignored();
     test_pick_phase_stops_with_the_box_held();
+    test_full_cycle_uses_the_taught_transfer_pose_after_gripping();
     test_vision_offset_shifts_the_pick_pose_within_its_limit();
     test_pose_config_parses_and_rejects_impossible_claw_travel();
     test_cartesian_pick_pose_drives_the_arm_through_kinematics();

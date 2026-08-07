@@ -54,16 +54,19 @@ clean_session=true
 home_pose=1000,700,1200
 
 # Directly above the box on the input conveyor; the claw descends from here.
-pick_approach_pose=600,700,900
+pick_approach_pose=1000,900,1400
 
 # Claw closed around the box on the input conveyor.
-pick_pose=600,1100,700
+pick_pose=1000,1000,1300
+
+# Safe transfer pose used immediately after gripping the box.
+transfer_pose=1800,700,1200
 
 # Directly above the drop point on the sorting conveyor.
-place_approach_pose=1800,700,900
+place_approach_pose=1800,900,1400
 
 # Claw opened to release the box onto the sorting conveyor.
-place_pose=1800,1100,700
+place_pose=1800,1000,1300
 
 # Calibrated claw travel for the assembled mechanism.
 # closed_position_percent must be smaller than open_position_percent; set it to

@@ -826,10 +826,11 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
             break;
 
         case GripperCycleStep::kPickApproach:
-        case GripperCycleStep::kPickRetreat:
-            // Retreat goes back to the same point the claw descended from, so a
-            // Cartesian cycle lifts straight up out of the box's footprint.
             send_arm(cycle_.pick_approach_pose);
+            break;
+
+        case GripperCycleStep::kPickRetreat:
+            send_arm(poses_.transfer);
             break;
 
         case GripperCycleStep::kPickDescend:
