@@ -7,8 +7,18 @@
  * 송신 요청을 꺼내 대상 채널(USART1/USART6)로 라우팅한다.
  *
  * 긴급 우선:
- *   urgent 큐가 비어 있을 때만 normal 큐를 처리한다. QueueSet으로 두 큐를
- *   동시에 대기하므로 폴링 지연이 없다.
+ *   urgent 큐가 비어 있을 때만 normal 큐를 처리한다. 두 큐를 동시에
+ *   기다리는 수단으로는 태스크 알림을 쓴다 - 송신자가 큐에 넣은 뒤
+ *   xTaskNotifyGive()로 깨우므로 폴링 지연이 없다.
+ *
+ *   예전에는 QueueSet을 썼는데, 큐셋은 "select 1회당 멤버 큐에서 receive
+ *   1회"가 규약이다. 그런데 이 태스크는 select 한 번 뒤에 두 큐를 루프로
+ *   몽땅 비우므로 컨테이너에 낡은 항목이 계속 쌓였고, 12개(멤버 큐 길이 합)에
+ *   도달한 순간 queue.c의 configASSERT가 깨져 IRQ를 끈 채 영원히 멈췄다.
+ *   그러면 HealthTask도 IWDG를 못 갱신해 약 2초 뒤 MCU가 리셋됐다 - 실기기에서
+ *   두 UART가 8분 35초 주기로 동시에 끊긴 원인이 이것이었다(2026-08-07).
+ *   알림은 "N번 give를 1번 take가 전부 소비"하는 의미라, 큐를 몽땅 비우는
+ *   이 구조와 애초에 어긋나지 않는다.
  *
  * 채널 독립성:
  *   채널마다 인코딩된 프레임 링버퍼를 두고, DMA 송신 완료 인터럽트가
@@ -84,8 +94,14 @@ typedef enum { COMM_TX_ROUTE_OK = 0, COMM_TX_ROUTE_BUSY, COMM_TX_ROUTE_DROPPED }
 
 static QueueHandle_t comm_tx_normal_queue;
 static QueueHandle_t comm_tx_urgent_queue;
-static QueueSetHandle_t comm_tx_queue_set;
 static uint32_t comm_tx_next_heartbeat;
+
+/* CommTx_Init()에서 자기 자신을 잡아둔다. 송신자가 이 핸들로 태스크를 깨운다. */
+static TaskHandle_t comm_tx_task_handle;
+
+/* 링버퍼가 막혀 큐에 처리 못 한 메시지가 남았다는 표시. 이때는 알림을
+ * 기다리지 않는다 - 알림은 이미 소비됐으므로 기다리면 재시도가 늦어진다. */
+static uint8_t comm_tx_retry_pending;
 
 static comm_tx_channel_state_t comm_tx_channels[COMM_TX_CH_COUNT];
 
@@ -372,6 +388,15 @@ static int32_t comm_tx_enqueue(QueueHandle_t queue, comm_tx_channel_t channel, u
         comm_tx_stats.enqueued++;
     }
 
+    /*
+     * CommTxTask를 깨운다. 넣은 뒤에 깨워야 태스크가 깬 시점에 메시지가
+     * 이미 큐에 있다. 알림 값이 여러 번 쌓여도 take 한 번이 전부 소비하므로
+     * (ulTaskNotifyTake의 xClearCountOnExit=pdTRUE) 넘칠 일이 없다.
+     */
+    if (comm_tx_task_handle != NULL) {
+        (void)xTaskNotifyGive(comm_tx_task_handle);
+    }
+
     return 0;
 }
 
@@ -417,19 +442,7 @@ const comm_tx_stats_t* CommTx_GetStats(void) {
     return &comm_tx_stats;
 }
 
-static void comm_tx_cleanup_queues(uint8_t urgent_added, uint8_t normal_added) {
-    if (comm_tx_queue_set != (QueueSetHandle_t)0) {
-        if ((urgent_added != 0U) && (comm_tx_urgent_queue != (QueueHandle_t)0)) {
-            (void)xQueueRemoveFromSet(comm_tx_urgent_queue, comm_tx_queue_set);
-        }
-
-        if ((normal_added != 0U) && (comm_tx_normal_queue != (QueueHandle_t)0)) {
-            (void)xQueueRemoveFromSet(comm_tx_normal_queue, comm_tx_queue_set);
-        }
-
-        vQueueDelete(comm_tx_queue_set);
-    }
-
+static void comm_tx_cleanup_queues(void) {
     if (comm_tx_urgent_queue != (QueueHandle_t)0) {
         vQueueDelete(comm_tx_urgent_queue);
     }
@@ -438,16 +451,12 @@ static void comm_tx_cleanup_queues(uint8_t urgent_added, uint8_t normal_added) {
         vQueueDelete(comm_tx_normal_queue);
     }
 
-    comm_tx_queue_set = (QueueSetHandle_t)0;
     comm_tx_urgent_queue = (QueueHandle_t)0;
     comm_tx_normal_queue = (QueueHandle_t)0;
 }
 
 int32_t CommTx_Init(void) {
-    uint8_t urgent_added = 0U;
-
-    if ((comm_tx_urgent_queue != (QueueHandle_t)0) && (comm_tx_normal_queue != (QueueHandle_t)0) &&
-        (comm_tx_queue_set != (QueueSetHandle_t)0)) {
+    if ((comm_tx_urgent_queue != (QueueHandle_t)0) && (comm_tx_normal_queue != (QueueHandle_t)0)) {
         return 0;
     }
 
@@ -461,31 +470,14 @@ int32_t CommTx_Init(void) {
 
     if ((comm_tx_urgent_queue == (QueueHandle_t)0) || (comm_tx_normal_queue == (QueueHandle_t)0)) {
         comm_tx_stats.init_failures++;
-        comm_tx_cleanup_queues(0U, 0U);
+        comm_tx_cleanup_queues();
         return -1;
     }
 
-    comm_tx_queue_set = xQueueCreateSet(COMM_TX_URGENT_QUEUE_DEPTH + COMM_TX_NORMAL_QUEUE_DEPTH);
-
-    if (comm_tx_queue_set == (QueueSetHandle_t)0) {
-        comm_tx_stats.init_failures++;
-        comm_tx_cleanup_queues(0U, 0U);
-        return -1;
-    }
-
-    if (xQueueAddToSet(comm_tx_urgent_queue, comm_tx_queue_set) != pdPASS) {
-        comm_tx_stats.init_failures++;
-        comm_tx_cleanup_queues(0U, 0U);
-        return -2;
-    }
-
-    urgent_added = 1U;
-
-    if (xQueueAddToSet(comm_tx_normal_queue, comm_tx_queue_set) != pdPASS) {
-        comm_tx_stats.init_failures++;
-        comm_tx_cleanup_queues(urgent_added, 0U);
-        return -2;
-    }
+    /* StartCommTxTask에서 호출되므로 여기서의 "현재 태스크"가 곧 CommTxTask다.
+     * 큐를 만든 뒤에 잡아야 송신자가 아직 없는 큐를 보고 깨우지 않는다. */
+    comm_tx_task_handle = xTaskGetCurrentTaskHandle();
+    comm_tx_retry_pending = 0U;
 
     comm_tx_next_heartbeat = osKernelGetTickCount() + COMM_TX_HEARTBEAT_PERIOD_MS;
     return 0;
@@ -529,7 +521,7 @@ void CommTx_ProcessOnce(void) {
     uint32_t wait = COMM_TX_MAX_WAIT_MS;
     uint8_t ring_blocked;
 
-    if (comm_tx_queue_set == (QueueSetHandle_t)0) {
+    if (comm_tx_task_handle == NULL) {
         osDelay(COMM_TX_RETRY_INTERVAL_MS);
         return;
     }
@@ -543,11 +535,21 @@ void CommTx_ProcessOnce(void) {
         wait = (uint32_t)remaining;
     }
 
-    (void)xQueueSelectFromSet(comm_tx_queue_set, wait);
+    /* 링버퍼가 막혀 아직 못 보낸 메시지가 큐에 남아 있으면 기다리지 않는다.
+     * 그 메시지의 알림은 이미 소비됐으므로, 기다리면 아래 osDelay(1)로
+     * 짧게 재시도하려던 의도가 최대 wait만큼 늦어진다. */
+    if (comm_tx_retry_pending != 0U) {
+        wait = 0U;
+    }
+
+    /* xClearCountOnExit=pdTRUE: 쌓인 알림을 한 번에 전부 소비한다.
+     * 아래 drain_queues가 큐를 몽땅 비우므로 이 의미가 맞다. */
+    (void)ulTaskNotifyTake(pdTRUE, wait);
 
     comm_tx_check_timeouts();
     comm_tx_service_restarts();
     ring_blocked = comm_tx_drain_queues();
+    comm_tx_retry_pending = ring_blocked;
 
     now = osKernelGetTickCount();
 

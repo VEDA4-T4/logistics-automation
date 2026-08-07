@@ -174,8 +174,9 @@ standard names. */
 /* USER CODE BEGIN Defines */
 /* Section where parameter definitions can be added (for instance, to override default ones in FreeRTOS.h) */
 
-/* CommTxTask: urgent/normal 2-Queue 동시 대기(QueueSet)를 위해 필요 */
-#define configUSE_QUEUE_SETS 1
+/* CommTxTask는 urgent/normal 두 큐를 태스크 알림으로 기다린다(app_comm_tx.c).
+ * 예전에는 QueueSet을 썼지만 규약 위반으로 컨테이너가 넘쳐 configASSERT가
+ * 깨졌고, 이제 큐셋을 쓰는 곳이 없어 기능 자체를 끈다. */
 
 /* 스택 오버플로 검사가 꺼져 있으면 넘친 태스크가 남의 메모리를 조용히 망가뜨리다
  * 엉뚱한 곳에서 HardFault로 터진다. 2는 패턴 검사까지 하는 강한 쪽이다.

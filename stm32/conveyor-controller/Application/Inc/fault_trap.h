@@ -74,8 +74,8 @@ typedef struct {
     uint32_t psp;
     uint32_t stackUsed; /* fault_trap_stack_t */
 
-    uint32_t line;                          /* configASSERT의 __LINE__ */
-    char context[FAULT_TRAP_CONTEXT_SIZE];  /* 태스크명 또는 파일명(뒤쪽 우선) */
+    uint32_t line;                         /* configASSERT의 __LINE__ */
+    char context[FAULT_TRAP_CONTEXT_SIZE]; /* 태스크명 또는 파일명(뒤쪽 우선) */
 } fault_trap_record_t;
 
 /*
