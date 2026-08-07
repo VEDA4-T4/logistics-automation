@@ -412,7 +412,7 @@ int main(int argc, char* argv[]) {
     assert(routed_view.boxPosition(QStringLiteral("linetracer")) == routed_view.lineTracerPickupPosition(1));
     assert(routed_view.lineArrowPositions().isEmpty());
 
-    routed_line.current_state = QStringLiteral("FOLLOWING_LINE");
+    routed_line.current_state = QStringLiteral("STOPPED");
     routed_view.setProcesses({ routed_line });
     const auto departure_position = routed_view.boxPosition(QStringLiteral("linetracer"));
     const auto arrows_before = routed_view.lineArrowPositions();
@@ -420,6 +420,11 @@ int main(int argc, char* argv[]) {
     assert(arrows_before.size() == 8);
     routed_view.advanceAnimationsForTest();
     assert(routed_view.boxPosition(QStringLiteral("linetracer")) == departure_position);
+    assert(routed_view.lineArrowPositions() == arrows_before);
+
+    routed_line.current_state = QStringLiteral("FOLLOWING_LINE");
+    routed_view.setProcesses({ routed_line });
+    routed_view.advanceAnimationsForTest();
     assert(routed_view.lineArrowPositions() != arrows_before);
 
     routed_line.current_state = QStringLiteral("ARRIVED_C");
@@ -562,7 +567,7 @@ int main(int argc, char* argv[]) {
 
     logistics::control_center::FactoryTopViewWidget position_view;
     auto positioned_line = Process(QStringLiteral("linetracer"), QStringLiteral("PI-LT-POSITION"),
-                                   QStringLiteral("MOVING"), QStringLiteral("WORK-POSITION"));
+                                   QStringLiteral("STOPPED"), QStringLiteral("WORK-POSITION"));
     positioned_line.departure_position =
         LineTracerPositionStatus{ .area = QStringLiteral("DEPARTURE"), .location = QStringLiteral("A") };
     positioned_line.target_position =
@@ -574,6 +579,11 @@ int main(int argc, char* argv[]) {
     const auto positioned_arrows = position_view.lineArrowPositions();
     position_view.advanceAnimationsForTest();
     assert(position_view.boxPosition(QStringLiteral("linetracer")) == QPointF(504, 250));
+    assert(position_view.lineArrowPositions() == positioned_arrows);
+
+    positioned_line.current_state = QStringLiteral("FOLLOWING_LINE");
+    position_view.setProcesses({ positioned_line });
+    position_view.advanceAnimationsForTest();
     assert(position_view.lineArrowPositions() != positioned_arrows);
     position_view.advanceAnimationsForTest();
     assert(position_view.boxPosition(QStringLiteral("linetracer")) == QPointF(504, 250));

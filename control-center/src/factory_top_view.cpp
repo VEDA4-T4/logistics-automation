@@ -746,7 +746,9 @@ struct FactoryTopViewWidget::Impl {
                             line_work_id = process.work_id;
                             line_arrow_phase = 0;
                         }
-                        node.motion_enabled = line_path.size() > 1;
+                        node.motion_enabled =
+                            NormalizedState(process.current_state) == QStringLiteral("FOLLOWING_LINE") &&
+                            line_path.size() > 1;
                         node.moving_item->setPos(*confirmed_point);
                         updateLineArrows();
                     } else if (confirmed_point.has_value()) {
@@ -797,7 +799,8 @@ struct FactoryTopViewWidget::Impl {
                         hideLineArrows();
                     }
                     node.motion_enabled = false;
-                } else if (node.visual.motion_phase == FactoryMotionPhase::LineFollowing) {
+                } else if (state == QStringLiteral("FOLLOWING_LINE") || state == QStringLiteral("STOPPED") ||
+                           state == QStringLiteral("DELIVERING")) {
                     const auto target_route = FactoryRouteIndex(process.destination);
                     if (!target_route.has_value()) {
                         node.motion_enabled = false;
@@ -808,6 +811,7 @@ struct FactoryTopViewWidget::Impl {
                                line_path.isEmpty()) {
                         beginLineTravel(node, process.work_id, *target_route);
                     }
+                    node.motion_enabled = state == QStringLiteral("FOLLOWING_LINE") && line_path.size() > 1;
                 }
             }
             if (!QApplication::isEffectEnabled(Qt::UI_AnimateCombo)) {

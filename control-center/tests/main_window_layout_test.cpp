@@ -468,8 +468,8 @@ int main(int argc, char* argv[]) {
                                                  { QStringLiteral("destination"), QStringLiteral("2") } } } });
     emit_device_status(QStringLiteral("LAYOUT-SORTING-LIVE"), QStringLiteral("PI-SORTING-01"),
                        QStringLiteral("SORTING"), 4);
-    emit_device_status(QStringLiteral("LAYOUT-LINETRACER-LIVE"), QStringLiteral("PI-LT-01"),
-                       QStringLiteral("DELIVERING"), 5);
+    emit_device_status(QStringLiteral("LAYOUT-LINETRACER-LIVE"), QStringLiteral("PI-LT-01"), QStringLiteral("STOPPED"),
+                       5);
     application.processEvents();
 
     const auto input_before_tick = factory->boxPosition(QStringLiteral("input"));
@@ -480,8 +480,8 @@ int main(int argc, char* argv[]) {
                "input node was not moving before global emergency stop") ||
         !check(factory->boxPosition(QStringLiteral("sorting")) != sorting_before_tick,
                "sorting node was not moving before global emergency stop") ||
-        !check(factory->lineArrowPositions() != line_arrows_before_tick,
-               "line-tracer route arrows were not moving before global emergency stop")) {
+        !check(!line_arrows_before_tick.isEmpty() && factory->lineArrowPositions() == line_arrows_before_tick,
+               "stopped line-tracer route arrows were missing or moving")) {
         return 2;
     }
 
