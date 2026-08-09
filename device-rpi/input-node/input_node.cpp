@@ -125,35 +125,6 @@ namespace mqtt = contracts::mqtt;
     return std::string("ERR-INTERNAL");
 }
 
-[[nodiscard]] std::optional<std::uint8_t> SpeedFromParams(const mqtt::Json& params, bool& invalid) {
-    invalid = false;
-    const auto iterator = params.find("speed");
-    if (iterator == params.end()) {
-        return std::nullopt;
-    }
-    if (!iterator->is_number_integer() && !iterator->is_number_unsigned()) {
-        invalid = true;
-        return std::nullopt;
-    }
-
-    std::uint64_t value = 0U;
-    if (iterator->is_number_unsigned()) {
-        value = iterator->get<std::uint64_t>();
-    } else {
-        const auto signed_value = iterator->get<std::int64_t>();
-        if (signed_value <= UART_INPUT_CONVEYOR_SPEED_MIN) {
-            invalid = true;
-            return std::nullopt;
-        }
-        value = static_cast<std::uint64_t>(signed_value);
-    }
-    if (value == 0U || value > UART_INPUT_CONVEYOR_SPEED_MAX) {
-        invalid = true;
-        return std::nullopt;
-    }
-    return static_cast<std::uint8_t>(value);
-}
-
 // SensorStatusPayload.measurement_status only accepts these three values
 // (IsValidMeasurementStatus in mqtt_codec.hpp).
 [[nodiscard]] std::string MeasurementStatusName(std::uint8_t state) {
@@ -376,7 +347,7 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
     switch (action) {
         case DeviceControlAction::kStart: {
             bool invalid_speed = false;
-            const auto speed = SpeedFromParams(command.params, invalid_speed);
+            const auto speed = ReadControlSpeed(command.params, UART_INPUT_CONVEYOR_SPEED_MAX, invalid_speed);
             if (invalid_speed) {
                 result.status = InputCommandStatus::kInvalidSpeed;
                 EmitCommandResponse(result, "input conveyor speed is invalid");

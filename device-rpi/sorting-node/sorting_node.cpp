@@ -62,35 +62,6 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
     return normalized;
 }
 
-[[nodiscard]] std::optional<std::uint8_t> SpeedFromParams(const mqtt::Json& params, bool& invalid) {
-    invalid = false;
-    const auto speed = params.find("speed");
-    if (speed == params.end()) {
-        return std::nullopt;
-    }
-    if (!speed->is_number_integer() && !speed->is_number_unsigned()) {
-        invalid = true;
-        return std::nullopt;
-    }
-
-    std::uint64_t value = 0U;
-    if (speed->is_number_unsigned()) {
-        value = speed->get<std::uint64_t>();
-    } else {
-        const std::int64_t signed_value = speed->get<std::int64_t>();
-        if (signed_value < 0) {
-            invalid = true;
-            return std::nullopt;
-        }
-        value = static_cast<std::uint64_t>(signed_value);
-    }
-    if (value == 0U || value > UART_SORTING_CONVEYOR_SPEED_MAX) {
-        invalid = true;
-        return std::nullopt;
-    }
-    return static_cast<std::uint8_t>(value);
-}
-
 [[nodiscard]] std::string DestinationSuffix(std::uint8_t destination) {
     return destination == UART_SORTING_DESTINATION_NONE ? std::string{} : "_DEST_" + std::to_string(destination);
 }
@@ -396,7 +367,8 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
     switch (action) {
         case DeviceControlAction::kStart: {
             bool invalid_speed = false;
-            std::optional<std::uint8_t> speed = SpeedFromParams(command.params, invalid_speed);
+            std::optional<std::uint8_t> speed =
+                ReadControlSpeed(command.params, UART_SORTING_CONVEYOR_SPEED_MAX, invalid_speed);
             if (invalid_speed) {
                 result.status = SortingCommandStatus::kInvalidSpeed;
                 return result;
