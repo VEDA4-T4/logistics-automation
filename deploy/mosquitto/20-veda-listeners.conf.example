@@ -1,0 +1,11 @@
+# Temporary plaintext listener for migration.
+# Remove this listener after every client has moved to TLS.
+listener 1883 0.0.0.0
+protocol mqtt
+
+listener 8883 0.0.0.0
+protocol mqtt
+certfile /etc/mosquitto/certs/server.crt
+keyfile /etc/mosquitto/certs/server.key
+require_certificate false
+tls_version tlsv1.2

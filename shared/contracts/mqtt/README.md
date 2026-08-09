@@ -81,7 +81,8 @@ MQTT topic, payload, QoS, retain, Last Will 규칙을 중앙에서 관리하는 
 중앙 서버는 현재 상품 변경을 `qt/{clientId}/event`로 전달합니다. `WORK_CREATED`가 새 `workId`로
 도착하면 Qt는 이전 상품 정보를 즉시 비우며, 이후 동일한 `workId`의 메시지만 현재 화면에 합칩니다.
 
-- `BARCODE_DETECTED`: `workId`, `recognitionStatus`, 선택적인 `barcode`, `confidence`, `message`
+- `BARCODE_DETECTED`: `workId`, `recognitionStatus`, 선택적인 `barcode`, `confidence`, `message`, `errorCode`,
+  `failureStage`. 실패 메타데이터를 사용하는 경우 `errorCode`와 `failureStage`를 함께 전송합니다.
 - `PRODUCT_INFO`: `workId`, `recognitionStatus`, 선택적인 `barcode`, `productId`, `productName`, `destination`, `image`
 - `PRODUCT_IMAGE`: `workId`, `imageId`, `imagePath`, `checksum`, `uploadStatus`
 - `DESTINATION_SET`: `workId`, `destination`

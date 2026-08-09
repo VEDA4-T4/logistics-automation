@@ -89,11 +89,26 @@ void TestCornersAreRequiredWhenEnabled() {
     assert(!transformer.Transform(position).has_value());
 }
 
+void TestEquivalentScaledMatrixRemainsValid() {
+    central_server::HomographyConfig config = Config();
+    for (double& coefficient : config.pixel_to_conveyor) {
+        coefficient *= 1.0e-12;
+    }
+
+    assert(config.IsValid());
+    const central_server::HomographyTransformer transformer(config);
+    const auto target = transformer.Transform(Position());
+    assert(target.has_value());
+    assert(Near(target->x_mm, 170.0));
+    assert(Near(target->y_mm, -310.0));
+}
+
 }  // namespace
 
 int main() {
     TestPixelCornersBecomeRobotRelativePose();
     TestRotatedBoxProducesRobotRelativeYaw();
     TestCornersAreRequiredWhenEnabled();
+    TestEquivalentScaledMatrixRemainsValid();
     return 0;
 }

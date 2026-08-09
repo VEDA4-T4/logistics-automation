@@ -36,7 +36,13 @@ inline constexpr std::size_t kCommandQueueCapacity = 64U;
 inline constexpr std::size_t kOutboundQueueCapacity = 256U;
 inline constexpr auto kSpontaneousPollTimeout = std::chrono::milliseconds{ 20 };
 inline constexpr auto kUartReconnectInterval = std::chrono::seconds{ 2 };
-inline constexpr auto kUartKeepAliveInterval = std::chrono::seconds{ 2 };
+// 한동안 2700ms을 썼다. 2000ms이 컨트롤러의 정확히 1000ms짜리 하트비트와
+// 주기적으로 재정렬되면서(비트 주파수) 약 8분 34초마다 응답이 지연됐기 때문이다
+// (2026-08-06 실기기 관측). 실제 원인은 주기가 아니라 컨트롤러 쪽에 있었다.
+// RX 복구가 HAL_UART_DMAStop()으로 전송 중이던 프레임까지 끊어서, 두 주기가
+// 겹치는 순간마다 하트비트가 잘리고 응답이 재시도 타임아웃만큼 밀렸다.
+// 컨트롤러가 송수신을 분리한 뒤로는 겹침 자체가 무해해져서 원래 값으로 되돌린다.
+inline constexpr auto kUartKeepAliveInterval = std::chrono::milliseconds{ 2000 };
 inline constexpr auto kIdleDelay = std::chrono::milliseconds{ 5 };
 
 volatile std::sig_atomic_t stop_requested = 0;
@@ -105,19 +111,11 @@ void UpdateDeviceStatus(const InputReport& report, DeviceStatus& device_status) 
                                    std::string_view device_id, std::string_view message_session_id,
                                    std::uint64_t& message_sequence, DeviceStatus& device_status) {
     UpdateDeviceStatus(report, device_status);
-    if (outbox.size() >= kOutboundQueueCapacity) {
-        const auto stale_status = std::find_if(outbox.begin(), outbox.end(), [](const OutboundMessage& queued) {
+    if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
             return queued.channel == InputReportChannel::kStatus;
-        });
-        if (stale_status == outbox.end()) {
-            if (report.channel != InputReportChannel::kResponse) {
-                std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued command responses\n";
-                return false;
-            }
-            std::cerr << "[input][mqtt][WARN] outbound queue capacity exceeded to preserve a command response\n";
-        } else {
-            outbox.erase(stale_status);
-        }
+        })) {
+        std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued messages\n";
+        return false;
     }
     outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
     return true;

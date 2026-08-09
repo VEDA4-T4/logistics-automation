@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
@@ -72,6 +73,16 @@ int main() {
         assert(recovered.ProcessPendingOnce());
         assert(transport_view->calls == 2);
         assert(recovered.PendingCount() == 0);
+    }
+
+    {
+        const auto orphan = root / "orphan.pending.log";
+        std::ofstream(orphan) << "log without metadata\n";
+        auto transport = std::make_unique<RetryThenConfirmTransport>();
+        device::LogSpoolUploader recovered(config, std::move(transport));
+        assert(!recovered.ProcessPendingOnce());
+        assert(!std::filesystem::exists(orphan));
+        assert(std::filesystem::exists(root / "orphan.pending.log.orphaned"));
     }
 
     std::error_code ignored;

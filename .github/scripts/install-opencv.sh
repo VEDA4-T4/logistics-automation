@@ -23,7 +23,7 @@ cmake -S "${source_dir}" -B "${build_dir}" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${install_dir}" \
     -DCMAKE_INSTALL_LIBDIR=lib \
-    -DBUILD_LIST=core,imgproc,highgui,imgcodecs,videoio,objdetect \
+    -DBUILD_LIST=core,dnn,imgproc,highgui,imgcodecs,videoio,objdetect \
     -DBUILD_DOCS=OFF \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_JAVA=OFF \

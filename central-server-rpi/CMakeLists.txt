@@ -16,6 +16,7 @@ add_library(
     src/http_upload/upload_service.cpp
     src/db_manager/persistence.cpp
     src/db_manager/process_state_store.cpp
+    src/process_manager/work_invalidation.cpp
 )
 add_library(logistics::central_storage ALIAS logistics_central_storage)
 
@@ -507,4 +508,11 @@ if(BUILD_TESTING)
     )
     logistics_enable_warnings(central_upload_service_test)
     add_test(NAME central_upload_service_test COMMAND central_upload_service_test)
+
+    if(UNIX)
+        add_executable(central_http_upload_server_test tests/http_upload_server_test.cpp)
+        target_link_libraries(central_http_upload_server_test PRIVATE logistics::central_http_upload_server)
+        logistics_enable_warnings(central_http_upload_server_test)
+        add_test(NAME central_http_upload_server_test COMMAND central_http_upload_server_test)
+    endif()
 endif()

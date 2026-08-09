@@ -256,6 +256,12 @@ struct ControllerEventDescription {
                     return { "ERR-HEALTH-SENSOR-STALE", "WARNING",
                              "input controller reported a stale sensor" + sensor_suffix + cause_suffix };
                 }
+                case 4U:  // HEALTH_ISSUE_UART_RECOVERY
+                    // Recovery started, not a confirmed loss - the frame is retried, and an
+                    // exhausted retry surfaces separately as a queue overflow. Still WARNING:
+                    // a line that keeps needing recovery is the precursor to those drops.
+                    return { "ERR-HEALTH-UART-RECOVERY", "WARNING",
+                             "input controller recovered from a UART error" + cause_suffix };
                 default:
                     return { "ERR-HEALTH-EVENT-" + std::to_string(static_cast<int>(kind)), "WARNING",
                              "input controller health event" + cause_suffix };

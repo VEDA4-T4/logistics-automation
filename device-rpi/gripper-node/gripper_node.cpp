@@ -209,12 +209,15 @@ std::string_view ToString(GripperCycleStep step) noexcept {
         case GripperCycleStep::kCloseClaw:
             return "PICKING";
         case GripperCycleStep::kPickRetreat:
+        case GripperCycleStep::kTransfer:
         case GripperCycleStep::kPlaceApproach:
             return "TRANSFERRING";
         case GripperCycleStep::kPlaceDescend:
         case GripperCycleStep::kReleaseClaw:
         case GripperCycleStep::kPlaceRetreat:
             return "PLACING";
+        case GripperCycleStep::kReturnTransfer:
+        case GripperCycleStep::kReturnPickSide:
         case GripperCycleStep::kReturnHome:
             return "HOMING";
         case GripperCycleStep::kCompleted:
@@ -518,6 +521,7 @@ GripperCommandResult GripperNode::StartCycle(const mqtt::ControlCommandPayload& 
 
     cycle_ = ActiveCycle{
         .active = true,
+        .mqtt_command = command.command,
         .phase = phase,
         .step = FirstStepOf(phase),
         .work_id = result.work_id,
@@ -593,6 +597,7 @@ GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayloa
 
     cycle_ = ActiveCycle{
         .active = true,
+        .mqtt_command = command.command,
         .phase = GripperPhase::kHome,
         .step = GripperCycleStep::kReturnHome,
         .work_id = {},
@@ -656,6 +661,7 @@ GripperCommandResult GripperNode::RunRecovery(const mqtt::ControlCommandPayload&
 
     cycle_ = ActiveCycle{
         .active = true,
+        .mqtt_command = command.command,
         .phase = GripperPhase::kHome,
         .step = GripperCycleStep::kReturnHome,
         .work_id = {},
@@ -735,6 +741,8 @@ GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step
             // separate TRANSFER command can continue from there.
             return (phase == GripperPhase::kPick) ? GripperCycleStep::kCompleted : GripperCycleStep::kPickRetreat;
         case GripperCycleStep::kPickRetreat:
+            return GripperCycleStep::kTransfer;
+        case GripperCycleStep::kTransfer:
             return GripperCycleStep::kPlaceApproach;
         case GripperCycleStep::kPlaceApproach:
             return (phase == GripperPhase::kTransfer) ? GripperCycleStep::kCompleted : GripperCycleStep::kPlaceDescend;
@@ -743,7 +751,12 @@ GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step
         case GripperCycleStep::kReleaseClaw:
             return GripperCycleStep::kPlaceRetreat;
         case GripperCycleStep::kPlaceRetreat:
-            return (phase == GripperPhase::kPlace) ? GripperCycleStep::kCompleted : GripperCycleStep::kReturnHome;
+            return (phase == GripperPhase::kPlace) ? GripperCycleStep::kCompleted
+                                                   : GripperCycleStep::kReturnTransfer;
+        case GripperCycleStep::kReturnTransfer:
+            return GripperCycleStep::kReturnPickSide;
+        case GripperCycleStep::kReturnPickSide:
+            return GripperCycleStep::kReturnHome;
         case GripperCycleStep::kReturnHome:
             return GripperCycleStep::kCompleted;
         case GripperCycleStep::kIdle:
@@ -826,10 +839,17 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
             break;
 
         case GripperCycleStep::kPickApproach:
-        case GripperCycleStep::kPickRetreat:
-            // Retreat goes back to the same point the claw descended from, so a
-            // Cartesian cycle lifts straight up out of the box's footprint.
             send_arm(cycle_.pick_approach_pose);
+            break;
+
+        case GripperCycleStep::kPickRetreat:
+        case GripperCycleStep::kReturnPickSide:
+            send_arm(poses_.pick_lift);
+            break;
+
+        case GripperCycleStep::kTransfer:
+        case GripperCycleStep::kReturnTransfer:
+            send_arm(poses_.transfer);
             break;
 
         case GripperCycleStep::kPickDescend:
@@ -914,12 +934,13 @@ void GripperNode::AdvanceCycle() {
 void GripperNode::FinishCycle() {
     const std::string work_id = cycle_.work_id;
     const std::string request_id = cycle_.request_id;
+    const mqtt::ControlCommand mqtt_command = cycle_.mqtt_command;
     const bool was_home_only = cycle_.phase == GripperPhase::kHome;
 
     cycle_ = ActiveCycle{};
 
     if (was_home_only) {
-        EmitCommandResponse(request_id, mqtt::ControlCommand::kRecovery, mqtt::CommandResult::kSuccess, std::nullopt,
+        EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kSuccess, std::nullopt,
                             "gripper returned home");
         EmitDeviceStatus("READY");
         return;
@@ -945,11 +966,11 @@ void GripperNode::AbortCycle(std::string error_code, std::string message) {
     angles_known_ = false;
     const std::string work_id = cycle_.work_id;
     const std::string request_id = cycle_.request_id;
+    const mqtt::ControlCommand mqtt_command = cycle_.mqtt_command;
     cycle_ = ActiveCycle{};
 
     const std::optional<std::string> job_id = work_id.empty() ? std::nullopt : std::optional{ work_id };
-    EmitCommandResponse(request_id, mqtt::ControlCommand::kStart, mqtt::CommandResult::kFailed,
-                        std::optional{ error_code }, message);
+    EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kFailed, std::optional{ error_code }, message);
     EmitError(std::move(error_code), "ERROR", std::move(message), job_id);
 }
 

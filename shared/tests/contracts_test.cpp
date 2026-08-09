@@ -130,7 +130,21 @@ void TestAllMqttMessageRoundTrips() {
                                                                   .barcode = "8801234567890",
                                                                   .confidence = 0.98,
                                                                   .message = std::nullopt,
+                                                                  .error_code = std::nullopt,
+                                                                  .failure_stage = std::nullopt,
                                                               }));
+
+    AssertRoundTrip<mqtt::BarcodeDetectedPayload>(
+        MakeMessage("MSG-0005-FAIL", mqtt::MessageType::kBarcodeDetected,
+                    mqtt::BarcodeDetectedPayload{
+                        .work_id = std::string(kTestWorkId),
+                        .recognition_status = "FAILED",
+                        .barcode = {},
+                        .confidence = std::nullopt,
+                        .message = "barcode region was not detected",
+                        .error_code = "ERR-VISION-BARCODE-REGION-NOT-DETECTED",
+                        .failure_stage = "BARCODE_DETECTION",
+                    }));
 
     AssertRoundTrip<mqtt::ProductImagePayload>(
         MakeMessage("MSG-0006", mqtt::MessageType::kProductImage,
@@ -224,6 +238,86 @@ void TestAllMqttMessageRoundTrips() {
                                                                   .error_code = std::nullopt,
                                                                   .message = "Destination information received.",
                                                               }));
+}
+
+void TestLineTracerPositionStatusRoundTrip() {
+    const auto original =
+        MakeMessage("MSG-LT-POSITION-01", mqtt::MessageType::kDeviceStatus,
+                    mqtt::DeviceStatusPayload{
+                        .status = mqtt::ConnectionState::kOnline,
+                        .current_state = "FOLLOWING_LINE",
+                        .job_id = std::string(kTestWorkId),
+                        .error_code = std::nullopt,
+                        .departure_position = mqtt::LineTracerPositionPayload{ .area = "DEPARTURE", .location = "A" },
+                        .target_position = mqtt::LineTracerPositionPayload{ .area = "DESTINATION", .location = "C" },
+                        .confirmed_position = mqtt::LineTracerPositionPayload{ .area = "DEPARTURE", .location = "A" },
+                        .movement_state = std::string("MOVING"),
+                    });
+
+    const auto encoded = mqtt::SerializeMessage(original);
+    assert(encoded.IsSuccess());
+    const auto json = mqtt::Json::parse(encoded.payload);
+    const auto& data = json.at("data");
+    assert(data.at("departurePosition").at("area") == "DEPARTURE");
+    assert(data.at("departurePosition").at("location") == "A");
+    assert(data.at("targetPosition").at("area") == "DESTINATION");
+    assert(data.at("targetPosition").at("location") == "C");
+    assert(data.at("confirmedPosition").at("area") == "DEPARTURE");
+    assert(data.at("confirmedPosition").at("location") == "A");
+    assert(data.at("movementState") == "MOVING");
+
+    const auto decoded = mqtt::DeserializeMessage(encoded.payload);
+    assert(decoded.IsSuccess());
+    const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(decoded.value);
+    assert(status != nullptr);
+    assert(status->departure_position->area == "DEPARTURE");
+    assert(status->departure_position->location == "A");
+    assert(status->target_position->area == "DESTINATION");
+    assert(status->target_position->location == "C");
+    assert(status->confirmed_position->area == "DEPARTURE");
+    assert(status->confirmed_position->location == "A");
+    assert(status->movement_state == "MOVING");
+}
+
+void TestLineTracerPositionResetRoundTrip() {
+    const auto original = MakeMessage("MSG-LT-POSITION-RESET", mqtt::MessageType::kDeviceStatus,
+                                      mqtt::DeviceStatusPayload{
+                                          .status = mqtt::ConnectionState::kOnline,
+                                          .current_state = "POSITION_UNKNOWN",
+                                          .job_id = std::nullopt,
+                                          .error_code = std::nullopt,
+                                          .position_reset = true,
+                                      });
+
+    const auto encoded = mqtt::SerializeMessage(original);
+    assert(encoded.IsSuccess());
+    const auto json = mqtt::Json::parse(encoded.payload);
+    const auto& data = json.at("data");
+    assert(data.at("departurePosition").is_null());
+    assert(data.at("targetPosition").is_null());
+    assert(data.at("confirmedPosition").is_null());
+    assert(data.at("movementState").is_null());
+
+    const auto decoded = mqtt::DeserializeMessage(encoded.payload);
+    assert(decoded.IsSuccess());
+    const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(decoded.value);
+    assert(status != nullptr);
+    assert(status->position_reset);
+    assert(!status->departure_position.has_value());
+
+    auto partial_reset = json;
+    partial_reset.at("data").erase("movementState");
+    const auto rejected = mqtt::DeserializeMessage(partial_reset.dump());
+    assert(!rejected.IsSuccess());
+    assert(rejected.status.error == mqtt::CodecError::kMissingField);
+
+    auto movement_only_reset = json;
+    movement_only_reset.at("data").erase("departurePosition");
+    movement_only_reset.at("data").erase("targetPosition");
+    movement_only_reset.at("data").erase("confirmedPosition");
+    const auto movement_only_rejected = mqtt::DeserializeMessage(movement_only_reset.dump());
+    assert(!movement_only_rejected.IsSuccess());
+    assert(movement_only_rejected.status.error == mqtt::CodecError::kMissingField);
 }
 
 void TestMqttCodecInvalidInputs() {
@@ -397,6 +491,21 @@ void TestMqttCodecInvalidInputs() {
     assert(!invalid_work_encoded.IsSuccess());
     assert(invalid_work_encoded.status.error == mqtt::CodecError::kInvalidFieldValue);
     assert(invalid_work_encoded.status.field == "workId");
+
+    const auto incomplete_barcode_failure = MakeMessage("MSG-BAD-BARCODE-01", mqtt::MessageType::kBarcodeDetected,
+                                                        mqtt::BarcodeDetectedPayload{
+                                                            .work_id = std::string(kTestWorkId),
+                                                            .recognition_status = "FAILED",
+                                                            .barcode = {},
+                                                            .confidence = std::nullopt,
+                                                            .message = "barcode decode failed",
+                                                            .error_code = "ERR-VISION-BARCODE-DECODE-FAILED",
+                                                            .failure_stage = std::nullopt,
+                                                        });
+    const auto incomplete_barcode_failure_encoded = mqtt::SerializeMessage(incomplete_barcode_failure);
+    assert(!incomplete_barcode_failure_encoded.IsSuccess());
+    assert(incomplete_barcode_failure_encoded.status.error == mqtt::CodecError::kInvalidPayload);
+    assert(incomplete_barcode_failure_encoded.status.field == "data");
 
     const auto invalid_error_level = mqtt::DeserializeMessage(R"json(
         {
@@ -656,6 +765,8 @@ int main() {
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 15 }) == mqtt::ConnectionState::kOffline);
 
     TestAllMqttMessageRoundTrips();
+    TestLineTracerPositionStatusRoundTrip();
+    TestLineTracerPositionResetRoundTrip();
     TestMqttCodecInvalidInputs();
     TestMqttTimestampValidation();
     TestMqttTopicMessageValidation();

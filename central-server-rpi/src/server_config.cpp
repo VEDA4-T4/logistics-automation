@@ -217,6 +217,8 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
             config.storage.security_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else if (key == "image_retention_days") {
             config.storage.image_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
+        } else if (key == "upload_retention_days") {
+            config.storage.upload_retention_days = ParseInteger(path, line_number, key, value, 1, 3'650);
         } else {
             ThrowLineError(path, line_number, "unknown [storage] setting: " + std::string(key));
         }
@@ -251,6 +253,11 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
                 ThrowLineError(path, line_number, "line_tracer_initial_position must be A, B, or C");
             }
             config.process.line_tracer_initial_position = value;
+        } else if (key == "default_destination") {
+            if (!contracts::mqtt::IsValidTopicLevel(value)) {
+                ThrowLineError(path, line_number, "default_destination must be a valid MQTT topic level");
+            }
+            config.process.default_destination = value;
         } else if (key == "server_id" || key == "input_device_id" || key == "vision_device_id" ||
                    key == "gripper_device_id" || key == "sorting_device_id" || key == "line_tracer_device_id") {
             AssignProcessId(config, path, line_number, key, value);

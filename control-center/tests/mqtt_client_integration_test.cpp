@@ -22,9 +22,11 @@ int main(int argc, char* argv[]) {
                                                    .client_id = QStringLiteral("control-center-integration"),
                                                    .username = {},
                                                    .password = {},
+                                                   .ca_certificate = {},
                                                    .port = port,
                                                    .reconnect_interval_ms = 1000,
-                                                   .keep_alive_seconds = 10 });
+                                                   .keep_alive_seconds = 10,
+                                                   .tls_enabled = false });
 
     bool command_was_published = false;
     QObject::connect(

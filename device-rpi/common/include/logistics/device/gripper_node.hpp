@@ -80,10 +80,13 @@ enum class GripperCycleStep {
     kPickDescend,
     kCloseClaw,
     kPickRetreat,
+    kTransfer,
     kPlaceApproach,
     kPlaceDescend,
     kReleaseClaw,
     kPlaceRetreat,
+    kReturnTransfer,
+    kReturnPickSide,
     kReturnHome,
     kCompleted,
 };
@@ -135,6 +138,7 @@ public:
 private:
     struct ActiveCycle {
         bool active{};
+        contracts::mqtt::ControlCommand mqtt_command{ contracts::mqtt::ControlCommand::kUnknown };
         GripperPhase phase{ GripperPhase::kFullCycle };
         GripperCycleStep step{ GripperCycleStep::kIdle };
         std::string work_id;

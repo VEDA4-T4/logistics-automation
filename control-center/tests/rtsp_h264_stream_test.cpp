@@ -1,9 +1,10 @@
-#include "logistics/control_center/rtsp_h264_stream.hpp"
-
 #include <QCoreApplication>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QThread>
 #include <QTimer>
+
+#include "logistics/control_center/rtsp_stream_worker.hpp"
 
 namespace {
 
@@ -44,7 +45,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    logistics::control_center::RtspH264Stream stream;
+    logistics::control_center::RtspStreamWorker worker(3000, 2 * 1024 * 1024);
+    auto* stream = worker.stream();
+    if (stream->thread() == QThread::currentThread()) {
+        return 5;
+    }
     QByteArray request_buffer;
     QByteArray decoded_stream;
     int request_count = 0;
@@ -94,21 +99,22 @@ int main(int argc, char* argv[]) {
         });
     });
 
-    QObject::connect(&stream, &QIODevice::readyRead, &app, [&]() {
-        decoded_stream.append(stream.read(stream.bytesAvailable()));
+    QObject::connect(stream, &QIODevice::readyRead, &app, [&]() {
+        decoded_stream.append(stream->read(stream->bytesAvailable()));
         if (decoded_stream.contains(QByteArray::fromHex("0000000165888421a0"))) {
             app.quit();
         }
     });
-    QObject::connect(&stream, &logistics::control_center::RtspH264Stream::streamError, &app,
+    QObject::connect(stream, &logistics::control_center::RtspH264Stream::streamError, &app,
                      [&](const QString&) { app.exit(3); });
     QObject::connect(
-        &stream, &logistics::control_center::RtspH264Stream::packetLossDetected, &app,
+        stream, &logistics::control_center::RtspH264Stream::packetLossDetected, &app,
         [&](quint16 expected, quint16 received) { packet_loss_detected = expected == 2 && received == 3; });
     QTimer::singleShot(3000, &app, [&]() { app.exit(4); });
 
-    stream.start(QUrl(QStringLiteral("rtsp://user:password@127.0.0.1:%1/stream").arg(server.serverPort())));
+    worker.start(QUrl(QStringLiteral("rtsp://user:password@127.0.0.1:%1/stream").arg(server.serverPort())));
     const auto exit_code = app.exec();
+    worker.stop();
 
     const auto has_sps = decoded_stream.contains(QByteArray::fromHex("000000016764001facd9405005bb010101a41e2445"));
     const auto has_pps = decoded_stream.contains(QByteArray::fromHex("0000000168ee3c80"));

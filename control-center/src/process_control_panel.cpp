@@ -120,26 +120,22 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
 ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("processControlPanel"));
     setMinimumWidth(0);
-    setMinimumHeight(170);
-    setMaximumHeight(190);
+    setMinimumHeight(72);
+    setMaximumHeight(92);
     setStyleSheet(
-        "#processControlPanel{background-color:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
-        "QLabel{color:#cccccc;}"
-        "QPushButton{min-height:27px;border:1px solid #3c3c3c;border-radius:5px;background-color:#2d2d2d;"
-        "color:#f0f0f0;font-size:12px;font-weight:600;padding:3px 8px;}"
-        "QPushButton:hover:enabled{background-color:#3c3c3c;border-color:#4d4d4d;}"
+        "#processControlPanel{background-color:#181818;border:1px solid #303030;border-radius:6px;}"
+        "QPushButton{font-size:12px;font-weight:600;padding:0 8px;}"
         "QPushButton:pressed:enabled{background-color:#252526;}"
-        "QPushButton:disabled{background-color:#1f1f1f;color:#6e6e6e;border-color:#2b2b2b;}"
         "QPushButton#startButton{background-color:#0e639c;border-color:#1177bb;}"
         "QPushButton#startButton:hover:enabled{background-color:#1177bb;}"
         "QPushButton#stopButton{color:#cca700;}"
         "QPushButton#recoveryButton{color:#75beff;}"
-        "QPushButton#emergencyStopButton{min-height:34px;background-color:#a1260d;color:#ffffff;"
+        "QPushButton#emergencyStopButton{background-color:#a1260d;color:#ffffff;"
         "font-size:13px;border:1px solid #c42b1c;}"
         "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, 8, 12, 8);
+    layout->setContentsMargins(8, 6, 8, 6);
     layout->setSpacing(4);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
@@ -151,21 +147,15 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "font-size:10px;font-weight:700;padding:4px 8px;");
     target_label_->setToolTip(
         QStringLiteral("상단 공정 카드를 클릭하여 대상을 변경합니다. 비상정지는 항상 전체 공정에 적용됩니다."));
-    auto* title_row = new QHBoxLayout();
-    title_row->setContentsMargins(0, 0, 0, 0);
-    title_row->setSpacing(8);
-    title_row->addWidget(title);
-    title_row->addStretch();
-    title_row->addWidget(target_label_);
     connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
-    connection_hint_->setWordWrap(true);
+    connection_hint_->setWordWrap(false);
     connection_hint_->setStyleSheet("color:#9d9d9d;font-size:10px;");
 
     command_status_ = new QLabel(QStringLiteral("대기 중"), this);
     command_status_->setObjectName(QStringLiteral("commandStatus"));
-    command_status_->setMinimumHeight(28);
+    command_status_->setFixedHeight(28);
     command_status_->setAlignment(Qt::AlignCenter);
-    command_status_->setWordWrap(true);
+    command_status_->setWordWrap(false);
     command_status_->setStyleSheet(IdleCommandStyle());
 
     start_button_ = new QPushButton(QStringLiteral("시작"), this);
@@ -174,8 +164,12 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     stop_button_->setObjectName(QStringLiteral("stopButton"));
     recovery_button_ = new QPushButton(QStringLiteral("복구"), this);
     recovery_button_->setObjectName(QStringLiteral("recoveryButton"));
-    emergency_stop_button_ = new QPushButton(QStringLiteral("비상정지\nEMERGENCY STOP"), this);
+    emergency_stop_button_ = new QPushButton(QStringLiteral("비상 정지"), this);
     emergency_stop_button_->setObjectName(QStringLiteral("emergencyStopButton"));
+    for (auto* button : { start_button_, stop_button_, recovery_button_ }) {
+        button->setFixedHeight(28);
+    }
+    emergency_stop_button_->setFixedHeight(32);
 
     connect(start_button_, &QPushButton::clicked, this,
             [this]() { requestCommand(mqtt::ControlCommand::kStart, QStringLiteral("공정을 시작하시겠습니까?")); });
@@ -189,22 +183,29 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         emit commandRequested(mqtt::ControlCommand::kEmergencyStop, command_target_device_id_);
     });
 
-    layout->addLayout(title_row);
-    layout->addWidget(connection_hint_);
-    layout->addWidget(command_status_);
-    auto* normal_commands = new QHBoxLayout();
-    normal_commands->setContentsMargins(0, 0, 0, 0);
-    normal_commands->setSpacing(6);
-    normal_commands->addWidget(start_button_);
-    normal_commands->addWidget(stop_button_);
-    normal_commands->addWidget(recovery_button_);
-    layout->addLayout(normal_commands);
+    auto* information_row = new QHBoxLayout();
+    information_row->setContentsMargins(0, 0, 0, 0);
+    information_row->setSpacing(8);
+    information_row->addWidget(title);
+    information_row->addWidget(target_label_);
+    information_row->addWidget(command_status_, 1);
+    information_row->addWidget(connection_hint_);
+
+    auto* command_row = new QHBoxLayout();
+    command_row->setContentsMargins(0, 0, 0, 0);
+    command_row->setSpacing(8);
+    command_row->addStretch(1);
+    command_row->addWidget(start_button_);
+    command_row->addWidget(stop_button_);
+    command_row->addWidget(recovery_button_);
 
     auto* divider = new QFrame(this);
-    divider->setFrameShape(QFrame::HLine);
-    divider->setStyleSheet("color:#2b2b2b;");
-    layout->addWidget(divider);
-    layout->addWidget(emergency_stop_button_);
+    divider->setFrameShape(QFrame::VLine);
+    divider->setStyleSheet("color:#303030;");
+    command_row->addWidget(divider);
+    command_row->addWidget(emergency_stop_button_);
+    layout->addLayout(information_row);
+    layout->addLayout(command_row);
 
     updateTargetPresentation();
     updateButtonStates();
@@ -231,6 +232,7 @@ void ProcessControlPanel::setMqttConnected(bool connected) {
         }
         command_target_device_id_.clear();
         command_status_->setText(QStringLiteral("MQTT 연결 끊김"));
+        command_status_->setToolTip(QStringLiteral("MQTT 연결 끊김"));
         command_status_->setStyleSheet(FailureCommandStyle());
     }
     updateButtonStates();
@@ -279,8 +281,7 @@ void ProcessControlPanel::setCommandPending(mqtt::ControlCommand command) {
         command_target_device_id_ = selectedTargetDeviceId();
     }
     control_state_.setCommandPending();
-    setCommandPresentation(command_target_device_id_,
-                           QStringLiteral("%1 명령 전송됨\n응답 대기 중").arg(CommandLabel(command)),
+    setCommandPresentation(command_target_device_id_, QStringLiteral("%1 · 응답 대기 중").arg(CommandLabel(command)),
                            PendingCommandStyle());
     updateButtonStates();
 }
@@ -288,25 +289,19 @@ void ProcessControlPanel::setCommandPending(mqtt::ControlCommand command) {
 void ProcessControlPanel::setCommandProgress(mqtt::ControlCommand command, mqtt::CommandResult result,
                                              const QString& detail) {
     control_state_.setCommandPending();
-    auto text = QStringLiteral("%1\n%2").arg(CommandLabel(command), ResultLabel(result));
-    if (!detail.isEmpty()) {
-        text.append(QStringLiteral("\n%1").arg(detail));
-    }
+    const auto text = QStringLiteral("%1 · %2").arg(CommandLabel(command), ResultLabel(result));
     const auto target = command_target_device_id_.isEmpty() ? selectedTargetDeviceId() : command_target_device_id_;
-    setCommandPresentation(target, text, ProgressCommandStyle());
+    setCommandPresentation(target, text, ProgressCommandStyle(), detail);
     updateButtonStates();
 }
 
 void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt::CommandResult result,
                                              const QString& detail) {
     control_state_.setCommandFinished();
-    auto text = QStringLiteral("%1\n%2").arg(CommandLabel(command), ResultLabel(result));
-    if (!detail.isEmpty()) {
-        text.append(QStringLiteral("\n%1").arg(detail));
-    }
+    const auto text = QStringLiteral("%1 · %2").arg(CommandLabel(command), ResultLabel(result));
     const bool succeeded = result == mqtt::CommandResult::kSuccess;
     const auto target = command_target_device_id_.isEmpty() ? selectedTargetDeviceId() : command_target_device_id_;
-    setCommandPresentation(target, text, succeeded ? SuccessCommandStyle() : FailureCommandStyle());
+    setCommandPresentation(target, text, succeeded ? SuccessCommandStyle() : FailureCommandStyle(), detail);
     const bool applies_to_selected_target =
         command_target_device_id_.isEmpty() || command_target_device_id_ == selectedTargetDeviceId();
     if (succeeded && applies_to_selected_target) {
@@ -366,9 +361,9 @@ bool ProcessControlPanel::hasBlockingSensorWarning() const {
 }
 
 void ProcessControlPanel::setCommandPresentation(const QString& target_device_id, const QString& text,
-                                                 const QString& style) {
+                                                 const QString& style, const QString& detail) {
     const auto target = target_device_id.isEmpty() ? QStringLiteral("SYSTEM") : target_device_id;
-    const CommandPresentation presentation{ .text = text, .style = style };
+    const CommandPresentation presentation{ .text = text, .detail = detail, .style = style };
     if (target == QStringLiteral("SYSTEM") || target == QStringLiteral("ALL")) {
         command_presentations_.insert(QStringLiteral("SYSTEM"), presentation);
         command_presentations_.insert(selectedTargetDeviceId(), presentation);
@@ -388,10 +383,14 @@ void ProcessControlPanel::updateCommandPresentation() {
     const auto presentation = command_presentations_.constFind(selectedTargetDeviceId());
     if (presentation == command_presentations_.cend()) {
         command_status_->setText(QStringLiteral("대기 중"));
+        command_status_->setToolTip({});
         command_status_->setStyleSheet(IdleCommandStyle());
         return;
     }
     command_status_->setText(presentation->text);
+    command_status_->setToolTip(presentation->detail.isEmpty()
+                                    ? presentation->text
+                                    : QStringLiteral("%1\n%2").arg(presentation->text, presentation->detail));
     command_status_->setStyleSheet(presentation->style);
 }
 

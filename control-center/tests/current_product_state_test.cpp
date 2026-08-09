@@ -62,7 +62,10 @@ int main() {
     result = state.applyEnvelope(Envelope("MSG-A-LATE", "PRODUCT_IMAGE", "WORK-A",
                                           { { QStringLiteral("imageUrl"), QStringLiteral("images/late-a.jpg") } },
                                           QStringLiteral("2026-07-16T01:01:01.000Z")));
-    assert(result.handled && !result.applied);
+    assert(result.handled && result.applied);
+    assert(state.products().size() == 2);
+    assert(state.products().front().image_path == QStringLiteral("images/late-a.jpg"));
+    assert(state.product().work_id == QStringLiteral("WORK-B"));
 
     result =
         state.applyEnvelope(Envelope("MSG-B-2", "BARCODE_DETECTED", "WORK-B",

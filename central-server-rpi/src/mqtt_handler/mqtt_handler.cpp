@@ -122,12 +122,28 @@ void DefaultLog(MqttHandlerLogLevel level, std::string_view message) {
     return output;
 }
 
+[[nodiscard]] mqtt::DeviceStatusPayload MakeDeviceStatusPayload(const DeviceSnapshot& device) {
+    return {
+        .status = device.connection_state,
+        .current_state = device.current_state.empty() ? "UNKNOWN" : device.current_state,
+        .job_id = device.job_id,
+        .error_code = device.error_code,
+        .departure_position = device.departure_position,
+        .target_position = device.target_position,
+        .confirmed_position = device.confirmed_position,
+        .movement_state = device.movement_state,
+        .position_reset = device.position_reset,
+    };
+}
+
 }  // namespace
 
-MqttHandler::MqttHandler(DeviceManager& device_manager, Logger logger, PersistenceService* persistence_service)
+MqttHandler::MqttHandler(DeviceManager& device_manager, Logger logger, PersistenceService* persistence_service,
+                         std::string default_destination)
     : device_manager_(device_manager),
       logger_(logger ? std::move(logger) : Logger(DefaultLog)),
-      persistence_service_(persistence_service) {}
+      persistence_service_(persistence_service),
+      default_destination_(std::move(default_destination)) {}
 
 void MqttHandler::SetWorkCreatedHandler(WorkCreatedHandler handler) {
     work_created_handler_ = std::move(handler);
@@ -179,6 +195,7 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
     }
 
     const auto parsed_topic = mqtt::ParseTopic(topic);
+    bool device_registry_updated = false;
     if (process_message_guard_ && !process_message_guard_(decoded.value)) {
         Log(MqttHandlerLogLevel::kError, "MQTT process transition rejected before persistence");
         return false;
@@ -219,6 +236,15 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             Log(MqttHandlerLogLevel::kError, "MQTT process transition commit failed");
             return false;
         }
+        if (IsDeviceRegistryMessage(decoded.value.message_type)) {
+            const std::string effective_received_at =
+                received_at.empty() ? CurrentIso8601Timestamp() : std::string(received_at);
+            if (!device_manager_.HandleMessage(parsed_topic, decoded.value, effective_received_at)) {
+                Log(MqttHandlerLogLevel::kError, "device registry update failed: " + device_manager_.LastError());
+                return false;
+            }
+            device_registry_updated = true;
+        }
 
         std::optional<mqtt::MqttMessage> catalog_product_message;
         if (const auto* barcode = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(decoded.value);
@@ -229,6 +255,16 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             if (!lookup_status.ok()) {
                 Log(MqttHandlerLogLevel::kError, "product catalog lookup failed: " + lookup_status.message);
                 return false;
+            }
+            if (!catalog_product && !default_destination_.empty()) {
+                Log(MqttHandlerLogLevel::kInfo, "product catalog miss; using default destination=" +
+                                                    default_destination_ + "; barcode=" + barcode->barcode);
+                catalog_product = CatalogProduct{
+                    .barcode = barcode->barcode,
+                    .product_id = "UNREGISTERED",
+                    .product_name = "Unregistered product",
+                    .destination = default_destination_,
+                };
             }
             if (catalog_product) {
                 catalog_product_message = mqtt::MqttMessage{
@@ -310,11 +346,11 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             route_succeeded = command_route_handler_(decoded.value);
         } else if (parsed_topic.kind == mqtt::TopicKind::kDeviceResponse && qt_response_handler_) {
             route_succeeded = qt_response_handler_(decoded.value);
-        } else if (parsed_topic.kind == mqtt::TopicKind::kDeviceStatus && qt_status_handler_) {
-            route_succeeded = qt_status_handler_(decoded.value);
-        } else if (parsed_topic.kind == mqtt::TopicKind::kDeviceHeartbeat && qt_status_handler_) {
-            const auto* heartbeat = mqtt::GetPayload<mqtt::HeartbeatPayload>(decoded.value);
-            if (heartbeat == nullptr) {
+        } else if ((parsed_topic.kind == mqtt::TopicKind::kDeviceStatus ||
+                    parsed_topic.kind == mqtt::TopicKind::kDeviceHeartbeat) &&
+                   qt_status_handler_) {
+            const auto device = device_manager_.FindDevice(parsed_topic.endpoint_id);
+            if (!device.has_value()) {
                 route_succeeded = false;
             } else {
                 const mqtt::MqttMessage status_message{
@@ -323,13 +359,7 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
                     .message_type = mqtt::MessageType::kDeviceStatus,
                     .source_id = decoded.value.source_id,
                     .timestamp = decoded.value.timestamp,
-                    .data =
-                        mqtt::DeviceStatusPayload{
-                            .status = heartbeat->status,
-                            .current_state = heartbeat->current_state,
-                            .job_id = heartbeat->job_id,
-                            .error_code = heartbeat->error_code,
-                        },
+                    .data = MakeDeviceStatusPayload(*device),
                 };
                 route_succeeded = qt_status_handler_(status_message);
             }
@@ -344,7 +374,7 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
         Log(MqttHandlerLogLevel::kError, "MQTT process transition commit failed");
         return false;
     }
-    if (IsDeviceRegistryMessage(decoded.value.message_type)) {
+    if (IsDeviceRegistryMessage(decoded.value.message_type) && !device_registry_updated) {
         const std::string effective_received_at =
             received_at.empty() ? CurrentIso8601Timestamp() : std::string(received_at);
         if (!device_manager_.HandleMessage(parsed_topic, decoded.value, effective_received_at)) {
@@ -378,15 +408,7 @@ bool MqttHandler::CheckHeartbeatTimeouts(std::string_view checked_at) {
             .message_type = mqtt::MessageType::kDeviceStatus,
             .source_id = device.device_id,
             .timestamp = effective_checked_at,
-            .data =
-                mqtt::DeviceStatusPayload{
-                    .status = device.connection_state,
-                    .current_state = device.current_state.empty() ? "UNKNOWN" : device.current_state,
-                    .job_id = device.job_id,
-                    .error_code = device.connection_state == mqtt::ConnectionState::kOffline
-                                      ? std::optional<std::string>("ERR-HEARTBEAT-TIMEOUT")
-                                      : device.error_code,
-                },
+            .data = MakeDeviceStatusPayload(device),
         };
         if (process_message_guard_ && !process_message_guard_(status_message)) {
             published = false;
@@ -408,6 +430,36 @@ bool MqttHandler::CheckHeartbeatTimeouts(std::string_view checked_at) {
                                             "; status=" + std::string(mqtt::ToString(device.connection_state)));
     }
     return published;
+}
+
+bool MqttHandler::ReplayDeviceStatuses(std::string_view target_device_id, std::string_view replayed_at) {
+    if (!qt_status_handler_) {
+        return false;
+    }
+    const bool replay_all = target_device_id == "ALL" || target_device_id == "SYSTEM";
+    const std::string fallback_timestamp = replayed_at.empty() ? CurrentIso8601Timestamp() : std::string(replayed_at);
+    bool matched = false;
+    bool published = true;
+
+    for (const auto& device : device_manager_.RegisteredDevices()) {
+        if (!replay_all && device.device_id != target_device_id) {
+            continue;
+        }
+        matched = true;
+        const mqtt::MqttMessage status_message{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "SNAPSHOT-" + device.device_id + "-" + std::to_string(++replay_message_sequence_),
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .source_id = device.device_id,
+            .timestamp = device.last_message_timestamp.empty() ? fallback_timestamp : device.last_message_timestamp,
+            .data = MakeDeviceStatusPayload(device),
+        };
+        if (!qt_status_handler_(status_message)) {
+            published = false;
+            Log(MqttHandlerLogLevel::kError, "device snapshot replay failed for " + device.device_id);
+        }
+    }
+    return matched && published;
 }
 
 void MqttHandler::Log(MqttHandlerLogLevel level, std::string_view message) const {

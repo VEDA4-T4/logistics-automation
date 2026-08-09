@@ -2,6 +2,7 @@
 
 #include <QJsonObject>
 #include <QObject>
+#include <QSslConfiguration>
 #include <QString>
 
 #include "logistics/contracts/mqtt_message.hpp"
@@ -16,9 +17,11 @@ struct MqttClientConfig {
     QString client_id;
     QString username;
     QString password;
+    QString ca_certificate;
     int port{ 1883 };
     int reconnect_interval_ms{ 3000 };
     int keep_alive_seconds{ 30 };
+    bool tls_enabled{ false };
 };
 
 class MqttClient final : public QObject {
@@ -40,9 +43,11 @@ public:
     void stop();
     [[nodiscard]] qint32 publishCommand(logistics::contracts::mqtt::ControlCommand command,
                                         const QString& target_device_id, const QString& component_id = {});
+    [[nodiscard]] qint32 requestCentralSnapshots();
 
 signals:
     void connectionStateChanged(ConnectionState state, const QString& detail);
+    void subscriptionsReady();
     void messageReceived(const QString& topic, const QJsonObject& envelope);
     void messageRejected(const QString& topic, const QString& reason);
     void errorOccurred(const QString& detail);
@@ -53,6 +58,9 @@ private:
     void connectToBroker();
     void scheduleReconnect();
     void subscribeRequiredTopics();
+    [[nodiscard]] qint32 publishCommand(logistics::contracts::mqtt::ControlCommand command,
+                                        const QString& target_device_id, const QString& component_id,
+                                        bool track_response);
     void handleMessage(const QByteArray& payload, const QString& topic);
     [[nodiscard]] QString errorDescription(int error) const;
 

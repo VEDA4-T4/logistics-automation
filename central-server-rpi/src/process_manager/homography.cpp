@@ -11,7 +11,7 @@ namespace logistics::central_server {
 namespace {
 
 constexpr double kMinimumDenominator = 1.0e-9;
-constexpr double kMinimumDeterminant = 1.0e-12;
+constexpr double kMinimumNormalizedDeterminant = 1.0e-12;
 constexpr double kPi = 3.14159265358979323846;
 
 [[nodiscard]] bool IsFinite(const double value) noexcept {
@@ -43,19 +43,35 @@ constexpr double kPi = 3.14159265358979323846;
     return x * x + y * y;
 }
 
+[[nodiscard]] double CoefficientScale(const std::array<double, 9>& matrix) noexcept {
+    double scale{};
+    for (const double value : matrix) {
+        scale = std::max(scale, std::abs(value));
+    }
+    return scale;
+}
+
+[[nodiscard]] bool IsScaleIndependentInvertible(const std::array<double, 9>& matrix) noexcept {
+    const double coefficient_scale = CoefficientScale(matrix);
+    if (coefficient_scale == 0.0) {
+        return false;
+    }
+
+    std::array<double, 9> normalized{};
+    std::transform(matrix.begin(), matrix.end(), normalized.begin(),
+                   [coefficient_scale](const double value) { return value / coefficient_scale; });
+    const double determinant = normalized[0] * (normalized[4] * normalized[8] - normalized[5] * normalized[7]) -
+                               normalized[1] * (normalized[3] * normalized[8] - normalized[5] * normalized[6]) +
+                               normalized[2] * (normalized[3] * normalized[7] - normalized[4] * normalized[6]);
+    return std::abs(determinant) > kMinimumNormalizedDeterminant;
+}
+
 }  // namespace
 
 bool HomographyConfig::IsValid() const noexcept {
     const bool finite_matrix = std::all_of(pixel_to_conveyor.begin(), pixel_to_conveyor.end(),
                                            [](const double value) { return IsFinite(value); });
-    const double determinant =
-        pixel_to_conveyor[0] *
-            (pixel_to_conveyor[4] * pixel_to_conveyor[8] - pixel_to_conveyor[5] * pixel_to_conveyor[7]) -
-        pixel_to_conveyor[1] *
-            (pixel_to_conveyor[3] * pixel_to_conveyor[8] - pixel_to_conveyor[5] * pixel_to_conveyor[6]) +
-        pixel_to_conveyor[2] *
-            (pixel_to_conveyor[3] * pixel_to_conveyor[7] - pixel_to_conveyor[4] * pixel_to_conveyor[6]);
-    return finite_matrix && std::abs(determinant) > kMinimumDeterminant && IsFinite(conveyor_plane_z_mm) &&
+    return finite_matrix && IsScaleIndependentInvertible(pixel_to_conveyor) && IsFinite(conveyor_plane_z_mm) &&
            IsFinite(robot_base_x_mm) && IsFinite(robot_base_y_mm) && IsFinite(robot_base_z_mm) &&
            IsFinite(robot_base_yaw_deg) && IsFinite(box_length_mm) && IsFinite(box_width_mm) &&
            IsFinite(box_height_mm) && box_length_mm >= box_width_mm && box_width_mm > 0.0 && box_height_mm > 0.0 &&
@@ -65,6 +81,12 @@ bool HomographyConfig::IsValid() const noexcept {
 HomographyTransformer::HomographyTransformer(HomographyConfig config) : config_(std::move(config)) {
     if (config_.enabled && !config_.IsValid()) {
         throw std::invalid_argument("invalid homography configuration");
+    }
+    if (config_.enabled) {
+        const double coefficient_scale = CoefficientScale(config_.pixel_to_conveyor);
+        for (double& coefficient : config_.pixel_to_conveyor) {
+            coefficient /= coefficient_scale;
+        }
     }
 }
 

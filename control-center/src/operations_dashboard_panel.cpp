@@ -3,22 +3,20 @@
 #include <QDateTime>
 #include <QEvent>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
 #include <QMouseEvent>
-#include <QScrollArea>
 #include <QSizePolicy>
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 
-#include "logistics/contracts/mqtt_message.hpp"
+#include "logistics/control_center/factory_top_view.hpp"
 
 namespace logistics::control_center {
 namespace {
-
-namespace mqtt = logistics::contracts::mqtt;
 
 struct StatusPresentation {
     QString text;
@@ -62,47 +60,26 @@ StatusPresentation OverallPresentation(OverallProcessState state) {
 }
 
 StatusPresentation ProcessPresentation(const ProcessUnitStatus& process) {
-    if (process.has_error) {
-        return { QStringLiteral("오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                 QStringLiteral("#6e2b2f") };
+    const auto state = BuildFactoryNodeVisual(process).state;
+    const auto foreground = FactoryNodeColor(state).name();
+    switch (state) {
+        case FactoryNodeVisualState::Disconnected:
+            return { QStringLiteral("연결 끊김"), QStringLiteral("#252526"), foreground, QStringLiteral("#3c3c3c") };
+        case FactoryNodeVisualState::EmergencyStop:
+            return { QStringLiteral("비상정지"), QStringLiteral("#521b20"), foreground, QStringLiteral("#a1262f") };
+        case FactoryNodeVisualState::Error:
+            return { QStringLiteral("오류"), QStringLiteral("#3b1f22"), foreground, QStringLiteral("#6e2b2f") };
+        case FactoryNodeVisualState::Working:
+            return { process.has_warning ? QStringLiteral("센서 경고") : QStringLiteral("작업 중"),
+                     QStringLiteral("#17324a"), foreground, QStringLiteral("#285a7e") };
+        case FactoryNodeVisualState::Running:
+            return { process.has_warning ? QStringLiteral("센서 경고") : QStringLiteral("가동 중"),
+                     QStringLiteral("#1f3325"), foreground, QStringLiteral("#385a40") };
+        case FactoryNodeVisualState::Waiting:
+            return { process.has_warning ? QStringLiteral("센서 경고") : QStringLiteral("대기"),
+                     QStringLiteral("#252526"), foreground, QStringLiteral("#3c3c3c") };
     }
-    if (process.has_warning) {
-        return { QStringLiteral("센서 경고"), QStringLiteral("#3a3000"), QStringLiteral("#cca700"),
-                 QStringLiteral("#6b5d00") };
-    }
-    switch (process.connection_state) {
-        case mqtt::ConnectionState::kOnline:
-            return { QStringLiteral("온라인"), QStringLiteral("#1f3325"), QStringLiteral("#89d185"),
-                     QStringLiteral("#385a40") };
-        case mqtt::ConnectionState::kDelayed:
-            return { QStringLiteral("응답 지연"), QStringLiteral("#3a3000"), QStringLiteral("#cca700"),
-                     QStringLiteral("#6b5d00") };
-        case mqtt::ConnectionState::kReconnecting:
-            return { QStringLiteral("재연결 중"), QStringLiteral("#3a2a20"), QStringLiteral("#ce9178"),
-                     QStringLiteral("#6b4938") };
-        case mqtt::ConnectionState::kOffline:
-            return { QStringLiteral("오프라인"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kRtspError:
-            return { QStringLiteral("RTSP 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kMqttError:
-            return { QStringLiteral("MQTT 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kMqttAuthError:
-            return { QStringLiteral("인증 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kTlsError:
-            return { QStringLiteral("TLS 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kUartError:
-            return { QStringLiteral("UART 오류"), QStringLiteral("#3b1f22"), QStringLiteral("#f14c4c"),
-                     QStringLiteral("#6e2b2f") };
-        case mqtt::ConnectionState::kUnknown:
-            break;
-    }
-    return { QStringLiteral("수신 대기"), QStringLiteral("#252526"), QStringLiteral("#9d9d9d"),
-             QStringLiteral("#3c3c3c") };
+    return {};
 }
 
 QString UpdatedAtText(const QDateTime& updated_at) {
@@ -198,28 +175,33 @@ QString SensorIndicatorText(const SensorUnitStatus& sensor) {
     return text;
 }
 
+void SetElidedText(QLabel* label, const QString& text) {
+    label->setText(label->fontMetrics().elidedText(text, Qt::ElideRight, 140));
+    label->setToolTip(text);
+}
+
 }  // namespace
 
 OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("operationsDashboard"));
-    setMinimumHeight(112);
-    setMaximumHeight(112);
+    setMinimumHeight(104);
+    setMaximumHeight(132);
     setStyleSheet(
-        "#operationsDashboard{background:#1f1f1f;border-bottom:1px solid #2b2b2b;}"
-        "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #2b2b2b;border-radius:6px;}"
+        "#operationsDashboard{background:#1f1f1f;border-bottom:1px solid #303030;}"
+        "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #303030;border-radius:6px;}"
         "#overallProcessCard[selectedControlTarget=\"true\"],#processUnitCard[selectedControlTarget=\"true\"]{"
         "background:#172534;border:2px solid #4daafc;}"
         "#overallProcessCard:hover,#processUnitCard:hover{border-color:#75beff;}"
         "#processStatusSection,#processStatusContent{background:#1f1f1f;border:0;}"
         "QLabel{color:#cccccc;}");
 
-    auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(10, 7, 10, 7);
-    layout->setSpacing(8);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(10, 6, 10, 6);
+    layout->setSpacing(4);
 
     overall_card_ = new QFrame(this);
     overall_card_->setObjectName(QStringLiteral("overallProcessCard"));
-    overall_card_->setFixedWidth(250);
+    overall_card_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     overall_card_->setCursor(Qt::PointingHandCursor);
     overall_card_->setProperty("controlTargetDeviceId", QStringLiteral("SYSTEM"));
     overall_card_->installEventFilter(this);
@@ -250,14 +232,12 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     for (auto* label : overall_card_->findChildren<QLabel*>()) {
         label->setAttribute(Qt::WA_TransparentForMouseEvents);
     }
-    layout->addWidget(overall_card_);
-
     auto* process_section = new QWidget(this);
     process_section->setObjectName(QStringLiteral("processStatusSection"));
     process_section->setAttribute(Qt::WA_StyledBackground);
     auto* process_section_layout = new QVBoxLayout(process_section);
     process_section_layout->setContentsMargins(0, 0, 0, 0);
-    process_section_layout->setSpacing(3);
+    process_section_layout->setSpacing(8);
     auto* process_header = new QHBoxLayout();
     process_header->setContentsMargins(2, 0, 2, 0);
     auto* process_title = new QLabel(QStringLiteral("공정·지원 노드 실시간 상태"), process_section);
@@ -270,27 +250,15 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     process_header->addWidget(live_status_);
     process_section_layout->addLayout(process_header);
 
-    auto* scroll_area = new QScrollArea(process_section);
-    scroll_area->setWidgetResizable(true);
-    scroll_area->setFrameShape(QFrame::NoFrame);
-    scroll_area->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    scroll_area->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll_area->setStyleSheet(
-        "QScrollArea{background:#1f1f1f;border:0;}"
-        "QScrollArea>QWidget>QWidget{background:#1f1f1f;}"
-        "QScrollBar:horizontal{height:4px;background:#1f1f1f;}"
-        "QScrollBar::handle:horizontal{background:#454545;border-radius:2px;min-width:24px;}"
-        "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}");
-    scroll_area->viewport()->setStyleSheet("background:#1f1f1f;");
-    auto* process_content = new QWidget(scroll_area);
-    process_content->setObjectName(QStringLiteral("processStatusContent"));
+    auto* process_content = new QWidget(process_section);
+    process_content->setObjectName(QStringLiteral("processCardGrid"));
     process_content->setAttribute(Qt::WA_StyledBackground);
-    process_layout_ = new QHBoxLayout(process_content);
+    process_layout_ = new QGridLayout(process_content);
     process_layout_->setContentsMargins(0, 0, 0, 0);
-    process_layout_->setSpacing(4);
-    scroll_area->setWidget(process_content);
-    process_section_layout->addWidget(scroll_area, 1);
-    layout->addWidget(process_section, 1);
+    process_layout_->setSpacing(8);
+    process_layout_->addWidget(overall_card_, 0, 0);
+    process_section_layout->addWidget(process_content, 1);
+    layout->addWidget(process_section);
 
     timestamp_timer_ = new QTimer(this);
     timestamp_timer_->setInterval(1000);
@@ -368,7 +336,6 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.card = new QFrame(this);
     widgets.card->setObjectName(QStringLiteral("processUnitCard"));
     widgets.card->setAttribute(Qt::WA_StyledBackground);
-    widgets.card->setMinimumWidth(170);
     widgets.card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     widgets.card->setCursor(Qt::PointingHandCursor);
     widgets.card->setProperty("controlTargetDeviceId", process.device_id);
@@ -382,6 +349,7 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     auto* title = new QLabel(process.display_name, widgets.card);
     title->setStyleSheet("color:#f0f0f0;font-size:10px;font-weight:700;");
     widgets.status = new QLabel(widgets.card);
+    widgets.status->setObjectName(QStringLiteral("processVisualStatus"));
     header->addWidget(title);
     header->addStretch();
     header->addWidget(widgets.status);
@@ -389,11 +357,15 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.current_state->setStyleSheet("color:#75beff;font-size:10px;font-weight:600;");
     widgets.work_or_error = new QLabel(widgets.card);
     widgets.work_or_error->setStyleSheet("color:#9d9d9d;font-size:9px;");
+    widgets.work_or_error->setMinimumWidth(0);
+    widgets.work_or_error->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     widgets.device_and_updated_at = new QLabel(widgets.card);
     widgets.device_and_updated_at->setStyleSheet("color:#7f7f7f;font-size:8px;");
+    widgets.device_and_updated_at->setMinimumWidth(0);
+    widgets.device_and_updated_at->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto* sensor_layout = new QHBoxLayout();
     sensor_layout->setContentsMargins(0, 0, 0, 0);
-    sensor_layout->setSpacing(7);
+    sensor_layout->setSpacing(8);
     for (const auto& sensor : process.sensors) {
         auto* indicator = new QLabel(widgets.card);
         indicator->setObjectName(QStringLiteral("sensorStatusIndicator"));
@@ -419,14 +391,15 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
 }
 
 void OperationsDashboardPanel::rebuildProcessCards() {
-    process_cards_.clear();
-    while (auto* item = process_layout_->takeAt(0)) {
-        delete item->widget();
-        delete item;
+    for (const auto& widgets : process_cards_) {
+        delete widgets.card;
     }
-    for (const auto& process : processes_) {
+    process_cards_.clear();
+    for (qsizetype index = 0; index < processes_.size(); ++index) {
+        const auto& process = processes_[index];
         auto widgets = createProcessCard(process);
-        process_layout_->addWidget(widgets.card, 1);
+        process_layout_->addWidget(widgets.card, 0, static_cast<int>(index) + 1);
+        process_layout_->setColumnStretch(static_cast<int>(index) + 1, 1);
         process_cards_.insert(process.key, widgets);
     }
     refreshControlTargetSelection();
@@ -458,27 +431,25 @@ void OperationsDashboardPanel::refreshProcesses() {
         widgets.status->setStyleSheet(PillStyle(presentation));
         widgets.current_state->setText(CurrentStateText(process.current_state));
         widgets.current_state->setToolTip(process.current_state);
+        QString work_or_error;
         if (process.has_error) {
-            widgets.work_or_error->setText(process.error_code.isEmpty()
-                                               ? QStringLiteral("오류 발생")
-                                               : QStringLiteral("오류 · %1").arg(process.error_code));
+            work_or_error = process.error_code.isEmpty() ? QStringLiteral("오류 발생")
+                                                         : QStringLiteral("오류 · %1").arg(process.error_code);
             widgets.work_or_error->setStyleSheet("color:#f14c4c;font-size:9px;");
         } else if (process.has_warning) {
-            widgets.work_or_error->setText(IsSensorStaleErrorCode(process.error_code)
-                                               ? QStringLiteral("경고 · 센서 응답 지연")
-                                               : QStringLiteral("경고 · %1").arg(process.error_code));
+            work_or_error = IsSensorStaleErrorCode(process.error_code)
+                                ? QStringLiteral("경고 · 센서 응답 지연")
+                                : QStringLiteral("경고 · %1").arg(process.error_code);
             widgets.work_or_error->setStyleSheet("color:#cca700;font-size:9px;");
         } else {
-            widgets.work_or_error->setText(process.work_id.isEmpty()
-                                               ? QStringLiteral("작업 · 없음")
-                                               : QStringLiteral("작업 · %1").arg(process.work_id));
+            work_or_error = process.work_id.isEmpty() ? QStringLiteral("작업 · 없음")
+                                                      : QStringLiteral("작업 · %1").arg(process.work_id);
             widgets.work_or_error->setStyleSheet("color:#9d9d9d;font-size:9px;");
         }
-        widgets.work_or_error->setToolTip(process.has_error || process.has_warning ? process.error_code
-                                                                                   : process.work_id);
-        widgets.device_and_updated_at->setText(
-            QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
-        widgets.device_and_updated_at->setToolTip(process.updated_at.toLocalTime().toString(Qt::ISODateWithMs));
+        SetElidedText(widgets.work_or_error, work_or_error);
+        const auto device_and_updated_at =
+            QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at));
+        SetElidedText(widgets.device_and_updated_at, device_and_updated_at);
         for (const auto& sensor : process.sensors) {
             auto* indicator = widgets.sensor_indicators.value(sensor.sensor_id, nullptr);
             if (indicator == nullptr) {
@@ -505,8 +476,8 @@ void OperationsDashboardPanel::refreshTimestamps() {
     for (const auto& process : processes_) {
         auto iterator = process_cards_.find(process.key);
         if (iterator != process_cards_.end()) {
-            iterator->device_and_updated_at->setText(
-                QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
+            SetElidedText(iterator->device_and_updated_at,
+                          QStringLiteral("%1 · %2").arg(process.device_id, UpdatedAtText(process.updated_at)));
         }
     }
 }

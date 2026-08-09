@@ -143,8 +143,13 @@ static uint8_t input_control_task_send_tx(const input_control_task_response_t* r
         return 0U;
     }
 
-    if (CommTx_SendWithSequence(channel, response->sequence, response->command, response->payload, response->length) !=
-        0) {
+    /*
+     * urgent 큐를 쓴다. 이 응답은 Pi가 ~400ms 재시도 예산 안에 받아야 하는데,
+     * 일반 큐는 센서 텔레메트리(SENSOR_STATUS, 상태 무관 매 폴링 전송)와
+     * heartbeat가 상시 점유하고 있어 링버퍼에 밀리면 그 예산을 넘길 수 있다.
+     */
+    if (CommTx_SendUrgentWithSequence(channel, response->sequence, response->command, response->payload,
+                                      response->length) != 0) {
         inputControlTaskStats.txQueueDrops++;
         return 0U;
     }
