@@ -170,20 +170,6 @@ std::optional<DeviceMessageOrder> ParseDeviceMessageOrder(const QString& message
                : std::nullopt;
 }
 
-bool IsConnectionError(mqtt::ConnectionState state) {
-    switch (state) {
-        case mqtt::ConnectionState::kOffline:
-        case mqtt::ConnectionState::kRtspError:
-        case mqtt::ConnectionState::kMqttError:
-        case mqtt::ConnectionState::kMqttAuthError:
-        case mqtt::ConnectionState::kTlsError:
-        case mqtt::ConnectionState::kUartError:
-            return true;
-        default:
-            return false;
-    }
-}
-
 QString WorkIdFor(mqtt::MessageType type, const QJsonObject& data) {
     switch (type) {
         case mqtt::MessageType::kWorkCreated:
@@ -611,10 +597,10 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 error_code.isEmpty() && HasFaultedSensor(process.status) ? QStringLiteral("ERR-SENSOR") : error_code;
             process.status.has_warning = sensor_stale;
             process.status.has_error =
-                !sensor_stale && (IsConnectionError(connection_state) || !process.status.error_code.isEmpty() ||
+                !sensor_stale && (mqtt::IsConnectionFailure(connection_state) || !process.status.error_code.isEmpty() ||
                                   (!sensor_telemetry && StateMeaning(process.status, current_state) ==
                                                             contracts::DeviceStateMeaning::kError));
-            if (IsConnectionError(process.status.connection_state)) {
+            if (mqtt::IsConnectionFailure(process.status.connection_state)) {
                 process.status.destination.clear();
             }
             process.status.updated_at = timestamp;
@@ -820,7 +806,7 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
         if (IsOperationalWaitingState(process.current_state)) {
             ++operational_waiting_processes;
         }
-        if (process.has_error || IsConnectionError(process.connection_state)) {
+        if (process.has_error || mqtt::IsConnectionFailure(process.connection_state)) {
             ++error_processes;
             if (first_error.isEmpty()) {
                 first_error = process.error_code.isEmpty()

@@ -291,6 +291,24 @@ void TestHealthyStoppedNodesDoNotFailTheProcess() {
     }
 }
 
+void TestDeviceEmergencyStopPreservesEmergencyState() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    assert(orchestrator.BeginWork("MSG-ESTOP-WORK", kWorkId, "PI-INPUT-01").Applied());
+
+    const auto spontaneous = orchestrator.Handle(
+        Status("MSG-ESTOP-INPUT", "PI-INPUT-01", "EMERGENCY_STOP", mqtt::ConnectionState::kOnline, std::nullopt));
+    assert(spontaneous.handled && spontaneous.transition.Applied());
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kEmergencyStop);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kEmergencyStopped);
+
+    const auto confirmation = orchestrator.Handle(
+        Status("MSG-ESTOP-LINE", "PI-LT-01", "EMERGENCY_STOP", mqtt::ConnectionState::kOnline, std::nullopt));
+    assert(confirmation.handled);
+    assert(confirmation.transition.disposition == central_server::TransitionDisposition::kDuplicate);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kEmergencyStop);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kEmergencyStopped);
+}
+
 void TestRestoredHomographyTargetCreatesGripperCommand() {
     central_server::ProcessOrchestrator orchestrator({
         .enabled = true,
@@ -557,6 +575,7 @@ int main() {
     TestInputOfflineStatusStopsTheProcess();
     TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess();
     TestHealthyStoppedNodesDoNotFailTheProcess();
+    TestDeviceEmergencyStopPreservesEmergencyState();
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();
     TestChangedCalibrationDiscardsRestoredTarget();

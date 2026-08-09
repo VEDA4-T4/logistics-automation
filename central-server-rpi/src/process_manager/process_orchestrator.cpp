@@ -23,12 +23,6 @@ namespace mqtt = contracts::mqtt;
     return std::ranges::find(expected, value) != expected.end();
 }
 
-[[nodiscard]] bool IsConnectionFailure(mqtt::ConnectionState state) noexcept {
-    return state == mqtt::ConnectionState::kOffline || state == mqtt::ConnectionState::kRtspError ||
-           state == mqtt::ConnectionState::kMqttError || state == mqtt::ConnectionState::kMqttAuthError ||
-           state == mqtt::ConnectionState::kTlsError || state == mqtt::ConnectionState::kUartError;
-}
-
 [[nodiscard]] std::optional<contracts::DeviceRole> DeviceRoleForSource(const ProcessOrchestratorConfig& config,
                                                                        std::string_view source_id) noexcept {
     if (source_id == config.input_device_id) {
@@ -341,9 +335,17 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             machine.SystemState() == ProcessSystemState::kRecovery && role == contracts::DeviceRole::kLineTracer &&
             current_state == "POSITION_UNKNOWN" && status->status == mqtt::ConnectionState::kOnline &&
             !status->error_code.has_value() && status->position_reset;
+        const bool connection_failure = mqtt::IsConnectionFailure(status->status);
+        if (role.has_value() && !expected_position_reset && !connection_failure &&
+            meaning == contracts::DeviceStateMeaning::kEmergencyStop) {
+            return {
+                .handled = true,
+                .transition = machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop),
+                .commands = {},
+            };
+        }
         if (role.has_value() && !expected_position_reset &&
-            (IsConnectionFailure(status->status) || meaning == contracts::DeviceStateMeaning::kError ||
-             meaning == contracts::DeviceStateMeaning::kEmergencyStop)) {
+            (connection_failure || meaning == contracts::DeviceStateMeaning::kError)) {
             return {
                 .handled = true,
                 .transition = machine.ApplySystemFailure(std::string(contracts::ToString(*role)) +
