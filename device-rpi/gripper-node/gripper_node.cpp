@@ -751,8 +751,7 @@ GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step
         case GripperCycleStep::kReleaseClaw:
             return GripperCycleStep::kPlaceRetreat;
         case GripperCycleStep::kPlaceRetreat:
-            return (phase == GripperPhase::kPlace) ? GripperCycleStep::kCompleted
-                                                   : GripperCycleStep::kReturnTransfer;
+            return (phase == GripperPhase::kPlace) ? GripperCycleStep::kCompleted : GripperCycleStep::kReturnTransfer;
         case GripperCycleStep::kReturnTransfer:
             return GripperCycleStep::kReturnPickSide;
         case GripperCycleStep::kReturnPickSide:
