@@ -154,8 +154,7 @@ void TestEventFlowCreatesCommandsForEachNode() {
     const auto idle_gripper = orchestrator.Handle(Status("MSG-GRIPPER-READY", "PI-GRIPPER-01", "READY"));
     assert(!idle_gripper.handled);
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kGripperRequested);
-    const auto early_completion =
-        orchestrator.Handle(Status("MSG-GRIPPER-EARLY-DONE", "PI-GRIPPER-01", "COMPLETED"));
+    const auto early_completion = orchestrator.Handle(Status("MSG-GRIPPER-EARLY-DONE", "PI-GRIPPER-01", "COMPLETED"));
     assert(!early_completion.transition.Applied() && early_completion.commands.empty());
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kGripperRequested);
     assert(orchestrator.Handle(Status("MSG-GRIPPER-START", "PI-GRIPPER-01", "TRANSFERRING")).transition.Applied());

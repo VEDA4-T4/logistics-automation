@@ -531,7 +531,8 @@ void test_recovery_releases_safety_without_component() {
     fixture.reports.clear();
     fixture.backend->written_commands.clear();
 
-    static_cast<void>(fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-safety")));
+    static_cast<void>(
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-safety")));
     assert(fixture.backend->written_commands.size() == 1U);
     assert(fixture.backend->written_commands[0] == UART_CMD_RESET_DEVICE);
     fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));

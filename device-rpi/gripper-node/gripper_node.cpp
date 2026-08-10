@@ -927,8 +927,8 @@ void GripperNode::FinishCycle() {
     if (was_home_only) {
         EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kSuccess, std::nullopt,
                             "gripper returned home");
-        const bool enters_running = mqtt_command == mqtt::ControlCommand::kStart ||
-                                    mqtt_command == mqtt::ControlCommand::kRestart;
+        const bool enters_running =
+            mqtt_command == mqtt::ControlCommand::kStart || mqtt_command == mqtt::ControlCommand::kRestart;
         EmitDeviceStatus(enters_running ? "RUNNING" : "READY");
         return;
     }
@@ -1098,10 +1098,10 @@ void GripperNode::HandleMotionFault(const uart_frame_t& frame) {
 void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
     const bool latched = frame.payload[kSafetyEventLatchedIndex] != 0U;
     const std::uint8_t cause = frame.payload[kSafetyEventCauseIndex];
-    const bool requested = estop_requested_ ||
-        pending_safety_.active &&
-        ((pending_safety_.expected == PendingSafetyEvent::kEstopLatched && latched) ||
-         (pending_safety_.expected == PendingSafetyEvent::kReleased && !latched));
+    const bool requested =
+        estop_requested_ ||
+        pending_safety_.active && ((pending_safety_.expected == PendingSafetyEvent::kEstopLatched && latched) ||
+                                   (pending_safety_.expected == PendingSafetyEvent::kReleased && !latched));
     estop_latched_ = latched;
 
     if (latched) {
@@ -1163,12 +1163,12 @@ void GripperNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
     }
 
     const std::optional<std::string> error_code =
-        (state.error_code == UART_ERROR_NONE ||
-         (estop_requested_ && state.error_code == UART_ERROR_EMERGENCY_STOP))
+        (state.error_code == UART_ERROR_NONE || (estop_requested_ && state.error_code == UART_ERROR_EMERGENCY_STOP))
             ? std::nullopt
             : std::optional{ DescribeUartError(state.error_code) };
-    EmitDeviceStatus(running_requested_ && state.device_state == UART_DEVICE_READY ? "RUNNING"
-                                                                                   : DescribeDeviceState(state.device_state),
+    EmitDeviceStatus(running_requested_ && state.device_state == UART_DEVICE_READY
+                         ? "RUNNING"
+                         : DescribeDeviceState(state.device_state),
                      error_code);
 }
 
@@ -1185,9 +1185,8 @@ void GripperNode::HandleDeviceStatus(const uart_frame_t& frame) {
         (error_code == UART_ERROR_NONE || (estop_requested_ && error_code == UART_ERROR_EMERGENCY_STOP))
             ? std::nullopt
             : std::optional{ DescribeUartError(error_code) };
-    EmitDeviceStatus(running_requested_ && device_state == UART_DEVICE_READY ? "RUNNING"
-                                                                              : DescribeDeviceState(device_state),
-                     error);
+    EmitDeviceStatus(
+        running_requested_ && device_state == UART_DEVICE_READY ? "RUNNING" : DescribeDeviceState(device_state), error);
 }
 
 void GripperNode::EmitControllerStatus(const uart_frame_t& response) {

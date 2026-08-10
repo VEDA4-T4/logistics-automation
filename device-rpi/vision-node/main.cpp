@@ -611,8 +611,8 @@ int main(const int argc, char* argv[]) {
             next_heartbeat = loop_now + logistics::contracts::mqtt::kHeartbeatInterval;
         }
         if (const auto pending_work_id = result_outbox.PendingWorkId(); pending_work_id.has_value()) {
-            const bool image_upload_pending = pending_image_upload_work_id.has_value() &&
-                                              *pending_image_upload_work_id == *pending_work_id;
+            const bool image_upload_pending =
+                pending_image_upload_work_id.has_value() && *pending_image_upload_work_id == *pending_work_id;
             if (!mqtt_client.IsConnected()) {
                 device_status->SetCurrentState("MQTT_DISCONNECTED");
             } else if (result_outbox.Flush(
@@ -799,26 +799,26 @@ int main(const int argc, char* argv[]) {
                             std::launch::async,
                             [uploader = image_uploader.get(), device_id, assigned_work = std::move(assigned_work),
                              upload_message_id, captured_at, generation, frame = std::move(captured_frame)]() mutable {
-                                    ImageUploadCompletion completion{
-                                        .work = std::move(assigned_work),
-                                        .publications = {},
-                                        .captured_at = captured_at,
-                                        .generation = generation,
-                                    };
-                                    try {
-                                        std::vector<std::uint8_t> jpeg;
-                                        completion.encoded =
-                                            cv::imencode(".jpg", frame, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 });
-                                        if (completion.encoded) {
-                                            completion.result = uploader->Upload(
-                                                device_id, completion.work.work_id, upload_message_id, captured_at,
-                                                completion.work.observation.image_name, "image/jpeg", jpeg);
-                                        }
-                                    } catch (const std::exception& error) {
-                                        completion.result.error = error.what();
+                                ImageUploadCompletion completion{
+                                    .work = std::move(assigned_work),
+                                    .publications = {},
+                                    .captured_at = captured_at,
+                                    .generation = generation,
+                                };
+                                try {
+                                    std::vector<std::uint8_t> jpeg;
+                                    completion.encoded =
+                                        cv::imencode(".jpg", frame, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 });
+                                    if (completion.encoded) {
+                                        completion.result = uploader->Upload(
+                                            device_id, completion.work.work_id, upload_message_id, captured_at,
+                                            completion.work.observation.image_name, "image/jpeg", jpeg);
                                     }
-                                    return completion;
-                                }));
+                                } catch (const std::exception& error) {
+                                    completion.result.error = error.what();
+                                }
+                                return completion;
+                            }));
                         pending_capture.Reset();
                         device_status->SetCurrentState("RESULT_PENDING");
                         result_deferred = true;
