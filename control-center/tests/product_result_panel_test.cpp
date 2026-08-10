@@ -84,9 +84,8 @@ int main(int argc, char* argv[]) {
     product.product_name = QStringLiteral("Long product name that must stay available in full");
     product.destination = QStringLiteral("outbound-dispatch-zone-northwest");
     product.confidence = 0.987;
+    product.processing_result = logistics::control_center::ProductProcessingResult::Processing;
     product.updated_at = QDateTime::fromString(QStringLiteral("2026-08-04T12:34:56"), Qt::ISODate);
-    product.product_info_received = true;
-    product.recognition_state = logistics::control_center::ProductRecognitionState::Recognized;
     panel.setCurrentProduct(product);
 
     assert(panel.minimumHeight() <= 180);
@@ -108,6 +107,7 @@ int main(int argc, char* argv[]) {
 
     auto second_product = product;
     second_product.work_id = QStringLiteral("work-second");
+    second_product.processing_result = logistics::control_center::ProductProcessingResult::Success;
     logistics::control_center::ProcessUnitStatus line_tracer;
     line_tracer.key = QStringLiteral("linetracer");
     line_tracer.display_name = QStringLiteral("라인트레이서");

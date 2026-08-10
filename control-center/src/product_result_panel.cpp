@@ -259,13 +259,14 @@ void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
     active_products_.clear();
     processes_ = processes;
     for (const auto& product : products) {
-        if (!product.product_info_received || product.recognition_state != ProductRecognitionState::Recognized) {
+        if (product.barcode.isEmpty()) {
             continue;
         }
         const bool active = std::any_of(processes.cbegin(), processes.cend(), [&product](const auto& process) {
             return process.work_id == product.work_id && !process.work_completed;
         });
-        if (active) {
+        if (active || (product.processing_result != ProductProcessingResult::Success &&
+                       product.processing_result != ProductProcessingResult::Failed)) {
             active_products_.append(product);
         }
     }
