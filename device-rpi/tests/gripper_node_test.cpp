@@ -318,9 +318,9 @@ void test_full_cycle_walks_every_motion_and_reports_completion_once() {
     Fixture fixture;
     fixture.Home();
 
-    GripperCommandResult result = fixture.node->HandleMqttCommand(MakeControlCommand(
-        mqtt::ControlCommand::kRestart, "req-1", "gripper",
-        mqtt::Json{ { "workId", kWorkId }, { "destination", "1" } }));
+    GripperCommandResult result = fixture.node->HandleMqttCommand(
+        MakeControlCommand(mqtt::ControlCommand::kRestart, "req-1", "gripper",
+                           mqtt::Json{ { "workId", kWorkId }, { "destination", "1" } }));
     assert(result.status == GripperCommandStatus::kAccepted);
     assert(fixture.node->HasActiveCycle());
     assert(fixture.node->ActiveStep() == GripperCycleStep::kOpenClaw);
