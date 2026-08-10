@@ -160,6 +160,7 @@ private:
     bool keepalive_pending_{};
     std::uint8_t keepalive_sequence_{};
     std::uint8_t last_uart_state_{ UART_LINETRACER_STATE_IDLE };
+    std::optional<std::uint8_t> reported_fault_error_;
     LineTracerReportHandler report_handler_;
 };
 
