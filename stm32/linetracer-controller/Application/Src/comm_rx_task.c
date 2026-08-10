@@ -76,10 +76,7 @@ static uint8_t CommRxTask_LinkMonitoringRequired(void) {
         return 0U;
     }
 
-    return (uart_linetracer_job_id_is_valid(snapshot.job_id) != 0U &&
-            uart_linetracer_route_is_valid(snapshot.route_id) != 0U)
-               ? 1U
-               : 0U;
+    return CommRxLogic_LinkMonitoringRequired(&snapshot);
 }
 
 static uint8_t CommRxTask_PutControl(void* context, const app_control_command_t* command) {

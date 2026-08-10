@@ -282,6 +282,40 @@ void TestIdleLinkDoesNotTimeout() {
     assert(monitor.timeout_reported == 0U);
 }
 
+void TestLinkMonitoringOnlyAppliesWhileVehicleIsMoving() {
+    app_control_snapshot_t snapshot{};
+
+    snapshot.job_id = 1U;
+    snapshot.route_id = UART_LINETRACER_ROUTE_A;
+
+    snapshot.state = UART_LINETRACER_STATE_FOLLOWING_LINE;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 1U);
+
+    snapshot.state = UART_LINETRACER_STATE_CORRECTING;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 1U);
+
+    snapshot.state = UART_LINETRACER_STATE_UNLOADING;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.state = UART_LINETRACER_STATE_LOAD_WAIT;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.state = UART_LINETRACER_STATE_STOPPED;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.state = UART_LINETRACER_STATE_IDLE;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.state = UART_LINETRACER_STATE_FOLLOWING_LINE;
+    snapshot.job_id = UART_LINETRACER_JOB_ID_NONE;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.job_id = 1U;
+    snapshot.route_id = UART_LINETRACER_ROUTE_NONE;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+    assert(CommRxLogic_LinkMonitoringRequired(nullptr) == 0U);
+}
+
 void TestDisablingLinkMonitoringClearsTimeout() {
     comm_rx_link_monitor_t monitor{};
 
@@ -417,6 +451,7 @@ int main() {
     TestResponseRetriesThreeTimes();
     TestBrokenBytesDoNotPreventValidFrameTimeout();
     TestIdleLinkDoesNotTimeout();
+    TestLinkMonitoringOnlyAppliesWhileVehicleIsMoving();
     TestDisablingLinkMonitoringClearsTimeout();
     TestPartialFrameTimesOutAt100Ms();
     TestEmergencyNotificationUsesOneLowLatencyPath();
