@@ -139,6 +139,17 @@ upload_root=${runtime_dir}/uploads
 
 [routing]
 qt_client_id=control-center
+
+[process]
+enabled=true
+server_id=central-server
+input_device_id=PI-INPUT-01
+vision_device_id=PI-VISION-01
+gripper_device_id=PI-GRIPPER-01
+sorting_device_id=PI-SORTING-01
+line_tracer_device_id=PI-LT-01
+line_tracer_initial_position=A
+default_destination=3
 EOF
     install -m 0600 "${temporary_config}" "${config_path}"
     echo "Created config: ${config_path}"

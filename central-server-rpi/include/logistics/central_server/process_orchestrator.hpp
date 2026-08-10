@@ -13,7 +13,7 @@
 namespace logistics::central_server {
 
 struct ProcessOrchestratorConfig final {
-    bool enabled{ false };
+    bool enabled{ true };
     std::string server_id{ "central-server" };
     std::string input_device_id{ "PI-INPUT-01" };
     std::string vision_device_id{ "PI-VISION-01" };
