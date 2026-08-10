@@ -14,6 +14,7 @@ namespace central_server = logistics::central_server;
 namespace mqtt = logistics::contracts::mqtt;
 
 constexpr auto kWorkId = "d8e9b2be-bfc0-471c-9000-590123412345";
+constexpr auto kQueuedWorkId = "a8e9b2be-bfc0-471c-9000-590123412346";
 constexpr auto kReplacementWorkId = "97c42b78-9299-4a3b-85aa-0f959954ea73";
 constexpr auto kTimestamp = "2026-07-25T01:00:00Z";
 
@@ -231,8 +232,8 @@ void TestInvalidOrderAndDispatchFailureEnterError() {
                                      .message = std::nullopt,
                                  });
     const auto product_result = orchestrator.Handle(product);
-    assert(product_result.commands.size() == 1);
-    assert(orchestrator.FailDispatch(product_result.commands.front(), "gripper is offline").Applied());
+    assert(product_result.commands.size() == 2);
+    assert(orchestrator.FailDispatch(product_result.commands.back(), "gripper is offline").Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
 }
 
@@ -426,8 +427,8 @@ void TestRestoredHomographyTargetCreatesGripperCommand() {
                                  });
     const auto result = orchestrator.Handle(product);
     assert(result.transition.Applied());
-    assert(result.commands.size() == 1);
-    const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(result.commands.front().message);
+    assert(result.commands.size() == 2);
+    const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(result.commands.back().message);
     assert(command != nullptr);
     assert(command->params.at("targetPose").at("x") == 150.0);
     assert(command->params.at("targetPose").at("yawDeg") == 10.0);
@@ -490,8 +491,8 @@ void TestDisabledHomographyDiscardsRestoredTarget() {
                                  });
     const auto result = orchestrator.Handle(product);
     assert(result.transition.Applied());
-    assert(result.commands.size() == 1);
-    const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(result.commands.front().message);
+    assert(result.commands.size() == 2);
+    const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(result.commands.back().message);
     assert(command != nullptr);
     assert(!command->params.contains("targetPose"));
 }
@@ -598,6 +599,88 @@ void TestChangedCalibrationDiscardsRestoredTarget() {
     assert(orchestrator.GripperTargets().contains(kReplacementWorkId));
 }
 
+void TestDownstreamDevicesServeOneWorkAtATime() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    const auto route_work = [&orchestrator](std::string_view work_id, std::string_view suffix) {
+        const std::string id_suffix(suffix);
+        assert(orchestrator.BeginWork("MSG-BOX-" + id_suffix, work_id, "PI-INPUT-01").Applied());
+        assert(orchestrator.ConfirmVisionAssignment("MSG-BOX-" + id_suffix, work_id).Applied());
+        assert(orchestrator
+                   .Handle(Message("MSG-BARCODE-" + id_suffix, mqtt::MessageType::kBarcodeDetected, "PI-VISION-01",
+                                   mqtt::BarcodeDetectedPayload{
+                                       .work_id = std::string(work_id),
+                                       .recognition_status = "SUCCESS",
+                                       .barcode = "5901234123457",
+                                       .confidence = std::nullopt,
+                                       .message = std::nullopt,
+                                   }))
+                   .transition.Applied());
+        return orchestrator.Handle(Message("MSG-PRODUCT-" + id_suffix, mqtt::MessageType::kProductInfo,
+                                           "central-server",
+                                           mqtt::ProductInfoPayload{
+                                               .work_id = std::string(work_id),
+                                               .recognition_status = "SUCCESS",
+                                               .barcode = "5901234123457",
+                                               .product_id = "VEDA107",
+                                               .product_name = "VEDA107",
+                                               .destination = "1",
+                                               .image = nullptr,
+                                               .confidence = std::nullopt,
+                                               .message = std::nullopt,
+                                           }));
+    };
+
+    const auto first = route_work(kWorkId, "FIRST");
+    assert(first.commands.size() == 2);
+    for (const auto& command : first.commands) {
+        assert(orchestrator.ConfirmDispatch(command).Applied());
+    }
+
+    const auto queued = route_work(kQueuedWorkId, "QUEUED");
+    assert(queued.transition.Applied());
+    assert(queued.commands.empty());
+    assert(orchestrator.StateMachine().FindWork(kQueuedWorkId)->stage == central_server::WorkStage::kProductIdentified);
+
+    assert(orchestrator
+               .Handle(Status("MSG-GRIPPER-FIRST-START", "PI-GRIPPER-01", "TRANSFERRING",
+                              mqtt::ConnectionState::kOnline, std::string(kWorkId)))
+               .transition.Applied());
+    const auto gripper_done = orchestrator.Handle(Status("MSG-GRIPPER-FIRST-DONE", "PI-GRIPPER-01", "COMPLETED",
+                                                         mqtt::ConnectionState::kOnline, std::string(kWorkId)));
+    assert(gripper_done.commands.size() == 2);
+    for (const auto& command : gripper_done.commands) {
+        assert(orchestrator.ConfirmDispatch(command).Applied());
+    }
+    assert(orchestrator
+               .Handle(Status("MSG-SORTING-FIRST-START", "PI-SORTING-01", "ROUTING", mqtt::ConnectionState::kOnline,
+                              std::string(kWorkId)))
+               .transition.Applied());
+    assert(orchestrator
+               .Handle(Status("MSG-SORTING-FIRST-DONE", "PI-SORTING-01", "CYCLE_COMPLETE",
+                              mqtt::ConnectionState::kOnline, std::string(kWorkId)))
+               .transition.Applied());
+    assert(orchestrator
+               .Handle(Status("MSG-LT-FIRST-START", "PI-LT-01", "FOLLOWING_LINE", mqtt::ConnectionState::kOnline,
+                              std::string(kWorkId)))
+               .transition.Applied());
+
+    const auto completed =
+        orchestrator.Handle(Message("MSG-FIRST-COMPLETED", mqtt::MessageType::kWorkCompleted, "PI-LT-01",
+                                    mqtt::WorkCompletedPayload{
+                                        .work_id = kWorkId,
+                                        .result = "SUCCESS",
+                                        .message = std::string("unload complete"),
+                                    }));
+    assert(completed.transition.Applied());
+    assert(completed.commands.size() == 2);
+    assert(completed.commands.front().work_id == kQueuedWorkId);
+    assert(completed.commands.back().work_id == kQueuedWorkId);
+    const auto* line_tracer = mqtt::GetPayload<mqtt::DestinationSetPayload>(completed.commands.front().message);
+    const auto* gripper = mqtt::GetPayload<mqtt::ControlCommandPayload>(completed.commands.back().message);
+    assert(line_tracer != nullptr && line_tracer->target_device_id == "PI-LT-01");
+    assert(gripper != nullptr && gripper->target_device_id == "PI-GRIPPER-01");
+}
+
 }  // namespace
 
 int main() {
@@ -611,5 +694,6 @@ int main() {
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();
     TestChangedCalibrationDiscardsRestoredTarget();
+    TestDownstreamDevicesServeOneWorkAtATime();
     return 0;
 }

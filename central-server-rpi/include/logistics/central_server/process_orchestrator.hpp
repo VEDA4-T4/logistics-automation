@@ -96,6 +96,8 @@ private:
                                                               std::string_view target_device_id,
                                                               std::optional<ProcessEventType> dispatched_event,
                                                               std::string_view timestamp);
+    void AppendDownstreamCommands(ProcessOrchestrationResult& result, const WorkProcessSnapshot& work,
+                                  std::string_view timestamp);
     [[nodiscard]] std::string NextMessageId();
 
     ProcessOrchestratorConfig config_;

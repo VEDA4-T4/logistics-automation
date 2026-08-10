@@ -1,6 +1,7 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <stdexcept>
 #include <utility>
@@ -81,6 +82,20 @@ namespace mqtt = contracts::mqtt;
         .destination = {},
         .reason = std::move(reason),
     };
+}
+
+[[nodiscard]] bool OwnsDownstreamDevices(WorkStage stage) noexcept {
+    constexpr std::array occupied_stages{
+        WorkStage::kGripperRequested, WorkStage::kGripperTransferring, WorkStage::kSortingRequested,
+        WorkStage::kSorting,          WorkStage::kTransportRequested,  WorkStage::kTransporting,
+    };
+    return std::ranges::find(occupied_stages, stage) != occupied_stages.end();
+}
+
+[[nodiscard]] bool DownstreamDevicesBusy(const ProcessStateMachine& machine, std::string_view work_id) {
+    return std::ranges::any_of(machine.ActiveWorks(), [work_id](const WorkProcessSnapshot& work) {
+        return work.work_id != work_id && OwnsDownstreamDevices(work.stage);
+    });
 }
 
 }  // namespace
@@ -473,13 +488,8 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
     if (event.type == ProcessEventType::kPositionDetected) {
         result.commands.push_back(
             MakeInputConveyorCommand(work->work_id, mqtt::ControlCommand::kStop, message.timestamp));
-    } else if (event.type == ProcessEventType::kProductInfoReady) {
-        const auto target = homography_.Enabled() ? gripper_targets_.find(work->work_id) : gripper_targets_.end();
-        result.commands.push_back(MakeDestinationCommand(
-            work->work_id, work->destination, config_.line_tracer_device_id, std::nullopt, message.timestamp));
-        result.commands.push_back(MakeGripperCommand(work->work_id, work->destination,
-                                                     target == gripper_targets_.end() ? nullptr : &target->second,
-                                                     message.timestamp));
+    } else if (event.type == ProcessEventType::kProductInfoReady && !DownstreamDevicesBusy(machine, work->work_id)) {
+        AppendDownstreamCommands(result, *work, message.timestamp);
     } else if (event.type == ProcessEventType::kGripperCompleted) {
         result.commands.push_back(MakeDestinationCommand(work->work_id, work->destination, config_.sorting_device_id,
                                                          ProcessEventType::kSortingCommandDispatched,
@@ -489,8 +499,25 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
     }
     if (event.type == ProcessEventType::kWorkCompleted) {
         gripper_targets_.erase(event.work_id);
+        // ponytail: the stopped input conveyor leaves at most one routed work waiting; add a persisted FIFO if
+        // multiple camera buffers are introduced.
+        const auto active_works = machine.ActiveWorks();
+        const auto waiting =
+            std::ranges::find(active_works, WorkStage::kProductIdentified, &WorkProcessSnapshot::stage);
+        if (waiting != active_works.end() && !DownstreamDevicesBusy(machine, waiting->work_id)) {
+            AppendDownstreamCommands(result, *waiting, message.timestamp);
+        }
     }
     return result;
+}
+
+void ProcessOrchestrator::AppendDownstreamCommands(ProcessOrchestrationResult& result, const WorkProcessSnapshot& work,
+                                                   std::string_view timestamp) {
+    const auto target = homography_.Enabled() ? gripper_targets_.find(work.work_id) : gripper_targets_.end();
+    result.commands.push_back(
+        MakeDestinationCommand(work.work_id, work.destination, config_.line_tracer_device_id, std::nullopt, timestamp));
+    result.commands.push_back(MakeGripperCommand(
+        work.work_id, work.destination, target == gripper_targets_.end() ? nullptr : &target->second, timestamp));
 }
 
 ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_view work_id,
