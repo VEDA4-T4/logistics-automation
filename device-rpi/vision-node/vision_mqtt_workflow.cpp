@@ -30,6 +30,9 @@ std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<Visio
     }
     if (!observation.has_value()) {
         detected_frames_ = 0;
+        if (phase_ == Phase::kIdle) {
+            observation_.reset();
+        }
         if (phase_ == Phase::kAwaitingClear && ++clear_frames_ >= clear_confirm_frames_) {
             phase_ = Phase::kIdle;
             clear_frames_ = 0;
@@ -49,12 +52,19 @@ std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<Visio
     if (phase_ != Phase::kIdle) {
         return std::nullopt;
     }
+    const auto detected_barcode = observation->barcode.has_value() ? std::move(observation->barcode)
+                                  : observation_.has_value()       ? std::move(observation_->barcode)
+                                                                   : std::nullopt;
+    const bool barcode_region_detected =
+        observation->barcode_region_detected || (observation_.has_value() && observation_->barcode_region_detected);
+    observation_ = std::move(observation);
+    observation_->barcode = std::move(detected_barcode);
+    observation_->barcode_region_detected = barcode_region_detected;
     if (++detected_frames_ < detection_confirm_frames_) {
         return std::nullopt;
     }
 
     detected_frames_ = 0;
-    observation_ = std::move(observation);
     phase_ = Phase::kAwaitingWork;
     return mqtt::MqttMessage{
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
