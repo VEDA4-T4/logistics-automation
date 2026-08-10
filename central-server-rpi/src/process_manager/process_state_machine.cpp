@@ -332,7 +332,7 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             return Move(work, WorkStage::kGripperTransferring, event.source_id);
 
         case ProcessEventType::kGripperCompleted:
-            if (!IsOneOf(work.stage, { WorkStage::kGripperRequested, WorkStage::kGripperTransferring })) {
+            if (work.stage != WorkStage::kGripperTransferring) {
                 return Reject("gripper completion is not allowed in the current work stage");
             }
             return Move(work, WorkStage::kSortingRequested, event.source_id);
