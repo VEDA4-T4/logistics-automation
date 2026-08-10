@@ -96,12 +96,19 @@ struct Fixture {
 
 void TestStartSuccess() {
     Fixture fixture;
-    fixture.backend->responder = AlwaysSucceed();
+    fixture.backend->responder = [](const uart_frame_t& request) {
+        if (request.command == UART_CMD_INPUT_CONVEYOR_SET_SPEED) {
+            assert(request.payload[UART_INPUT_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
+        }
+        return std::vector<uart_frame_t>{ MakeOperationResult(request.sequence, UART_STATUS_SUCCESS, UART_ERROR_NONE) };
+    };
 
     const InputCommandResult result =
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId)));
 
     assert(result.status == InputCommandStatus::kSuccess);
+    assert((fixture.backend->written_commands ==
+            std::vector<std::uint8_t>{ UART_CMD_INPUT_CONVEYOR_SET_SPEED, UART_CMD_INPUT_CONVEYOR_START }));
     assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_START);
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
@@ -109,6 +116,54 @@ void TestStartSuccess() {
     assert(response->result == mqtt::CommandResult::kSuccess);
     const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
     assert(status != nullptr && status->current_state == "RUNNING");
+}
+
+void TestStartResendsSpeedAfterControllerRestart() {
+    Fixture fixture;
+    fixture.backend->responder = AlwaysSucceed();
+
+    assert(fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId)))
+               .Succeeded());
+    fixture.node->ResetControllerHeartbeatMonitor();
+    assert(fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId)))
+               .Succeeded());
+
+    assert((fixture.backend->written_commands ==
+            std::vector<std::uint8_t>{ UART_CMD_INPUT_CONVEYOR_SET_SPEED, UART_CMD_INPUT_CONVEYOR_START,
+                                       UART_CMD_INPUT_CONVEYOR_SET_SPEED, UART_CMD_INPUT_CONVEYOR_START }));
+}
+
+void TestInvalidStartSpeedIsRejected() {
+    Fixture fixture;
+    mqtt::Json params = mqtt::Json::object();
+    params["speed"] = 0;
+
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId), std::move(params)));
+
+    assert(result.status == InputCommandStatus::kInvalidSpeed);
+    assert(fixture.backend->written_commands.empty());
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr && response->error_code == "ERR-SPEED-INVALID");
+}
+
+void TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload() {
+    const auto run = [](std::uint8_t start_error) {
+        Fixture fixture;
+        fixture.backend->responder = [start_error](const uart_frame_t& request) {
+            return std::vector<uart_frame_t>{ MakeOperationResult(
+                request.sequence,
+                request.command == UART_CMD_INPUT_CONVEYOR_SET_SPEED ? UART_STATUS_SUCCESS : UART_STATUS_ERROR,
+                request.command == UART_CMD_INPUT_CONVEYOR_SET_SPEED ? static_cast<std::uint8_t>(UART_ERROR_NONE)
+                                                                     : start_error) };
+        };
+        static_cast<void>(
+            fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, std::string(kDeviceId))));
+        return fixture.LastResponse()->error_code;
+    };
+
+    assert(run(UART_ERROR_SPEED_NOT_CONFIGURED) == "ERR-SPEED-NOT-CONFIGURED");
+    assert(run(UART_ERROR_INVALID_PAYLOAD) == "ERR-UART-INVALID-PAYLOAD");
 }
 
 void TestStartWithSpeed() {
@@ -235,7 +290,7 @@ void TestRestartMapsToStart() {
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRestart, std::string(kDeviceId)));
 
     assert(result.status == InputCommandStatus::kSuccess);
-    assert(fixture.backend->write_calls == 1);
+    assert(fixture.backend->write_calls == 2);
     assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_START);
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
@@ -643,6 +698,9 @@ void TestRepeatedControllerEventIsDeduplicated() {
 
 int main() {
     TestStartSuccess();
+    TestStartResendsSpeedAfterControllerRestart();
+    TestInvalidStartSpeedIsRejected();
+    TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload();
     TestStartWithSpeed();
     TestStop();
     TestStatusRequest();

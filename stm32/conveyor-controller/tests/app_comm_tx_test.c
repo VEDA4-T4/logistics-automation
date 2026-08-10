@@ -451,6 +451,8 @@ static void test_heartbeat_routes_to_both_channels(void) {
     assert(inputFrame.command == UART_CMD_EVENT);
     assert(sortingFrame.command == UART_CMD_EVENT);
     assert(inputFrame.payload[UART_EVENT_ID_INDEX] == APP_EVENT_HEARTBEAT);
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(inputFrame.payload, inputFrame.length) != 0U);
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(inputFrame.payload, inputFrame.length - 1U) == 0U);
     assert(inputFrame.payload[APP_HEARTBEAT_STATE_INDEX] == UART_DEVICE_RUNNING);
     assert(inputFrame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX] == UART_SENSOR_DETECTED);
     assert(sortingFrame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] == UART_SENSOR_CLEAR);

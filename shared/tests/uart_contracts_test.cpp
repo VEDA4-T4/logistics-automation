@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "logistics/contracts/uart/conveyor_events.h"
+#include "logistics/contracts/uart/gripper_commands.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart/linetracer_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
@@ -27,6 +29,7 @@ void TestCommonValidationDoesNotTruncateWideValues() {
     assert(UART_IS_VALID_COMMAND(0x101U) == 0U);
     assert(UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(UART_CMD_PING, 0U) != 0U);
     assert(UART_IS_VALID_COMMAND_PAYLOAD_LENGTH(UART_CMD_PING, 256U) == 0U);
+    assert(uart_app_error_is_valid(UART_ERROR_SPEED_NOT_CONFIGURED) != 0U);
 }
 
 void TestInputPayloadValidation() {
@@ -58,6 +61,58 @@ void TestInputPayloadValidation() {
     assert((static_cast<std::uint16_t>(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_LOW_INDEX]) |
             (static_cast<std::uint16_t>(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_HIGH_INDEX]) << 8U)) == 0x1234U);
     assert(UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
+}
+
+void TestGripperPayloadValidation() {
+    constexpr std::array<std::uint8_t, 10> kMoveArm{ 0x34U, 0x12U, 0x84U, 0x03U, 0xC2U,
+                                                     0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
+    constexpr std::array<std::uint8_t, 10> kInvalidAngle{ 0x34U, 0x12U, 0x09U, 0x07U, 0xC2U,
+                                                          0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
+    constexpr std::array<std::uint8_t, 10> kInvalidMotionId{ 0x00U, 0x00U, 0x84U, 0x03U, 0xC2U,
+                                                             0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
+    constexpr std::array<std::uint8_t, 5> kSetGripper{ 0x78U, 0x56U, 100U, 0xF4U, 0x01U };
+    constexpr std::array<std::uint8_t, 5> kInvalidPosition{ 0x78U, 0x56U, 101U, 0xF4U, 0x01U };
+    constexpr std::array<std::uint8_t, 2> kHome{ 0xBCU, 0x9AU };
+    constexpr std::array<std::uint8_t, 4> kCompleteEvent{ UART_GRIPPER_EVENT_MOTION_COMPLETE, 0x34U, 0x12U,
+                                                          UART_GRIPPER_MOTION_ARM };
+    constexpr std::array<std::uint8_t, 5> kFaultEvent{ UART_GRIPPER_EVENT_FAULT, 0x78U, 0x56U,
+                                                       UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO };
+    constexpr std::array<std::uint8_t, 5> kInvalidFaultEvent{ UART_GRIPPER_EVENT_FAULT, 0x78U, 0x56U,
+                                                              UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_MOTOR };
+
+    assert(UART_CMD_GRIPPER_MOVE_ARM == UART_CMD_GRIPPER_MIN);
+    assert(UART_IS_VALID_GRIPPER_COMMAND(UART_CMD_GRIPPER_RESET) != 0U);
+    assert(UART_IS_VALID_GRIPPER_COMMAND(0x26U) == 0U);
+    assert(UART_IS_VALID_GRIPPER_COMMAND(0x120U) == 0U);
+
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kMoveArm.data(), kMoveArm.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kInvalidAngle.data(), kInvalidAngle.size()) == 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kInvalidMotionId.data(), kInvalidMotionId.size()) ==
+           0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_SET_GRIPPER, kSetGripper.data(), kSetGripper.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_SET_GRIPPER, kInvalidPosition.data(),
+                                         kInvalidPosition.size()) == 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_HOME, kHome.data(), kHome.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_STOP, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_GET_STATUS, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_RESET, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_RESET, kHome.data(), kHome.size()) == 0U);
+
+    assert(uart_gripper_move_motion_id(kMoveArm.data()) == 0x1234U);
+    assert(uart_gripper_move_base_angle(kMoveArm.data()) == 900U);
+    assert(uart_gripper_move_shoulder_angle(kMoveArm.data()) == 450U);
+    assert(uart_gripper_move_elbow_angle(kMoveArm.data()) == 1800U);
+    assert(uart_gripper_move_duration_ms(kMoveArm.data()) == 1000U);
+    assert(uart_gripper_set_motion_id(kSetGripper.data()) == 0x5678U);
+    assert(uart_gripper_set_duration_ms(kSetGripper.data()) == 500U);
+    assert(uart_gripper_home_motion_id(kHome.data()) == 0x9ABCU);
+
+    assert(UART_IS_VALID_GRIPPER_EVENT_PAYLOAD(kCompleteEvent.data(), kCompleteEvent.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_EVENT_PAYLOAD(kFaultEvent.data(), kFaultEvent.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_EVENT_PAYLOAD(kInvalidFaultEvent.data(), kInvalidFaultEvent.size()) == 0U);
+    assert(UART_GRIPPER_STATUS_PAYLOAD_SIZE == 14U);
+    assert(UART_GRIPPER_MOTION_EVENT_PAYLOAD_SIZE == 4U);
+    assert(UART_GRIPPER_FAULT_EVENT_PAYLOAD_SIZE == 5U);
 }
 
 void TestSortingPayloadValidation() {
@@ -121,6 +176,54 @@ void TestSortingPayloadValidation() {
     assert(UART_SORTING_STATUS_PAYLOAD_SIZE == 7U);
     assert(UART_SORTING_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
     assert(UART_SORTING_CYCLE_EVENT_PAYLOAD_SIZE == 4U);
+}
+
+void TestConveyorEventContracts() {
+    std::array<std::uint8_t, APP_HEARTBEAT_PAYLOAD_SIZE> heartbeat{};
+    heartbeat[UART_EVENT_ID_INDEX] = APP_EVENT_HEARTBEAT;
+    heartbeat[APP_HEARTBEAT_STATE_INDEX] = UART_DEVICE_READY;
+    heartbeat[APP_HEARTBEAT_ERROR_INDEX] = UART_ERROR_NONE;
+    heartbeat[APP_HEARTBEAT_INPUT_SENSOR_INDEX] = UART_SENSOR_CLEAR;
+    heartbeat[APP_HEARTBEAT_SORTING_SENSOR_INDEX] = UART_SENSOR_DETECTED;
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(heartbeat.data(), heartbeat.size()) != 0U);
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(heartbeat.data(), heartbeat.size() - 1U) == 0U);
+    heartbeat[APP_HEARTBEAT_STATE_INDEX] = UART_DEVICE_EMERGENCY_STOP + 1U;
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(heartbeat.data(), heartbeat.size()) == 0U);
+    heartbeat[APP_HEARTBEAT_STATE_INDEX] = UART_DEVICE_READY;
+
+    std::array<std::uint8_t, APP_SAFETY_EVENT_PAYLOAD_SIZE> safety{};
+    safety[UART_EVENT_ID_INDEX] = APP_EVENT_SAFETY;
+    safety[APP_SAFETY_EVENT_KIND_INDEX] = SAFETY_EVENT_RESET_REJECTED;
+    safety[APP_SAFETY_EVENT_CAUSE_INDEX] = SAFETY_CAUSE_ESTOP_INPUT_PI;
+    safety[APP_SAFETY_EVENT_RESULT_INDEX] = SAFETY_RESET_INPUT_NOT_READY;
+    assert(UART_IS_VALID_APP_SAFETY_PAYLOAD(safety.data(), safety.size()) != 0U);
+    safety[APP_SAFETY_EVENT_KIND_INDEX] = SAFETY_EVENT_RESET_REJECTED + 1U;
+    assert(UART_IS_VALID_APP_SAFETY_PAYLOAD(safety.data(), safety.size()) == 0U);
+    safety[APP_SAFETY_EVENT_KIND_INDEX] = SAFETY_EVENT_RESET_REJECTED;
+
+    std::array<std::uint8_t, APP_HEALTH_EVENT_PAYLOAD_SIZE> health{};
+    health[UART_EVENT_ID_INDEX] = APP_EVENT_HEALTH;
+    health[APP_HEALTH_EVENT_KIND_INDEX] = HEALTH_ISSUE_SENSOR_STALE;
+    health[APP_HEALTH_EVENT_CAUSE_INDEX] = HEALTH_ISSUE_CAUSE_SORTING;
+    health[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = 3U;
+    assert(UART_IS_VALID_APP_HEALTH_PAYLOAD(health.data(), health.size()) != 0U);
+    health[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = HEALTH_ISSUE_SENSOR_ID_NONE;
+    assert(UART_IS_VALID_APP_HEALTH_PAYLOAD(health.data(), health.size()) == 0U);
+    health[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = 3U;
+
+    uart_frame_t source{};
+    source.version = UART_PROTOCOL_VERSION;
+    source.sequence = 9U;
+    source.command = UART_CMD_EVENT;
+    source.length = static_cast<std::uint8_t>(health.size());
+    std::memcpy(source.payload, health.data(), health.size());
+
+    std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+    std::size_t encoded_length{};
+    assert(uart_encode_frame(&source, encoded.data(), encoded.size(), &encoded_length) == UART_CODEC_OK);
+    uart_frame_t decoded{};
+    assert(uart_decode_frame(encoded.data(), encoded_length, &decoded) == UART_CODEC_OK);
+    assert(UART_IS_VALID_APP_HEALTH_PAYLOAD(decoded.payload, decoded.length) != 0U);
 }
 
 void TestLineTracerPayloadValidation() {
@@ -237,7 +340,9 @@ int main() {
     TestCrc16KnownVector();
     TestCommonValidationDoesNotTruncateWideValues();
     TestInputPayloadValidation();
+    TestGripperPayloadValidation();
     TestSortingPayloadValidation();
+    TestConveyorEventContracts();
     TestLineTracerPayloadValidation();
     TestCodecAndParserRoundTrip();
     TestParserTimeout();

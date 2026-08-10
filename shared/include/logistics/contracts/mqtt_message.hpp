@@ -307,6 +307,12 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
     return "UNKNOWN";
 }
 
+[[nodiscard]] constexpr bool IsConnectionFailure(ConnectionState state) noexcept {
+    return state == ConnectionState::kOffline || state == ConnectionState::kRtspError ||
+           state == ConnectionState::kMqttError || state == ConnectionState::kMqttAuthError ||
+           state == ConnectionState::kTlsError || state == ConnectionState::kUartError;
+}
+
 [[nodiscard]] constexpr DeliveryPolicy PolicyFor(MessageType type) noexcept {
     switch (type) {
         case MessageType::kHeartbeat:

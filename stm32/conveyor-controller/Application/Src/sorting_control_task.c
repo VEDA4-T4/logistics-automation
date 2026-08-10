@@ -77,8 +77,10 @@ static uart_error_t sorting_control_task_result_error(sorting_control_result_t r
             return UART_ERROR_UNSUPPORTED_COMMAND;
 
         case SORTING_CONTROL_INVALID_PAYLOAD:
-        case SORTING_CONTROL_SPEED_NOT_CONFIGURED:
             return UART_ERROR_INVALID_PAYLOAD;
+
+        case SORTING_CONTROL_SPEED_NOT_CONFIGURED:
+            return UART_ERROR_SPEED_NOT_CONFIGURED;
 
         case SORTING_CONTROL_FAULT_LATCHED:
             return (controller->state.lastError != UART_ERROR_NONE) ? controller->state.lastError : UART_ERROR_INTERNAL;

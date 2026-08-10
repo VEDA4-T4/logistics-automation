@@ -13,11 +13,13 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
 
+#include "logistics/contracts/uart/conveyor_events.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart_codec.h"
 #include "logistics/contracts/uart_protocol.h"
@@ -92,16 +94,16 @@ namespace input_test {
     frame.version = UART_PROTOCOL_VERSION;
     frame.sequence = 203U;
     frame.command = UART_CMD_EVENT;
-    frame.length = 9U;
-    frame.payload[UART_EVENT_ID_INDEX] = 0x01U;  // APP_EVENT_HEARTBEAT
-    frame.payload[1] = device_state;
-    frame.payload[2] = error_code;
-    frame.payload[3] = static_cast<std::uint8_t>(uptime_seconds & 0xFFU);
-    frame.payload[4] = static_cast<std::uint8_t>((uptime_seconds >> 8U) & 0xFFU);
-    frame.payload[5] = static_cast<std::uint8_t>((uptime_seconds >> 16U) & 0xFFU);
-    frame.payload[6] = static_cast<std::uint8_t>((uptime_seconds >> 24U) & 0xFFU);
-    frame.payload[7] = input_sensor_state;
-    frame.payload[8] = UART_SENSOR_CLEAR;  // sorting sensor state (not used by the input node)
+    frame.length = APP_HEARTBEAT_PAYLOAD_SIZE;
+    frame.payload[UART_EVENT_ID_INDEX] = APP_EVENT_HEARTBEAT;
+    frame.payload[APP_HEARTBEAT_STATE_INDEX] = device_state;
+    frame.payload[APP_HEARTBEAT_ERROR_INDEX] = error_code;
+    frame.payload[APP_HEARTBEAT_UPTIME_INDEX] = static_cast<std::uint8_t>(uptime_seconds & 0xFFU);
+    frame.payload[APP_HEARTBEAT_UPTIME_INDEX + 1U] = static_cast<std::uint8_t>((uptime_seconds >> 8U) & 0xFFU);
+    frame.payload[APP_HEARTBEAT_UPTIME_INDEX + 2U] = static_cast<std::uint8_t>((uptime_seconds >> 16U) & 0xFFU);
+    frame.payload[APP_HEARTBEAT_UPTIME_INDEX + 3U] = static_cast<std::uint8_t>((uptime_seconds >> 24U) & 0xFFU);
+    frame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX] = input_sensor_state;
+    frame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] = UART_SENSOR_CLEAR;
     return frame;
 }
 
@@ -113,14 +115,18 @@ namespace input_test {
     frame.sequence = 202U;
     frame.command = UART_CMD_EVENT;
     frame.payload[UART_EVENT_ID_INDEX] = event_id;
-    frame.payload[1] = kind;
-    frame.payload[2] = cause;
-    if (sensor_id.has_value()) {
-        // app-level HEALTH/SENSOR_STALE layout: event_id + kind + cause + sensorId.
-        frame.length = 4U;
-        frame.payload[3] = *sensor_id;
+    frame.payload[APP_SAFETY_EVENT_KIND_INDEX] = kind;
+    frame.payload[APP_SAFETY_EVENT_CAUSE_INDEX] = cause;
+    if (event_id == APP_EVENT_SAFETY) {
+        frame.length = APP_SAFETY_EVENT_PAYLOAD_SIZE;
+        frame.payload[APP_SAFETY_EVENT_RESULT_INDEX] =
+            kind == SAFETY_EVENT_RESET_REJECTED ? SAFETY_RESET_INPUT_NOT_READY : SAFETY_RESET_OK;
+    } else if (event_id == APP_EVENT_HEALTH) {
+        frame.length = APP_HEALTH_EVENT_PAYLOAD_SIZE;
+        frame.payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = sensor_id.value_or(
+            kind == HEALTH_ISSUE_SENSOR_STALE ? HEALTH_ISSUE_SENSOR_ID_MIN : HEALTH_ISSUE_SENSOR_ID_NONE);
     } else {
-        frame.length = 3U;  // event_id + kind + cause (app-level SAFETY/HEALTH layout)
+        frame.length = 3U;
     }
     return frame;
 }
@@ -182,6 +188,22 @@ public:
 
     void PreloadIncoming(const uart_frame_t& frame) {
         incoming_.push_back(Encode(frame));
+    }
+
+    /*
+     * Queues several frames to be delivered concatenated in a single Read(),
+     * the way a real serial port can hand back more than one frame's worth of
+     * bytes in one read() call when the sender writes them close together.
+     * PreloadIncoming and the responder's per-reply loop both queue one frame
+     * per Read() instead, which cannot exercise that path.
+     */
+    void PreloadCombinedIncoming(std::initializer_list<uart_frame_t> frames) {
+        std::vector<std::uint8_t> combined;
+        for (const uart_frame_t& frame : frames) {
+            const std::vector<std::uint8_t> encoded = Encode(frame);
+            combined.insert(combined.end(), encoded.begin(), encoded.end());
+        }
+        incoming_.push_back(std::move(combined));
     }
 
     Responder responder;

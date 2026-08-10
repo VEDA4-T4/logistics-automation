@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "logistics/contracts/uart/conveyor_events.h"
 #include "logistics/contracts/uart_codec.h"
 
 namespace {
@@ -193,14 +194,14 @@ struct Fixture {
         event.version = UART_PROTOCOL_VERSION;
         event.sequence = next_event_sequence++;
         event.command = UART_CMD_EVENT;
-        event.length = 8U;  // SAFETY and HEALTH app-level payloads are both 8 bytes.
+        event.length = APP_SAFETY_EVENT_PAYLOAD_SIZE;
         event.payload[UART_EVENT_ID_INDEX] = event_id;
-        event.payload[1U] = kind;
-        event.payload[2U] = cause;
-        if (event_id == 0x03U) {
-            event.payload[7U] = result;
+        event.payload[APP_SAFETY_EVENT_KIND_INDEX] = kind;
+        event.payload[APP_SAFETY_EVENT_CAUSE_INDEX] = cause;
+        if (event_id == APP_EVENT_SAFETY) {
+            event.payload[APP_SAFETY_EVENT_RESULT_INDEX] = result;
         } else {
-            event.payload[3U] = sensor_id;  // HEALTH/SENSOR_STALE only; ignored by other kinds.
+            event.payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] = sensor_id;
         }
         backend->PushRead(Encode(event));
         assert(session->PollOnce().Succeeded());
@@ -211,10 +212,10 @@ struct Fixture {
         event.version = UART_PROTOCOL_VERSION;
         event.sequence = next_event_sequence++;
         event.command = UART_CMD_EVENT;
-        event.length = 9U;
-        event.payload[UART_EVENT_ID_INDEX] = 0x01U;
-        event.payload[1U] = state;
-        event.payload[2U] = error;
+        event.length = APP_HEARTBEAT_PAYLOAD_SIZE;
+        event.payload[UART_EVENT_ID_INDEX] = APP_EVENT_HEARTBEAT;
+        event.payload[APP_HEARTBEAT_STATE_INDEX] = state;
+        event.payload[APP_HEARTBEAT_ERROR_INDEX] = error;
         backend->PushRead(Encode(event));
         assert(session->PollOnce().Succeeded());
     }
@@ -421,6 +422,36 @@ void TestStartConfiguresSpeedBeforeStartingConveyor() {
     assert(response.result == mqtt::CommandResult::kSuccess);
 }
 
+void TestStartResendsCachedSpeedAfterControllerRestart() {
+    Fixture fixture;
+    mqtt::Json params = mqtt::Json::object();
+    params["speed"] = 70;
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, {}, params)).Succeeded());
+    fixture.PushOperationResult();
+    fixture.PushOperationResult();
+
+    fixture.node->ResetControllerHeartbeatMonitor();
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart)).Succeeded());
+
+    const auto command = fixture.LastCommand();
+    assert(command.command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
+    assert(command.payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 70U);
+}
+
+void TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload() {
+    Fixture speed_fixture;
+    assert(speed_fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    speed_fixture.PushOperationResult(UART_STATUS_ERROR, UART_ERROR_SPEED_NOT_CONFIGURED);
+    const auto& speed_response = ReportPayload<mqtt::CommandResponsePayload>(speed_fixture.reports.front());
+    assert(speed_response.error_code == "ERR-SPEED-NOT-CONFIGURED");
+
+    Fixture payload_fixture;
+    assert(payload_fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+    payload_fixture.PushOperationResult(UART_STATUS_NACK, UART_ERROR_INVALID_PAYLOAD);
+    const auto& payload_response = ReportPayload<mqtt::CommandResponsePayload>(payload_fixture.reports.front());
+    assert(payload_response.error_code == "ERR-UART-PAYLOAD");
+}
+
 void TestEmergencyStopPreemptsPendingCommandAndIsNotRetried() {
     Fixture fixture;
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
@@ -623,14 +654,17 @@ void TestSafetyAndHealthEventsAreDecodedAndDeduplicated() {
     assert(fixture.reports.size() == 1U);
 
     fixture.reports.clear();
-    fixture.PushControllerEvent(0x04U, 2U, 3U);
-    fixture.PushControllerEvent(0x04U, 2U, 3U);
+    fixture.PushControllerEvent(APP_EVENT_HEALTH, HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT,
+                                HEALTH_ISSUE_CAUSE_DEVICE_WIDE);
+    fixture.PushControllerEvent(APP_EVENT_HEALTH, HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT,
+                                HEALTH_ISSUE_CAUSE_DEVICE_WIDE);
     assert(fixture.reports.size() == 1U);
     const auto& health = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.front());
     assert(health.error_code == "ERR-HEALTH-QUEUE-OVERFLOW");
 
     fixture.PushHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE);
-    fixture.PushControllerEvent(0x04U, 2U, 3U);
+    fixture.PushControllerEvent(APP_EVENT_HEALTH, HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT,
+                                HEALTH_ISSUE_CAUSE_DEVICE_WIDE);
     assert(fixture.reports.size() == 3U);
 }
 
@@ -700,6 +734,8 @@ int main() {
     TestNackDoesNotActivateCycleAndReportsFailure();
     TestControllerErrorsDistinguishRejectionFromFailure();
     TestStartConfiguresSpeedBeforeStartingConveyor();
+    TestStartResendsCachedSpeedAfterControllerRestart();
+    TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload();
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
     TestSafetyRecoveryUsesOneWayDeviceReset();
     TestPendingSafetyCommandCannotBeOverwritten();

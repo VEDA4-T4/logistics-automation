@@ -308,6 +308,25 @@ static void test_response_cache_and_retry(void) {
     assert(lastDeviceState == UART_DEVICE_RUNNING);
 }
 
+static void test_speed_errors_are_distinct(void) {
+    sorting_control_t controller;
+    fake_motor_t motor;
+    fake_gate_t gate;
+    control_command_t message;
+    tx_request_t response;
+
+    initialize(&controller, &motor, &gate);
+    message = command(12U, UART_CMD_SORTING_CONVEYOR_START, NULL, 0U);
+    assert(sorting_control_task_process_message(&controller, &message) == SORTING_CONTROL_SPEED_NOT_CONFIGURED);
+    response = pop_tx();
+    assert(response.payload[UART_OPERATION_RESULT_ERROR_INDEX] == UART_ERROR_SPEED_NOT_CONFIGURED);
+
+    message = command(13U, UART_CMD_SORTING_CONVEYOR_SET_SPEED, NULL, 0U);
+    assert(sorting_control_task_process_message(&controller, &message) == SORTING_CONTROL_INVALID_PAYLOAD);
+    response = pop_tx();
+    assert(response.payload[UART_OPERATION_RESULT_ERROR_INDEX] == UART_ERROR_INVALID_PAYLOAD);
+}
+
 static void test_route_return_home_emits_event(void) {
     sorting_control_t controller;
     fake_motor_t motor;
@@ -375,6 +394,7 @@ static void test_safety_epoch_rejects_old_command(void) {
 
 int main(void) {
     test_response_cache_and_retry();
+    test_speed_errors_are_distinct();
     test_route_return_home_emits_event();
     test_safety_epoch_rejects_old_command();
     return 0;

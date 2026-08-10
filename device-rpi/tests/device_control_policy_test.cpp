@@ -76,6 +76,15 @@ void TestRequestsUseOneView() {
     assert(emergency->target_device_id == "ALL");
 }
 
+void TestControlSpeedParsing() {
+    bool invalid = true;
+    assert(!device::ReadControlSpeed(mqtt::Json::object(), 100U, invalid).has_value() && !invalid);
+    assert(device::ReadControlSpeed(mqtt::Json{ { "speed", 42 } }, 100U, invalid) == 42U && !invalid);
+    assert(!device::ReadControlSpeed(mqtt::Json{ { "speed", 0 } }, 100U, invalid).has_value() && invalid);
+    assert(!device::ReadControlSpeed(mqtt::Json{ { "speed", 101 } }, 100U, invalid).has_value() && invalid);
+    assert(!device::ReadControlSpeed(mqtt::Json{ { "speed", "fast" } }, 100U, invalid).has_value() && invalid);
+}
+
 }  // namespace
 
 int main() {
@@ -83,5 +92,6 @@ int main() {
     TestCommonTargets();
     TestRecoveryDefaultsToSafety();
     TestRequestsUseOneView();
+    TestControlSpeedParsing();
     return 0;
 }

@@ -192,7 +192,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
         case SortingCommandStatus::kInvalidDestination:
             return "ERR-MQTT-INVALID-DESTINATION";
         case SortingCommandStatus::kInvalidSpeed:
-            return "ERR-SPEED-REQUIRED";
+            return "ERR-SPEED-INVALID";
         case SortingCommandStatus::kActiveCycleConflict:
             return "ERR-ACTIVE-CYCLE-CONFLICT";
         case SortingCommandStatus::kNoActiveCycle:
