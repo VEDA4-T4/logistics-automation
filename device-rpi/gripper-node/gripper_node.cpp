@@ -922,7 +922,9 @@ void GripperNode::FinishCycle() {
     if (was_home_only) {
         EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kSuccess, std::nullopt,
                             "gripper returned home");
-        EmitDeviceStatus("READY");
+        const bool enters_running = mqtt_command == mqtt::ControlCommand::kStart ||
+                                    mqtt_command == mqtt::ControlCommand::kRestart;
+        EmitDeviceStatus(enters_running ? "RUNNING" : "READY");
         return;
     }
 
