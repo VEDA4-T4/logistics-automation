@@ -133,7 +133,10 @@ ProductUpdateResult CurrentProductState::applyEnvelope(const QJsonObject& envelo
     }
 
     if (product == nullptr) {
-        if (!products_.isEmpty() && type != mqtt::MessageType::kWorkCreated) {
+        const bool can_recover_missing_work =
+            (type == mqtt::MessageType::kBarcodeDetected || type == mqtt::MessageType::kProductInfo) &&
+            ParseRecognitionReport(data) == RecognitionReport::Success && !StringValue(data, "barcode").isEmpty();
+        if (!products_.isEmpty() && type != mqtt::MessageType::kWorkCreated && !can_recover_missing_work) {
             result.error = QStringLiteral("알 수 없는 workId의 상품 메시지를 무시했습니다: %1").arg(work_id);
             return result;
         }
