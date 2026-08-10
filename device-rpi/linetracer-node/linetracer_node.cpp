@@ -164,7 +164,6 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
     if (event.type == UartSessionEventType::kTransportDisconnected ||
         event.type == UartSessionEventType::kTransportError) {
         ResetStatusKeepalive();
-        reported_fault_error_.reset();
         if (pending_.active) {
             EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
                                 "UART transport disconnected before acknowledgement");

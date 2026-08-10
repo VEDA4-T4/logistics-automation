@@ -700,6 +700,12 @@ void TestDuplicateFaultIsSuppressedUntilStatusRecovery() {
     assert(fixture.reports.size() == 1U);
     assert(ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.front()).error_code == "ERR-UART-TIMEOUT");
 
+    fixture.node->HandleUartEvent({
+        .type = logistics::device::UartSessionEventType::kTransportDisconnected,
+    });
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_TIMEOUT);
+    assert(fixture.reports.size() == 1U);
+
     fixture.node->Tick(std::chrono::milliseconds{ 1000 });
     assert(fixture.node->TrySendStatusKeepalive());
     fixture.RespondToLastStatus(UART_LINETRACER_STATE_STOPPED);

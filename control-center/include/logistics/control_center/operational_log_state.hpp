@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDateTime>
+#include <QHash>
 #include <QList>
 #include <QSet>
 #include <QString>
@@ -60,6 +61,7 @@ private:
 
     QList<OperationalLogEntry> entries_;
     QSet<QString> processed_message_ids_;
+    QHash<QString, QSet<QString>> active_device_alerts_;
     quint64 local_sequence_{ 0 };
 };
 
