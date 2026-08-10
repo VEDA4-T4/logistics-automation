@@ -420,6 +420,11 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             if (meaning != contracts::DeviceStateMeaning::kWorking) {
                 return NotHandled();
             }
+            const auto work = machine.FindWork(*status->job_id);
+            if (!work.has_value() ||
+                (work->stage != WorkStage::kTransportRequested && work->stage != WorkStage::kTransporting)) {
+                return NotHandled();
+            }
             event = Event(ProcessEventType::kTransportStarted, message, *status->job_id);
         } else {
             mapped = false;
@@ -470,6 +475,8 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             MakeInputConveyorCommand(work->work_id, mqtt::ControlCommand::kStop, message.timestamp));
     } else if (event.type == ProcessEventType::kProductInfoReady) {
         const auto target = homography_.Enabled() ? gripper_targets_.find(work->work_id) : gripper_targets_.end();
+        result.commands.push_back(MakeDestinationCommand(
+            work->work_id, work->destination, config_.line_tracer_device_id, std::nullopt, message.timestamp));
         result.commands.push_back(MakeGripperCommand(work->work_id, work->destination,
                                                      target == gripper_targets_.end() ? nullptr : &target->second,
                                                      message.timestamp));
@@ -479,10 +486,6 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                                                          message.timestamp));
         result.commands.push_back(
             MakeInputConveyorCommand(work->work_id, mqtt::ControlCommand::kStart, message.timestamp));
-    } else if (event.type == ProcessEventType::kSortingCompleted) {
-        result.commands.push_back(
-            MakeDestinationCommand(work->work_id, work->destination, config_.line_tracer_device_id,
-                                   ProcessEventType::kTransportCommandDispatched, message.timestamp));
     }
     if (event.type == ProcessEventType::kWorkCompleted) {
         gripper_targets_.erase(event.work_id);
@@ -558,7 +561,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeGripperCommand(std::string_view wo
 
 ProcessCommandIntent ProcessOrchestrator::MakeDestinationCommand(std::string_view work_id, std::string_view destination,
                                                                  std::string_view target_device_id,
-                                                                 ProcessEventType dispatched_event,
+                                                                 std::optional<ProcessEventType> dispatched_event,
                                                                  std::string_view timestamp) {
     const std::string request_id = NextMessageId();
     return {

@@ -67,10 +67,7 @@ void ApplyNormalFlow(central_server::ProcessStateMachine& machine, std::string_v
                .Apply(Event(central_server::ProcessEventType::kSortingCompleted, "MSG-SORT-DONE", std::string(work_id),
                             "PI-SORTING-01"))
                .Applied());
-    assert(machine
-               .Apply(Event(central_server::ProcessEventType::kTransportCommandDispatched, "MSG-TRANSPORT-COMMAND",
-                            std::string(work_id), "central-server"))
-               .Applied());
+    assert(machine.FindWork(work_id)->stage == central_server::WorkStage::kTransporting);
     assert(machine
                .Apply(Event(central_server::ProcessEventType::kTransportStarted, "MSG-TRANSPORT-START",
                             std::string(work_id), "PI-LT-01"))

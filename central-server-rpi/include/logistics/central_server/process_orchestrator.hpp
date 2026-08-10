@@ -94,7 +94,7 @@ private:
                                                           const GripperTarget* target, std::string_view timestamp);
     [[nodiscard]] ProcessCommandIntent MakeDestinationCommand(std::string_view work_id, std::string_view destination,
                                                               std::string_view target_device_id,
-                                                              ProcessEventType dispatched_event,
+                                                              std::optional<ProcessEventType> dispatched_event,
                                                               std::string_view timestamp);
     [[nodiscard]] std::string NextMessageId();
 

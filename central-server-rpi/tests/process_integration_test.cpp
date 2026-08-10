@@ -401,8 +401,8 @@ void TestAutomaticProcessCompletesThroughAllNodes() {
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStop) == 1);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
     assert((harness.DeviceCommandTargets() ==
-            std::vector<std::string>{ std::string(kVisionId), std::string(kInputId), std::string(kGripperId),
-                                      std::string(kSortingId), std::string(kInputId), std::string(kLineTracerId) }));
+            std::vector<std::string>{ std::string(kVisionId), std::string(kInputId), std::string(kLineTracerId),
+                                      std::string(kGripperId), std::string(kSortingId), std::string(kInputId) }));
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
     assert(work.has_value());

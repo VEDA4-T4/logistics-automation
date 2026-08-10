@@ -353,7 +353,7 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             if (!IsOneOf(work.stage, { WorkStage::kSortingRequested, WorkStage::kSorting })) {
                 return Reject("sorting completion is not allowed in the current work stage");
             }
-            return Move(work, WorkStage::kTransportRequested, event.source_id);
+            return Move(work, WorkStage::kTransporting, event.source_id);
 
         case ProcessEventType::kTransportCommandDispatched:
             if (work.stage != WorkStage::kTransportRequested) {
