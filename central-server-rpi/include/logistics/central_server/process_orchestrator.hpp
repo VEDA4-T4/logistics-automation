@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -30,6 +31,16 @@ struct ProcessCommandIntent final {
     contracts::mqtt::MqttMessage message;
     std::optional<ProcessEventType> dispatched_event;
     std::string work_id;
+};
+
+class ProcessCommandTracker final {
+public:
+    [[nodiscard]] bool Track(const ProcessCommandIntent& intent);
+    [[nodiscard]] std::optional<ProcessCommandIntent> HandleResponse(const contracts::mqtt::MqttMessage& message);
+    [[nodiscard]] std::size_t PendingCount() const noexcept;
+
+private:
+    std::unordered_map<std::string, ProcessCommandIntent> pending_;
 };
 
 struct ProcessOrchestrationResult final {

@@ -96,6 +96,42 @@ bool ProcessOrchestratorConfig::IsValid() const noexcept {
            (!homography.enabled || homography.IsValid());
 }
 
+bool ProcessCommandTracker::Track(const ProcessCommandIntent& intent) {
+    std::string request_id;
+    if (const auto* control = mqtt::GetPayload<mqtt::ControlCommandPayload>(intent.message)) {
+        request_id = control->request_id;
+    } else if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(intent.message)) {
+        request_id = destination->request_id;
+    }
+    if (request_id.empty() || pending_.contains(request_id)) {
+        return false;
+    }
+    pending_.emplace(std::move(request_id), intent);
+    return true;
+}
+
+std::optional<ProcessCommandIntent> ProcessCommandTracker::HandleResponse(const mqtt::MqttMessage& message) {
+    const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(message);
+    if (response == nullptr || !mqtt::IsTerminal(response->result)) {
+        return std::nullopt;
+    }
+    const auto pending = pending_.find(response->request_id);
+    if (pending == pending_.end()) {
+        return std::nullopt;
+    }
+
+    ProcessCommandIntent intent = std::move(pending->second);
+    pending_.erase(pending);
+    if (response->result == mqtt::CommandResult::kSuccess || response->result == mqtt::CommandResult::kDuplicated) {
+        return std::nullopt;
+    }
+    return intent;
+}
+
+std::size_t ProcessCommandTracker::PendingCount() const noexcept {
+    return pending_.size();
+}
+
 ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config)
     : config_(std::move(config)), homography_(config_.homography) {
     if (!config_.IsValid()) {

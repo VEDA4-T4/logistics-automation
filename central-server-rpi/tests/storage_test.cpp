@@ -67,7 +67,7 @@ int main() {
     server::Transaction independent_upload_transaction(upload_database);
     assert(independent_upload_transaction.status().code == server::DatabaseStatusCode::kBusy);
     assert(database.Rollback().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 6);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 7);
     assert(Scalar(database,
                   "SELECT count(*) FROM product_catalog WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
                   "product_name='VEDA107 기본 상품' AND destination='1' AND active=1") == 1);

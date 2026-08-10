@@ -439,6 +439,24 @@ if(BUILD_TESTING)
         COMMAND central_server_process_orchestrator_test
     )
 
+    add_executable(
+        central_server_process_integration_test
+        tests/process_integration_test.cpp
+    )
+    target_link_libraries(
+        central_server_process_integration_test
+        PRIVATE
+            logistics::central_server_command_manager
+            logistics::central_server_mqtt_handler
+            logistics::central_server_process_orchestrator
+    )
+    target_compile_definitions(
+        central_server_process_integration_test
+        PRIVATE LOGISTICS_TEST_MIGRATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/db/migrations"
+    )
+    logistics_enable_warnings(central_server_process_integration_test)
+    add_test(NAME central_server_process_integration_test COMMAND central_server_process_integration_test)
+
     add_executable(central_server_homography_test tests/homography_test.cpp)
     target_link_libraries(
         central_server_homography_test
