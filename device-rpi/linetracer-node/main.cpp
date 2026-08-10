@@ -308,9 +308,7 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
         }
 
         if (event.type == UartSessionEventType::kTransportDisconnected ||
-            event.type == UartSessionEventType::kTransportError ||
-            (event.type == UartSessionEventType::kAckTimeout &&
-             event.pending_command == UART_CMD_LINETRACER_GET_STATUS)) {
+            event.type == UartSessionEventType::kTransportError) {
             uart_failure_pending = true;
         }
     });
