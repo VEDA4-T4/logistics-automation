@@ -5,10 +5,11 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=5fade8d5ca2f983f62c28fb123891a52"
 
 SRC_URI = " \
     git://github.com/VEDA4-T4/logistics-automation.git;protocol=https;nobranch=1 \
+    file://input-node.ini.example \
     file://logistics-input-node.service \
 "
 
-SRCREV = "86487a06cbd66358bfbc56005decf213d77b469b"
+SRCREV = "1de4c9e35cb5e48039208ed64d9f4193c70e43e0"
 
 S = "${WORKDIR}/git"
 
@@ -31,6 +32,7 @@ EXTRA_OECMAKE = " \
     -DLOGISTICS_BUILD_INPUT_NODE=ON \
     -DLOGISTICS_BUILD_VISION_NODE=OFF \
     -DLOGISTICS_BUILD_SORTING_NODE=OFF \
+    -DLOGISTICS_BUILD_GRIPPER_NODE=OFF \
     -DLOGISTICS_BUILD_LINETRACER_NODE=OFF \
 "
 
@@ -61,7 +63,7 @@ do_install() {
     install -d ${D}${sysconfdir}/logistics
 
     install -m 0600 \
-        ${S}/device-rpi/config/input-node.ini.example \
+        ${WORKDIR}/input-node.ini.example \
         ${D}${sysconfdir}/logistics/input-node.ini.example
 
     install -d ${D}${systemd_system_unitdir}
