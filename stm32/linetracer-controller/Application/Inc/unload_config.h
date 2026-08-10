@@ -11,10 +11,11 @@
  * defaults assume opposing linkage;
  * calibrate each pair independently on the assembled unload mechanism.
  */
-#define UNLOAD_SERVO_1_HOME_PULSE_US 1000U
-#define UNLOAD_SERVO_1_RELEASE_PULSE_US 2000U
-#define UNLOAD_SERVO_2_HOME_PULSE_US 2000U
-#define UNLOAD_SERVO_2_RELEASE_PULSE_US 1000U
+#define UNLOAD_SERVO_1_HOME_PULSE_US 2000U
+#define UNLOAD_SERVO_1_RELEASE_PULSE_US 1000U
+#define UNLOAD_SERVO_2_HOME_PULSE_US 1000U
+#define UNLOAD_SERVO_2_RELEASE_PULSE_US 2000U
+#define UNLOAD_SERVO_RAMP_STEP_US 40U
 
 /* Mechanical timings are intentionally conservative and must be calibrated on the vehicle. */
 #define UNLOAD_SERVO_DEPLOY_MS 700U
@@ -33,6 +34,10 @@
 #if UNLOAD_SERVO_1_HOME_PULSE_US >= 20000U || UNLOAD_SERVO_1_RELEASE_PULSE_US >= 20000U || \
     UNLOAD_SERVO_2_HOME_PULSE_US >= 20000U || UNLOAD_SERVO_2_RELEASE_PULSE_US >= 20000U
 #error "Each unload servo pulse width must fit within the TIM4 20 ms period"
+#endif
+
+#if UNLOAD_SERVO_RAMP_STEP_US == 0U
+#error "Unload servo ramp step must be greater than zero"
 #endif
 
 #endif /* UNLOAD_CONFIG_H */

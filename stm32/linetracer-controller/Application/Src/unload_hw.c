@@ -6,6 +6,8 @@
 static volatile uint8_t s_safety_inhibited;
 static volatile uint32_t s_safety_inhibit_generation;
 static uint8_t s_pwm_started;
+static uint32_t s_servo_1_pulse_us;
+static uint32_t s_servo_2_pulse_us;
 
 #define UNLOAD_SERVO_1_CHANNEL TIM_CHANNEL_1
 #define UNLOAD_SERVO_2_CHANNEL TIM_CHANNEL_2
@@ -21,6 +23,22 @@ static void UnloadHw_ExitCriticalSection(uint32_t primask) {
     if (primask == 0U) {
         __enable_irq();
     }
+}
+
+static uint32_t UnloadHw_RampPulse(uint32_t current_pulse_us, uint32_t target_pulse_us) {
+    if (current_pulse_us < target_pulse_us) {
+        uint32_t remaining_us = target_pulse_us - current_pulse_us;
+
+        return current_pulse_us +
+               ((remaining_us < UNLOAD_SERVO_RAMP_STEP_US) ? remaining_us : UNLOAD_SERVO_RAMP_STEP_US);
+    }
+    if (current_pulse_us > target_pulse_us) {
+        uint32_t remaining_us = current_pulse_us - target_pulse_us;
+
+        return current_pulse_us -
+               ((remaining_us < UNLOAD_SERVO_RAMP_STEP_US) ? remaining_us : UNLOAD_SERVO_RAMP_STEP_US);
+    }
+    return current_pulse_us;
 }
 
 static uint8_t UnloadHw_StopPwm(void) {
@@ -51,6 +69,8 @@ uint8_t UnloadHw_Init(void) {
      * before UnloadTask gets its first scheduling slot.
      */
     s_pwm_started = 0U;
+    s_servo_1_pulse_us = UNLOAD_SERVO_1_HOME_PULSE_US;
+    s_servo_2_pulse_us = UNLOAD_SERVO_2_HOME_PULSE_US;
     return UnloadHw_StopPwm();
 }
 
@@ -89,8 +109,10 @@ uint8_t UnloadHw_Apply(unload_servo_output_t output) {
         return UnloadHw_StopPwm();
     }
 
-    __HAL_TIM_SET_COMPARE(&htim4, UNLOAD_SERVO_1_CHANNEL, servo_1_pulse_us);
-    __HAL_TIM_SET_COMPARE(&htim4, UNLOAD_SERVO_2_CHANNEL, servo_2_pulse_us);
+    s_servo_1_pulse_us = UnloadHw_RampPulse(s_servo_1_pulse_us, servo_1_pulse_us);
+    s_servo_2_pulse_us = UnloadHw_RampPulse(s_servo_2_pulse_us, servo_2_pulse_us);
+    __HAL_TIM_SET_COMPARE(&htim4, UNLOAD_SERVO_1_CHANNEL, s_servo_1_pulse_us);
+    __HAL_TIM_SET_COMPARE(&htim4, UNLOAD_SERVO_2_CHANNEL, s_servo_2_pulse_us);
     if (s_pwm_started == 0U) {
         if (HAL_TIM_PWM_Start(&htim4, UNLOAD_SERVO_1_CHANNEL) != HAL_OK) {
             status = 0U;
