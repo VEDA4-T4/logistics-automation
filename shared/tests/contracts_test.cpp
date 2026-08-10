@@ -30,6 +30,33 @@ mqtt::MqttMessage MakeMessage(std::string message_id, mqtt::MessageType message_
     };
 }
 
+void TestRoleAwareDeviceStates() {
+    using logistics::contracts::DeviceRole;
+    using logistics::contracts::DeviceStateMeaning;
+    using logistics::contracts::DeviceStateMeaningFor;
+
+    static_assert(DeviceStateMeaningFor(DeviceRole::kVision, "WAITING_FOR_PRODUCT") == DeviceStateMeaning::kIdle);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kGripper, "TRANSFERRING") == DeviceStateMeaning::kWorking);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kGripper, "READY") == DeviceStateMeaning::kIdle);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kGripper, "PLACED") == DeviceStateMeaning::kCompleted);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kSorting, "GATE_MOVING_DEST_2") == DeviceStateMeaning::kWorking);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kLineTracer, "FOLLOWING_LINE") == DeviceStateMeaning::kWorking);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kLineTracer, "POSITION_UNKNOWN") == DeviceStateMeaning::kError);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kInput, "TRANSFERRING") == DeviceStateMeaning::kUnknown);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kSorting, "GATE_MOVING_DEST_20") == DeviceStateMeaning::kUnknown);
+
+    const auto future_status = MakeMessage("MSG-FUTURE-STATE", mqtt::MessageType::kDeviceStatus,
+                                           mqtt::DeviceStatusPayload{
+                                               .status = mqtt::ConnectionState::kOnline,
+                                               .current_state = "FUTURE_STATE",
+                                           });
+    const auto encoded = mqtt::SerializeMessage(future_status);
+    assert(encoded.IsSuccess());
+    const auto decoded = mqtt::DeserializeMessage(encoded.payload);
+    assert(decoded.IsSuccess());
+    assert(mqtt::GetPayload<mqtt::DeviceStatusPayload>(decoded.value)->current_state == "FUTURE_STATE");
+}
+
 template <typename PayloadType>
 void AssertRoundTrip(const mqtt::MqttMessage& original) {
     const auto encoded = mqtt::SerializeMessage(original);
@@ -765,6 +792,7 @@ int main() {
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 15 }) == mqtt::ConnectionState::kOffline);
 
     TestAllMqttMessageRoundTrips();
+    TestRoleAwareDeviceStates();
     TestLineTracerPositionStatusRoundTrip();
     TestLineTracerPositionResetRoundTrip();
     TestMqttCodecInvalidInputs();
