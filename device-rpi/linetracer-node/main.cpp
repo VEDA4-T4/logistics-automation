@@ -144,6 +144,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
 
 [[nodiscard]] mqtt::CommandResult LocalCommandResult(LineTracerCommandStatus status) noexcept {
     switch (status) {
+        case LineTracerCommandStatus::kCompleted:
+            return mqtt::CommandResult::kSuccess;
         case LineTracerCommandStatus::kInvalidTarget:
         case LineTracerCommandStatus::kInvalidDestination:
         case LineTracerCommandStatus::kInvalidPosition:
@@ -167,6 +169,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
 
 [[nodiscard]] std::string LocalCommandError(LineTracerCommandStatus status) {
     switch (status) {
+        case LineTracerCommandStatus::kCompleted:
+            return {};
         case LineTracerCommandStatus::kInvalidMessage:
             return "ERR-MQTT-INVALID-MESSAGE";
         case LineTracerCommandStatus::kInvalidTarget:
@@ -198,7 +202,25 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
 }
 
 [[nodiscard]] std::optional<LineTracerReport> MakeLocalCommandResponse(const LineTracerCommandResult& result) {
-    if (result.Succeeded() || result.request_id.empty() || result.mqtt_command == mqtt::ControlCommand::kUnknown) {
+    if (result.request_id.empty() || result.mqtt_command == mqtt::ControlCommand::kUnknown) {
+        return std::nullopt;
+    }
+
+    if (result.status == LineTracerCommandStatus::kCompleted) {
+        return LineTracerReport{
+            .channel = LineTracerReportChannel::kResponse,
+            .message_type = mqtt::MessageType::kCommandResponse,
+            .data =
+                mqtt::CommandResponsePayload{
+                    .request_id = result.request_id,
+                    .command = result.mqtt_command,
+                    .result = mqtt::CommandResult::kSuccess,
+                    .error_code = std::nullopt,
+                    .message = "line tracer node is running",
+                },
+        };
+    }
+    if (result.Succeeded()) {
         return std::nullopt;
     }
 

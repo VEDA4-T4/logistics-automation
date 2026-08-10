@@ -128,7 +128,8 @@ namespace mqtt = contracts::mqtt;
 }  // namespace
 
 bool LineTracerCommandResult::Succeeded() const noexcept {
-    return status == LineTracerCommandStatus::kSent || status == LineTracerCommandStatus::kSentNoReply;
+    return status == LineTracerCommandStatus::kCompleted || status == LineTracerCommandStatus::kSent ||
+           status == LineTracerCommandStatus::kSentNoReply;
 }
 
 LineTracerNode::LineTracerNode(std::string device_id, UartSession& uart_session)
@@ -501,7 +502,7 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
             break;
         case DeviceControlAction::kStart:
             if (!HasActiveJob()) {
-                result.status = LineTracerCommandStatus::kNoActiveJob;
+                result.status = LineTracerCommandStatus::kCompleted;
                 return result;
             }
             uart_command = UART_CMD_LINETRACER_RESUME_DRIVE;

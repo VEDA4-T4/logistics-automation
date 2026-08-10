@@ -401,6 +401,20 @@ void TestStopUsesActiveJobId() {
     assert(uart_linetracer_stop_job_id(frame.payload) == fixture.node->ActiveUartJobId());
 }
 
+void TestStartAndRestartWithoutActiveJobCompleteLocally() {
+    Fixture fixture;
+
+    const auto start = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart));
+    const auto restart = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRestart));
+
+    assert(start.status == LineTracerCommandStatus::kCompleted);
+    assert(restart.status == LineTracerCommandStatus::kCompleted);
+    assert(start.Succeeded());
+    assert(restart.Succeeded());
+    assert(fixture.backend->writes.empty());
+    assert(!fixture.node->HasActiveJob());
+}
+
 void TestRestartMapsToResume() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
@@ -867,6 +881,7 @@ int main() {
     TestInvalidCurrentPositionIsRejectedWithoutUartWrite();
     TestDestinationRequiresKnownCurrentPosition();
     TestStopUsesActiveJobId();
+    TestStartAndRestartWithoutActiveJobCompleteLocally();
     TestRestartMapsToResume();
     TestInitializeMapsToResetAndClearsActiveJob();
     TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob();
