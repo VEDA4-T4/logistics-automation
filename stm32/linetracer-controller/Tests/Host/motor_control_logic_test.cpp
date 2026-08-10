@@ -115,7 +115,9 @@ void TestRouteActions() {
     assert(output.left_direction == MOTOR_DIRECTION_REVERSE);
     assert(output.right_direction == MOTOR_DIRECTION_FORWARD);
     assert(output.left_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_PIVOT_PWM + MOTOR_CONTROL_LEFT_TRIM));
-    assert(output.right_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_PIVOT_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+    assert(output.right_pwm ==
+           MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_PIVOT_PWM + MOTOR_CONTROL_LEFT_TURN_RIGHT_BOOST_PWM +
+                                      MOTOR_CONTROL_RIGHT_TRIM));
     assert(output.standby != 0U);
 
     assert(MotorControlLogic_ComputeRouteAction(ROUTE_ACTION_TURN_RIGHT, &output) != 0U);

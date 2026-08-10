@@ -16,7 +16,8 @@ extern "C" {
 #define CONTROL_MARKER_TIMEOUT_MS 15000U
 /*
  * SensorTask already publishes debounced line inputs. A narrow transverse
- * junction stripe may be present for only one 10 ms SensorTask sample, so
+ * junction stripe may be present for only
+ * one 10 ms SensorTask sample, so
  * requiring a second sample can silently miss the junction at driving speed.
  */
 #define CONTROL_JUNCTION_BLACK_STABLE_MS 0U
@@ -27,7 +28,7 @@ extern "C" {
  * forward long enough to place the axle
  * near the intersection centre before beginning the pivot turn.
  */
-#define CONTROL_JUNCTION_CENTER_ADVANCE_MS 250U
+#define CONTROL_JUNCTION_CENTER_ADVANCE_MS 300U
 #define CONTROL_JUNCTION_CROSS_TIMEOUT_MS 1000U
 #define CONTROL_TURN_SOURCE_CLEAR_MS 60U
 #define CONTROL_TURN_TARGET_CENTERED_MS 50U
@@ -84,6 +85,8 @@ typedef struct {
     uint8_t last_marker_valid;
     uint8_t junction_condition_active;
     uint8_t junction_candidate_active;
+    /* Target-line outer edge must be observed before center alignment can complete a turn. */
+    uint8_t junction_target_edge_seen;
     uint8_t junction_guard_active;
     uint8_t delayed_marker_ignore_valid;
     /* Set after an unload completes; the next assigned job must turn around before departure. */

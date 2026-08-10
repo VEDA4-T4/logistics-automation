@@ -177,6 +177,7 @@ typedef enum {
     APP_TX_EVENT_LOAD_DETECTED,
     APP_TX_EVENT_UNLOAD_COMPLETE,
     APP_TX_EVENT_STATE_CHANGED,
+    APP_TX_EVENT_SENSOR_STATUS,
     APP_TX_EVENT_FAULT
 } app_tx_event_type_t;
 
@@ -200,6 +201,9 @@ typedef struct {
     uint8_t original_payload_length;
     uint8_t status;
     uint8_t error_code;
+    uint8_t sensor_id;
+    uint8_t sensor_state;
+    uint16_t sensor_distance_cm;
     uint8_t retry_count;
 } app_tx_event_t;
 
@@ -225,6 +229,7 @@ static inline uint8_t app_tx_event_priority(app_tx_event_type_t type) {
         case APP_TX_EVENT_LOAD_DETECTED:
         case APP_TX_EVENT_UNLOAD_COMPLETE:
         case APP_TX_EVENT_STATE_CHANGED:
+        case APP_TX_EVENT_SENSOR_STATUS:
             return APP_TX_PRIORITY_EVENT;
 
         case APP_TX_EVENT_HEARTBEAT:
