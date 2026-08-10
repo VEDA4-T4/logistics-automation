@@ -288,6 +288,7 @@ private:
     std::uint16_t next_motion_id_{ UART_GRIPPER_MOTION_ID_MIN };
     bool homed_{ false };
     bool estop_latched_{ false };
+    bool estop_requested_{ false };
 
     std::optional<HeartbeatState> last_heartbeat_state_;
     std::chrono::milliseconds since_controller_heartbeat_{};

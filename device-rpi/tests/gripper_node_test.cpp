@@ -485,6 +485,7 @@ void test_requested_emergency_stop_is_status_not_device_error() {
 
     static_cast<void>(fixture.node->HandleMqttCommand(MakeEmergencyStop()));
     fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
+    fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
 
     assert(!fixture.AnyErrorEquals("ERR-EMERGENCY-STOP"));
     const auto* response = fixture.LastResponse();
@@ -507,14 +508,16 @@ void test_unrequested_emergency_stop_reports_actual_hex_cause() {
     assert(status != nullptr && status->error_code == "ERR-EMERGENCY-STOP");
 }
 
-void test_safety_release_reports_stopped_rather_than_ready() {
+void test_recovery_releases_safety_without_component() {
     Fixture fixture;
     fixture.Home();
     fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
     fixture.reports.clear();
+    fixture.backend->written_commands.clear();
 
-    static_cast<void>(
-        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-safety", "safety")));
+    static_cast<void>(fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-safety")));
+    assert(fixture.backend->written_commands.size() == 1U);
+    assert(fixture.backend->written_commands[0] == UART_CMD_RESET_DEVICE);
     fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));
 
     // Releasing the latch does not home the arm, so reporting READY here would
@@ -522,26 +525,6 @@ void test_safety_release_reports_stopped_rather_than_ready() {
     assert(!fixture.AnyStatusEquals("READY"));
     assert(fixture.AnyStatusEquals("STOPPED"));
     assert(!fixture.node->IsHomed());
-}
-
-void test_recovery_homes_the_arm_after_a_safety_release() {
-    Fixture fixture;
-    fixture.Home();
-    fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
-    fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));
-    fixture.backend->written_commands.clear();
-
-    const GripperCommandResult result =
-        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-home", "home"));
-    assert(result.status == GripperCommandStatus::kAccepted);
-    assert(fixture.backend->written_commands.size() == 1U);
-    assert(fixture.backend->written_commands[0] == UART_CMD_GRIPPER_HOME);
-
-    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_HOME);
-    assert(fixture.node->IsHomed());
-    const auto* response = fixture.LastResponse();
-    assert(response != nullptr && response->command == mqtt::ControlCommand::kRecovery &&
-           response->request_id == "req-home" && response->result == mqtt::CommandResult::kSuccess);
 }
 
 void test_missing_completion_event_times_out_the_cycle() {
@@ -584,31 +567,6 @@ void test_start_cycle_dispatch_failure_reports_exactly_one_response() {
         const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
         assert(response != nullptr && response->command == mqtt::ControlCommand::kExecute &&
                response->request_id == "req-1");
-    }
-    assert(response_count == 1);
-}
-
-// Same bug, but for RECOVERY(home): the stray first response reported
-// command=START instead of RECOVERY, since AbortCycle always hardcoded kStart
-// regardless of which command actually created the cycle.
-void test_recovery_home_dispatch_failure_reports_the_recovery_command() {
-    Fixture fixture;
-    fixture.backend->fail_write = true;
-
-    const GripperCommandResult result =
-        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-home", "home"));
-
-    assert(result.status == GripperCommandStatus::kUartError);
-    assert(!fixture.node->HasActiveCycle());
-    int response_count = 0;
-    for (const GripperReport& report : fixture.reports) {
-        if (report.channel != GripperReportChannel::kResponse) {
-            continue;
-        }
-        ++response_count;
-        const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
-        assert(response != nullptr && response->command == mqtt::ControlCommand::kRecovery &&
-               response->request_id == "req-home");
     }
     assert(response_count == 1);
 }
@@ -1048,11 +1006,9 @@ int main() {
     test_emergency_stop_aborts_the_cycle_and_clears_the_home_reference();
     test_requested_emergency_stop_is_status_not_device_error();
     test_unrequested_emergency_stop_reports_actual_hex_cause();
-    test_safety_release_reports_stopped_rather_than_ready();
-    test_recovery_homes_the_arm_after_a_safety_release();
+    test_recovery_releases_safety_without_component();
     test_missing_completion_event_times_out_the_cycle();
     test_start_cycle_dispatch_failure_reports_exactly_one_response();
-    test_recovery_home_dispatch_failure_reports_the_recovery_command();
     test_stop_cancels_the_active_cycle();
     test_status_request_reports_the_controller_state();
     test_commands_for_another_device_are_ignored();

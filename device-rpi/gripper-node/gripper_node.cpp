@@ -381,6 +381,7 @@ GripperCommandResult GripperNode::HandleEmergencyStop(const mqtt::EmergencyStopP
 
     result = ExecuteAsync(std::move(result), UART_CMD_EMERGENCY_STOP, {});
     if (result.Succeeded()) {
+        estop_requested_ = true;
         pending_safety_ = PendingSafetyCommand{ .active = true,
                                                 .expected = PendingSafetyEvent::kEstopLatched,
                                                 .command = mqtt::ControlCommand::kEmergencyStop,
@@ -658,62 +659,16 @@ GripperCommandResult GripperNode::RunRecovery(const mqtt::ControlCommandPayload&
                                  .mqtt_command = command.command,
                                  .request_id = command.request_id };
 
-    if (command.component_id == "safety" || command.component_id == "SAFETY") {
-        result = ExecuteAsync(std::move(result), UART_CMD_RESET_DEVICE, {});
-        if (result.Succeeded()) {
-            pending_safety_ = PendingSafetyCommand{ .active = true,
-                                                    .expected = PendingSafetyEvent::kReleased,
-                                                    .command = command.command,
-                                                    .request_id = command.request_id,
-                                                    .elapsed = {} };
-        } else {
-            EmitCommandResponse(result, "safety reset could not be written to the controller");
-        }
-        return result;
+    result = ExecuteAsync(std::move(result), UART_CMD_RESET_DEVICE, {});
+    if (result.Succeeded()) {
+        pending_safety_ = PendingSafetyCommand{ .active = true,
+                                                .expected = PendingSafetyEvent::kReleased,
+                                                .command = command.command,
+                                                .request_id = command.request_id,
+                                                .elapsed = {} };
+    } else {
+        EmitCommandResponse(result, "safety reset could not be written to the controller");
     }
-
-    // Releasing the latch never moves the arm on its own: the controller leaves it
-    // stopped and unhomed on purpose, so homing stays an explicit operator step
-    // taken after the work area has been confirmed clear.
-    if (cycle_.active) {
-        result.status = GripperCommandStatus::kActiveCycleConflict;
-        EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kRejected,
-                            std::string("ERR-ACTIVE-CYCLE-CONFLICT"), "a cycle is already running");
-        return result;
-    }
-
-    cycle_ = ActiveCycle{
-        .active = true,
-        .mqtt_command = command.command,
-        .phase = GripperPhase::kHome,
-        .step = GripperCycleStep::kReturnHome,
-        .work_id = {},
-        .request_id = command.request_id,
-        .destination = {},
-        // Homing never visits either pick waypoint; the taught values are carried
-        // only so the struct has no half-initialised members.
-        .pick_pose = poses_.pick,
-        .pick_approach_pose = poses_.pick_approach,
-        .from_kinematics = false,
-        .motion_id = UART_GRIPPER_MOTION_ID_NONE,
-        .motion_type = 0U,
-        .waited = {},
-        .motion_budget = {},
-    };
-
-    if (!DispatchStep(result)) {
-        // Same reasoning as StartCycle: this request has not been answered yet,
-        // so AbortCycle's own (kStart-labeled) response would duplicate this one.
-        const std::string message = "homing could not be started";
-        cycle_ = ActiveCycle{};
-        EmitCommandResponse(result, message);
-        return result;
-    }
-
-    result.status = GripperCommandStatus::kAccepted;
-    EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kProcessing, std::nullopt,
-                        "homing in progress");
-    EmitDeviceStatus("HOMING");
     return result;
 }
 
@@ -1133,7 +1088,7 @@ void GripperNode::HandleMotionFault(const uart_frame_t& frame) {
 void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
     const bool latched = frame.payload[kSafetyEventLatchedIndex] != 0U;
     const std::uint8_t cause = frame.payload[kSafetyEventCauseIndex];
-    const bool requested =
+    const bool requested = estop_requested_ ||
         pending_safety_.active &&
         ((pending_safety_.expected == PendingSafetyEvent::kEstopLatched && latched) ||
          (pending_safety_.expected == PendingSafetyEvent::kReleased && !latched));
@@ -1166,6 +1121,7 @@ void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
     } else {
         // Released but deliberately not homed: report STOPPED, never READY, so the
         // server does not treat the arm as ready to accept work yet.
+        estop_requested_ = false;
         EmitDeviceStatus("STOPPED");
     }
 }
@@ -1196,7 +1152,10 @@ void GripperNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
     }
 
     const std::optional<std::string> error_code =
-        (state.error_code == UART_ERROR_NONE) ? std::nullopt : std::optional{ DescribeUartError(state.error_code) };
+        (state.error_code == UART_ERROR_NONE ||
+         (estop_requested_ && state.error_code == UART_ERROR_EMERGENCY_STOP))
+            ? std::nullopt
+            : std::optional{ DescribeUartError(state.error_code) };
     EmitDeviceStatus(DescribeDeviceState(state.device_state), error_code);
 }
 
@@ -1210,7 +1169,9 @@ void GripperNode::HandleDeviceStatus(const uart_frame_t& frame) {
         return;
     }
     const std::optional<std::string> error =
-        (error_code == UART_ERROR_NONE) ? std::nullopt : std::optional{ DescribeUartError(error_code) };
+        (error_code == UART_ERROR_NONE || (estop_requested_ && error_code == UART_ERROR_EMERGENCY_STOP))
+            ? std::nullopt
+            : std::optional{ DescribeUartError(error_code) };
     EmitDeviceStatus(DescribeDeviceState(device_state), error);
 }
 
@@ -1237,7 +1198,7 @@ void GripperNode::EmitControllerStatus(const uart_frame_t& response) {
     }
 
     const std::optional<std::string> error_code =
-        estop_latched_ ? std::optional{ std::string("ERR-EMERGENCY-STOP") } : std::nullopt;
+        (estop_latched_ && !estop_requested_) ? std::optional{ std::string("ERR-EMERGENCY-STOP") } : std::nullopt;
     EmitDeviceStatus(DescribeGripperState(state), error_code);
 }
 
@@ -1259,6 +1220,9 @@ void GripperNode::Tick(std::chrono::milliseconds elapsed) {
             EmitCommandResponse(pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kTimeout,
                                 std::string("ERR-SAFETY-EVENT-TIMEOUT"),
                                 "controller did not confirm the safety change");
+            if (pending_safety_.expected == PendingSafetyEvent::kEstopLatched) {
+                estop_requested_ = false;
+            }
             pending_safety_ = PendingSafetyCommand{};
         }
     }
