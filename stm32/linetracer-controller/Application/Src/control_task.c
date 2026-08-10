@@ -27,7 +27,6 @@ static uint8_t controlTaskPendingUnloadResetActive;
 static uint32_t controlTaskPendingUnloadResetDeadlineMs;
 static uint32_t controlTaskPendingUnloadResetRequestId;
 static uint32_t controlTaskNextUnloadRequestId;
-static uint8_t controlTaskUnloadStartPending;
 
 static void ControlTask_PublishStateChanged(uint32_t now_ms);
 
@@ -708,9 +707,8 @@ static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_con
                 ControlTask_PublishUnloadFailure(&failure, now_ms);
                 break;
             }
-            /* Capture the stopped, loaded destination reference before the servo moves. */
-            controlTaskUnloadStartPending = 1U;
-            SensorTask_RequestFsrBaselineCapture(SENSOR_TASK_FSR_BASELINE_FOR_LOAD_OFF);
+            /* Destination-marker arrival starts the deterministic servo cycle immediately. */
+            ControlTask_StartUnload(now_ms);
             break;
 
         case ROUTE_ACTION_JOB_COMPLETE:
@@ -755,16 +753,6 @@ static void ControlTask_ProcessSensorSnapshots(void) {
 
         if (uart_linetracer_load_state_is_valid(snapshot.load_state) != 0U) {
             controlTaskLoadState = snapshot.load_state;
-        }
-
-        if (controlTaskUnloadStartPending != 0U) {
-            if (controlTaskContext.state != LINETRACER_CONTROL_UNLOADING) {
-                /* A stop/fault before baseline completion must not auto-start unloading later. */
-                controlTaskUnloadStartPending = 0U;
-            } else if ((snapshot.event_flags & APP_SENSOR_EVENT_FSR_BASELINE_READY) != 0U && snapshot.fsr_valid != 0U) {
-                controlTaskUnloadStartPending = 0U;
-                ControlTask_StartUnload(now_ms);
-            }
         }
 
         if (ControlTask_RouteSensorEventsEnabled() == 0U) {
@@ -908,7 +896,6 @@ void StartControlTask(void* argument) {
     controlTaskPendingUnloadResetDeadlineMs = 0U;
     controlTaskPendingUnloadResetRequestId = 0U;
     controlTaskNextUnloadRequestId = 0U;
-    controlTaskUnloadStartPending = 0U;
     next_wake_tick = osKernelGetTickCount();
     last_alive_tick = next_wake_tick;
     ControlLogic_Init(&controlTaskContext, next_wake_tick);

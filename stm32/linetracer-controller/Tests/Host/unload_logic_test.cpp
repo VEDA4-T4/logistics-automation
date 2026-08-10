@@ -20,7 +20,7 @@ app_unload_command_t MakeStart(std::uint16_t job_id, uart_linetracer_route_t rou
     return command;
 }
 
-void TestCompletionAfterDebouncedLoadOff() {
+void TestCompletionAfterTimedServoCycle() {
     unload_logic_context_t context{};
     app_unload_result_t result{};
     const auto command = MakeStart(101U, UART_LINETRACER_ROUTE_B, 100U);
@@ -33,13 +33,14 @@ void TestCompletionAfterDebouncedLoadOff() {
     assert(context.state == UNLOAD_LOGIC_MOVING_TO_RELEASE);
 
     UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 100U + UNLOAD_SERVO_DEPLOY_MS);
-    assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
-
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 1000U);
     assert(context.state == UNLOAD_LOGIC_MOVING_HOME);
     assert(UnloadLogic_GetServoOutput(&context) == UNLOAD_SERVO_OUTPUT_HOME);
 
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 1000U + UNLOAD_SERVO_HOME_MS);
+    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT,
+                       100U + UNLOAD_SERVO_DEPLOY_MS + UNLOAD_SERVO_HOME_MS - 1U);
+    assert(context.state == UNLOAD_LOGIC_MOVING_HOME);
+
+    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 100U + UNLOAD_SERVO_DEPLOY_MS + UNLOAD_SERVO_HOME_MS);
     assert(context.state == UNLOAD_LOGIC_IDLE);
     assert(UnloadLogic_GetServoOutput(&context) == UNLOAD_SERVO_OUTPUT_DISABLE);
     assert(UnloadLogic_GetPendingResult(&context, &result) != 0U);
@@ -54,46 +55,34 @@ void TestCompletionAfterDebouncedLoadOff() {
     assert(UnloadLogic_GetPendingResult(&context, &result) == 0U);
 }
 
-void TestNonEmptyLoadDoesNotStartHomeMove() {
+void TestLoadStateDoesNotBlockCompletion() {
     unload_logic_context_t context{};
+    app_unload_result_t result{};
     const auto command = MakeStart(102U, UART_LINETRACER_ROUTE_C, 100U);
 
     UnloadLogic_Init(&context, 0U);
     assert(UnloadLogic_Start(&context, &command, 100U) != 0U);
     UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 100U + UNLOAD_SERVO_DEPLOY_MS);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_UNLOADING, 1000U);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 1100U);
-    assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
+    assert(context.state == UNLOAD_LOGIC_MOVING_HOME);
+    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 100U + UNLOAD_SERVO_DEPLOY_MS + UNLOAD_SERVO_HOME_MS);
+    assert(UnloadLogic_GetPendingResult(&context, &result) != 0U);
+    assert(result.type == APP_UNLOAD_RESULT_COMPLETE);
 }
 
-void TestPreexistingEmptyLoadCannotComplete() {
+void TestServoCycleHandlesTickWraparound() {
     unload_logic_context_t context{};
     app_unload_result_t result{};
-    const auto command = MakeStart(107U, UART_LINETRACER_ROUTE_A, 100U);
-
-    UnloadLogic_Init(&context, 0U);
-    assert(UnloadLogic_Start(&context, &command, 100U) != 0U);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 100U + UNLOAD_SERVO_DEPLOY_MS);
-    assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
-    assert(context.load_present_seen == 0U);
-    assert(UnloadLogic_GetPendingResult(&context, &result) == 0U);
-
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 100U + UNLOAD_OPERATION_TIMEOUT_MS);
-    assert(UnloadLogic_GetPendingResult(&context, &result) != 0U);
-    assert(result.type == APP_UNLOAD_RESULT_TIMEOUT);
-}
-
-void TestLoadOffHandlesTickWraparound() {
-    unload_logic_context_t context{};
     const std::uint32_t started_at_ms = UINT32_MAX - UNLOAD_SERVO_DEPLOY_MS + 1U;
     const auto command = MakeStart(106U, UART_LINETRACER_ROUTE_A, started_at_ms);
 
     UnloadLogic_Init(&context, started_at_ms);
     assert(UnloadLogic_Start(&context, &command, started_at_ms) != 0U);
     UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, 0U);
-    assert(context.state == UNLOAD_LOGIC_WAITING_LOAD_OFF);
-    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_EMPTY, 0U);
     assert(context.state == UNLOAD_LOGIC_MOVING_HOME);
+    UnloadLogic_Update(&context, UART_LINETRACER_LOAD_PRESENT, UNLOAD_SERVO_HOME_MS);
+    assert(context.state == UNLOAD_LOGIC_IDLE);
+    assert(UnloadLogic_GetPendingResult(&context, &result) != 0U);
+    assert(result.type == APP_UNLOAD_RESULT_COMPLETE);
 }
 
 void TestTimeoutAndAbortAreTerminal() {
@@ -134,10 +123,9 @@ void TestRejectsConcurrentOrInvalidStart() {
 }  // namespace
 
 int main() {
-    TestCompletionAfterDebouncedLoadOff();
-    TestNonEmptyLoadDoesNotStartHomeMove();
-    TestPreexistingEmptyLoadCannotComplete();
-    TestLoadOffHandlesTickWraparound();
+    TestCompletionAfterTimedServoCycle();
+    TestLoadStateDoesNotBlockCompletion();
+    TestServoCycleHandlesTickWraparound();
     TestTimeoutAndAbortAreTerminal();
     TestRejectsConcurrentOrInvalidStart();
     return 0;

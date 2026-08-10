@@ -12,7 +12,6 @@ extern "C" {
 typedef enum {
     UNLOAD_LOGIC_IDLE = 0,
     UNLOAD_LOGIC_MOVING_TO_RELEASE,
-    UNLOAD_LOGIC_WAITING_LOAD_OFF,
     UNLOAD_LOGIC_MOVING_HOME,
     UNLOAD_LOGIC_FAILED
 } unload_logic_state_t;
@@ -30,7 +29,6 @@ typedef struct {
     uint32_t started_at_ms;
     uint32_t state_entered_at_ms;
     uint8_t active;
-    uint8_t load_present_seen;
     uint8_t result_pending;
 } unload_logic_context_t;
 
