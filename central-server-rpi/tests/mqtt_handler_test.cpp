@@ -371,22 +371,37 @@ void TestSensorStatusIsAcceptedAndForwardedToQt() {
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
             .message_id = "MSG-SENSOR-STATUS-01",
             .message_type = mqtt::MessageType::kSensorStatus,
-            .source_id = "PI-INPUT-01",
+            .source_id = "PI-LINETRACER-01",
             .timestamp = "2026-07-27T02:00:00Z",
             .data =
                 mqtt::SensorStatusPayload{
-                    .sensor_id = 1,
+                    .sensor_id = 4,
                     .measurement_status = "DETECTED",
                     .distance_cm = 14,
                 },
         };
-        assert(handler.Handle(mqtt::DeviceEventTopic("PI-INPUT-01"), Encode(sensor_status)));
+        assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_status)));
         assert(qt_events.size() == 1);
         const auto* forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.front());
         assert(forwarded != nullptr);
-        assert(forwarded->sensor_id == 1);
+        assert(forwarded->sensor_id == 4);
         assert(forwarded->measurement_status == "DETECTED");
         assert(forwarded->distance_cm == 14);
+
+        auto sensor_clear = sensor_status;
+        sensor_clear.message_id = "MSG-SENSOR-STATUS-02";
+        sensor_clear.timestamp = "2026-07-27T02:00:01Z";
+        auto* clear_payload = mqtt::GetPayload<mqtt::SensorStatusPayload>(sensor_clear);
+        assert(clear_payload != nullptr);
+        clear_payload->measurement_status = "CLEAR";
+        clear_payload->distance_cm = 20;
+        assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_clear)));
+        assert(qt_events.size() == 2);
+        forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.back());
+        assert(forwarded != nullptr);
+        assert(forwarded->sensor_id == 4);
+        assert(forwarded->measurement_status == "CLEAR");
+        assert(forwarded->distance_cm == 20);
     }
     std::filesystem::remove_all(root);
 }
