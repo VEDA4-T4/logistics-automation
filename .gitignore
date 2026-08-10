@@ -115,6 +115,9 @@ Thumbs.db
 # Codex/PDF review intermediates
 tmp/
 
+# Local reference documents (never commit)
+docs/documents/V-*.pdf
+
 # C++ objects and libs
 *.slo
 *.lo
