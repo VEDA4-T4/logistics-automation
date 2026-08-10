@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -182,6 +183,22 @@ public:
 
     void PreloadIncoming(const uart_frame_t& frame) {
         incoming_.push_back(Encode(frame));
+    }
+
+    /*
+     * Queues several frames to be delivered concatenated in a single Read(),
+     * the way a real serial port can hand back more than one frame's worth of
+     * bytes in one read() call when the sender writes them close together.
+     * PreloadIncoming and the responder's per-reply loop both queue one frame
+     * per Read() instead, which cannot exercise that path.
+     */
+    void PreloadCombinedIncoming(std::initializer_list<uart_frame_t> frames) {
+        std::vector<std::uint8_t> combined;
+        for (const uart_frame_t& frame : frames) {
+            const std::vector<std::uint8_t> encoded = Encode(frame);
+            combined.insert(combined.end(), encoded.begin(), encoded.end());
+        }
+        incoming_.push_back(std::move(combined));
     }
 
     Responder responder;

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "logistics/contracts/uart/gripper_commands.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart/linetracer_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
@@ -58,6 +59,58 @@ void TestInputPayloadValidation() {
     assert((static_cast<std::uint16_t>(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_LOW_INDEX]) |
             (static_cast<std::uint16_t>(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_HIGH_INDEX]) << 8U)) == 0x1234U);
     assert(UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
+}
+
+void TestGripperPayloadValidation() {
+    constexpr std::array<std::uint8_t, 10> kMoveArm{ 0x34U, 0x12U, 0x84U, 0x03U, 0xC2U,
+                                                     0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
+    constexpr std::array<std::uint8_t, 10> kInvalidAngle{ 0x34U, 0x12U, 0x09U, 0x07U, 0xC2U,
+                                                          0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
+    constexpr std::array<std::uint8_t, 10> kInvalidMotionId{ 0x00U, 0x00U, 0x84U, 0x03U, 0xC2U,
+                                                             0x01U, 0x08U, 0x07U, 0xE8U, 0x03U };
+    constexpr std::array<std::uint8_t, 5> kSetGripper{ 0x78U, 0x56U, 100U, 0xF4U, 0x01U };
+    constexpr std::array<std::uint8_t, 5> kInvalidPosition{ 0x78U, 0x56U, 101U, 0xF4U, 0x01U };
+    constexpr std::array<std::uint8_t, 2> kHome{ 0xBCU, 0x9AU };
+    constexpr std::array<std::uint8_t, 4> kCompleteEvent{ UART_GRIPPER_EVENT_MOTION_COMPLETE, 0x34U, 0x12U,
+                                                          UART_GRIPPER_MOTION_ARM };
+    constexpr std::array<std::uint8_t, 5> kFaultEvent{ UART_GRIPPER_EVENT_FAULT, 0x78U, 0x56U,
+                                                       UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO };
+    constexpr std::array<std::uint8_t, 5> kInvalidFaultEvent{ UART_GRIPPER_EVENT_FAULT, 0x78U, 0x56U,
+                                                              UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_MOTOR };
+
+    assert(UART_CMD_GRIPPER_MOVE_ARM == UART_CMD_GRIPPER_MIN);
+    assert(UART_IS_VALID_GRIPPER_COMMAND(UART_CMD_GRIPPER_RESET) != 0U);
+    assert(UART_IS_VALID_GRIPPER_COMMAND(0x26U) == 0U);
+    assert(UART_IS_VALID_GRIPPER_COMMAND(0x120U) == 0U);
+
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kMoveArm.data(), kMoveArm.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kInvalidAngle.data(), kInvalidAngle.size()) == 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_MOVE_ARM, kInvalidMotionId.data(), kInvalidMotionId.size()) ==
+           0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_SET_GRIPPER, kSetGripper.data(), kSetGripper.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_SET_GRIPPER, kInvalidPosition.data(),
+                                         kInvalidPosition.size()) == 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_HOME, kHome.data(), kHome.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_STOP, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_GET_STATUS, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_RESET, nullptr, 0U) != 0U);
+    assert(UART_IS_VALID_GRIPPER_PAYLOAD(UART_CMD_GRIPPER_RESET, kHome.data(), kHome.size()) == 0U);
+
+    assert(uart_gripper_move_motion_id(kMoveArm.data()) == 0x1234U);
+    assert(uart_gripper_move_base_angle(kMoveArm.data()) == 900U);
+    assert(uart_gripper_move_shoulder_angle(kMoveArm.data()) == 450U);
+    assert(uart_gripper_move_elbow_angle(kMoveArm.data()) == 1800U);
+    assert(uart_gripper_move_duration_ms(kMoveArm.data()) == 1000U);
+    assert(uart_gripper_set_motion_id(kSetGripper.data()) == 0x5678U);
+    assert(uart_gripper_set_duration_ms(kSetGripper.data()) == 500U);
+    assert(uart_gripper_home_motion_id(kHome.data()) == 0x9ABCU);
+
+    assert(UART_IS_VALID_GRIPPER_EVENT_PAYLOAD(kCompleteEvent.data(), kCompleteEvent.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_EVENT_PAYLOAD(kFaultEvent.data(), kFaultEvent.size()) != 0U);
+    assert(UART_IS_VALID_GRIPPER_EVENT_PAYLOAD(kInvalidFaultEvent.data(), kInvalidFaultEvent.size()) == 0U);
+    assert(UART_GRIPPER_STATUS_PAYLOAD_SIZE == 14U);
+    assert(UART_GRIPPER_MOTION_EVENT_PAYLOAD_SIZE == 4U);
+    assert(UART_GRIPPER_FAULT_EVENT_PAYLOAD_SIZE == 5U);
 }
 
 void TestSortingPayloadValidation() {
@@ -237,6 +290,7 @@ int main() {
     TestCrc16KnownVector();
     TestCommonValidationDoesNotTruncateWideValues();
     TestInputPayloadValidation();
+    TestGripperPayloadValidation();
     TestSortingPayloadValidation();
     TestLineTracerPayloadValidation();
     TestCodecAndParserRoundTrip();
