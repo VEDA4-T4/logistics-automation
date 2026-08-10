@@ -134,7 +134,8 @@ enum class DeviceStateMeaning : std::uint8_t {
             if (state == "IDLE" || state == "READY" || state == "ONLINE") {
                 return DeviceStateMeaning::kIdle;
             }
-            if (state == "PICKING" || state == "TRANSFERRING" || state == "PLACING" || state == "RUNNING") {
+            if (state == "WORK_ASSIGNED" || state == "PROCESSING" || state == "PICKING" || state == "TRANSFERRING" ||
+                state == "PLACING" || state == "RUNNING") {
                 return DeviceStateMeaning::kWorking;
             }
             if (state == "PLACED") {

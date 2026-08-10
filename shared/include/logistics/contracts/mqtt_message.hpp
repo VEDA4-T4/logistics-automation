@@ -45,6 +45,7 @@ enum class MessageType : std::uint8_t {
 enum class ControlCommand : std::uint8_t {
     kUnknown,
     kStart,
+    kExecute,
     kStop,
     kRestart,
     kInitialize,
@@ -212,6 +213,8 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
     switch (command) {
         case ControlCommand::kStart:
             return "START";
+        case ControlCommand::kExecute:
+            return "EXECUTE";
         case ControlCommand::kStop:
             return "STOP";
         case ControlCommand::kRestart:
@@ -234,9 +237,9 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
 [[nodiscard]] constexpr ControlCommand ControlCommandFromString(std::string_view value) noexcept {
     constexpr std::array values = {
-        ControlCommand::kStart,      ControlCommand::kStop,           ControlCommand::kRestart,
-        ControlCommand::kInitialize, ControlCommand::kStatusRequest,  ControlCommand::kEmergencyStop,
-        ControlCommand::kRecovery,   ControlCommand::kDestinationSet,
+        ControlCommand::kStart,         ControlCommand::kExecute,    ControlCommand::kStop,
+        ControlCommand::kRestart,       ControlCommand::kInitialize, ControlCommand::kStatusRequest,
+        ControlCommand::kEmergencyStop, ControlCommand::kRecovery,   ControlCommand::kDestinationSet,
     };
     for (const auto command : values) {
         if (ToString(command) == value) {

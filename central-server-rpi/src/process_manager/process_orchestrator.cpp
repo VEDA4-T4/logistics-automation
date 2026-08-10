@@ -545,7 +545,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeGripperCommand(std::string_view wo
                 .data =
                     mqtt::ControlCommandPayload{
                         .request_id = request_id,
-                        .command = mqtt::ControlCommand::kStart,
+                        .command = mqtt::ControlCommand::kExecute,
                         .target_device_id = config_.gripper_device_id,
                         .component_id = "gripper",
                         .params = std::move(params),

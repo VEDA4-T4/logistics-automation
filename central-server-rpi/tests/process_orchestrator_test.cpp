@@ -134,6 +134,7 @@ void TestEventFlowCreatesCommandsForEachNode() {
     const auto& gripper = product_result.commands.front();
     const auto* gripper_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(gripper.message);
     assert(gripper_payload != nullptr);
+    assert(gripper_payload->command == mqtt::ControlCommand::kExecute);
     assert(gripper_payload->target_device_id == "PI-GRIPPER-01");
     assert(gripper_payload->params.at("workId") == kWorkId);
     assert(gripper_payload->params.at("action") == "PICK");

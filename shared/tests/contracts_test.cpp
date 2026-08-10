@@ -734,6 +734,8 @@ int main() {
     assert(mqtt::MessageTypeFromString("SENSOR_STATUS") == mqtt::MessageType::kSensorStatus);
     assert(mqtt::kWorkIdField == "workId");
     assert(mqtt::IsValidUuid(kTestWorkId));
+    assert(mqtt::ControlCommandFromString("EXECUTE") == mqtt::ControlCommand::kExecute);
+    assert(mqtt::ToString(mqtt::ControlCommand::kExecute) == "EXECUTE");
     assert(mqtt::ControlCommandFromString("EMERGENCY_STOP") == mqtt::ControlCommand::kEmergencyStop);
     assert(mqtt::CommandResultFromString("RECEIVED") == mqtt::CommandResult::kReceived);
     assert(mqtt::ToString(mqtt::CommandResult::kDuplicated) == "DUPLICATED");

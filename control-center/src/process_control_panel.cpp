@@ -43,6 +43,8 @@ QString CommandLabel(mqtt::ControlCommand command) {
     switch (command) {
         case mqtt::ControlCommand::kStart:
             return QStringLiteral("공정 시작");
+        case mqtt::ControlCommand::kExecute:
+            return QStringLiteral("작업 실행");
         case mqtt::ControlCommand::kStop:
             return QStringLiteral("공정 정지");
         case mqtt::ControlCommand::kRestart:
@@ -321,6 +323,7 @@ void ProcessControlPanel::setCommandFinished(mqtt::ControlCommand command, mqtt:
                 control_state_.setPhase(ProcessControlPhase::Stopped);
                 break;
             case mqtt::ControlCommand::kStatusRequest:
+            case mqtt::ControlCommand::kExecute:
             case mqtt::ControlCommand::kDestinationSet:
             case mqtt::ControlCommand::kUnknown:
                 break;

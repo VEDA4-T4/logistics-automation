@@ -117,6 +117,7 @@ void UpdateDeviceStatus(const GripperReport& report, DeviceStatus& device_status
         // The heartbeat carries this state, which is what makes the gripper's own
         // device ID and live state visible to the server between work cycles.
         device_status.SetCurrentState(status->current_state);
+        device_status.SetJobId(status->job_id);
         device_status.SetErrorCode(status->error_code);
         return;
     }

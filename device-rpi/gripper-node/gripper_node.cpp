@@ -318,6 +318,24 @@ GripperCommandResult GripperNode::HandleControlCommand(const mqtt::ControlComman
     switch (command.command) {
         case mqtt::ControlCommand::kStart:
         case mqtt::ControlCommand::kRestart: {
+            GripperCommandResult result{ .status = GripperCommandStatus::kSuccess,
+                                         .mqtt_command = command.command,
+                                         .request_id = command.request_id };
+            if (estop_latched_) {
+                result.status = GripperCommandStatus::kRejected;
+                EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kRejected,
+                                    std::string("ERR-EMERGENCY-STOP"),
+                                    "emergency stop is latched; send RECOVERY before START");
+                return result;
+            }
+            EmitCommandResponse(result, "gripper entered running state");
+            if (!cycle_.active) {
+                EmitDeviceStatus("RUNNING");
+            }
+            return result;
+        }
+
+        case mqtt::ControlCommand::kExecute: {
             const auto phase = PhaseFromComponent(command.component_id);
             if (!phase.has_value()) {
                 GripperCommandResult result{ .status = GripperCommandStatus::kUnsupportedCommand,
@@ -468,7 +486,7 @@ GripperCommandResult GripperNode::StartCycle(const mqtt::ControlCommandPayload& 
 
     const auto work_id = ReadStringParam(command.params, "workId");
     if (phase != GripperPhase::kHome && !work_id.has_value()) {
-        EmitCommandResponse(result, "params.workId is required to start a gripper cycle");
+        EmitCommandResponse(result, "params.workId is required to execute a gripper cycle");
         return result;
     }
     result.work_id = work_id.value_or(std::string{});
