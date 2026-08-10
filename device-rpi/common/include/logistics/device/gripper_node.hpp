@@ -289,6 +289,7 @@ private:
     bool homed_{ false };
     bool estop_latched_{ false };
     bool estop_requested_{ false };
+    bool running_requested_{ false };
 
     std::optional<HeartbeatState> last_heartbeat_state_;
     std::chrono::milliseconds since_controller_heartbeat_{};

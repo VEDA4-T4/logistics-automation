@@ -291,6 +291,11 @@ void test_start_homes_without_work_id() {
            response->result == mqtt::CommandResult::kSuccess);
     status = fixture.LastStatus();
     assert(status != nullptr && status->current_state == "RUNNING" && !status->job_id.has_value());
+
+    fixture.reports.clear();
+    fixture.node->HandleUartFrame(MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE));
+    status = fixture.LastStatus();
+    assert(status != nullptr && status->current_state == "RUNNING" && !status->job_id.has_value());
 }
 
 void test_execute_is_rejected_until_the_arm_is_homed() {

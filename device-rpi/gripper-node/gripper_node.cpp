@@ -333,6 +333,7 @@ GripperCommandResult GripperNode::HandleControlCommand(const mqtt::ControlComman
                                     "emergency stop is latched; send RECOVERY before START");
                 return result;
             }
+            running_requested_ = true;
             if (!homed_) {
                 return RunInitialize(command);
             }
@@ -359,9 +360,11 @@ GripperCommandResult GripperNode::HandleControlCommand(const mqtt::ControlComman
             return RunStop(command);
 
         case mqtt::ControlCommand::kInitialize:
+            running_requested_ = false;
             return RunInitialize(command);
 
         case mqtt::ControlCommand::kRecovery:
+            running_requested_ = false;
             return RunRecovery(command);
 
         case mqtt::ControlCommand::kStatusRequest:
@@ -384,6 +387,7 @@ GripperCommandResult GripperNode::HandleEmergencyStop(const mqtt::EmergencyStopP
 
     result = ExecuteAsync(std::move(result), UART_CMD_EMERGENCY_STOP, {});
     if (result.Succeeded()) {
+        running_requested_ = false;
         estop_requested_ = true;
         pending_safety_ = PendingSafetyCommand{ .active = true,
                                                 .expected = PendingSafetyEvent::kEstopLatched,
@@ -589,6 +593,7 @@ GripperCommandResult GripperNode::RunStop(const mqtt::ControlCommandPayload& com
 
     result = Execute(std::move(result), UART_CMD_GRIPPER_STOP, {});
     if (result.Succeeded()) {
+        running_requested_ = false;
         // STOP halts interpolation wherever it is, so the pose stops being known
         // whether or not a cycle was driving it.
         angles_known_ = false;
@@ -1100,6 +1105,7 @@ void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
     estop_latched_ = latched;
 
     if (latched) {
+        running_requested_ = false;
         // The controller drops the active motion and forgets its home reference,
         // so both must be invalidated here to keep this node's view honest.
         homed_ = false;
@@ -1161,7 +1167,9 @@ void GripperNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
          (estop_requested_ && state.error_code == UART_ERROR_EMERGENCY_STOP))
             ? std::nullopt
             : std::optional{ DescribeUartError(state.error_code) };
-    EmitDeviceStatus(DescribeDeviceState(state.device_state), error_code);
+    EmitDeviceStatus(running_requested_ && state.device_state == UART_DEVICE_READY ? "RUNNING"
+                                                                                   : DescribeDeviceState(state.device_state),
+                     error_code);
 }
 
 void GripperNode::HandleDeviceStatus(const uart_frame_t& frame) {
@@ -1177,7 +1185,9 @@ void GripperNode::HandleDeviceStatus(const uart_frame_t& frame) {
         (error_code == UART_ERROR_NONE || (estop_requested_ && error_code == UART_ERROR_EMERGENCY_STOP))
             ? std::nullopt
             : std::optional{ DescribeUartError(error_code) };
-    EmitDeviceStatus(DescribeDeviceState(device_state), error);
+    EmitDeviceStatus(running_requested_ && device_state == UART_DEVICE_READY ? "RUNNING"
+                                                                              : DescribeDeviceState(device_state),
+                     error);
 }
 
 void GripperNode::EmitControllerStatus(const uart_frame_t& response) {
@@ -1204,7 +1214,8 @@ void GripperNode::EmitControllerStatus(const uart_frame_t& response) {
 
     const std::optional<std::string> error_code =
         (estop_latched_ && !estop_requested_) ? std::optional{ std::string("ERR-EMERGENCY-STOP") } : std::nullopt;
-    EmitDeviceStatus(DescribeGripperState(state), error_code);
+    EmitDeviceStatus(running_requested_ && state == UART_GRIPPER_STATE_IDLE ? "RUNNING" : DescribeGripperState(state),
+                     error_code);
 }
 
 // ---------------------------------------------------------------------------
