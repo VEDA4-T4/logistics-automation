@@ -318,7 +318,9 @@ void test_full_cycle_walks_every_motion_and_reports_completion_once() {
     Fixture fixture;
     fixture.Home();
 
-    GripperCommandResult result = fixture.node->HandleMqttCommand(MakeStartCommand("req-1", kWorkId));
+    GripperCommandResult result = fixture.node->HandleMqttCommand(MakeControlCommand(
+        mqtt::ControlCommand::kRestart, "req-1", "gripper",
+        mqtt::Json{ { "workId", kWorkId }, { "destination", "1" } }));
     assert(result.status == GripperCommandStatus::kAccepted);
     assert(fixture.node->HasActiveCycle());
     assert(fixture.node->ActiveStep() == GripperCycleStep::kOpenClaw);
@@ -348,6 +350,9 @@ void test_full_cycle_walks_every_motion_and_reports_completion_once() {
 
     assert(!fixture.node->HasActiveCycle());
     assert(fixture.node->IsHomed());
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr && response->command == mqtt::ControlCommand::kRestart &&
+           response->request_id == "req-1" && response->result == mqtt::CommandResult::kSuccess);
 
     // Exactly one COMPLETED status, carrying the job ID, is what advances the
     // server's work state machine.

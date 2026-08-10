@@ -916,7 +916,7 @@ void GripperNode::AdvanceCycle() {
     }
 
     GripperCommandResult dispatch{ .status = GripperCommandStatus::kUartError,
-                                   .mqtt_command = mqtt::ControlCommand::kStart,
+                                   .mqtt_command = cycle_.mqtt_command,
                                    .request_id = cycle_.request_id,
                                    .work_id = cycle_.work_id };
     if (!DispatchStep(dispatch)) {
@@ -945,7 +945,7 @@ void GripperNode::FinishCycle() {
         return;
     }
 
-    EmitCommandResponse(request_id, mqtt::ControlCommand::kStart, mqtt::CommandResult::kSuccess, std::nullopt,
+    EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kSuccess, std::nullopt,
                         "gripper transfer completed");
     // COMPLETED with the job ID attached is what advances the server's work state
     // machine, so it is published exactly once and only from here.
