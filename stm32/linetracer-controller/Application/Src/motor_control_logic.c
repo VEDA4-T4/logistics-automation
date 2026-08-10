@@ -117,7 +117,7 @@ uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output
                 MOTOR_DIRECTION_REVERSE,
                 MOTOR_DIRECTION_FORWARD,
                 MOTOR_CONTROL_LEFT_PIVOT_PWM,
-                MOTOR_CONTROL_LEFT_TURN_RIGHT_PWM,
+                MOTOR_CONTROL_RIGHT_PIVOT_PWM + MOTOR_CONTROL_LEFT_TURN_RIGHT_BOOST_PWM,
                 output);
             return 1U;
 

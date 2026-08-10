@@ -446,28 +446,18 @@ void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t* context, uint16_t l
 }
 
 void SensorLogic_UpdateLineCenter(sensor_logic_context_t* context, uint8_t line_center, uint16_t line_center_raw) {
-    uint16_t line_center_normalized;
-
     if (context == NULL) {
         return;
     }
 
+    /*
+     * Keep the ADC value observable for calibration, but use PB8's normalized
+     * digital output as the control authority. This keeps left, center, and
+     * right line decisions on the same DO threshold/polarity basis.
+     */
     context->snapshot.line_center_raw = line_center_raw;
-    line_center_normalized =
-        SensorLogic_NormalizeLineRaw(line_center_raw, SENSOR_LINE_CENTER_WHITE_RAW, SENSOR_LINE_CENTER_BLACK_RAW);
-
-    if (context->line_center_analog_initialized == 0U) {
-        context->line_center_filtered = line_center_normalized;
-        context->line_center_analog_initialized = 1U;
-    } else {
-        context->line_center_filtered =
-            SensorLogic_FilterLineNormalized(context->line_center_filtered, line_center_normalized);
-    }
-
-    context->line_center_black =
-        SensorLogic_UpdateBlackHysteresis(context->line_center_filtered, context->line_center_black);
+    context->line_center_black = (line_center != 0U) ? 1U : 0U;
     context->snapshot.line_center = context->line_center_black;
-    (void)line_center;
 }
 
 void SensorLogic_UpdateFsr(sensor_logic_context_t* context, uint16_t raw_value, uint32_t now_ms,

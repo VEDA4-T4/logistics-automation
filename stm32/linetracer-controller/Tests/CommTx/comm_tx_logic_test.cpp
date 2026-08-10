@@ -113,6 +113,32 @@ void TestFaultMayBeReportedWithoutActiveJob() {
     assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(frame.payload, frame.length) != 0U);
 }
 
+void TestObstacleSensorStatusUsesAsyncSequenceAndDistance() {
+    comm_tx_logic_t logic{};
+    app_tx_event_t event{};
+    std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+    std::size_t length{};
+
+    event.type = APP_TX_EVENT_SENSOR_STATUS;
+    event.sensor_id = 1U;
+    event.sensor_state = UART_SENSOR_DETECTED;
+    event.sensor_distance_cm = 4U;
+
+    CommTxLogic_Init(&logic);
+    assert(CommTxLogic_EncodeEvent(&logic, &event, encoded.data(), encoded.size(), &length) == UART_CODEC_OK);
+    const auto frame = Decode(encoded, length);
+    assert(frame.sequence == 0U);
+    assert(frame.command == UART_CMD_SENSOR_STATUS);
+    assert(frame.length == UART_SENSOR_STATUS_PAYLOAD_SIZE);
+    assert(frame.payload[UART_SENSOR_ID_INDEX] == 1U);
+    assert(frame.payload[UART_SENSOR_STATE_INDEX] == UART_SENSOR_DETECTED);
+    const std::uint16_t distance_cm =
+        static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
+        static_cast<std::uint16_t>(static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX]) << 8U);
+    assert(distance_cm == 4U);
+    assert(logic.next_sequence == 1U);
+}
+
 void TestHeartbeatContainsUptimeStateSensorsAndError() {
     comm_tx_logic_t logic{};
     comm_tx_heartbeat_t heartbeat{};
@@ -227,7 +253,7 @@ void TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags() {
     CommTxLogic_InitObservedState(&state);
     snapshot.line_state = LINETRACER_LINE_CENTERED;
     snapshot.load_state = UART_LINETRACER_LOAD_PRESENT;
-    snapshot.ultrasonic_front_mm = 100U;
+    snapshot.ultrasonic_front_mm = 40U;
     snapshot.ultrasonic_rear_mm = 500U;
     snapshot.ultrasonic_left_mm = 500U;
     snapshot.ultrasonic_right_mm = 500U;
@@ -295,6 +321,7 @@ int main() {
     TestStatusResponseContainsCurrentState();
     TestStartedEventUsesAsyncSequence();
     TestFaultMayBeReportedWithoutActiveJob();
+    TestObstacleSensorStatusUsesAsyncSequenceAndDistance();
     TestHeartbeatContainsUptimeStateSensorsAndError();
     TestHeartbeatAllowsIdleAndRejectsUnknownFlags();
     TestAsyncSequenceWraps();

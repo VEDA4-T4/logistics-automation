@@ -24,6 +24,9 @@ static void ControlLogic_SetJunctionPhase(control_context_t* context, control_ju
     context->junction_phase_started_at_ms = now_ms;
     context->junction_condition_since_ms = now_ms;
     context->junction_condition_active = 0U;
+    if (phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET) {
+        context->junction_target_edge_seen = 0U;
+    }
 }
 
 static void ControlLogic_ResetJunctionManeuver(control_context_t* context) {
@@ -35,6 +38,7 @@ static void ControlLogic_ResetJunctionManeuver(control_context_t* context) {
     context->junction_condition_active = 0U;
     context->junction_candidate_since_ms = 0U;
     context->junction_candidate_active = 0U;
+    context->junction_target_edge_seen = 0U;
 }
 
 static void ControlLogic_StartJunctionGuard(control_context_t* context, uint32_t now_ms) {
@@ -1119,8 +1123,8 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, app_marker_
     return action;
 }
 
-static uint8_t ControlLogic_TargetAcquired(const control_context_t* context, uint8_t line_left, uint8_t line_center,
-                                           uint8_t line_right) {
+static uint8_t ControlLogic_TargetEdgeDetected(const control_context_t* context, uint8_t line_left, uint8_t line_center,
+                                               uint8_t line_right) {
     if (context == NULL ||
         (context->junction_action != ROUTE_ACTION_TURN_LEFT && context->junction_action != ROUTE_ACTION_TURN_RIGHT &&
          context->junction_action != ROUTE_ACTION_TURN_AROUND)) {
@@ -1128,12 +1132,27 @@ static uint8_t ControlLogic_TargetAcquired(const control_context_t* context, uin
     }
 
     if (context->junction_action == ROUTE_ACTION_TURN_LEFT) {
-        /* Left turn: accept 100, 110 or 010 and let PID finish centering. */
-        return (line_right == 0U && (line_left != 0U || line_center != 0U)) ? 1U : 0U;
+        /* A left turn must encounter the target line at the left outer sensor first (100). */
+        return (line_left != 0U && line_center == 0U && line_right == 0U) ? 1U : 0U;
     }
 
-    /* Right turn/U-turn: accept 001, 011 or 010 and let PID finish centering. */
-    return (line_left == 0U && (line_center != 0U || line_right != 0U)) ? 1U : 0U;
+    /* A right turn/U-turn must encounter the target line at the right outer sensor first (001). */
+    return (line_left == 0U && line_center == 0U && line_right != 0U) ? 1U : 0U;
+}
+
+static uint8_t ControlLogic_TargetAligned(const control_context_t* context, uint8_t line_left, uint8_t line_center,
+                                          uint8_t line_right) {
+    if (context == NULL || context->junction_target_edge_seen == 0U || line_center == 0U) {
+        return 0U;
+    }
+
+    if (context->junction_action == ROUTE_ACTION_TURN_LEFT) {
+        /* After 100, accept 110 or 010 and let PID finish the remaining centering. */
+        return (line_right == 0U) ? 1U : 0U;
+    }
+
+    /* After 001, accept 011 or 010 for right turns and U-turns. */
+    return (line_left == 0U) ? 1U : 0U;
 }
 
 static uint8_t ControlLogic_CompleteDetectedTurn(control_context_t* context, uint32_t now_ms) {
@@ -1159,7 +1178,7 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
     uint8_t all_white;
     uint8_t both_black;
     uint8_t both_white;
-    uint8_t target_acquired;
+    uint8_t target_aligned;
     uint32_t required_black_stable_ms;
     linetracer_control_state_t previous_state;
 
@@ -1243,8 +1262,16 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
             break;
 
         case CONTROL_JUNCTION_TURN_SEARCH_TARGET:
-            target_acquired = ControlLogic_TargetAcquired(context, line_left, line_center, line_right);
-            if (ControlLogic_ConditionStable(context, target_acquired, now_ms, CONTROL_TURN_TARGET_CENTERED_MS) != 0U) {
+            if (context->junction_target_edge_seen == 0U) {
+                if (ControlLogic_TargetEdgeDetected(context, line_left, line_center, line_right) != 0U) {
+                    context->junction_target_edge_seen = 1U;
+                    context->junction_condition_active = 0U;
+                }
+                break;
+            }
+
+            target_aligned = ControlLogic_TargetAligned(context, line_left, line_center, line_right);
+            if (ControlLogic_ConditionStable(context, target_aligned, now_ms, CONTROL_TURN_TARGET_CENTERED_MS) != 0U) {
                 previous_state = context->state;
                 if (ControlLogic_CompleteDetectedTurn(context, now_ms) == 0U) {
                     result.action = ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE,
