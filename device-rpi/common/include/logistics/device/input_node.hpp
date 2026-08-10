@@ -22,6 +22,7 @@ enum class InputCommandStatus {
     kUnsupportedMessage,
     kUnsupportedCommand,
     kInvalidMessage,
+    kInvalidSpeed,
     kInvalidTarget,
     kUartNotOpen,
     kUartError,
@@ -66,7 +67,7 @@ using InputReportHandler = std::function<void(const InputReport& report)>;
  */
 class InputNode final {
 public:
-    InputNode(std::string device_id, InputUartSession& uart_session);
+    InputNode(std::string device_id, InputUartSession& uart_session, std::uint8_t default_speed = 50U);
 
     void SetReportHandler(InputReportHandler handler);
 
@@ -123,6 +124,7 @@ private:
 
     std::string device_id_;
     InputUartSession& uart_session_;
+    std::uint8_t default_speed_{ 50U };
     InputReportHandler report_handler_;
     std::optional<std::uint8_t> last_sensor_state_;
     std::optional<std::uint32_t> last_controller_event_signature_;

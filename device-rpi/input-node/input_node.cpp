@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/uart/conveyor_events.h"
 #include "logistics/device/device_control_policy.hpp"
 
 namespace logistics::device {
@@ -21,6 +22,7 @@ namespace mqtt = contracts::mqtt;
         case InputCommandStatus::kRejected:
         case InputCommandStatus::kUnsupportedMessage:
         case InputCommandStatus::kUnsupportedCommand:
+        case InputCommandStatus::kInvalidSpeed:
         case InputCommandStatus::kInvalidTarget:
             return mqtt::CommandResult::kRejected;
         case InputCommandStatus::kControllerFailure:
@@ -86,6 +88,8 @@ namespace mqtt = contracts::mqtt;
             return "ERR-EMERGENCY-STOP";
         case UART_ERROR_INVALID_PAYLOAD:
             return "ERR-UART-INVALID-PAYLOAD";
+        case UART_ERROR_SPEED_NOT_CONFIGURED:
+            return "ERR-SPEED-NOT-CONFIGURED";
         case UART_ERROR_UNSUPPORTED_COMMAND:
             return "ERR-UART-UNSUPPORTED";
         case UART_ERROR_INTERNAL:
@@ -111,6 +115,8 @@ namespace mqtt = contracts::mqtt;
             return std::string("ERR-UART-IO");
         case InputCommandStatus::kInvalidTarget:
             return std::string("ERR-MQTT-INVALID-TARGET");
+        case InputCommandStatus::kInvalidSpeed:
+            return std::string("ERR-SPEED-INVALID");
         case InputCommandStatus::kUnsupportedMessage:
         case InputCommandStatus::kUnsupportedCommand:
             return std::string("ERR-UNSUPPORTED-COMMAND");
@@ -118,18 +124,6 @@ namespace mqtt = contracts::mqtt;
             return std::string("ERR-MQTT-INVALID-MESSAGE");
     }
     return std::string("ERR-INTERNAL");
-}
-
-[[nodiscard]] std::optional<std::uint8_t> SpeedFromParams(const mqtt::Json& params) {
-    const auto iterator = params.find("speed");
-    if (iterator == params.end() || !iterator->is_number_integer()) {
-        return std::nullopt;
-    }
-    const auto value = iterator->get<std::int64_t>();
-    if (value < UART_INPUT_CONVEYOR_SPEED_MIN || value > UART_INPUT_CONVEYOR_SPEED_MAX) {
-        return std::nullopt;
-    }
-    return static_cast<std::uint8_t>(value);
 }
 
 // SensorStatusPayload.measurement_status only accepts these three values
@@ -190,34 +184,7 @@ namespace mqtt = contracts::mqtt;
     return static_cast<std::int32_t>(distance);
 }
 
-// App-level UART_CMD_EVENT ids and payload layout. These are defined by the controller
-// firmware, not the shared UART contract, so the values are mirrored from
-// stm32/conveyor-controller/Application/Inc/{app_comm_tx,safety_task,health_task}.h and must
-// be kept in sync if the firmware renumbers them.
-constexpr std::uint8_t kAppEventHeartbeat = 0x01U;  // periodic CommTxTask liveness + status ping
-constexpr std::uint8_t kAppEventSafety = 0x03U;     // SafetyTask event
-constexpr std::uint8_t kAppEventHealth = 0x04U;     // HealthTask event
-constexpr std::size_t kAppEventKindIndex = 1U;      // safety/health payload[1] = kind
-constexpr std::size_t kAppEventCauseIndex = 2U;     // safety/health payload[2] = cause/channel
-// health payload[3] = sensorId, HEALTH_ISSUE_SENSOR_STALE only (other health kinds and all
-// safety events carry a timestamp byte there instead, so this index must stay kind-gated).
-constexpr std::size_t kAppHealthSensorIdIndex = 3U;
-constexpr std::uint8_t kHealthIssueSensorStale = 3U;  // HEALTH_ISSUE_SENSOR_STALE
-constexpr std::uint8_t kHealthSensorIdNone = 0xFFU;   // HEALTH_ISSUE_SENSOR_ID_NONE
-
-constexpr std::uint8_t kSafetyEventResetComplete = 0x02U;  // SAFETY_EVENT_RESET_COMPLETE
-constexpr std::uint8_t kSafetyEventEstopLatched = 0x01U;
-constexpr std::uint8_t kSafetyEventResetRejected = 0x03U;
-constexpr std::size_t kSafetyEventResultIndex = 7U;
 constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
-
-// APP_EVENT_HEARTBEAT payload (app_comm_tx.h APP_HEARTBEAT_*):
-//   [1] device_state, [2] error_code, [3..6] uptime seconds (LE u32),
-//   [7] input sensor state, [8] sorting sensor state
-constexpr std::size_t kHeartbeatStateIndex = 1U;
-constexpr std::size_t kHeartbeatErrorIndex = 2U;
-constexpr std::size_t kHeartbeatInputSensorIndex = 7U;
-constexpr std::size_t kHeartbeatPayloadSize = 9U;
 
 struct ControllerEventDescription {
     std::string error_code;
@@ -230,7 +197,7 @@ struct ControllerEventDescription {
                                                                  std::optional<std::uint8_t> sensor_id) {
     const std::string cause_suffix = " (cause=" + std::to_string(static_cast<int>(cause)) + ")";
     switch (event_id) {
-        case kAppEventSafety:
+        case APP_EVENT_SAFETY:
             switch (kind) {
                 case 1U:  // SAFETY_EVENT_ESTOP_LATCHED
                     return { "ERR-SAFETY-ESTOP-LATCHED", "ERROR", "input controller latched an emergency stop" };
@@ -242,7 +209,7 @@ struct ControllerEventDescription {
                     return { "ERR-SAFETY-EVENT-" + std::to_string(static_cast<int>(kind)), "WARNING",
                              "input controller safety event" + cause_suffix };
             }
-        case kAppEventHealth:
+        case APP_EVENT_HEALTH:
             switch (kind) {
                 case 1U:  // HEALTH_ISSUE_UART_CHANNEL_TIMEOUT
                     return { "ERR-HEALTH-UART-CHANNEL-TIMEOUT", "WARNING",
@@ -250,7 +217,7 @@ struct ControllerEventDescription {
                 case 2U:  // HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT
                     return { "ERR-HEALTH-QUEUE-OVERFLOW", "WARNING",
                              "input controller reported a transient queue overflow" + cause_suffix };
-                case kHealthIssueSensorStale: {
+                case HEALTH_ISSUE_SENSOR_STALE: {
                     const std::string sensor_suffix =
                         sensor_id.has_value() ? " sensorId=" + std::to_string(static_cast<int>(*sensor_id)) : "";
                     return { "ERR-HEALTH-SENSOR-STALE", "WARNING",
@@ -274,10 +241,10 @@ struct ControllerEventDescription {
 
 }  // namespace
 
-InputNode::InputNode(std::string device_id, InputUartSession& uart_session)
-    : device_id_(std::move(device_id)), uart_session_(uart_session) {
-    if (!mqtt::IsValidTopicLevel(device_id_)) {
-        throw std::invalid_argument("input device ID must be one non-wildcard MQTT topic level");
+InputNode::InputNode(std::string device_id, InputUartSession& uart_session, const std::uint8_t default_speed)
+    : device_id_(std::move(device_id)), uart_session_(uart_session), default_speed_(default_speed) {
+    if (!mqtt::IsValidTopicLevel(device_id_) || default_speed == 0U || default_speed > UART_INPUT_CONVEYOR_SPEED_MAX) {
+        throw std::invalid_argument("input device ID or default speed is invalid");
     }
 }
 
@@ -380,13 +347,19 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
 
     switch (action) {
         case DeviceControlAction::kStart: {
-            if (const auto speed = SpeedFromParams(command.params); speed.has_value()) {
-                const std::array<std::uint8_t, UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE> speed_payload{ *speed };
-                InputCommandResult speed_result = Execute(result, UART_CMD_INPUT_CONVEYOR_SET_SPEED, speed_payload);
-                if (!speed_result.Succeeded()) {
-                    EmitCommandResponse(speed_result, "input conveyor speed could not be set");
-                    return speed_result;
-                }
+            bool invalid_speed = false;
+            const auto speed = ReadControlSpeed(command.params, UART_INPUT_CONVEYOR_SPEED_MAX, invalid_speed);
+            if (invalid_speed) {
+                result.status = InputCommandStatus::kInvalidSpeed;
+                EmitCommandResponse(result, "input conveyor speed is invalid");
+                return result;
+            }
+            const std::array<std::uint8_t, UART_INPUT_CONVEYOR_SET_SPEED_PAYLOAD_SIZE> speed_payload{ speed.value_or(
+                default_speed_) };
+            InputCommandResult speed_result = Execute(result, UART_CMD_INPUT_CONVEYOR_SET_SPEED, speed_payload);
+            if (!speed_result.Succeeded()) {
+                EmitCommandResponse(speed_result, "input conveyor speed could not be set");
+                return speed_result;
             }
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_START, conveyor_payload);
             EmitCommandResponse(result, "input conveyor start");
@@ -657,12 +630,12 @@ void InputNode::HandleControllerHeartbeat(const uart_frame_t& frame) {
     // The controller's periodic heartbeat carries the authoritative device state,
     // active error and input sensor state, so decode it rather than dropping it.
     // It arrives about once a second; report only on change to avoid flooding.
-    if (frame.length != kHeartbeatPayloadSize) {
+    if (UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(frame.payload, frame.length) == 0U) {
         return;
     }
-    const std::uint8_t device_state = frame.payload[kHeartbeatStateIndex];
-    const std::uint8_t error_code = frame.payload[kHeartbeatErrorIndex];
-    const std::uint8_t sensor_state = frame.payload[kHeartbeatInputSensorIndex];
+    const std::uint8_t device_state = frame.payload[APP_HEARTBEAT_STATE_INDEX];
+    const std::uint8_t error_code = frame.payload[APP_HEARTBEAT_ERROR_INDEX];
+    const std::uint8_t sensor_state = frame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX];
     const bool recovered = controller_heartbeat_timed_out_;
     controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
     controller_heartbeat_timed_out_ = false;
@@ -703,32 +676,36 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     }
     const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
 
-    if (event_id == kAppEventHeartbeat) {
+    if (event_id == APP_EVENT_HEARTBEAT) {
         HandleControllerHeartbeat(frame);
         return;
     }
 
-    const bool has_detail = frame.length > kAppEventCauseIndex;
-    const std::uint8_t kind = has_detail ? frame.payload[kAppEventKindIndex] : 0U;
-    const std::uint8_t cause = has_detail ? frame.payload[kAppEventCauseIndex] : 0U;
+    if ((event_id == APP_EVENT_SAFETY && UART_IS_VALID_APP_SAFETY_PAYLOAD(frame.payload, frame.length) == 0U) ||
+        (event_id == APP_EVENT_HEALTH && UART_IS_VALID_APP_HEALTH_PAYLOAD(frame.payload, frame.length) == 0U)) {
+        return;
+    }
+    const bool has_detail = frame.length > APP_SAFETY_EVENT_CAUSE_INDEX;
+    const std::uint8_t kind = has_detail ? frame.payload[APP_SAFETY_EVENT_KIND_INDEX] : 0U;
+    const std::uint8_t cause = has_detail ? frame.payload[APP_SAFETY_EVENT_CAUSE_INDEX] : 0U;
 
     // A timed-out UART cannot receive its own health event, so the STM32 sends
     // this event over the opposite, still healthy channel. The central server
     // already determines the affected Pi's availability from MQTT heartbeats.
-    if (event_id == kAppEventHealth && kind == 1U) {
+    if (event_id == APP_EVENT_HEALTH && kind == HEALTH_ISSUE_UART_CHANNEL_TIMEOUT) {
         return;
     }
 
-    if ((event_id == kAppEventSafety) && pending_safety_.active) {
+    if ((event_id == APP_EVENT_SAFETY) && pending_safety_.active) {
         const bool estopConfirmed =
-            (pending_safety_.expected == PendingSafetyEvent::kEstopLatched) && (kind == kSafetyEventEstopLatched);
+            (pending_safety_.expected == PendingSafetyEvent::kEstopLatched) && (kind == SAFETY_EVENT_ESTOP_LATCHED);
         const bool resetConfirmed =
-            (pending_safety_.expected == PendingSafetyEvent::kResetComplete) && (kind == kSafetyEventResetComplete);
+            (pending_safety_.expected == PendingSafetyEvent::kResetComplete) && (kind == SAFETY_EVENT_RESET_COMPLETE);
         const bool resetRejected =
-            (pending_safety_.expected == PendingSafetyEvent::kResetComplete) && (kind == kSafetyEventResetRejected);
+            (pending_safety_.expected == PendingSafetyEvent::kResetComplete) && (kind == SAFETY_EVENT_RESET_REJECTED);
         if (estopConfirmed || resetConfirmed || resetRejected) {
             const std::uint8_t resetResult =
-                (frame.length > kSafetyEventResultIndex) ? frame.payload[kSafetyEventResultIndex] : 0U;
+                (frame.length > APP_SAFETY_EVENT_RESULT_INDEX) ? frame.payload[APP_SAFETY_EVENT_RESULT_INDEX] : 0U;
             EmitCommandResponse(
                 pending_safety_.request_id, pending_safety_.command,
                 resetRejected ? mqtt::CommandResult::kRejected : mqtt::CommandResult::kSuccess,
@@ -741,12 +718,12 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
 
     // sensor_id is only meaningful for a HEALTH/SENSOR_STALE event; every other event
     // (including all SAFETY events) has a timestamp byte at that same offset instead.
-    const bool is_health_sensor_stale = event_id == kAppEventHealth && kind == kHealthIssueSensorStale;
+    const bool is_health_sensor_stale = event_id == APP_EVENT_HEALTH && kind == HEALTH_ISSUE_SENSOR_STALE;
     const std::optional<std::uint8_t> sensor_id =
-        (is_health_sensor_stale && frame.length > kAppHealthSensorIdIndex)
-            ? std::optional<std::uint8_t>{ frame.payload[kAppHealthSensorIdIndex] }
+        (is_health_sensor_stale && frame.length > APP_HEALTH_EVENT_SENSOR_ID_INDEX)
+            ? std::optional<std::uint8_t>{ frame.payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] }
             : std::nullopt;
-    const std::uint8_t sensor_id_for_signature = sensor_id.value_or(kHealthSensorIdNone);
+    const std::uint8_t sensor_id_for_signature = sensor_id.value_or(HEALTH_ISSUE_SENSOR_ID_NONE);
 
     // Report only when the (event, kind, cause, sensorId) changes. The controller
     // re-latches and re-emits some health conditions (e.g. an oscillating
@@ -761,7 +738,7 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
     }
     last_controller_event_signature_ = signature;
 
-    if (event_id == kAppEventSafety && kind == kSafetyEventEstopLatched) {
+    if (event_id == APP_EVENT_SAFETY && kind == SAFETY_EVENT_ESTOP_LATCHED) {
         EmitReport({
             .channel = InputReportChannel::kStatus,
             .message_type = mqtt::MessageType::kDeviceStatus,
@@ -782,7 +759,7 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
         return;
     }
 
-    if (event_id == kAppEventSafety && kind == kSafetyEventResetComplete) {
+    if (event_id == APP_EVENT_SAFETY && kind == SAFETY_EVENT_RESET_COMPLETE) {
         // Recovery releases the safety latch but does not start the process.
         // Report STOPPED so an explicit START is still required.
         EmitReport({
