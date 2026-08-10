@@ -17,6 +17,7 @@
 /* Sensor filtering and communication supervision. */
 #define APP_TIMING_LINE_DEBOUNCE_SAMPLES 1U
 #define APP_TIMING_FSR_STABLE_MS 300U
+#define APP_TIMING_EMERGENCY_STOP_DEBOUNCE_MS 30U
 /*
  * Pi sends a 1-second status keepalive. Permit several missed frames before a
  * moving vehicle reports the link

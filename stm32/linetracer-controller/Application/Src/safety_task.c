@@ -48,6 +48,8 @@ static volatile uint32_t s_control_event_drop_count;
 static volatile uint32_t s_duplicate_event_count;
 static volatile uint32_t s_invalid_event_count;
 static volatile uint32_t s_emergency_stop_interrupt_count;
+static uint32_t s_emergency_stop_input_changed_at_ms;
+static uint8_t s_emergency_stop_input_active;
 static uint8_t s_emergency_stop_input_reported;
 static uint8_t s_line_lost_sensor_active;
 
@@ -532,16 +534,18 @@ static void SafetyTask_ReconcileLineLoss(uint32_t now_ms) {
 
 static void SafetyTask_ProcessEmergencyStopInput(uint32_t now_ms) {
     app_safety_event_t event = { 0 };
-    uint32_t flags;
-    uint8_t interrupt_pending;
     uint8_t hardware_active;
 
-    flags = osThreadFlagsWait(APP_SAFETY_NOTIFY_EMERGENCY_STOP, osFlagsWaitAny, 0U);
-    interrupt_pending =
-        (((flags & osFlagsError) == 0U) && ((flags & APP_SAFETY_NOTIFY_EMERGENCY_STOP) != 0U)) ? 1U : 0U;
+    (void)osThreadFlagsWait(APP_SAFETY_NOTIFY_EMERGENCY_STOP, osFlagsWaitAny, 0U);
     hardware_active = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12) == GPIO_PIN_RESET) ? 1U : 0U;
 
-    if (((interrupt_pending != 0U) || (hardware_active != 0U)) && (s_emergency_stop_input_reported == 0U)) {
+    if (hardware_active != s_emergency_stop_input_active) {
+        s_emergency_stop_input_active = hardware_active;
+        s_emergency_stop_input_changed_at_ms = now_ms;
+    }
+
+    if ((s_emergency_stop_input_active != 0U) && (s_emergency_stop_input_reported == 0U) &&
+        ((uint32_t)(now_ms - s_emergency_stop_input_changed_at_ms) >= APP_TIMING_EMERGENCY_STOP_DEBOUNCE_MS)) {
         event.type = APP_SAFETY_EVENT_EMERGENCY_STOP;
         event.occurred_at_ms = now_ms;
         event.reason = LINETRACER_STOP_REASON_EMERGENCY;
@@ -552,12 +556,8 @@ static void SafetyTask_ProcessEmergencyStopInput(uint32_t now_ms) {
         s_emergency_stop_input_reported = 1U;
     }
 
-    /*
-     * PB12 is the real active-low E-Stop input. A momentary B1 test event is
-     * allowed to clear its active bit immediately; the safety latch remains
-     * set until an explicit RESET is approved.
-     */
-    if ((hardware_active == 0U) && (s_emergency_stop_input_reported != 0U)) {
+    if ((s_emergency_stop_input_active == 0U) && (s_emergency_stop_input_reported != 0U) &&
+        ((uint32_t)(now_ms - s_emergency_stop_input_changed_at_ms) >= APP_TIMING_EMERGENCY_STOP_DEBOUNCE_MS)) {
         event.type = APP_SAFETY_EVENT_EMERGENCY_STOP;
         event.occurred_at_ms = now_ms;
         event.reason = LINETRACER_STOP_REASON_EMERGENCY;
@@ -595,6 +595,8 @@ static void SafetyTask_Initialize(void) {
     s_duplicate_event_count = 0U;
     s_invalid_event_count = 0U;
     s_emergency_stop_interrupt_count = 0U;
+    s_emergency_stop_input_changed_at_ms = 0U;
+    s_emergency_stop_input_active = 0U;
     s_emergency_stop_input_reported = 0U;
     s_line_lost_sensor_active = 0U;
     (void)osThreadFlagsClear(APP_SAFETY_NOTIFY_EMERGENCY_STOP);
@@ -631,7 +633,7 @@ void StartSafetyTask(void* argument) {
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-    if ((GPIO_Pin != GPIO_PIN_12) && (GPIO_Pin != B1_Pin)) {
+    if (GPIO_Pin != GPIO_PIN_12) {
         return;
     }
 

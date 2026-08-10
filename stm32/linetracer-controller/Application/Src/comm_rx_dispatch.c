@@ -135,16 +135,6 @@ void CommRxDispatch_Frame(comm_rx_dispatch_t* dispatcher, const comm_rx_dispatch
 
         if (decoded.safety_event.type == APP_SAFETY_EVENT_EMERGENCY_STOP) {
             queue_priority = APP_TX_PRIORITY_SAFETY;
-            if (port->notify_emergency != NULL && port->notify_emergency(port->context) != 0U) {
-                /*
-                 * The thread flag is the primary low-latency delivery path.
-                 * Do not enqueue the same E-stop as well, otherwise SafetyTask
-                 * observes one physical command twice.
-                 */
-                ++effects->safety_commands;
-                CommRxLogic_CommitSequence(&dispatcher->sequence_history, frame->sequence, now_ms);
-                return;
-            }
         }
 
         if (port->put_safety == NULL || port->put_safety(port->context, &decoded.safety_event, queue_priority) == 0U) {
