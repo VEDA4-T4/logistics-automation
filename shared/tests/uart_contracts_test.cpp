@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <cstring>
 
-#include "logistics/contracts/uart/gripper_commands.h"
 #include "logistics/contracts/uart/conveyor_events.h"
+#include "logistics/contracts/uart/gripper_commands.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart/linetracer_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
