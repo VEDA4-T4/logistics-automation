@@ -333,6 +333,9 @@ GripperCommandResult GripperNode::HandleControlCommand(const mqtt::ControlComman
                                     "emergency stop is latched; send RECOVERY before START");
                 return result;
             }
+            if (!homed_) {
+                return RunInitialize(command);
+            }
             EmitCommandResponse(result, "gripper entered running state");
             if (!cycle_.active) {
                 EmitDeviceStatus("RUNNING");

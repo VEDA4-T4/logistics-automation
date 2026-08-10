@@ -267,19 +267,28 @@ struct Fixture {
     std::vector<GripperReport> reports;
 };
 
-void test_start_enters_running_without_work_id() {
+void test_start_homes_without_work_id() {
     Fixture fixture;
 
     const GripperCommandResult result = fixture.node->HandleMqttCommand(
         MakeControlCommand(mqtt::ControlCommand::kStart, "req-1", "gripper", mqtt::Json::object()));
 
-    assert(result.status == GripperCommandStatus::kSuccess);
-    assert(!fixture.node->HasActiveCycle());
-    assert(fixture.backend->written_commands.empty());
+    assert(result.status == GripperCommandStatus::kAccepted);
+    assert(fixture.node->HasActiveCycle());
+    assert(fixture.backend->written_commands.size() == 2U);
+    assert(fixture.backend->written_commands[0] == UART_CMD_GRIPPER_RESET);
+    assert(fixture.backend->written_commands[1] == UART_CMD_GRIPPER_HOME);
     const auto* response = fixture.LastResponse();
-    assert(response != nullptr && response->result == mqtt::CommandResult::kSuccess);
+    assert(response != nullptr && response->result == mqtt::CommandResult::kProcessing);
     const auto* status = fixture.LastStatus();
-    assert(status != nullptr && status->current_state == "RUNNING" && !status->job_id.has_value());
+    assert(status != nullptr && status->current_state == "HOMING" && !status->job_id.has_value());
+
+    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_HOME);
+    assert(fixture.node->IsHomed());
+    assert(!fixture.node->HasActiveCycle());
+    response = fixture.LastResponse();
+    assert(response != nullptr && response->command == mqtt::ControlCommand::kStart &&
+           response->result == mqtt::CommandResult::kSuccess);
 }
 
 void test_execute_is_rejected_until_the_arm_is_homed() {
@@ -994,7 +1003,7 @@ arm_duration_ms=1200
 }  // namespace
 
 int main() {
-    test_start_enters_running_without_work_id();
+    test_start_homes_without_work_id();
     test_execute_is_rejected_until_the_arm_is_homed();
     test_initialize_resets_then_homes();
     test_full_cycle_walks_every_motion_and_reports_completion_once();
