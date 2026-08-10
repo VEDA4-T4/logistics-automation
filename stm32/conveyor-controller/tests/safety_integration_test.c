@@ -396,7 +396,7 @@ static void test_scoped_reset_cycle_with_real_control_tasks(void) {
     assert(releaseLatchCalls == 1U);
     assert(setChannelStatusCalls[COMM_TX_CH_INPUT] == 1U);
     assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 0U);
-    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_READY);
+    assert(channelDeviceStates[COMM_TX_CH_INPUT] == UART_DEVICE_STOPPED);
     assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_EMERGENCY_STOP);
     assert(conveyor_motor_power_enable() == 1U);
     assert(input_control_task_capture_command_epoch() != UINT32_MAX);
@@ -418,7 +418,7 @@ static void test_scoped_reset_cycle_with_real_control_tasks(void) {
     assert(releaseLatchCalls == 2U);
     assert(SafetyTask_IsReleasing() == 0U);
     assert(setChannelStatusCalls[COMM_TX_CH_SORTING] == 1U);
-    assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_READY);
+    assert(channelDeviceStates[COMM_TX_CH_SORTING] == UART_DEVICE_STOPPED);
     assert(sorting_control_task_capture_command_epoch() != UINT32_MAX);
 }
 
