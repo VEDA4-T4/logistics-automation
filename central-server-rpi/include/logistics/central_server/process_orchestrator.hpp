@@ -28,7 +28,7 @@ struct ProcessOrchestratorConfig final {
 
 struct ProcessCommandIntent final {
     contracts::mqtt::MqttMessage message;
-    ProcessEventType dispatched_event{ ProcessEventType::kGripperCommandDispatched };
+    std::optional<ProcessEventType> dispatched_event;
     std::string work_id;
 };
 
@@ -76,6 +76,9 @@ private:
     [[nodiscard]] ProcessOrchestrationResult HandleWith(ProcessStateMachine& machine,
                                                         const contracts::mqtt::MqttMessage& message,
                                                         bool create_commands);
+    [[nodiscard]] ProcessCommandIntent MakeInputConveyorCommand(std::string_view work_id,
+                                                                contracts::mqtt::ControlCommand command,
+                                                                std::string_view timestamp);
     [[nodiscard]] ProcessCommandIntent MakeGripperCommand(std::string_view work_id, std::string_view destination,
                                                           const GripperTarget* target, std::string_view timestamp);
     [[nodiscard]] ProcessCommandIntent MakeDestinationCommand(std::string_view work_id, std::string_view destination,

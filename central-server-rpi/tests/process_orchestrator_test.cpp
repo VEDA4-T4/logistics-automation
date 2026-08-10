@@ -92,7 +92,18 @@ void TestEventFlowCreatesCommandsForEachNode() {
                                               mqtt::PixelPoint{ .x = 100.0, .y = 150.0 },
                                           },
                                   });
-    assert(orchestrator.Handle(position).transition.Applied());
+    const auto position_result = orchestrator.Handle(position);
+    assert(position_result.transition.Applied() && position_result.commands.size() == 1);
+    const auto& input_stop = position_result.commands.front();
+    const auto* input_stop_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(input_stop.message);
+    assert(input_stop_payload != nullptr);
+    assert(input_stop_payload->command == mqtt::ControlCommand::kStop);
+    assert(input_stop_payload->target_device_id == "PI-INPUT-01");
+    assert(input_stop_payload->component_id == "input_conveyor");
+    assert(input_stop_payload->params.at("workId") == kWorkId);
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-INPUT-01"), input_stop.message).IsSuccess());
+    assert(orchestrator.ConfirmDispatch(input_stop).Applied());
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kVisionProcessing);
 
     const auto barcode = Message("MSG-BARCODE", mqtt::MessageType::kBarcodeDetected, "PI-VISION-01",
                                  mqtt::BarcodeDetectedPayload{
@@ -144,11 +155,20 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kGripperRequested);
     assert(orchestrator.Handle(Status("MSG-GRIPPER-START", "PI-GRIPPER-01", "TRANSFERRING")).transition.Applied());
     const auto gripper_done = orchestrator.Handle(Status("MSG-GRIPPER-DONE", "PI-GRIPPER-01", "COMPLETED"));
-    assert(gripper_done.transition.Applied() && gripper_done.commands.size() == 1);
+    assert(gripper_done.transition.Applied() && gripper_done.commands.size() == 2);
     const auto& sorting = gripper_done.commands.front();
     const auto* sorting_payload = mqtt::GetPayload<mqtt::DestinationSetPayload>(sorting.message);
     assert(sorting_payload != nullptr && sorting_payload->target_device_id == "PI-SORTING-01");
     assert(orchestrator.ConfirmDispatch(sorting).Applied());
+    const auto& input_start = gripper_done.commands.back();
+    const auto* input_start_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(input_start.message);
+    assert(input_start_payload != nullptr);
+    assert(input_start_payload->command == mqtt::ControlCommand::kStart);
+    assert(input_start_payload->target_device_id == "PI-INPUT-01");
+    assert(input_start_payload->component_id == "input_conveyor");
+    assert(input_start_payload->params.at("workId") == kWorkId);
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-INPUT-01"), input_start.message).IsSuccess());
+    assert(orchestrator.ConfirmDispatch(input_start).Applied());
 
     assert(orchestrator.Handle(Status("MSG-SORTING-START", "PI-SORTING-01", "ROUTING")).transition.Applied());
     const auto sorting_done = orchestrator.Handle(Status("MSG-SORTING-DONE", "PI-SORTING-01", "CYCLE_COMPLETE"));

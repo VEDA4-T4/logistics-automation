@@ -184,8 +184,16 @@ ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view 
 }
 
 ProcessTransition ProcessOrchestrator::ConfirmDispatch(const ProcessCommandIntent& intent) {
+    if (!intent.dispatched_event.has_value()) {
+        return {
+            .disposition = TransitionDisposition::kApplied,
+            .previous_stage = std::nullopt,
+            .current_stage = std::nullopt,
+            .reason = {},
+        };
+    }
     auto transition = state_machine_.Apply({
-        .type = intent.dispatched_event,
+        .type = *intent.dispatched_event,
         .message_id = intent.message.message_id + "-DISPATCHED",
         .work_id = intent.work_id,
         .source_id = config_.server_id,
@@ -421,7 +429,10 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
     if (!work.has_value()) {
         return result;
     }
-    if (event.type == ProcessEventType::kProductInfoReady) {
+    if (event.type == ProcessEventType::kPositionDetected) {
+        result.commands.push_back(
+            MakeInputConveyorCommand(work->work_id, mqtt::ControlCommand::kStop, message.timestamp));
+    } else if (event.type == ProcessEventType::kProductInfoReady) {
         const auto target = homography_.Enabled() ? gripper_targets_.find(work->work_id) : gripper_targets_.end();
         result.commands.push_back(MakeGripperCommand(work->work_id, work->destination,
                                                      target == gripper_targets_.end() ? nullptr : &target->second,
@@ -430,6 +441,8 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         result.commands.push_back(MakeDestinationCommand(work->work_id, work->destination, config_.sorting_device_id,
                                                          ProcessEventType::kSortingCommandDispatched,
                                                          message.timestamp));
+        result.commands.push_back(
+            MakeInputConveyorCommand(work->work_id, mqtt::ControlCommand::kStart, message.timestamp));
     } else if (event.type == ProcessEventType::kSortingCompleted) {
         result.commands.push_back(
             MakeDestinationCommand(work->work_id, work->destination, config_.line_tracer_device_id,
@@ -439,6 +452,32 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         gripper_targets_.erase(event.work_id);
     }
     return result;
+}
+
+ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_view work_id,
+                                                                   mqtt::ControlCommand command,
+                                                                   std::string_view timestamp) {
+    const std::string request_id = NextMessageId();
+    return {
+        .message =
+            {
+                .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+                .message_id = request_id,
+                .message_type = mqtt::MessageType::kControlCommand,
+                .source_id = config_.server_id,
+                .timestamp = std::string(timestamp),
+                .data =
+                    mqtt::ControlCommandPayload{
+                        .request_id = request_id,
+                        .command = command,
+                        .target_device_id = config_.input_device_id,
+                        .component_id = "input_conveyor",
+                        .params = mqtt::Json{ { "workId", work_id } },
+                    },
+            },
+        .dispatched_event = std::nullopt,
+        .work_id = std::string(work_id),
+    };
 }
 
 ProcessCommandIntent ProcessOrchestrator::MakeGripperCommand(std::string_view work_id, std::string_view destination,
