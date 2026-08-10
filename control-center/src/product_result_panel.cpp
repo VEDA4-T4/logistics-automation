@@ -140,8 +140,9 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     tracking_status_ = new QLabel(QStringLiteral("위치 · 확인 중  |  경로 · 확인 중"), this);
     tracking_status_->setObjectName(QStringLiteral("workTrackingStatus"));
     tracking_status_->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:600;");
+    tracking_status_->setWordWrap(true);
     tracking_status_->setMinimumWidth(0);
-    tracking_status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    tracking_status_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     header_text_layout->addWidget(eyebrow);
     header_text_layout->addWidget(title);
     header_text_layout->addWidget(tracking_status_);
@@ -258,25 +259,15 @@ void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
     active_products_.clear();
     processes_ = processes;
     for (const auto& product : products) {
+        if (!product.product_info_received || product.recognition_state != ProductRecognitionState::Recognized) {
+            continue;
+        }
         const bool active = std::any_of(processes.cbegin(), processes.cend(), [&product](const auto& process) {
             return process.work_id == product.work_id && !process.work_completed;
         });
-        if (active || (product.processing_result != ProductProcessingResult::Success &&
-                       product.processing_result != ProductProcessingResult::Failed)) {
+        if (active) {
             active_products_.append(product);
         }
-    }
-    for (const auto& process : processes) {
-        if (process.work_id.isEmpty() || process.work_completed ||
-            std::any_of(active_products_.cbegin(), active_products_.cend(),
-                        [&process](const auto& product) { return product.work_id == process.work_id; })) {
-            continue;
-        }
-        CurrentProduct product;
-        product.work_id = process.work_id;
-        product.destination = process.destination;
-        product.processing_result = ProductProcessingResult::Processing;
-        active_products_.append(product);
     }
     const QSignalBlocker blocker(active_work_list_);
     active_work_list_->clear();

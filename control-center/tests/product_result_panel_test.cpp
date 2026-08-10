@@ -85,6 +85,8 @@ int main(int argc, char* argv[]) {
     product.destination = QStringLiteral("outbound-dispatch-zone-northwest");
     product.confidence = 0.987;
     product.updated_at = QDateTime::fromString(QStringLiteral("2026-08-04T12:34:56"), Qt::ISODate);
+    product.product_info_received = true;
+    product.recognition_state = logistics::control_center::ProductRecognitionState::Recognized;
     panel.setCurrentProduct(product);
 
     assert(panel.minimumHeight() <= 180);
@@ -121,8 +123,9 @@ int main(int argc, char* argv[]) {
     panel.setActiveWorks({ product, second_product }, { line_tracer });
     auto* work_list = panel.findChild<QListWidget*>(QStringLiteral("activeWorkList"));
     auto* tracking = panel.findChild<QLabel*>(QStringLiteral("workTrackingStatus"));
-    assert(work_list != nullptr && work_list->count() == 2);
+    assert(work_list != nullptr && work_list->count() == 1);
     assert(tracking != nullptr);
+    assert(tracking->wordWrap());
     work_list->setCurrentRow(0);
     assert(tracking->text().contains(QStringLiteral("출발 A")));
     assert(tracking->text().contains(QStringLiteral("도착 A")));
