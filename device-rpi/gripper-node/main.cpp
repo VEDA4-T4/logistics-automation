@@ -231,6 +231,20 @@ int RunGripperDaemon(int argc, char* argv[]) {
     uart_session.SetSpontaneousFrameHandler(
         [&gripper_node](const uart_frame_t& frame) { gripper_node.HandleUartFrame(frame); });
     mqtt_client.SetCommandHandler([&command_inbox](const mqtt::MqttMessage& message) {
+        if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
+            std::string work_id;
+            const auto work_id_it = command->params.find("workId");
+            if (work_id_it != command->params.end() && work_id_it->is_string()) {
+                work_id = work_id_it->get<std::string>();
+            }
+            std::clog << "[gripper][mqtt][INFO] command received: message_id=" << message.message_id
+                      << "; request_id=" << command->request_id << "; command=" << mqtt::ToString(command->command)
+                      << "; target=" << command->target_device_id << "; component=" << command->component_id
+                      << "; work_id=" << work_id << '\n';
+        } else {
+            std::clog << "[gripper][mqtt][INFO] non-control command received: message_id=" << message.message_id
+                      << '\n';
+        }
         if (!command_inbox.Push(message)) {
             std::cerr << "[gripper][mqtt][ERROR] command queue full; command rejected: " << message.message_id << '\n';
         }
@@ -270,7 +284,14 @@ int RunGripperDaemon(int argc, char* argv[]) {
         const bool was_open = uart_session.IsOpen();
 
         for (const mqtt::MqttMessage& command : command_inbox.TakeAll()) {
-            static_cast<void>(gripper_node.HandleMqttCommand(command));
+            const device::GripperCommandResult result = gripper_node.HandleMqttCommand(command);
+            std::clog << "[gripper][command][" << (result.Succeeded() ? "INFO" : "WARN")
+                      << "] command handled: request_id=" << result.request_id << "; work_id=" << result.work_id
+                      << "; accepted=" << (result.Succeeded() ? "true" : "false")
+                      << "; status=" << static_cast<int>(result.status)
+                      << "; uart_command=" << static_cast<unsigned>(result.uart_command)
+                      << "; motion_id=" << result.motion_id
+                      << "; uart_status=" << static_cast<int>(result.uart_result.status) << '\n';
         }
 
         if (uart_session.IsOpen()) {
