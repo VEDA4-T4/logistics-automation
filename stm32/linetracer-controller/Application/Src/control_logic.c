@@ -437,7 +437,8 @@ uint8_t ControlLogic_Transition(control_context_t* context, linetracer_control_s
         return 1U;
     }
 
-    if (next_state == LINETRACER_CONTROL_STOPPED && ControlLogic_StateCanResume(context->state) != 0U) {
+    if (next_state == LINETRACER_CONTROL_STOPPED &&
+        (ControlLogic_StateCanResume(context->state) != 0U || context->state == LINETRACER_CONTROL_UNLOADING)) {
         context->state = next_state;
         context->state_entered_at_ms = now_ms;
         return 1U;
@@ -744,6 +745,8 @@ static void ControlLogic_HandleAssignRoute(control_context_t* context, const app
 
 static void ControlLogic_HandleStop(control_context_t* context, const app_control_command_t* command, uint32_t now_ms,
                                     control_command_result_t* result) {
+    linetracer_control_state_t previous_state;
+
     if (uart_linetracer_job_id_is_valid(command->job_id) == 0U || ControlLogic_HasActiveJob(context) == 0U ||
         command->job_id != context->active_job_id) {
         ControlLogic_Reject(result, UART_STATUS_NACK, UART_ERROR_INVALID_PAYLOAD);
@@ -755,13 +758,23 @@ static void ControlLogic_HandleStop(control_context_t* context, const app_contro
         return;
     }
 
-    if (ControlLogic_StateCanResume(context->state) == 0U) {
+    if (ControlLogic_StateCanResume(context->state) == 0U && context->state != LINETRACER_CONTROL_UNLOADING) {
         ControlLogic_Reject(result, UART_STATUS_BUSY, UART_ERROR_BUSY);
         return;
     }
 
-    context->resume_state = context->state;
-    context->resume_valid = 1U;
+    previous_state = context->state;
+    if (previous_state == LINETRACER_CONTROL_UNLOADING) {
+        /*
+         * An interrupted unload must be restarted as a new operation after
+         * explicit reset. Never resume from an unknown servo/load position.
+         */
+        context->resume_state = LINETRACER_CONTROL_INITIALIZING;
+        context->resume_valid = 0U;
+    } else {
+        context->resume_state = context->state;
+        context->resume_valid = 1U;
+    }
     context->stop_reason = LINETRACER_STOP_REASON_COMMAND;
     ControlLogic_ResetJunctionManeuver(context);
 
@@ -770,6 +783,12 @@ static void ControlLogic_HandleStop(control_context_t* context, const app_contro
         context->stop_reason = LINETRACER_STOP_REASON_NONE;
         ControlLogic_Reject(result, UART_STATUS_ERROR, UART_ERROR_INTERNAL);
         return;
+    }
+
+    if (previous_state == LINETRACER_CONTROL_UNLOADING) {
+        result->unload_command = APP_UNLOAD_COMMAND_ABORT;
+        result->action_job_id = context->active_job_id;
+        result->action_route_id = context->active_route;
     }
 
     ControlLogic_Accept(result);
@@ -813,11 +832,13 @@ static void ControlLogic_HandleReset(control_context_t* context, uint32_t now_ms
         return;
     }
 
-    if (context->state == LINETRACER_CONTROL_UNLOADING) {
-        result->unload_command = APP_UNLOAD_COMMAND_RESET;
-        result->action_job_id = previous_job_id;
-        result->action_route_id = previous_route_id;
-    }
+    /*
+     * RESET also clears any command-stop or safety inhibit retained by
+     * UnloadTask, even if ControlTask has already left UNLOADING.
+     */
+    result->unload_command = APP_UNLOAD_COMMAND_RESET;
+    result->action_job_id = previous_job_id;
+    result->action_route_id = previous_route_id;
 
     ControlLogic_Init(context, now_ms);
     result->previous_state = previous_state;
@@ -1026,6 +1047,11 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, app_marker_
 
     if (context == NULL || ControlLogic_HasActiveJob(context) == 0U) {
         return ROUTE_ACTION_ERROR;
+    }
+
+    /* Destination marker activity can continue while the vehicle is stationary for unloading. */
+    if (context->state == LINETRACER_CONTROL_UNLOADING) {
+        return ROUTE_ACTION_NONE;
     }
 
     expected_marker = ControlLogic_ExpectedMarkerCode(context);
@@ -1314,7 +1340,7 @@ linetracer_stop_reason_t ControlLogic_CheckRouteTimeout(control_context_t* conte
      * route timeouts are disabled,
      * progress is driven only by confirmed line,
      * marker, and load events instead of wall-clock deadlines.
- */
+     */
     if (CONTROL_ROUTE_TIMEOUTS_ENABLED == 0U) {
         (void)now_ms;
         return LINETRACER_STOP_REASON_NONE;
@@ -1396,27 +1422,25 @@ route_action_t ControlLogic_HandleLoadOff(control_context_t* context, uint32_t n
         return ROUTE_ACTION_ERROR;
     }
 
+    /*
+     * During unloading, the filtered LOAD_EMPTY transition only tells
+     * UnloadTask to return the servo
+     * home. Job completion is intentionally
+     * deferred until ControlTask receives APP_UNLOAD_RESULT_COMPLETE.
+ */
+    if (context->state == LINETRACER_CONTROL_UNLOADING) {
+        return ROUTE_ACTION_NONE;
+    }
+
     action = RoutePlanner_OnLoadOff(&context->route_plan);
     if (action == ROUTE_ACTION_LOAD_LOST) {
         return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_LOAD_LOST, action, now_ms);
     }
 
-    if (action == ROUTE_ACTION_JOB_COMPLETE) {
-        control_job_completion_t result = ControlLogic_CompleteJob(context, now_ms);
-
-        if (result.completed == 0U) {
-            return ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE, ROUTE_ACTION_ERROR, now_ms);
-        }
-        if (completion != NULL) {
-            *completion = result;
-        }
-        context->pending_route_action = ROUTE_ACTION_NONE;
-    }
-
     return action;
 }
 
-control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, uint32_t now_ms) {
+static control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, uint32_t now_ms) {
     control_job_completion_t completion = { 0 };
     uart_linetracer_position_t destination;
 
@@ -1453,4 +1477,20 @@ control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, ui
     context->pending_route_action = ROUTE_ACTION_NONE;
 
     return completion;
+}
+
+control_job_completion_t ControlLogic_HandleUnloadResult(control_context_t* context,
+                                                         const app_unload_result_t* unload_result, uint32_t now_ms) {
+    control_job_completion_t completion = { 0 };
+
+    completion.route_id = UART_LINETRACER_ROUTE_NONE;
+    completion.destination = UART_LINETRACER_POSITION_NONE;
+
+    if (context == NULL || unload_result == NULL || unload_result->type != APP_UNLOAD_RESULT_COMPLETE ||
+        context->state != LINETRACER_CONTROL_UNLOADING || context->active_job_id != unload_result->job_id ||
+        context->active_route != unload_result->route_id) {
+        return completion;
+    }
+
+    return ControlLogic_CompleteJob(context, now_ms);
 }

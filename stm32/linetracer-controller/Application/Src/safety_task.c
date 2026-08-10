@@ -10,6 +10,8 @@
 #include "control_task.h"
 #include "main.h"
 #include "safety_policy.h"
+#include "unload_hw.h"
+#include "unload_task.h"
 
 extern osThreadId_t SafetyTaskHandle;
 
@@ -210,6 +212,7 @@ static uint8_t SafetyTask_ReasonToUartError(linetracer_stop_reason_t reason) {
 
 static uint8_t SafetyTask_HealthErrorCode(uint8_t error_code) {
     switch ((uart_error_t)error_code) {
+        case UART_ERROR_SERVO:
         case UART_ERROR_BUSY:
         case UART_ERROR_TIMEOUT:
         case UART_ERROR_INTERNAL:
@@ -222,6 +225,9 @@ static uint8_t SafetyTask_HealthErrorCode(uint8_t error_code) {
 
 static uint8_t SafetyTask_HealthErrorPriority(uint8_t error_code) {
     switch ((uart_error_t)error_code) {
+        case UART_ERROR_SERVO:
+            return 4U;
+
         case UART_ERROR_INTERNAL:
             return 3U;
 
@@ -255,18 +261,22 @@ static void SafetyTask_StoreLatestControlEvent(const app_control_safety_event_t*
 }
 
 static uint8_t SafetyTask_PublishControlEvent(const app_control_safety_event_t* event) {
+    app_control_safety_event_t queued_event;
+
     if ((event == NULL) || (controlSafetyQueue == NULL)) {
         ++s_control_event_drop_count;
         return 0U;
     }
 
-    if (osMessageQueuePut(controlSafetyQueue, event, 0U, 0U) != osOK) {
+    queued_event = *event;
+    queued_event.unload_inhibit_generation = UnloadHw_GetSafetyInhibitGeneration();
+    if (osMessageQueuePut(controlSafetyQueue, &queued_event, 0U, 0U) != osOK) {
         ++s_control_event_drop_count;
         SafetyTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)event->type, event->occurred_at_ms);
         return 0U;
     }
 
-    SafetyTask_StoreLatestControlEvent(event);
+    SafetyTask_StoreLatestControlEvent(&queued_event);
     return 1U;
 }
 
@@ -350,6 +360,12 @@ static void SafetyTask_ActivateHazard(const app_safety_event_t* event) {
         ++s_invalid_event_count;
         return;
     }
+
+    /*
+     * SafetyTask stops the unload servo before queue delivery so shutdown does
+     * not depend on ControlTask scheduling or queue availability.
+     */
+    (void)UnloadTask_RequestSafetyStop();
 
     if ((s_safety_context.active_hazard_mask & hazard_mask) != 0U) {
         if ((reason == LINETRACER_STOP_REASON_HEALTH_FAULT) &&

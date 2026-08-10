@@ -15,6 +15,7 @@ extern "C" {
 #define APP_SAFETY_EVENT_QUEUE_DEPTH 8U
 #define APP_CONTROL_SAFETY_QUEUE_DEPTH 4U
 #define APP_UNLOAD_COMMAND_QUEUE_DEPTH 4U
+#define APP_UNLOAD_RESULT_QUEUE_DEPTH 4U
 #define APP_TX_RESPONSE_QUEUE_DEPTH 8U
 #define APP_TX_SAFETY_QUEUE_DEPTH 4U
 #define APP_TX_EVENT_QUEUE_DEPTH 16U
@@ -31,6 +32,8 @@ extern osMessageQueueId_t safetyEventQueue;
 /* SafetyTask produces; ControlTask consumes before normal commands. */
 extern osMessageQueueId_t controlSafetyQueue;
 extern osMessageQueueId_t unloadCommandQueue;
+/* UnloadTask produces terminal operation results and explicit reset acknowledgements. */
+extern osMessageQueueId_t unloadResultQueue;
 /* Fault events; kept separate because the FreeRTOS CMSIS adapter ignores message priority. */
 extern osMessageQueueId_t txSafetyQueue;
 /* ACK and STATUS responses. */

@@ -161,7 +161,8 @@ linetracer_stop_reason_t ControlLogic_CheckRouteTimeout(control_context_t* conte
 route_action_t ControlLogic_HandleLoadOn(control_context_t* context, uint32_t now_ms);
 route_action_t ControlLogic_HandleLoadOff(control_context_t* context, uint32_t now_ms,
                                           control_job_completion_t* completion);
-control_job_completion_t ControlLogic_CompleteJob(control_context_t* context, uint32_t now_ms);
+control_job_completion_t ControlLogic_HandleUnloadResult(control_context_t* context,
+                                                         const app_unload_result_t* unload_result, uint32_t now_ms);
 
 #ifdef __cplusplus
 }

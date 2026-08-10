@@ -64,7 +64,8 @@ typedef enum {
     APP_SENSOR_EVENT_LOAD_ON = (1U << 3U),
     APP_SENSOR_EVENT_LOAD_OFF = (1U << 4U),
     APP_SENSOR_EVENT_OVERLOAD = (1U << 5U),
-    APP_SENSOR_EVENT_OBSTACLE = (1U << 6U)
+    APP_SENSOR_EVENT_OBSTACLE = (1U << 6U),
+    APP_SENSOR_EVENT_FSR_BASELINE_READY = (1U << 7U)
 } app_sensor_event_flags_t;
 
 /*
@@ -101,6 +102,7 @@ typedef struct {
     uint8_t line_center;
     uint8_t line_right;
     uint8_t marker_count;
+    uint8_t fsr_valid;
     uint8_t marker_active;
 } app_sensor_snapshot_t;
 
@@ -145,6 +147,7 @@ typedef enum {
 typedef struct {
     app_control_safety_event_type_t type;
     uint32_t occurred_at_ms;
+    uint32_t unload_inhibit_generation;
     linetracer_stop_reason_t reason;
     uint16_t original_payload_crc;
     uint8_t error_code;
@@ -163,9 +166,32 @@ typedef enum {
 typedef struct {
     app_unload_command_type_t type;
     uint32_t requested_at_ms;
+    uint32_t inhibit_generation;
+    uint32_t request_id;
     uint16_t job_id;
     uart_linetracer_route_t route_id;
 } app_unload_command_t;
+
+typedef enum {
+    APP_UNLOAD_RESULT_NONE = 0,
+    APP_UNLOAD_RESULT_COMPLETE,
+    APP_UNLOAD_RESULT_FAILED,
+    APP_UNLOAD_RESULT_TIMEOUT,
+    APP_UNLOAD_RESULT_ABORTED,
+    APP_UNLOAD_RESULT_RESET_COMPLETE,
+    APP_UNLOAD_RESULT_RESET_FAILED
+} app_unload_result_type_t;
+
+typedef struct {
+    app_unload_result_type_t type;
+    uint32_t requested_at_ms;
+    uint32_t completed_at_ms;
+    uint32_t inhibit_generation;
+    uint32_t request_id;
+    uint16_t job_id;
+    uart_linetracer_route_t route_id;
+    uint8_t error_code;
+} app_unload_result_t;
 
 typedef enum {
     APP_TX_EVENT_NONE = 0,
@@ -264,6 +290,8 @@ typedef struct {
 #define APP_COMM_RX_NOTIFY_DATA_READY (1UL << 0U)
 #define APP_COMM_RX_NOTIFY_UART_ERROR (1UL << 1U)
 #define APP_SAFETY_NOTIFY_EMERGENCY_STOP (1UL << 0U)
+#define APP_UNLOAD_NOTIFY_SAFETY_STOP (1UL << 0U)
+#define APP_UNLOAD_NOTIFY_ABORT (1UL << 1U)
 #define APP_COMM_TX_NOTIFY_QUEUE_READY (1UL << 0U)
 #define APP_COMM_TX_NOTIFY_TX_COMPLETE (1UL << 1U)
 #define APP_COMM_TX_NOTIFY_ABORT_COMPLETE (1UL << 2U)

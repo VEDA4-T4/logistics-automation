@@ -474,6 +474,7 @@ void SensorLogic_UpdateFsr(sensor_logic_context_t* context, uint16_t raw_value, 
     }
 
     context->snapshot.fsr_raw = raw_value;
+    context->snapshot.fsr_valid = 1U;
     context->diagnostics.fsr_filtered = SensorLogic_FilterFsr(&context->fsr_filter, raw_value);
     context->diagnostics.valid_flags |= SENSOR_LOGIC_VALID_FSR;
     error_flags = context->diagnostics.error_flags & ~(SENSOR_LOGIC_ERROR_FSR_ADC | SENSOR_LOGIC_ERROR_FSR_TIMEOUT);
@@ -492,6 +493,7 @@ void SensorLogic_UpdateFsr(sensor_logic_context_t* context, uint16_t raw_value, 
             context->fsr_baseline_capture_active = 0U;
             context->fsr_baseline_valid = 1U;
             context->fsr_candidate_since_ms = now_ms;
+            update->event_flags |= APP_SENSOR_EVENT_FSR_BASELINE_READY;
         }
     }
 
@@ -567,6 +569,7 @@ void SensorLogic_MarkFsrError(sensor_logic_context_t* context, uint32_t error_fl
     }
 
     context->diagnostics.valid_flags &= ~SENSOR_LOGIC_VALID_FSR;
+    context->snapshot.fsr_valid = 0U;
     SensorLogic_SetErrorFlags(context, context->diagnostics.error_flags | (error_flag & allowed_flags), now_ms);
 }
 
@@ -732,6 +735,7 @@ void SensorLogic_CheckStaleness(sensor_logic_context_t* context, uint32_t now_ms
     error_flags = context->diagnostics.error_flags;
     if (SensorLogic_TimeElapsed(now_ms, context->last_fsr_sample_ms, SENSOR_FSR_ADC_TIMEOUT_MS) != 0U) {
         context->diagnostics.valid_flags &= ~SENSOR_LOGIC_VALID_FSR;
+        context->snapshot.fsr_valid = 0U;
         error_flags |= SENSOR_LOGIC_ERROR_FSR_TIMEOUT;
     }
 

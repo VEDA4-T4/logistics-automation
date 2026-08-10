@@ -376,14 +376,19 @@ void TestInvalidMarkerWidthAndNoise() {
 
 void TestFsrStabilityAndHysteresis() {
     sensor_logic_context_t context{};
+    std::uint32_t baseline_ready_count = 0U;
     std::uint32_t load_on_count = 0U;
     std::uint32_t load_off_count = 0U;
 
     SensorLogic_Init(&context, 0U);
     SensorLogic_StartFsrBaselineCapture(&context, SENSOR_FSR_BASELINE_FOR_LOAD_ON);
     for (std::uint32_t now = 0U; now < (SENSOR_FSR_BASELINE_SAMPLES * 10U); now += 10U) {
-        (void)UpdateFsr(context, 1700U, now);
+        const auto update = UpdateFsr(context, 1700U, now);
+        if ((update.event_flags & APP_SENSOR_EVENT_FSR_BASELINE_READY) != 0U) {
+            ++baseline_ready_count;
+        }
     }
+    CHECK_TRUE(baseline_ready_count == 1U);
     CHECK_TRUE(context.fsr_baseline_valid != 0U);
     CHECK_TRUE(context.diagnostics.fsr_empty_baseline == 1700U);
 
@@ -403,9 +408,14 @@ void TestFsrStabilityAndHysteresis() {
     CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_PRESENT);
 
     SensorLogic_StartFsrBaselineCapture(&context, SENSOR_FSR_BASELINE_FOR_LOAD_OFF);
+    baseline_ready_count = 0U;
     for (std::uint32_t now = 880U; now < 880U + (SENSOR_FSR_BASELINE_SAMPLES * 10U); now += 10U) {
-        (void)UpdateFsr(context, 2000U, now);
+        const auto update = UpdateFsr(context, 2000U, now);
+        if ((update.event_flags & APP_SENSOR_EVENT_FSR_BASELINE_READY) != 0U) {
+            ++baseline_ready_count;
+        }
     }
+    CHECK_TRUE(baseline_ready_count == 1U);
 
     for (std::uint32_t now = 1120U; now <= 1290U; now += 10U) {
         auto update = UpdateFsr(context, 1850U, now);
@@ -553,9 +563,13 @@ void TestSensorErrorsAndStaleness() {
     SensorLogic_Init(&context, 0U);
     SensorLogic_CheckStaleness(&context, SENSOR_FSR_ADC_TIMEOUT_MS);
     CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_FSR_TIMEOUT) != 0U);
+    CHECK_TRUE(context.snapshot.fsr_valid == 0U);
     update = {};
     SensorLogic_UpdateFsr(&context, 1000U, SENSOR_FSR_ADC_TIMEOUT_MS + 1U, &update);
     CHECK_TRUE((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_FSR_TIMEOUT) == 0U);
+    CHECK_TRUE(context.snapshot.fsr_valid != 0U);
+    SensorLogic_MarkFsrError(&context, SENSOR_LOGIC_ERROR_FSR_ADC, SENSOR_FSR_ADC_TIMEOUT_MS + 2U);
+    CHECK_TRUE(context.snapshot.fsr_valid == 0U);
 }
 
 void TestRouteTestSafetyFiltering() {

@@ -231,17 +231,19 @@ static void TestInternalErrorBlocksAndSuppressesDuplicate(void) {
     assert(HealthLogic_HasActiveFaults(&context) != 0U);
 }
 
-static void TestUnloadIsDeferred(void) {
+static void TestUnloadIsMonitored(void) {
     health_logic_context_t context{};
     health_fault_record_t fault{};
 
-    assert((HEALTH_REQUIRED_TASK_MASK & HEALTH_TASK_MASK(APP_TASK_UNLOAD)) == 0U);
+    assert((HEALTH_REQUIRED_TASK_MASK & HEALTH_TASK_MASK(APP_TASK_UNLOAD)) != 0U);
     HealthLogic_Init(&context, HEALTH_REQUIRED_TASK_MASK, 0U);
-    PublishRequiredAlive(&context, 1000U, APP_TASK_COUNT);
+    PublishRequiredAlive(&context, 1000U, APP_TASK_UNLOAD);
     SetRequiredStack(&context, HEALTH_STACK_MIN_WORDS + 64U);
 
     assert(HealthLogic_Evaluate(&context, 2000U, HEALTH_STARTUP_GRACE_MS, HEALTH_ALIVE_TIMEOUT_MS,
-                                HEALTH_STACK_MIN_WORDS, &fault) == 0U);
+                                HEALTH_STACK_MIN_WORDS, &fault) != 0U);
+    assert(fault.reason == HEALTH_FAULT_TASK_STALLED);
+    assert(fault.source_task == APP_TASK_UNLOAD);
 }
 
 static void TestTickWraparound(void) {
@@ -276,7 +278,7 @@ int main() {
     TestOneRecoveryDoesNotClearAnotherFault();
     TestUartRecoveryClearsTimeoutAndRecoverableError();
     TestInternalErrorBlocksAndSuppressesDuplicate();
-    TestUnloadIsDeferred();
+    TestUnloadIsMonitored();
     TestTickWraparound();
     TestBusyIsAValidLineTracerFault();
     return 0;
