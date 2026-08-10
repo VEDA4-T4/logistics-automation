@@ -83,7 +83,7 @@ typedef struct {
     uint32_t dropped_ring_full;            /* best-effort heartbeat 링 포화 드랍 */
     uint32_t ring_full_waits;              /* 수락한 메시지가 링 자리를 기다린 횟수 */
     uint32_t dropped_retry_exhausted;      /* DMA 재시도 소진 후 드랍 */
-    uint32_t init_failures;                /* TX Queue/QueueSet 초기화 실패 */
+    uint32_t init_failures;                /* TX Queue 초기화 실패 */
     uint32_t tx_error[COMM_TX_CH_COUNT];   /* HAL 송신 오류 수 */
     uint32_t tx_timeout[COMM_TX_CH_COUNT]; /* DMA 송신 timeout 수 */
     uint32_t tx_retry[COMM_TX_CH_COUNT];   /* timeout 후 재시도 수 */
