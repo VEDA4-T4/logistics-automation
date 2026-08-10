@@ -190,6 +190,24 @@ struct Fixture {
         assert(session->PollOnce().Succeeded());
     }
 
+    void PushSensorStatus(std::uint8_t sensor_id, std::uint8_t sensor_state, std::uint16_t distance_cm) {
+        uart_frame_t frame{};
+        frame.version = UART_PROTOCOL_VERSION;
+        frame.sequence = next_event_sequence++;
+        frame.command = UART_CMD_SENSOR_STATUS;
+        frame.length = UART_SENSOR_STATUS_PAYLOAD_SIZE;
+        frame.payload[UART_SENSOR_ID_INDEX] = sensor_id;
+        frame.payload[UART_SENSOR_STATE_INDEX] = sensor_state;
+        frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX] = static_cast<std::uint8_t>(distance_cm & 0xffU);
+        frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX] = static_cast<std::uint8_t>((distance_cm >> 8U) & 0xffU);
+
+        std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+        std::size_t encoded_length = 0;
+        assert(uart_encode_frame(&frame, encoded.data(), encoded.size(), &encoded_length) == UART_CODEC_OK);
+        backend->PushRead({ encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(encoded_length) });
+        assert(session->PollOnce().Succeeded());
+    }
+
     FakeUartIoBackend* backend{};
     std::unique_ptr<UartSession> session;
     std::unique_ptr<LineTracerNode> node;
@@ -694,6 +712,26 @@ void TestFaultReportsMappedError() {
     assert(error.current_state == "FAULT");
 }
 
+void TestObstacleTransitionsPublishSensorStatusOnlyWhenReceived() {
+    Fixture fixture;
+
+    fixture.PushSensorStatus(1U, UART_SENSOR_DETECTED, 4U);
+    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.front().channel == LineTracerReportChannel::kEvent);
+    assert(fixture.reports.front().message_type == mqtt::MessageType::kSensorStatus);
+    const auto& detected = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.front());
+    assert(detected.sensor_id == 1);
+    assert(detected.measurement_status == "DETECTED");
+    assert(detected.distance_cm == 4);
+
+    fixture.PushSensorStatus(1U, UART_SENSOR_CLEAR, 8U);
+    assert(fixture.reports.size() == 2U);
+    const auto& cleared = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.back());
+    assert(cleared.sensor_id == 1);
+    assert(cleared.measurement_status == "CLEAR");
+    assert(cleared.distance_cm == 8);
+}
+
 void TestStaleJobEventIsIgnored() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
@@ -834,6 +872,7 @@ int main() {
     TestLoadDetectedReportsLoadOn();
     TestUnloadCompleteReportsCompletionAndClearsMapping();
     TestFaultReportsMappedError();
+    TestObstacleTransitionsPublishSensorStatusOnlyWhenReceived();
     TestStaleJobEventIsIgnored();
     TestKeepaliveRunsWithoutActiveJob();
     TestKeepaliveWaitsForOneSecondAndSendsStatusRequest();
