@@ -479,6 +479,34 @@ void test_emergency_stop_aborts_the_cycle_and_clears_the_home_reference() {
     assert(blocked.status == GripperCommandStatus::kRejected);
 }
 
+void test_requested_emergency_stop_is_status_not_device_error() {
+    Fixture fixture;
+    fixture.Home();
+
+    static_cast<void>(fixture.node->HandleMqttCommand(MakeEmergencyStop()));
+    fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
+
+    assert(!fixture.AnyErrorEquals("ERR-EMERGENCY-STOP"));
+    const auto* response = fixture.LastResponse();
+    assert(response != nullptr && response->command == mqtt::ControlCommand::kEmergencyStop &&
+           response->result == mqtt::CommandResult::kSuccess);
+    const auto* status = fixture.LastStatus();
+    assert(status != nullptr && status->current_state == "EMERGENCY_STOP" && !status->error_code.has_value());
+}
+
+void test_unrequested_emergency_stop_reports_actual_hex_cause() {
+    Fixture fixture;
+    fixture.Home();
+
+    fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
+
+    const auto* error = fixture.LastError();
+    assert(error != nullptr && error->error_code == "ERR-EMERGENCY-STOP");
+    assert(error->message == "controller latched an emergency stop (cause 0xF0)");
+    const auto* status = fixture.LastStatus();
+    assert(status != nullptr && status->error_code == "ERR-EMERGENCY-STOP");
+}
+
 void test_safety_release_reports_stopped_rather_than_ready() {
     Fixture fixture;
     fixture.Home();
@@ -1018,6 +1046,8 @@ int main() {
     test_motion_fault_aborts_the_cycle_and_reports_an_error();
     test_a_stale_motion_completion_does_not_advance_the_cycle();
     test_emergency_stop_aborts_the_cycle_and_clears_the_home_reference();
+    test_requested_emergency_stop_is_status_not_device_error();
+    test_unrequested_emergency_stop_reports_actual_hex_cause();
     test_safety_release_reports_stopped_rather_than_ready();
     test_recovery_homes_the_arm_after_a_safety_release();
     test_missing_completion_event_times_out_the_cycle();

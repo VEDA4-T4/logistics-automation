@@ -47,6 +47,11 @@ void WriteU16(std::uint8_t* payload, std::size_t low_index, std::uint16_t value)
                                       (static_cast<std::uint16_t>(payload[low_index + 1U]) << 8U));
 }
 
+[[nodiscard]] std::string HexByte(std::uint8_t value) {
+    constexpr char digits[] = "0123456789ABCDEF";
+    return std::string{ '0', 'x', digits[value >> 4U], digits[value & 0x0FU] };
+}
+
 [[nodiscard]] std::string DescribeDeviceState(std::uint8_t state) {
     switch (state) {
         case UART_DEVICE_READY:
@@ -1128,6 +1133,10 @@ void GripperNode::HandleMotionFault(const uart_frame_t& frame) {
 void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
     const bool latched = frame.payload[kSafetyEventLatchedIndex] != 0U;
     const std::uint8_t cause = frame.payload[kSafetyEventCauseIndex];
+    const bool requested =
+        pending_safety_.active &&
+        ((pending_safety_.expected == PendingSafetyEvent::kEstopLatched && latched) ||
+         (pending_safety_.expected == PendingSafetyEvent::kReleased && !latched));
     estop_latched_ = latched;
 
     if (latched) {
@@ -1140,22 +1149,20 @@ void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
         }
     }
 
-    if (pending_safety_.active) {
-        const bool matched = (pending_safety_.expected == PendingSafetyEvent::kEstopLatched && latched) ||
-                             (pending_safety_.expected == PendingSafetyEvent::kReleased && !latched);
-        if (matched) {
-            EmitCommandResponse(
-                pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kSuccess, std::nullopt,
-                latched ? "emergency stop latched" : "emergency stop released; send RECOVERY to home the arm");
-            pending_safety_ = PendingSafetyCommand{};
-        }
+    if (requested) {
+        EmitCommandResponse(
+            pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kSuccess, std::nullopt,
+            latched ? "emergency stop latched" : "emergency stop released; send RECOVERY to home the arm");
+        pending_safety_ = PendingSafetyCommand{};
     }
 
     if (latched) {
-        EmitError("ERR-EMERGENCY-STOP", "CRITICAL",
-                  "controller latched an emergency stop (cause 0x" + std::to_string(static_cast<int>(cause)) + ")",
-                  std::nullopt);
-        EmitDeviceStatus("EMERGENCY_STOP", std::string("ERR-EMERGENCY-STOP"));
+        if (!requested) {
+            EmitError("ERR-EMERGENCY-STOP", "CRITICAL",
+                      "controller latched an emergency stop (cause " + HexByte(cause) + ")", std::nullopt);
+        }
+        EmitDeviceStatus("EMERGENCY_STOP",
+                         requested ? std::nullopt : std::optional<std::string>{ "ERR-EMERGENCY-STOP" });
     } else {
         // Released but deliberately not homed: report STOPPED, never READY, so the
         // server does not treat the arm as ready to accept work yet.
