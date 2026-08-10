@@ -337,7 +337,6 @@ logistics::contracts::mqtt::MqttMessage MakeVisionError(std::string_view device_
 struct ImageUploadCompletion final {
     logistics::vision::AssignedVisionWork work;
     std::vector<logistics::vision::VisionPublication> publications;
-    std::string timestamp;
     std::string captured_at;
     logistics::device::ImageUploadResult result;
     std::uint64_t generation{};
@@ -383,6 +382,7 @@ int main(const int argc, char* argv[]) {
         image_uploader = std::make_unique<logistics::device::ImageUploader>(mqtt_config.image_upload);
     }
     std::optional<std::future<ImageUploadCompletion>> pending_image_upload;
+    std::optional<std::string> pending_image_upload_work_id;
     std::atomic_uint64_t work_generation{};
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
     logistics::vision::VisionMqttWorkflow mqtt_workflow(
@@ -545,10 +545,11 @@ int main(const int argc, char* argv[]) {
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
         const auto loop_now = Clock::now();
-        if (pending_image_upload.has_value() &&
+        if (pending_image_upload.has_value() && !result_outbox.PendingWorkId().has_value() &&
             pending_image_upload->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             ImageUploadCompletion completion = pending_image_upload->get();
             pending_image_upload.reset();
+            pending_image_upload_work_id.reset();
             if (completion.generation == work_generation.load(std::memory_order_relaxed) &&
                 control_state.IsOperational()) {
                 if (!completion.encoded) {
@@ -567,14 +568,6 @@ int main(const int argc, char* argv[]) {
                     std::clog << "[vision][transport][INFO] HTTP image upload confirmed; work_id="
                               << completion.work.work_id << '\n'
                               << std::flush;
-                    completion.publications.push_back({
-                        logistics::vision::VisionPublicationChannel::kEvent,
-                        logistics::vision::MakeBarcodeDetectedMessage(
-                            device_id, completion.work,
-                            logistics::device::MakeMessageId(device_id, mqtt_session_id,
-                                                             mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
-                            completion.timestamp),
-                    });
                     completion.publications.push_back({
                         logistics::vision::VisionPublicationChannel::kEvent,
                         logistics::vision::MakeProductImageMessage(
@@ -618,6 +611,8 @@ int main(const int argc, char* argv[]) {
             next_heartbeat = loop_now + logistics::contracts::mqtt::kHeartbeatInterval;
         }
         if (const auto pending_work_id = result_outbox.PendingWorkId(); pending_work_id.has_value()) {
+            const bool image_upload_pending = pending_image_upload_work_id.has_value() &&
+                                              *pending_image_upload_work_id == *pending_work_id;
             if (!mqtt_client.IsConnected()) {
                 device_status->SetCurrentState("MQTT_DISCONNECTED");
             } else if (result_outbox.Flush(
@@ -630,14 +625,18 @@ int main(const int argc, char* argv[]) {
                 std::clog << "[vision][transport][INFO] MQTT result publication completed; work_id=" << *pending_work_id
                           << '\n'
                           << std::flush;
-                mqtt_workflow.CompleteWork();
-                pending_capture.Reset();
-                device_status->SetJobId(std::nullopt);
-                if (control_state.IsOperational()) {
-                    device_status->SetCurrentState(std::string(kWaitingForProductState));
-                    device_status->SetErrorCode(std::nullopt);
+                if (image_upload_pending) {
+                    device_status->SetCurrentState("UPLOAD_PENDING");
                 } else {
-                    device_status->SetCurrentState(control_state.CurrentState());
+                    mqtt_workflow.CompleteWork();
+                    pending_capture.Reset();
+                    device_status->SetJobId(std::nullopt);
+                    if (control_state.IsOperational()) {
+                        device_status->SetCurrentState(std::string(kWaitingForProductState));
+                        device_status->SetErrorCode(std::nullopt);
+                    } else {
+                        device_status->SetCurrentState(control_state.CurrentState());
+                    }
                 }
             }
         }
@@ -793,37 +792,41 @@ int main(const int argc, char* argv[]) {
                     const std::uint64_t generation = work_generation.load(std::memory_order_relaxed);
                     cv::Mat captured_frame = pending_capture.Frame().clone();
                     auto assigned_work = *work;
-                    auto initial_publications = std::move(publications);
-                    // ponytail: the workflow permits one active work, so one future is the queue limit.
-                    pending_image_upload.emplace(std::async(
-                        std::launch::async,
-                        [uploader = image_uploader.get(), device_id, assigned_work = std::move(assigned_work),
-                         upload_message_id, timestamp, captured_at, generation, frame = std::move(captured_frame),
-                         publications = std::move(initial_publications)]() mutable {
-                            ImageUploadCompletion completion{
-                                .work = std::move(assigned_work),
-                                .publications = std::move(publications),
-                                .timestamp = timestamp,
-                                .captured_at = captured_at,
-                                .generation = generation,
-                            };
-                            try {
-                                std::vector<std::uint8_t> jpeg;
-                                completion.encoded =
-                                    cv::imencode(".jpg", frame, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 });
-                                if (completion.encoded) {
-                                    completion.result = uploader->Upload(
-                                        device_id, completion.work.work_id, upload_message_id, captured_at,
-                                        completion.work.observation.image_name, "image/jpeg", jpeg);
-                                }
-                            } catch (const std::exception& error) {
-                                completion.result.error = error.what();
-                            }
-                            return completion;
-                        }));
-                    pending_capture.Reset();
-                    device_status->SetCurrentState("UPLOAD_PENDING");
-                    result_deferred = true;
+                    if (result_outbox.Enqueue(work->work_id, std::move(publications))) {
+                        pending_image_upload_work_id = work->work_id;
+                        // ponytail: the workflow permits one active work, so one future is the queue limit.
+                        pending_image_upload.emplace(std::async(
+                            std::launch::async,
+                            [uploader = image_uploader.get(), device_id, assigned_work = std::move(assigned_work),
+                             upload_message_id, captured_at, generation, frame = std::move(captured_frame)]() mutable {
+                                    ImageUploadCompletion completion{
+                                        .work = std::move(assigned_work),
+                                        .publications = {},
+                                        .captured_at = captured_at,
+                                        .generation = generation,
+                                    };
+                                    try {
+                                        std::vector<std::uint8_t> jpeg;
+                                        completion.encoded =
+                                            cv::imencode(".jpg", frame, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 });
+                                        if (completion.encoded) {
+                                            completion.result = uploader->Upload(
+                                                device_id, completion.work.work_id, upload_message_id, captured_at,
+                                                completion.work.observation.image_name, "image/jpeg", jpeg);
+                                        }
+                                    } catch (const std::exception& error) {
+                                        completion.result.error = error.what();
+                                    }
+                                    return completion;
+                                }));
+                        pending_capture.Reset();
+                        device_status->SetCurrentState("RESULT_PENDING");
+                        result_deferred = true;
+                    } else {
+                        control_state.SetFault();
+                        device_status->SetCurrentState(control_state.CurrentState());
+                        device_status->SetErrorCode("ERR-VISION-RESULT-QUEUE-FAILED");
+                    }
                 }
             } else if (barcode_detected && image_uploader != nullptr) {
                 std::cerr << "[vision][ERROR] barcode was detected without a captured frame\n";
