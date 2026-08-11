@@ -541,7 +541,11 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
             break;
         case DeviceControlAction::kSafetyRecovery:
             uart_command = UART_CMD_RESET_DEVICE;
-            effect = PendingEffect::kClearJob;
+            /*
+             * A safety recovery clears the controller latch, but the controller
+             * resumes an active route. Preserve its MQTT work/job/position mapping.
+             */
+            effect = HasActiveJob() ? PendingEffect::kNone : PendingEffect::kClearJob;
             break;
         case DeviceControlAction::kStatusRequest:
         case DeviceControlAction::kComponentRecovery:

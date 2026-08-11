@@ -94,13 +94,14 @@ ProcessTransition ProcessStateMachine::ApplySystemFailure(std::string reason) {
 }
 
 ProcessTransition ProcessStateMachine::ClearSystemFailureIfIdle() {
-    if (system_state_ != ProcessSystemState::kError) {
-        return Reject("automatic recovery requires an error state");
+    if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop) {
+        return Reject("automatic recovery requires an error or emergency-stop state");
     }
     if (!ActiveWorks().empty()) {
         return Reject("automatic recovery is not allowed while work is active");
     }
-    system_state_ = ProcessSystemState::kIdle;
+    system_state_ =
+        system_state_ == ProcessSystemState::kEmergencyStop ? ProcessSystemState::kStopped : ProcessSystemState::kIdle;
     return {
         .disposition = TransitionDisposition::kApplied,
         .previous_stage = std::nullopt,

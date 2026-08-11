@@ -91,6 +91,53 @@ void TestSafetyLatchRejectsDriveUntilApprovedReset() {
     assert(context.active_job_id == UART_LINETRACER_JOB_ID_NONE);
 }
 
+void TestEmergencyRecoveryResumesActiveRoute() {
+    control_context_t context{};
+    ControlLogic_Init(&context, 100U);
+
+    auto position = MakeCommand(APP_CONTROL_COMMAND_SET_CURRENT_POSITION, 110U, 1U);
+    position.position = UART_LINETRACER_POSITION_DEST_A;
+    assert(ControlLogic_HandleCommand(&context, &position, 110U).accepted != 0U);
+
+    auto assign = MakeCommand(APP_CONTROL_COMMAND_ASSIGN_ROUTE, 120U, 2U);
+    assign.job_id = 84U;
+    assign.route_id = UART_LINETRACER_ROUTE_C;
+    assert(ControlLogic_HandleCommand(&context, &assign, 120U).accepted != 0U);
+    const auto resume_state = context.state;
+    assert(ControlLogic_StateCanResume(resume_state) != 0U);
+
+    app_control_safety_event_t safety_event{};
+    safety_event.type = APP_CONTROL_SAFETY_LATCHED;
+    safety_event.reason = LINETRACER_STOP_REASON_EMERGENCY;
+    safety_event.error_code = UART_ERROR_EMERGENCY_STOP;
+
+    assert(ControlLogic_ApplySafetyEvent(&context, &safety_event, 130U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_EMERGENCY_STOPPED);
+    assert(context.resume_valid != 0U);
+    assert(context.resume_state == resume_state);
+    assert(context.active_job_id == 84U);
+    assert(context.active_route == UART_LINETRACER_ROUTE_C);
+    assert(context.route_active != 0U);
+
+    safety_event.type = APP_CONTROL_SAFETY_RESET_REJECTED;
+    assert(ControlLogic_ApplySafetyEvent(&context, &safety_event, 140U) != 0U);
+    assert(context.resume_valid != 0U);
+
+    safety_event.type = APP_CONTROL_SAFETY_RESET_APPROVED;
+    safety_event.reason = LINETRACER_STOP_REASON_NONE;
+    safety_event.error_code = UART_ERROR_NONE;
+    assert(ControlLogic_ApplySafetyEvent(&context, &safety_event, 200U) != 0U);
+    assert(context.state == resume_state);
+    assert(context.state_entered_at_ms == 200U);
+    assert(context.safety_latched == 0U);
+    assert(context.safety_error_code == UART_ERROR_NONE);
+    assert(context.stop_reason == LINETRACER_STOP_REASON_NONE);
+    assert(context.resume_valid == 0U);
+    assert(context.active_job_id == 84U);
+    assert(context.active_route == UART_LINETRACER_ROUTE_C);
+    assert(context.route_active != 0U);
+}
+
 void TestObstacleSafetyState() {
     control_context_t context{};
     ControlLogic_Init(&context, 200U);
@@ -446,6 +493,7 @@ int main() {
     RunMotorControlLogicTests();
     TestInitializationAndPosition();
     TestSafetyLatchRejectsDriveUntilApprovedReset();
+    TestEmergencyRecoveryResumesActiveRoute();
     TestObstacleSafetyState();
     TestRouteStopAndResume();
     TestInvalidStateStatusAndTimeout();
