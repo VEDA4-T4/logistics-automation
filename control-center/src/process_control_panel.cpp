@@ -17,7 +17,7 @@ namespace mqtt = logistics::contracts::mqtt;
 
 QString IdleCommandStyle() {
     return QStringLiteral(
-        "background-color:#1f1f1f;color:#cccccc;border:1px solid #2b2b2b;border-radius:4px;padding:4px;");
+        "background-color:#1f1f1f;color:#cccccc;border:1px solid #4a4a4a;border-radius:4px;padding:4px;");
 }
 
 QString PendingCommandStyle() {
@@ -121,8 +121,8 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
 ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("processControlPanel"));
     setMinimumWidth(0);
-    setMinimumHeight(72);
-    setMaximumHeight(92);
+    setMinimumHeight(44);
+    setMaximumHeight(58);
     setStyleSheet(
         "#processControlPanel{background-color:#181818;border:1px solid #303030;border-radius:6px;}"
         "QPushButton{font-size:12px;font-weight:600;padding:0 8px;}"
@@ -139,9 +139,9 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "QPushButton#recoveryButton:disabled,QPushButton#emergencyStopButton:disabled{"
         "background:#202020;color:#626262;border:1px solid #2b2b2b;}");
 
-    auto* layout = new QVBoxLayout(this);
+    auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(4);
+    layout->setSpacing(8);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
     title->setObjectName(QStringLiteral("processControlTitle"));
@@ -151,19 +151,13 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     target_label_ = new QLabel(QStringLiteral("제어 대상 · 전체 공정"), this);
     target_label_->setObjectName(QStringLiteral("processControlTarget"));
     target_label_->setFixedWidth(170);
+    target_label_->setFixedHeight(28);
     target_label_->setAlignment(Qt::AlignCenter);
     target_label_->setStyleSheet(
         "background:#172534;color:#75beff;border:1px solid #285a7e;border-radius:4px;"
         "font-size:10px;font-weight:700;padding:4px 8px;");
     target_label_->setToolTip(
         QStringLiteral("상단 공정 카드를 클릭하여 대상을 변경합니다. 비상정지는 항상 전체 공정에 적용됩니다."));
-    connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
-    connection_hint_->setObjectName(QStringLiteral("processControlConnectionHint"));
-    connection_hint_->setWordWrap(false);
-    connection_hint_->setFixedWidth(215);
-    connection_hint_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    connection_hint_->setStyleSheet("color:#9d9d9d;font-size:10px;");
-
     command_status_ = new QLabel(QStringLiteral("대기 중"), this);
     command_status_->setObjectName(QStringLiteral("commandStatus"));
     command_status_->setFixedHeight(28);
@@ -197,19 +191,6 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         emit commandRequested(mqtt::ControlCommand::kEmergencyStop, command_target_device_id_);
     });
 
-    auto* information_row = new QHBoxLayout();
-    information_row->setContentsMargins(0, 0, 0, 0);
-    information_row->setSpacing(8);
-    information_row->addWidget(title);
-    information_row->addWidget(target_label_);
-    information_row->addWidget(command_status_, 1);
-    information_row->addWidget(connection_hint_);
-
-    auto* command_row = new QHBoxLayout();
-    command_row->setContentsMargins(0, 0, 0, 0);
-    command_row->setSpacing(8);
-    command_row->addStretch(1);
-
     auto* standard_group = new QFrame(this);
     standard_group->setObjectName(QStringLiteral("standardCommandGroup"));
     standard_group->setAccessibleName(QStringLiteral("일반 공정 제어"));
@@ -239,12 +220,13 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     safety_divider->setFixedHeight(24);
     safety_divider->setStyleSheet("color:#3c3c3c;");
 
-    command_row->addWidget(standard_group);
-    command_row->addWidget(recovery_group);
-    command_row->addWidget(safety_divider, 0, Qt::AlignVCenter);
-    command_row->addWidget(safety_group);
-    layout->addLayout(information_row);
-    layout->addLayout(command_row);
+    layout->addWidget(title);
+    layout->addWidget(target_label_);
+    layout->addWidget(command_status_, 1);
+    layout->addWidget(standard_group);
+    layout->addWidget(recovery_group);
+    layout->addWidget(safety_divider, 0, Qt::AlignVCenter);
+    layout->addWidget(safety_group);
 
     updateTargetPresentation();
     updateButtonStates();
@@ -260,8 +242,6 @@ void ProcessControlPanel::setControlTarget(const QString& target_device_id, cons
 
 void ProcessControlPanel::setMqttConnected(bool connected) {
     control_state_.setMqttConnected(connected);
-    connection_hint_->setText(connected ? QStringLiteral("중앙 서버 MQTT 연결됨")
-                                        : QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."));
     if (connected) {
         updateCommandPresentation();
     } else if (!connected) {
