@@ -7,6 +7,8 @@
 #include <QHostAddress>
 #include <QLabel>
 #include <QListWidget>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSizePolicy>
 #include <QStackedLayout>
 #include <QTcpServer>
@@ -50,7 +52,8 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
 
     auto* image = panel.findChild<QLabel*>(QStringLiteral("productImage"));
     auto* work_list = panel.findChild<QListWidget*>(QStringLiteral("activeWorkList"));
-    auto* metadata = panel.findChild<QWidget*>(QStringLiteral("productMetadata"));
+    auto* metadata = panel.findChild<QWidget*>(QStringLiteral("productMetadataColumn"));
+    auto* info_card = panel.findChild<QWidget*>(QStringLiteral("productInfoCard"));
     auto* status_row = panel.findChild<QWidget*>(QStringLiteral("productStatusRow"));
     auto* work_title = panel.findChild<QLabel*>(QStringLiteral("activeWorkListTitle"));
     auto* image_title = panel.findChild<QLabel*>(QStringLiteral("productImageTitle"));
@@ -58,13 +61,15 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
     assert(image != nullptr);
     assert(work_list != nullptr);
     assert(metadata != nullptr);
+    assert(info_card != nullptr);
     assert(status_row != nullptr);
     assert(work_title != nullptr && image_title != nullptr && metadata_title != nullptr);
     assert(panel.size() == size);
 
     const auto image_rect = PanelRect(panel, *image);
     const auto work_list_rect = PanelRect(panel, *work_list);
-    const auto metadata_rect = PanelRect(panel, *metadata);
+    auto metadata_rect = PanelRect(panel, *metadata);
+    metadata_rect.setTop(PanelRect(panel, *info_card).top());
     const auto status_rect = PanelRect(panel, *status_row);
     for (const auto& rect : { work_list_rect, image_rect, metadata_rect, status_rect }) {
         assert(!rect.isEmpty());
@@ -148,6 +153,38 @@ int main(int argc, char* argv[]) {
         const int value_top = label->mapTo(info_card, QPoint{}).y();
         assert(value_top > previous_value_top);
         previous_value_top = value_top;
+    }
+    panel.resize(460, 180);
+    application.processEvents();
+    auto* metadata_scroll = panel.findChild<QScrollArea*>(QStringLiteral("productMetadata"));
+    auto* metadata_content = panel.findChild<QWidget*>(QStringLiteral("productMetadataContent"));
+    auto* detail_card = panel.findChild<QWidget*>(QStringLiteral("productDetailCard"));
+    assert(metadata_scroll != nullptr && metadata_content != nullptr && detail_card != nullptr);
+    assert(metadata_content->styleSheet().contains(QStringLiteral("background-color:#141d26")));
+    assert(metadata_scroll->viewport()->styleSheet().contains(QStringLiteral("background-color:#141d26")));
+    assert(metadata_scroll->styleSheet().contains(QStringLiteral("QScrollBar::add-line:vertical")));
+    assert(metadata_scroll->styleSheet().contains(QStringLiteral("background:#1f1f1f")));
+    assert(metadata_scroll->styleSheet().contains(QStringLiteral("min-height:8px")));
+    assert(metadata_content->minimumHeight() == 140);
+    assert(metadata_scroll->verticalScrollBar()->maximum() > 0);
+    const auto info_card_geometry = info_card->geometry();
+    metadata_scroll->verticalScrollBar()->setValue(metadata_scroll->verticalScrollBar()->maximum());
+    application.processEvents();
+    assert(metadata_scroll->verticalScrollBar()->value() == metadata_scroll->verticalScrollBar()->maximum());
+    assert(metadata_scroll->verticalScrollBar()->value() > metadata_scroll->verticalScrollBar()->minimum());
+    assert(info_card->geometry() == info_card_geometry);
+    assert(info_card->rect().contains(QRect(metadata_scroll->mapTo(info_card, QPoint{}), metadata_scroll->size())));
+    assert(detail_card->isVisible());
+    assert(detail_card->height() == 46);
+    assert(panel.rect().contains(QRect(detail_card->mapTo(&panel, QPoint{}), detail_card->size())));
+    assert(detail_value->isVisible());
+    assert(!detail_value->wordWrap());
+    assert(detail_value->height() == 18);
+    assert(detail_value->styleSheet().contains(QStringLiteral("font-size:9px")));
+    assert(detail_card->rect().contains(QRect(detail_value->mapTo(detail_card, QPoint{}), detail_value->size())));
+    for (const auto& value : expected_values) {
+        const auto* label = FindLabel(panel, value);
+        assert(label != nullptr && label->height() >= 16);
     }
 
     auto second_product = product;

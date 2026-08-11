@@ -48,7 +48,6 @@ private:
     void applySelectedTargetState();
     void updateButtonStates();
 
-    QLabel* connection_hint_{ nullptr };
     QLabel* command_status_{ nullptr };
     QLabel* target_label_{ nullptr };
     QPushButton* start_button_{ nullptr };

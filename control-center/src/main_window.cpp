@@ -470,10 +470,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* app_header = new QFrame(central_widget);
     app_header->setObjectName(QStringLiteral("appHeader"));
-    app_header->setMinimumHeight(76);
-    app_header->setMaximumHeight(92);
+    app_header->setMinimumHeight(46);
+    app_header->setMaximumHeight(58);
     auto* app_header_layout = new QHBoxLayout(app_header);
-    app_header_layout->setContentsMargins(16, 7, 16, 7);
+    app_header_layout->setContentsMargins(16, 4, 16, 4);
     auto* app_title_layout = new QVBoxLayout();
     app_title_layout->setContentsMargins(0, 0, 0, 0);
     app_title_layout->setSpacing(1);
@@ -483,15 +483,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     app_title->setStyleSheet("color:#f0f0f0;font-size:18px;font-weight:700;");
     app_title_layout->addWidget(app_eyebrow);
     app_title_layout->addWidget(app_title);
-    auto* channel_badge = new QLabel(QStringLiteral("1 CHANNEL"), app_header);
-    channel_badge->setAlignment(Qt::AlignCenter);
-    channel_badge->setStyleSheet(
-        "background:#252526;color:#cccccc;border:1px solid #3c3c3c;border-radius:4px;"
-        "font-size:10px;font-weight:700;padding:5px 10px;");
-    process_control_panel_ = new ProcessControlPanel(app_header);
     app_header_layout->addLayout(app_title_layout);
-    app_header_layout->addWidget(process_control_panel_, 1);
-    app_header_layout->addWidget(channel_badge);
+    app_header_layout->addStretch(1);
     root_layout->addWidget(app_header);
 
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
@@ -512,6 +505,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operations_workspace->setStretchFactor(0, 11);
     operations_workspace->setStretchFactor(1, 9);
     operations_workspace->setSizes({ 704, 576 });
+    process_control_panel_ = new ProcessControlPanel(central_widget);
 
     auto* detail_splitter = new QSplitter(Qt::Horizontal, central_widget);
     detail_splitter->setObjectName(QStringLiteral("detailSplitter"));
@@ -543,6 +537,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     selectControlTarget(config.control_target_device_id, initial_control_target_name);
 
     root_layout->addWidget(operations_workspace, 1);
+    root_layout->addSpacing(6);
+    root_layout->addWidget(process_control_panel_);
     root_layout->addWidget(operations_dashboard_panel_);
     root_layout->addWidget(detail_splitter, 1);
     setCentralWidget(central_widget);

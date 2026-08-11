@@ -13,6 +13,7 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QStackedLayout>
@@ -46,11 +47,13 @@ QLabel* AddValueRow(QGridLayout* layout, int row, int column, const QString& tit
                     int value_column_span = 1) {
     auto* title_label = new QLabel(title, parent);
     title_label->setMinimumWidth(36);
+    title_label->setMinimumHeight(16);
     title_label->setStyleSheet("color:#91a3b0;font-size:10px;font-weight:600;");
     auto* value_label = new QLabel(QStringLiteral("—"), parent);
     value_label->setStyleSheet("color:#6e6e6e;font-size:10px;font-weight:600;");
     value_label->setWordWrap(false);
     value_label->setMinimumWidth(0);
+    value_label->setMinimumHeight(16);
     value_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     layout->addWidget(title_label, row, column);
     layout->addWidget(value_label, row, column + 1, 1, value_column_span);
@@ -187,24 +190,52 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
 
     auto* info_card = new QFrame(this);
     info_card->setObjectName(QStringLiteral("productInfoCard"));
+    info_card->setMinimumHeight(0);
+    info_card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     auto* info_layout = new QVBoxLayout(info_card);
-    info_layout->setContentsMargins(9, 7, 9, 7);
-    info_layout->setSpacing(5);
+    info_layout->setContentsMargins(8, 6, 8, 6);
+    info_layout->setSpacing(0);
+    auto* metadata = new QWidget(info_card);
+    metadata->setObjectName(QStringLiteral("productMetadataContent"));
+    metadata->setStyleSheet("#productMetadataContent{background-color:#141d26;}");
+    metadata->setMinimumHeight(140);
+    metadata->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    auto* metadata_layout = new QVBoxLayout(metadata);
+    metadata_layout->setContentsMargins(0, 0, 0, 0);
     auto* fields = new QGridLayout();
     fields->setHorizontalSpacing(6);
     fields->setVerticalSpacing(2);
     fields->setColumnStretch(1, 1);
-    work_id_value_ = AddValueRow(fields, 0, 0, QStringLiteral("작업"), info_card);
-    barcode_value_ = AddValueRow(fields, 1, 0, QStringLiteral("바코드"), info_card);
-    product_id_value_ = AddValueRow(fields, 2, 0, QStringLiteral("상품 ID"), info_card);
-    product_name_value_ = AddValueRow(fields, 3, 0, QStringLiteral("상품명"), info_card);
-    destination_value_ = AddValueRow(fields, 4, 0, QStringLiteral("목적지"), info_card);
-    confidence_value_ = AddValueRow(fields, 5, 0, QStringLiteral("신뢰도"), info_card);
-    updated_at_value_ = AddValueRow(fields, 6, 0, QStringLiteral("갱신"), info_card);
-    info_layout->addLayout(fields);
+    work_id_value_ = AddValueRow(fields, 0, 0, QStringLiteral("작업"), metadata);
+    barcode_value_ = AddValueRow(fields, 1, 0, QStringLiteral("바코드"), metadata);
+    product_id_value_ = AddValueRow(fields, 2, 0, QStringLiteral("상품 ID"), metadata);
+    product_name_value_ = AddValueRow(fields, 3, 0, QStringLiteral("상품명"), metadata);
+    destination_value_ = AddValueRow(fields, 4, 0, QStringLiteral("목적지"), metadata);
+    confidence_value_ = AddValueRow(fields, 5, 0, QStringLiteral("신뢰도"), metadata);
+    updated_at_value_ = AddValueRow(fields, 6, 0, QStringLiteral("갱신"), metadata);
+    metadata_layout->addLayout(fields);
+
+    auto* metadata_scroll = new QScrollArea(info_card);
+    metadata_scroll->setObjectName(QStringLiteral("productMetadata"));
+    metadata_scroll->setFrameShape(QFrame::NoFrame);
+    metadata_scroll->setMinimumHeight(0);
+    metadata_scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+    metadata_scroll->setWidgetResizable(true);
+    metadata_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    metadata_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    metadata_scroll->setStyleSheet(
+        "QScrollArea{background-color:#141d26;border:0;}"
+        "QScrollBar:vertical{width:7px;background:#1f1f1f;margin:0;}"
+        "QScrollBar::handle:vertical{background:#4a4a4a;border-radius:3px;min-height:8px;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;background:transparent;}"
+        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:#1f1f1f;}");
+    metadata_scroll->viewport()->setStyleSheet("background-color:#141d26;");
+    metadata_scroll->setWidget(metadata);
+    info_layout->addWidget(metadata_scroll);
 
     auto* detail_card = new QFrame(this);
     detail_card->setObjectName(QStringLiteral("productDetailCard"));
+    detail_card->setFixedHeight(46);
     auto* detail_layout = new QVBoxLayout(detail_card);
     detail_layout->setContentsMargins(9, 6, 9, 6);
     detail_layout->setSpacing(2);
@@ -212,20 +243,14 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     detail_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
     detail_value_ = new QLabel(QStringLiteral("상품 데이터 수신 대기 중"), detail_card);
     detail_value_->setObjectName(QStringLiteral("productDetailValue"));
-    detail_value_->setWordWrap(true);
-    detail_value_->setMaximumHeight(30);
-    detail_value_->setStyleSheet("color:#e7eef3;font-size:10px;");
+    detail_value_->setWordWrap(false);
+    detail_value_->setMinimumWidth(0);
+    detail_value_->setFixedHeight(18);
+    detail_value_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    detail_value_->setStyleSheet("color:#e7eef3;font-size:9px;");
     detail_layout->addWidget(detail_title);
     detail_layout->addWidget(detail_value_);
 
-    auto* metadata = new QWidget(this);
-    metadata->setObjectName(QStringLiteral("productMetadata"));
-    metadata->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-    auto* metadata_layout = new QVBoxLayout(metadata);
-    metadata_layout->setContentsMargins(0, 0, 0, 0);
-    metadata_layout->setSpacing(6);
-    metadata_layout->addWidget(info_card, 1);
-    metadata_layout->addWidget(detail_card);
     auto* content_layout = new QHBoxLayout();
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(8);
@@ -283,7 +308,8 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     metadata_title->setObjectName(QStringLiteral("productMetadataTitle"));
     metadata_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
     metadata_column_layout->addWidget(metadata_title);
-    metadata_column_layout->addWidget(metadata, 1);
+    metadata_column_layout->addWidget(info_card, 1);
+    metadata_column_layout->addWidget(detail_card);
 
     content_layout->addWidget(work_list_panel);
     content_layout->addWidget(image_panel, 3);

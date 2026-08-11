@@ -30,7 +30,7 @@ struct StatusPresentation {
 QString PillStyle(const StatusPresentation& presentation) {
     return QStringLiteral(
                "background:%1;color:%2;border:1px solid %3;border-radius:4px;"
-               "font-size:9px;font-weight:700;padding:3px 6px;")
+               "font-size:9px;font-weight:700;padding:1px 6px;")
         .arg(presentation.background, presentation.foreground, presentation.border);
 }
 
@@ -203,7 +203,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
         "QLabel{color:#cccccc;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 6, 10, 6);
+    layout->setContentsMargins(10, 4, 10, 4);
     layout->setSpacing(4);
 
     overall_card_ = new QFrame(this);
@@ -216,8 +216,8 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     overall_card_->setProperty("controlTargetDeviceId", QStringLiteral("SYSTEM"));
     overall_card_->installEventFilter(this);
     auto* overall_layout = new QVBoxLayout(overall_card_);
-    overall_layout->setContentsMargins(9, 6, 9, 6);
-    overall_layout->setSpacing(2);
+    overall_layout->setContentsMargins(9, 4, 9, 4);
+    overall_layout->setSpacing(0);
     auto* overall_header = new QHBoxLayout();
     overall_header->setContentsMargins(0, 0, 0, 0);
     auto* overall_title = new QLabel(QStringLiteral("전체 공정"), overall_card_);
@@ -247,12 +247,12 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     process_section->setAttribute(Qt::WA_StyledBackground);
     auto* process_section_layout = new QVBoxLayout(process_section);
     process_section_layout->setContentsMargins(0, 0, 0, 0);
-    process_section_layout->setSpacing(8);
+    process_section_layout->setSpacing(4);
     auto* process_header = new QHBoxLayout();
     process_header->setContentsMargins(2, 0, 2, 0);
     auto* process_title = new QLabel(QStringLiteral("공정·지원 노드 실시간 상태"), process_section);
     process_title->setStyleSheet("color:#f0f0f0;font-size:10px;font-weight:700;");
-    live_status_ = new QLabel(QStringLiteral("실시간 연결 대기"), process_section);
+    live_status_ = new QLabel(QStringLiteral("● MQTT 연결 끊김"), process_section);
     live_status_->setObjectName(QStringLiteral("dashboardLiveStatus"));
     live_status_->setStyleSheet("color:#9d9d9d;font-size:9px;font-weight:700;");
     process_header->addWidget(process_title);
@@ -265,7 +265,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     process_content->setAttribute(Qt::WA_StyledBackground);
     process_layout_ = new QGridLayout(process_content);
     process_layout_->setContentsMargins(0, 0, 0, 0);
-    process_layout_->setSpacing(8);
+    process_layout_->setSpacing(6);
     process_layout_->addWidget(overall_card_, 0, 0);
     process_section_layout->addWidget(process_content, 1);
     layout->addWidget(process_section);
@@ -368,8 +368,8 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.card->installEventFilter(this);
     widgets.card->setToolTip(QStringLiteral("클릭하여 제어 대상으로 선택 · %1").arg(process.device_id));
     auto* layout = new QVBoxLayout(widgets.card);
-    layout->setContentsMargins(8, 5, 8, 5);
-    layout->setSpacing(1);
+    layout->setContentsMargins(8, 4, 8, 4);
+    layout->setSpacing(0);
     auto* header = new QHBoxLayout();
     header->setContentsMargins(0, 0, 0, 0);
     auto* title = new QLabel(process.display_name, widgets.card);
