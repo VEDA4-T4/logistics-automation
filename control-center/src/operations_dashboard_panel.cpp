@@ -321,13 +321,12 @@ void OperationsDashboardPanel::setControlTarget(const QString& target_device_id)
 }
 
 bool OperationsDashboardPanel::eventFilter(QObject* watched, QEvent* event) {
-    const bool mouse_activated = event->type() == QEvent::MouseButtonRelease &&
-                                 static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton;
+    const bool mouse_activated =
+        event->type() == QEvent::MouseButtonRelease && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton;
     const bool keyboard_activated =
-        event->type() == QEvent::KeyPress &&
-        (static_cast<QKeyEvent*>(event)->key() == Qt::Key_Return ||
-         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Enter ||
-         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Space);
+        event->type() == QEvent::KeyPress && (static_cast<QKeyEvent*>(event)->key() == Qt::Key_Return ||
+                                              static_cast<QKeyEvent*>(event)->key() == Qt::Key_Enter ||
+                                              static_cast<QKeyEvent*>(event)->key() == Qt::Key_Space);
     if (mouse_activated || keyboard_activated) {
         const auto target_device_id = watched->property("controlTargetDeviceId").toString();
         if (!target_device_id.isEmpty()) {

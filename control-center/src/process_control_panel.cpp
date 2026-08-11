@@ -91,9 +91,8 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
 
     const auto state = process.current_state.trimmed().toUpper();
     const auto role = logistics::contracts::DeviceRoleFromString(process.key.toStdString());
-    const auto meaning = role.has_value()
-                             ? logistics::contracts::DeviceStateMeaningFor(*role, state.toStdString())
-                             : logistics::contracts::DeviceStateMeaning::kUnknown;
+    const auto meaning = role.has_value() ? logistics::contracts::DeviceStateMeaningFor(*role, state.toStdString())
+                                          : logistics::contracts::DeviceStateMeaning::kUnknown;
     if (meaning == logistics::contracts::DeviceStateMeaning::kEmergencyStop) {
         return ProcessControlPhase::EmergencyStop;
     }
