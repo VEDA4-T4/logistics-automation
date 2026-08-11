@@ -355,6 +355,46 @@ static uint8_t ControlLogic_StateCanPauseForObstacle(linetracer_control_state_t 
     return ControlLogic_StateCanResume(state);
 }
 
+static uint8_t ControlLogic_CanResumeAfterEmergency(const control_context_t* context) {
+    if (ControlLogic_HasActiveJob(context) == 0U) {
+        return 0U;
+    }
+
+    if (ControlLogic_StateCanResume(context->state) != 0U) {
+        return 1U;
+    }
+
+    return (context->safety_latched != 0U && context->resume_valid != 0U &&
+            ControlLogic_StateCanResume(context->resume_state) != 0U)
+               ? 1U
+               : 0U;
+}
+
+static void ControlLogic_RestartResumeTimers(control_context_t* context, uint32_t now_ms) {
+    context->state_entered_at_ms = now_ms;
+    context->junction_condition_since_ms = now_ms;
+    context->junction_condition_active = 0U;
+    context->junction_candidate_since_ms = now_ms;
+    context->junction_candidate_active = 0U;
+
+    if (ControlLogic_StateExpectsMarker(context->state) != 0U) {
+        context->marker_wait_started_at_ms = now_ms;
+    }
+
+    if (ControlLogic_IsTurning(context) != 0U) {
+        context->junction_phase_started_at_ms = now_ms;
+        context->junction_turn_started_at_ms = now_ms;
+    }
+
+    if (context->junction_guard_active != 0U) {
+        context->junction_guard_until_ms = now_ms + CONTROL_JUNCTION_EXIT_GUARD_MS;
+    }
+
+    /* Drop marker events captured before recovery even if SensorTask delivers them late. */
+    context->delayed_marker_ignore_before_ms = now_ms;
+    context->delayed_marker_ignore_valid = 1U;
+}
+
 static uint8_t ControlLogic_NormalTransitionIsAllowed(const control_context_t* context,
                                                       linetracer_control_state_t next_state) {
     switch (context->state) {
@@ -529,16 +569,25 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
             return 1U;
 
         case APP_CONTROL_SAFETY_LATCHED:
-        case APP_CONTROL_SAFETY_RESET_REJECTED:
             reason = event->reason;
             if (reason == LINETRACER_STOP_REASON_NONE) {
                 reason = context->stop_reason;
             }
 
+            if (reason == LINETRACER_STOP_REASON_EMERGENCY && ControlLogic_CanResumeAfterEmergency(context) != 0U) {
+                if (ControlLogic_StateCanResume(context->state) != 0U) {
+                    context->resume_state = context->state;
+                    context->resume_valid = 1U;
+                }
+                context->junction_condition_active = 0U;
+                context->junction_candidate_active = 0U;
+            } else {
+                context->resume_valid = 0U;
+                ControlLogic_ResetJunctionManeuver(context);
+            }
+
             context->safety_latched = 1U;
             context->stop_reason = reason;
-            context->resume_valid = 0U;
-            ControlLogic_ResetJunctionManeuver(context);
             if (event->error_code != UART_ERROR_NONE) {
                 context->safety_error_code = event->error_code;
             } else if (reason == LINETRACER_STOP_REASON_EMERGENCY) {
@@ -549,7 +598,36 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
 
             return ControlLogic_Transition(context, ControlLogic_SafetyState(reason), now_ms);
 
+        case APP_CONTROL_SAFETY_RESET_REJECTED:
+            reason = event->reason;
+            if (reason == LINETRACER_STOP_REASON_NONE) {
+                reason = context->stop_reason;
+            }
+
+            context->safety_latched = 1U;
+            context->stop_reason = reason;
+            if (event->error_code != UART_ERROR_NONE) {
+                context->safety_error_code = event->error_code;
+            } else if (reason == LINETRACER_STOP_REASON_EMERGENCY) {
+                context->safety_error_code = UART_ERROR_EMERGENCY_STOP;
+            } else {
+                context->safety_error_code = UART_ERROR_BUSY;
+            }
+            return ControlLogic_Transition(context, ControlLogic_SafetyState(reason), now_ms);
+
         case APP_CONTROL_SAFETY_RESET_APPROVED:
+            if (context->safety_latched != 0U && context->stop_reason == LINETRACER_STOP_REASON_EMERGENCY &&
+                context->resume_valid != 0U && ControlLogic_HasActiveJob(context) != 0U &&
+                ControlLogic_StateCanResume(context->resume_state) != 0U) {
+                context->state = context->resume_state;
+                context->resume_valid = 0U;
+                context->safety_latched = 0U;
+                context->stop_reason = LINETRACER_STOP_REASON_NONE;
+                context->safety_error_code = UART_ERROR_NONE;
+                ControlLogic_RestartResumeTimers(context, now_ms);
+                return 1U;
+            }
+
             ControlLogic_Init(context, now_ms);
             return 1U;
 
@@ -1427,7 +1505,7 @@ route_action_t ControlLogic_HandleLoadOff(control_context_t* context, uint32_t n
      * UnloadTask to return the servo
      * home. Job completion is intentionally
      * deferred until ControlTask receives APP_UNLOAD_RESULT_COMPLETE.
- */
+     */
     if (context->state == LINETRACER_CONTROL_UNLOADING) {
         return ROUTE_ACTION_NONE;
     }

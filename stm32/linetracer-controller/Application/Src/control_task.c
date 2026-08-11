@@ -277,6 +277,8 @@ static void ControlTask_ProcessSafetyEvents(void) {
                                                        &fault_event) != 0U) {
                     ControlTask_PublishTxEvent(&fault_event, now_ms);
                 }
+            } else if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
+                ControlTask_PublishStateChanged(now_ms);
             } else if (event.type == APP_CONTROL_SAFETY_OBSTACLE_ACTIVE ||
                        event.type == APP_CONTROL_SAFETY_OBSTACLE_CLEARED) {
                 ControlTask_PublishStateChanged(now_ms);
@@ -630,7 +632,9 @@ static void ControlTask_ProcessUnloadResults(void) {
                 if (result.type == APP_UNLOAD_RESULT_RESET_FAILED) {
                     ControlTask_RejectPendingUnloadReset(result.error_code, now_ms);
                 } else {
-                    (void)ControlLogic_ApplySafetyEvent(&controlTaskContext, &reset_event, now_ms);
+                    if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &reset_event, now_ms) != 0U) {
+                        ControlTask_PublishStateChanged(now_ms);
+                    }
                     ControlTask_PublishSafetyResetResult(&reset_event, now_ms);
                     ControlTask_ClearPendingUnloadReset();
                 }
