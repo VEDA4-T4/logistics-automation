@@ -324,6 +324,65 @@ void TestHealthyStoppedNodesDoNotFailTheProcess() {
     }
 }
 
+void TestIdleSystemRecoversAfterEveryNodeReportsHealthy() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    const auto failure = orchestrator.Handle(
+        Status("MSG-AUTO-RECOVERY-FAILURE", "PI-INPUT-01", "FAULT", mqtt::ConnectionState::kOffline, std::nullopt));
+    assert(failure.handled && failure.transition.Applied());
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+
+    assert(!orchestrator
+                .Handle(Status("MSG-AUTO-RECOVERY-INPUT", "PI-INPUT-01", "RUNNING", mqtt::ConnectionState::kOnline,
+                               std::nullopt))
+                .handled);
+    assert(!orchestrator
+                .Handle(Status("MSG-AUTO-RECOVERY-VISION", "PI-VISION-01", "WAITING_FOR_PRODUCT",
+                               mqtt::ConnectionState::kOnline, std::nullopt))
+                .handled);
+    assert(!orchestrator
+                .Handle(Status("MSG-AUTO-RECOVERY-GRIPPER", "PI-GRIPPER-01", "RUNNING", mqtt::ConnectionState::kOnline,
+                               std::nullopt))
+                .handled);
+    assert(!orchestrator
+                .Handle(Status("MSG-AUTO-RECOVERY-SORTING", "PI-SORTING-01", "RUNNING", mqtt::ConnectionState::kOnline,
+                               std::nullopt))
+                .handled);
+
+    const auto unknown_position =
+        orchestrator.Handle(Status("MSG-AUTO-RECOVERY-LT-UNKNOWN", "PI-LT-01", "POSITION_UNKNOWN",
+                                   mqtt::ConnectionState::kOnline, std::nullopt, true));
+    assert(unknown_position.handled && unknown_position.transition.Applied());
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+
+    const auto recovered = orchestrator.Handle(
+        Status("MSG-AUTO-RECOVERY-LT-READY", "PI-LT-01", "IDLE", mqtt::ConnectionState::kOnline, std::nullopt));
+    assert(recovered.handled && recovered.transition.Applied());
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kIdle);
+    assert(orchestrator.BeginWork("MSG-AUTO-RECOVERY-WORK", kWorkId, "PI-INPUT-01").Applied());
+}
+
+void TestActiveWorkPreventsAutomaticRecovery() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    assert(orchestrator.BeginWork("MSG-ACTIVE-RECOVERY-WORK", kWorkId, "PI-INPUT-01").Applied());
+    assert(orchestrator
+               .Handle(Status("MSG-ACTIVE-RECOVERY-FAILURE", "PI-GRIPPER-01", "FAULT", mqtt::ConnectionState::kOffline,
+                              std::nullopt))
+               .transition.Applied());
+
+    constexpr std::array healthy_nodes{
+        std::pair{ "PI-INPUT-01", "RUNNING" },   std::pair{ "PI-VISION-01", "WAITING_FOR_PRODUCT" },
+        std::pair{ "PI-GRIPPER-01", "RUNNING" }, std::pair{ "PI-SORTING-01", "RUNNING" },
+        std::pair{ "PI-LT-01", "IDLE" },
+    };
+    for (std::size_t index = 0; index < healthy_nodes.size(); ++index) {
+        static_cast<void>(orchestrator.Handle(Status("MSG-ACTIVE-RECOVERY-HEALTHY-" + std::to_string(index),
+                                                     healthy_nodes[index].first, healthy_nodes[index].second,
+                                                     mqtt::ConnectionState::kOnline, std::nullopt)));
+    }
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kFailed);
+}
+
 void TestDeviceEmergencyStopPreservesEmergencyState() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-ESTOP-WORK", kWorkId, "PI-INPUT-01").Applied());
@@ -690,6 +749,8 @@ int main() {
     TestInputOfflineStatusStopsTheProcess();
     TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess();
     TestHealthyStoppedNodesDoNotFailTheProcess();
+    TestIdleSystemRecoversAfterEveryNodeReportsHealthy();
+    TestActiveWorkPreventsAutomaticRecovery();
     TestDeviceEmergencyStopPreservesEmergencyState();
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();

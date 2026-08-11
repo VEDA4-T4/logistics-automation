@@ -8,6 +8,7 @@
 
 #include "logistics/central_server/homography.hpp"
 #include "logistics/central_server/process_state_machine.hpp"
+#include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
 namespace logistics::central_server {
@@ -98,11 +99,15 @@ private:
                                                               std::string_view timestamp);
     void AppendDownstreamCommands(ProcessOrchestrationResult& result, const WorkProcessSnapshot& work,
                                   std::string_view timestamp);
+    void RememberDeviceHealth(std::string_view device_id, contracts::DeviceStateMeaning meaning,
+                              const contracts::mqtt::DeviceStatusPayload& status);
+    [[nodiscard]] bool AllProcessDevicesHealthy() const;
     [[nodiscard]] std::string NextMessageId();
 
     ProcessOrchestratorConfig config_;
     HomographyTransformer homography_;
     std::unordered_map<std::string, GripperTarget> gripper_targets_;
+    std::unordered_map<std::string, bool> device_health_;
     ProcessStateMachine state_machine_;
     std::uint64_t message_sequence_{};
     std::uint64_t revision_{};

@@ -390,6 +390,17 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         const auto role = DeviceRoleForSource(config_, message.source_id);
         const auto meaning = role.has_value() ? contracts::DeviceStateMeaningFor(*role, current_state)
                                               : contracts::DeviceStateMeaning::kUnknown;
+        if (role.has_value()) {
+            RememberDeviceHealth(message.source_id, meaning, *status);
+            if (machine.SystemState() == ProcessSystemState::kError && machine.ActiveWorks().empty() &&
+                AllProcessDevicesHealthy()) {
+                return {
+                    .handled = true,
+                    .transition = machine.ClearSystemFailureIfIdle(),
+                    .commands = {},
+                };
+            }
+        }
         const bool expected_position_reset =
             machine.SystemState() == ProcessSystemState::kRecovery && role == contracts::DeviceRole::kLineTracer &&
             current_state == "POSITION_UNKNOWN" && status->status == mqtt::ConnectionState::kOnline &&
@@ -454,6 +465,9 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             return NotHandled();
         }
         if (!error->job_id.has_value()) {
+            if (DeviceRoleForSource(config_, message.source_id).has_value()) {
+                device_health_.insert_or_assign(message.source_id, false);
+            }
             return {
                 .handled = true,
                 .transition = machine.ApplySystemFailure(reason),
@@ -518,6 +532,27 @@ void ProcessOrchestrator::AppendDownstreamCommands(ProcessOrchestrationResult& r
         MakeDestinationCommand(work.work_id, work.destination, config_.line_tracer_device_id, std::nullopt, timestamp));
     result.commands.push_back(MakeGripperCommand(
         work.work_id, work.destination, target == gripper_targets_.end() ? nullptr : &target->second, timestamp));
+}
+
+void ProcessOrchestrator::RememberDeviceHealth(std::string_view device_id, contracts::DeviceStateMeaning meaning,
+                                               const mqtt::DeviceStatusPayload& status) {
+    const bool healthy_state =
+        meaning == contracts::DeviceStateMeaning::kIdle || meaning == contracts::DeviceStateMeaning::kWorking ||
+        meaning == contracts::DeviceStateMeaning::kStopped || meaning == contracts::DeviceStateMeaning::kCompleted;
+    device_health_.insert_or_assign(std::string(device_id), status.status == mqtt::ConnectionState::kOnline &&
+                                                                !status.error_code.has_value() && healthy_state);
+}
+
+bool ProcessOrchestrator::AllProcessDevicesHealthy() const {
+    const std::array required_devices{
+        std::string_view(config_.input_device_id),       std::string_view(config_.vision_device_id),
+        std::string_view(config_.gripper_device_id),     std::string_view(config_.sorting_device_id),
+        std::string_view(config_.line_tracer_device_id),
+    };
+    return std::ranges::all_of(required_devices, [this](std::string_view device_id) {
+        const auto health = device_health_.find(std::string(device_id));
+        return health != device_health_.end() && health->second;
+    });
 }
 
 ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_view work_id,
