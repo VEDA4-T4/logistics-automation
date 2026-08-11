@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QLayoutItem>
 #include <QMouseEvent>
+#include <QResizeEvent>
 #include <QSizePolicy>
 #include <QStyle>
 #include <QTimer>
@@ -275,6 +276,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     timestamp_timer_->start();
     refreshOverall();
     refreshControlTargetSelection();
+    QTimer::singleShot(0, this, [this] { updateCardLayout(true); });
 }
 
 void OperationsDashboardPanel::setState(const OperationsDashboardState& state) {
@@ -343,6 +345,11 @@ bool OperationsDashboardPanel::eventFilter(QObject* watched, QEvent* event) {
         }
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void OperationsDashboardPanel::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    updateCardLayout();
 }
 
 OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createProcessCard(
@@ -417,11 +424,45 @@ void OperationsDashboardPanel::rebuildProcessCards() {
     for (qsizetype index = 0; index < processes_.size(); ++index) {
         const auto& process = processes_[index];
         auto widgets = createProcessCard(process);
-        process_layout_->addWidget(widgets.card, 0, static_cast<int>(index) + 1);
-        process_layout_->setColumnStretch(static_cast<int>(index) + 1, 1);
         process_cards_.insert(process.key, widgets);
     }
+    updateCardLayout(true);
     refreshControlTargetSelection();
+}
+
+void OperationsDashboardPanel::updateCardLayout(bool force) {
+    constexpr int kWideLayoutBreakpoint = 1400;
+    const int columns = width() >= kWideLayoutBreakpoint ? 6 : 3;
+    if (!force && card_column_count_ == columns) {
+        return;
+    }
+    card_column_count_ = columns;
+
+    QList<QWidget*> cards{ overall_card_ };
+    for (const auto& process : processes_) {
+        const auto card = process_cards_.constFind(process.key);
+        if (card != process_cards_.cend()) {
+            cards.append(card->card);
+        }
+    }
+    for (auto* card : cards) {
+        process_layout_->removeWidget(card);
+    }
+    for (qsizetype index = 0; index < cards.size(); ++index) {
+        process_layout_->addWidget(cards[index], static_cast<int>(index) / columns, static_cast<int>(index) % columns);
+    }
+    for (int column = 0; column < 6; ++column) {
+        process_layout_->setColumnStretch(column, column < columns ? 1 : 0);
+    }
+
+    const bool two_rows = cards.size() > columns;
+    overall_updated_at_->setVisible(!two_rows);
+    for (auto iterator = process_cards_.begin(); iterator != process_cards_.end(); ++iterator) {
+        iterator->device_and_updated_at->setVisible(!two_rows);
+    }
+    setMinimumHeight(two_rows ? 148 : 104);
+    setMaximumHeight(two_rows ? 168 : 132);
+    updateGeometry();
 }
 
 void OperationsDashboardPanel::refreshOverall() {

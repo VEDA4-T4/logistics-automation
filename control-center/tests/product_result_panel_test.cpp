@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QSizePolicy>
+#include <QStackedLayout>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -92,14 +93,24 @@ int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
 
     logistics::control_center::ProductResultPanel panel(QUrl(QStringLiteral("http://127.0.0.1/")));
-    int empty_value_count = 0;
+    int awaiting_value_count = 0;
     for (const auto* label : panel.findChildren<QLabel*>()) {
-        if (label->text() == QStringLiteral("데이터 없음")) {
-            assert(label->styleSheet().contains(QStringLiteral("color:#cca700")));
-            ++empty_value_count;
+        if (label->text() == QStringLiteral("—")) {
+            assert(label->styleSheet().contains(QStringLiteral("color:#6e6e6e")));
+            ++awaiting_value_count;
         }
     }
-    assert(empty_value_count == 7);
+    assert(awaiting_value_count == 7);
+    auto* work_stack = panel.findChild<QStackedLayout*>(QStringLiteral("activeWorkStack"));
+    auto* work_empty_state = panel.findChild<QLabel*>(QStringLiteral("activeWorkListEmptyState"));
+    auto* image_empty_state = panel.findChild<QLabel*>(QStringLiteral("productImage"));
+    auto* detail_value = panel.findChild<QLabel*>(QStringLiteral("productDetailValue"));
+    assert(work_stack != nullptr && work_empty_state != nullptr);
+    assert(image_empty_state != nullptr && detail_value != nullptr);
+    assert(work_stack->currentWidget() == work_empty_state);
+    assert(work_empty_state->text() == QStringLiteral("진행 중인 작업 없음"));
+    assert(work_empty_state->styleSheet() == image_empty_state->styleSheet());
+    assert(detail_value->text() == QStringLiteral("상품 데이터 수신 대기 중"));
 
     logistics::control_center::CurrentProduct product;
     product.work_id = QStringLiteral("work-20260804-very-long-identifier");
@@ -158,6 +169,7 @@ int main(int argc, char* argv[]) {
     auto* work_list = panel.findChild<QListWidget*>(QStringLiteral("activeWorkList"));
     auto* tracking = panel.findChild<QLabel*>(QStringLiteral("workTrackingStatus"));
     assert(work_list != nullptr && work_list->count() == 1);
+    assert(work_stack->currentWidget() == work_list);
     assert(tracking != nullptr);
     assert(tracking->wordWrap());
     work_list->setCurrentRow(0);
@@ -168,6 +180,7 @@ int main(int argc, char* argv[]) {
     second_product.processing_result = logistics::control_center::ProductProcessingResult::Success;
     panel.setActiveWorks({ product, second_product }, { line_tracer });
     assert(work_list->count() == 0);
+    assert(work_stack->currentWidget() == work_empty_state);
     for (const auto* label : panel.findChildren<QLabel*>()) {
         assert(label->text() != product.work_id);
         assert(label->text() != second_product.work_id);

@@ -10,6 +10,7 @@ class QFrame;
 class QGridLayout;
 class QHBoxLayout;
 class QLabel;
+class QResizeEvent;
 class QTimer;
 
 namespace logistics::control_center {
@@ -29,6 +30,7 @@ signals:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     struct ProcessCardWidgets {
@@ -42,6 +44,7 @@ private:
 
     ProcessCardWidgets createProcessCard(const ProcessUnitStatus& process);
     void rebuildProcessCards();
+    void updateCardLayout(bool force = false);
     void refreshOverall();
     void refreshProcesses();
     void refreshTimestamps();
@@ -60,6 +63,7 @@ private:
     QList<ProcessUnitStatus> processes_;
     QMap<QString, ProcessCardWidgets> process_cards_;
     QString selected_control_target_{ QStringLiteral("SYSTEM") };
+    int card_column_count_{ 0 };
 };
 
 }  // namespace logistics::control_center
