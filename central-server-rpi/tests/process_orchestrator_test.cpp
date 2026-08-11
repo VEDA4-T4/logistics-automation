@@ -399,6 +399,27 @@ void TestIdleEmergencyStopRecoversAfterEveryNodeReportsHealthy() {
     assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
 }
 
+void TestFailedWorkIsDiscardedAfterServerRestart() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    std::vector works{
+        central_server::WorkProcessSnapshot{
+            .work_id = kWorkId,
+            .stage = central_server::WorkStage::kFailed,
+            .suspended_stage = central_server::WorkStage::kInputDetected,
+            .destination = "1",
+            .last_source_id = "PI-INPUT-01",
+            .failure_reason = "input conveyor fault",
+        },
+    };
+
+    const auto restore =
+        orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kError, std::move(works), {}, 12);
+    assert(restore.restored);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+    assert(orchestrator.StateMachine().ActiveWorks().empty());
+    assert(!orchestrator.StateMachine().FindWork(kWorkId).has_value());
+}
+
 void TestDeviceEmergencyStopPreservesEmergencyState() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-ESTOP-WORK", kWorkId, "PI-INPUT-01").Applied());
@@ -768,6 +789,7 @@ int main() {
     TestIdleSystemRecoversAfterEveryNodeReportsHealthy();
     TestActiveWorkPreventsAutomaticRecovery();
     TestIdleEmergencyStopRecoversAfterEveryNodeReportsHealthy();
+    TestFailedWorkIsDiscardedAfterServerRestart();
     TestDeviceEmergencyStopPreservesEmergencyState();
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();

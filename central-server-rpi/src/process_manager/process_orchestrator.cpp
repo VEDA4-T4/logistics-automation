@@ -317,6 +317,7 @@ ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
     ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
     std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence) {
     std::vector<InvalidatedRestoredWork> invalidated_works;
+    std::erase_if(works, [](const WorkProcessSnapshot& work) { return work.stage == WorkStage::kFailed; });
     if (!homography_.Enabled()) {
         gripper_targets.clear();
     } else {
