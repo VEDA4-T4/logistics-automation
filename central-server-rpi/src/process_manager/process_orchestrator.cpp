@@ -385,13 +385,29 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         event = Event(succeeded ? ProcessEventType::kProductInfoReady : ProcessEventType::kProductInfoFailed, message,
                       product->work_id, product->message.value_or("product information is incomplete"));
         event.destination = product->destination;
+    } else if (const auto* heartbeat = mqtt::GetPayload<mqtt::HeartbeatPayload>(message)) {
+        const auto role = DeviceRoleForSource(config_, message.source_id);
+        if (!role.has_value()) {
+            return NotHandled();
+        }
+        const auto meaning = contracts::DeviceStateMeaningFor(*role, Uppercase(heartbeat->current_state));
+        RememberDeviceHealth(message.source_id, meaning, heartbeat->status, heartbeat->error_code);
+        if (machine.SystemState() == ProcessSystemState::kError && machine.ActiveWorks().empty() &&
+            AllProcessDevicesHealthy()) {
+            return {
+                .handled = true,
+                .transition = machine.ClearSystemFailureIfIdle(),
+                .commands = {},
+            };
+        }
+        return NotHandled();
     } else if (const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(message)) {
         const std::string current_state = Uppercase(status->current_state);
         const auto role = DeviceRoleForSource(config_, message.source_id);
         const auto meaning = role.has_value() ? contracts::DeviceStateMeaningFor(*role, current_state)
                                               : contracts::DeviceStateMeaning::kUnknown;
         if (role.has_value()) {
-            RememberDeviceHealth(message.source_id, meaning, *status);
+            RememberDeviceHealth(message.source_id, meaning, status->status, status->error_code);
             if (machine.SystemState() == ProcessSystemState::kError && machine.ActiveWorks().empty() &&
                 AllProcessDevicesHealthy()) {
                 return {
@@ -535,12 +551,13 @@ void ProcessOrchestrator::AppendDownstreamCommands(ProcessOrchestrationResult& r
 }
 
 void ProcessOrchestrator::RememberDeviceHealth(std::string_view device_id, contracts::DeviceStateMeaning meaning,
-                                               const mqtt::DeviceStatusPayload& status) {
+                                               mqtt::ConnectionState connection_state,
+                                               const std::optional<std::string>& error_code) {
     const bool healthy_state =
         meaning == contracts::DeviceStateMeaning::kIdle || meaning == contracts::DeviceStateMeaning::kWorking ||
         meaning == contracts::DeviceStateMeaning::kStopped || meaning == contracts::DeviceStateMeaning::kCompleted;
-    device_health_.insert_or_assign(std::string(device_id), status.status == mqtt::ConnectionState::kOnline &&
-                                                                !status.error_code.has_value() && healthy_state);
+    device_health_.insert_or_assign(std::string(device_id), connection_state == mqtt::ConnectionState::kOnline &&
+                                                                !error_code.has_value() && healthy_state);
 }
 
 bool ProcessOrchestrator::AllProcessDevicesHealthy() const {

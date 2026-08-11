@@ -100,7 +100,8 @@ private:
     void AppendDownstreamCommands(ProcessOrchestrationResult& result, const WorkProcessSnapshot& work,
                                   std::string_view timestamp);
     void RememberDeviceHealth(std::string_view device_id, contracts::DeviceStateMeaning meaning,
-                              const contracts::mqtt::DeviceStatusPayload& status);
+                              contracts::mqtt::ConnectionState connection_state,
+                              const std::optional<std::string>& error_code);
     [[nodiscard]] bool AllProcessDevicesHealthy() const;
     [[nodiscard]] std::string NextMessageId();
 

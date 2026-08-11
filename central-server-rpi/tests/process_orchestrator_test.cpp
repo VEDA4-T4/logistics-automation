@@ -43,6 +43,17 @@ mqtt::MqttMessage Status(std::string id, std::string source, std::string state,
                    });
 }
 
+mqtt::MqttMessage Heartbeat(std::string id, std::string source, std::string state) {
+    return Message(std::move(id), mqtt::MessageType::kHeartbeat, std::move(source),
+                   mqtt::HeartbeatPayload{
+                       .status = mqtt::ConnectionState::kOnline,
+                       .current_state = std::move(state),
+                       .uptime = 1,
+                       .job_id = std::nullopt,
+                       .error_code = std::nullopt,
+                   });
+}
+
 void TestEventFlowCreatesCommandsForEachNode() {
     central_server::ProcessOrchestrator orchestrator({
         .enabled = true,
@@ -331,31 +342,17 @@ void TestIdleSystemRecoversAfterEveryNodeReportsHealthy() {
     assert(failure.handled && failure.transition.Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
 
-    assert(!orchestrator
-                .Handle(Status("MSG-AUTO-RECOVERY-INPUT", "PI-INPUT-01", "RUNNING", mqtt::ConnectionState::kOnline,
-                               std::nullopt))
-                .handled);
-    assert(!orchestrator
-                .Handle(Status("MSG-AUTO-RECOVERY-VISION", "PI-VISION-01", "WAITING_FOR_PRODUCT",
-                               mqtt::ConnectionState::kOnline, std::nullopt))
-                .handled);
-    assert(!orchestrator
-                .Handle(Status("MSG-AUTO-RECOVERY-GRIPPER", "PI-GRIPPER-01", "RUNNING", mqtt::ConnectionState::kOnline,
-                               std::nullopt))
-                .handled);
-    assert(!orchestrator
-                .Handle(Status("MSG-AUTO-RECOVERY-SORTING", "PI-SORTING-01", "RUNNING", mqtt::ConnectionState::kOnline,
-                               std::nullopt))
-                .handled);
+    assert(!orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-INPUT", "PI-INPUT-01", "STOPPED")).handled);
+    assert(!orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-VISION", "PI-VISION-01", "STOPPED")).handled);
+    assert(!orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-GRIPPER", "PI-GRIPPER-01", "STOPPED")).handled);
+    assert(!orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-SORTING", "PI-SORTING-01", "STOPPED")).handled);
 
     const auto unknown_position =
-        orchestrator.Handle(Status("MSG-AUTO-RECOVERY-LT-UNKNOWN", "PI-LT-01", "POSITION_UNKNOWN",
-                                   mqtt::ConnectionState::kOnline, std::nullopt, true));
-    assert(unknown_position.handled && unknown_position.transition.Applied());
+        orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-LT-UNKNOWN", "PI-LT-01", "POSITION_UNKNOWN"));
+    assert(!unknown_position.handled);
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
 
-    const auto recovered = orchestrator.Handle(
-        Status("MSG-AUTO-RECOVERY-LT-READY", "PI-LT-01", "IDLE", mqtt::ConnectionState::kOnline, std::nullopt));
+    const auto recovered = orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-LT-READY", "PI-LT-01", "IDLE"));
     assert(recovered.handled && recovered.transition.Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kIdle);
     assert(orchestrator.BeginWork("MSG-AUTO-RECOVERY-WORK", kWorkId, "PI-INPUT-01").Applied());
