@@ -14,7 +14,7 @@ class QResizeEvent;
 
 namespace logistics::control_center {
 
-enum class FactoryNodeVisualState { Disconnected, EmergencyStop, Error, Working, Running, Waiting };
+enum class FactoryNodeVisualState { Disconnected, EmergencyStop, Error, Recovery, Stopped, Working, Running, Waiting };
 enum class FactoryMotionPhase {
     None,
     InputConveyor,
@@ -75,7 +75,9 @@ public:
     [[nodiscard]] QPointF lineTracerJunctionPosition(int route) const;
     [[nodiscard]] QPointF lineTracerDestinationPosition(int route) const;
     [[nodiscard]] QList<QPointF> lineArrowPositions() const;
+    [[nodiscard]] QRectF nodeSelectionRect(const QString& process_key) const;
     [[nodiscard]] qreal gripperAngle() const;
+    [[nodiscard]] QPointF gripperPivotPosition() const;
     [[nodiscard]] bool gripperProductVisible() const;
     [[nodiscard]] QPointF gripperProductPosition() const;
     [[nodiscard]] qreal sortingServoAngle() const;

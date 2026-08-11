@@ -13,6 +13,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QStackedLayout>
 #include <QTableView>
 #include <cassert>
 #include <utility>
@@ -58,9 +59,10 @@ int main(int argc, char* argv[]) {
     auto* unacknowledged = panel.findChild<QCheckBox*>(QStringLiteral("logUnacknowledgedOnly"));
     auto* acknowledge_all = panel.findChild<QPushButton*>(QStringLiteral("acknowledgeAllLogsButton"));
     auto* empty_state = panel.findChild<QLabel*>(QStringLiteral("operationalLogEmptyState"));
+    auto* table_stack = empty_state == nullptr ? nullptr : qobject_cast<QStackedLayout*>(empty_state->parentWidget()->layout());
     auto* result_count = panel.findChild<QLabel*>(QStringLiteral("operationalLogResultCount"));
     assert(table != nullptr && severity != nullptr && query != nullptr && unacknowledged != nullptr &&
-           acknowledge_all != nullptr && empty_state != nullptr && result_count != nullptr);
+           acknowledge_all != nullptr && empty_state != nullptr && table_stack != nullptr && result_count != nullptr);
     assert(panel.findChild<QPushButton*>(QStringLiteral("acknowledgeLogButton")) == nullptr);
     assert(panel.findChild<QPushButton*>(QStringLiteral("showAllUnacknowledgedLogsButton")) == nullptr);
     assert(table->model()->rowCount() == 4);
@@ -87,11 +89,13 @@ int main(int argc, char* argv[]) {
     application.processEvents();
     assert(table->model()->rowCount() == 0);
     assert(empty_state->isVisible());
+    assert(table_stack->currentWidget() == empty_state);
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
     query->clear();
     application.processEvents();
     assert(table->model()->rowCount() == 4);
     assert(!empty_state->isVisible());
+    assert(table_stack->currentWidget() == table);
 
     table->doubleClicked(table->model()->index(0, 3));
     application.processEvents();
@@ -210,6 +214,7 @@ int main(int argc, char* argv[]) {
     panel.reloadEntries(state.activeAlertCount());
     application.processEvents();
     assert(empty_state != nullptr && empty_state->isVisible());
+    assert(table_stack->currentWidget() == empty_state);
     assert(empty_state->text() == QStringLiteral("표시할 운영 로그가 없습니다"));
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
 

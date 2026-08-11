@@ -498,9 +498,9 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     layout->addLayout(secondary_filters);
 
     auto* table_surface = new QWidget(this);
-    auto* table_stack = new QStackedLayout(table_surface);
-    table_stack->setContentsMargins(0, 0, 0, 0);
-    table_stack->setStackingMode(QStackedLayout::StackAll);
+    table_stack_ = new QStackedLayout(table_surface);
+    table_stack_->setContentsMargins(0, 0, 0, 0);
+    table_stack_->setStackingMode(QStackedLayout::StackAll);
     table_model_ = new OperationalLogTableModel(this);
     filter_model_ = new OperationalLogFilterProxyModel(this);
     filter_model_->setSourceModel(table_model_);
@@ -524,13 +524,13 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-    table_stack->addWidget(table_);
-    auto* empty_state = new QLabel(QStringLiteral("표시할 운영 로그가 없습니다"), table_surface);
-    empty_state->setObjectName(QStringLiteral("operationalLogEmptyState"));
-    empty_state->setAlignment(Qt::AlignCenter);
-    empty_state->setAttribute(Qt::WA_TransparentForMouseEvents);
-    empty_state->setStyleSheet("color:#777777;font-size:11px;");
-    table_stack->addWidget(empty_state);
+    table_stack_->addWidget(table_);
+    empty_state_ = new QLabel(QStringLiteral("표시할 운영 로그가 없습니다"), table_surface);
+    empty_state_->setObjectName(QStringLiteral("operationalLogEmptyState"));
+    empty_state_->setAlignment(Qt::AlignCenter);
+    empty_state_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    empty_state_->setStyleSheet("color:#777777;font-size:11px;");
+    table_stack_->addWidget(empty_state_);
     layout->addWidget(table_surface, 1);
 
     connect(severity_filter_, &QComboBox::currentIndexChanged, this, [this]() { applyFilter(); });
@@ -719,9 +719,9 @@ void OperationalLogPanel::updateSummary() {
     alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(displayed_alert_count));
     alert_count_->setVisible(displayed_alert_count > 0);
     acknowledge_all_button_->setEnabled(displayed_alert_count > 0);
-    if (auto* empty_state = findChild<QLabel*>(QStringLiteral("operationalLogEmptyState")); empty_state != nullptr) {
-        empty_state->setVisible(filtered_count == 0);
-    }
+    const bool is_empty = filtered_count == 0;
+    empty_state_->setVisible(is_empty);
+    table_stack_->setCurrentWidget(is_empty ? static_cast<QWidget*>(empty_state_) : static_cast<QWidget*>(table_));
 }
 
 QString OperationalLogPanel::entryIdAtRow(int row) const {

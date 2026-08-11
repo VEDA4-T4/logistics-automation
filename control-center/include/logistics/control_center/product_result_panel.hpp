@@ -11,6 +11,7 @@ class QLabel;
 class QListWidget;
 class QNetworkAccessManager;
 class QNetworkReply;
+class QEvent;
 class QResizeEvent;
 
 namespace logistics::control_center {
@@ -22,6 +23,7 @@ public:
     void setActiveWorks(const QList<CurrentProduct>& products, const QList<ProcessUnitStatus>& processes);
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
 private:

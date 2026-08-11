@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QFrame>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QRegularExpression>
@@ -202,10 +203,9 @@ int main(int argc, char* argv[]) {
     }
     assert(has_product_waiting_state);
 
-    QString selected_target;
-    QObject::connect(
-        &panel, &logistics::control_center::OperationsDashboardPanel::controlTargetSelected,
-        [&selected_target](const QString& target_device_id, const QString&) { selected_target = target_device_id; });
+    assert(state.applyEnvelope(DeviceEnvelope("VISION-STOPPED", "PI-VISION-01", "STOPPED", "", 8)).applied);
+    panel.setState(state);
+    application.processEvents();
     QFrame* vision_card = nullptr;
     for (auto* card : panel.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
         if (card->property("controlTargetDeviceId").toString() == QStringLiteral("PI-VISION-01")) {
@@ -214,11 +214,32 @@ int main(int argc, char* argv[]) {
         }
     }
     assert(vision_card != nullptr);
+    auto* vision_status = vision_card->findChild<QLabel*>(QStringLiteral("processVisualStatus"));
+    assert(vision_status != nullptr && vision_status->text() == QStringLiteral("정지"));
+    assert(vision_status->styleSheet().contains(QStringLiteral("#cca700")));
+
+    assert(state.applyEnvelope(DeviceEnvelope("VISION-RECOVERY", "PI-VISION-01", "RECOVERY", "", 9)).applied);
+    panel.setState(state);
+    application.processEvents();
+    assert(vision_status->text() == QStringLiteral("복구 중"));
+    assert(vision_status->styleSheet().contains(QStringLiteral("#75beff")));
+
+    QString selected_target;
+    QObject::connect(
+        &panel, &logistics::control_center::OperationsDashboardPanel::controlTargetSelected,
+        [&selected_target](const QString& target_device_id, const QString&) { selected_target = target_device_id; });
     QMouseEvent select_vision(QEvent::MouseButtonRelease, QPointF(4, 4), QPointF(4, 4), QPointF(4, 4), Qt::LeftButton,
                               Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(vision_card, &select_vision);
     assert(selected_target == QStringLiteral("PI-VISION-01"));
     assert(vision_card->property("selectedControlTarget").toBool());
+    assert(vision_card->focusPolicy() == Qt::StrongFocus);
+    assert(!vision_card->accessibleName().isEmpty());
+
+    selected_target.clear();
+    QKeyEvent select_vision_with_keyboard(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    QApplication::sendEvent(vision_card, &select_vision_with_keyboard);
+    assert(selected_target == QStringLiteral("PI-VISION-01"));
 
     state.markMqttDisconnected(QDateTime::currentDateTimeUtc());
     panel.setState(state);
