@@ -2,8 +2,8 @@
 
 #include <QApplication>
 #include <QColor>
-#include <QGraphicsObject>
 #include <QGraphicsLineItem>
+#include <QGraphicsObject>
 #include <QGraphicsRectItem>
 #include <QGraphicsScene>
 #include <QGraphicsSimpleTextItem>
@@ -232,8 +232,8 @@ int main(int argc, char* argv[]) {
             const auto wrong_visual = BuildFactoryNodeVisual(wrong_process);
             const bool valid_gripper_assignment =
                 wrong_key == QStringLiteral("gripper") && vision_state == QStringLiteral("WORK_ASSIGNED");
-            assert(wrong_visual.state == (valid_gripper_assignment ? FactoryNodeVisualState::Working
-                                                                    : FactoryNodeVisualState::Waiting));
+            assert(wrong_visual.state ==
+                   (valid_gripper_assignment ? FactoryNodeVisualState::Working : FactoryNodeVisualState::Waiting));
             assert(wrong_visual.motion_enabled == valid_gripper_assignment);
         }
     }

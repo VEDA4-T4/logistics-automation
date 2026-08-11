@@ -59,7 +59,8 @@ int main(int argc, char* argv[]) {
     auto* unacknowledged = panel.findChild<QCheckBox*>(QStringLiteral("logUnacknowledgedOnly"));
     auto* acknowledge_all = panel.findChild<QPushButton*>(QStringLiteral("acknowledgeAllLogsButton"));
     auto* empty_state = panel.findChild<QLabel*>(QStringLiteral("operationalLogEmptyState"));
-    auto* table_stack = empty_state == nullptr ? nullptr : qobject_cast<QStackedLayout*>(empty_state->parentWidget()->layout());
+    auto* table_stack =
+        empty_state == nullptr ? nullptr : qobject_cast<QStackedLayout*>(empty_state->parentWidget()->layout());
     auto* result_count = panel.findChild<QLabel*>(QStringLiteral("operationalLogResultCount"));
     assert(table != nullptr && severity != nullptr && query != nullptr && unacknowledged != nullptr &&
            acknowledge_all != nullptr && empty_state != nullptr && table_stack != nullptr && result_count != nullptr);

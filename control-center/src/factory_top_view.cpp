@@ -342,8 +342,7 @@ protected:
     }
 
     void focusInEvent(QFocusEvent* event) override {
-        focus_outline_visible_ = event->reason() == Qt::TabFocusReason ||
-                                 event->reason() == Qt::BacktabFocusReason ||
+        focus_outline_visible_ = event->reason() == Qt::TabFocusReason || event->reason() == Qt::BacktabFocusReason ||
                                  event->reason() == Qt::ShortcutFocusReason;
         QGraphicsObject::focusInEvent(event);
         update();
@@ -494,8 +493,8 @@ struct FactoryTopViewWidget::Impl {
         scene->addItem(vision.group);
         finalizeNode(vision);
 
-        auto& gripper = addNode(QString::fromLatin1(kGripperProcessKey), QStringLiteral("Gripper"),
-                                kGripperPivot - QPointF(5, 5));
+        auto& gripper =
+            addNode(QString::fromLatin1(kGripperProcessKey), QStringLiteral("Gripper"), kGripperPivot - QPointF(5, 5));
         gripper.state_marker->setZValue(10);
         auto* pivot =
             new QGraphicsEllipseItem(QRectF(kGripperPivot.x() - 8, kGripperPivot.y() - 8, 16, 16), gripper.group);
