@@ -449,9 +449,14 @@ void TestInitializeMapsToResetAndClearsActiveJob() {
     assert(status->position_reset);
 }
 
-void TestRecoveryUsesCommonDeviceResetAndClearsActiveJob() {
+void TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
+
+    const std::string active_work_id{ fixture.node->ActiveWorkId() };
+    const std::uint16_t active_uart_job_id = fixture.node->ActiveUartJobId();
+    const std::uint8_t active_route_id = fixture.node->ActiveRouteId();
+    const std::uint8_t current_position = fixture.node->CurrentPosition();
 
     const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
     const uart_frame_t frame = fixture.LastFrame();
@@ -461,7 +466,15 @@ void TestRecoveryUsesCommonDeviceResetAndClearsActiveJob() {
     assert(frame.length == 0U);
     assert(fixture.node->HasActiveJob());
     fixture.AcknowledgeLastFrame();
-    assert(!fixture.node->HasActiveJob());
+    assert(fixture.node->HasActiveJob());
+    assert(fixture.node->ActiveWorkId() == active_work_id);
+    assert(fixture.node->ActiveUartJobId() == active_uart_job_id);
+    assert(fixture.node->ActiveRouteId() == active_route_id);
+    assert(fixture.node->CurrentPosition() == current_position);
+    assert(std::none_of(fixture.reports.begin(), fixture.reports.end(), [](const LineTracerReport& report) {
+        const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&report.data);
+        return status != nullptr && status->current_state == "POSITION_UNKNOWN";
+    }));
 }
 
 void TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault() {
@@ -871,7 +884,7 @@ int main() {
     TestStartAndRestartWithoutActiveJobCompleteLocally();
     TestRestartMapsToResume();
     TestInitializeMapsToResetAndClearsActiveJob();
-    TestRecoveryUsesCommonDeviceResetAndClearsActiveJob();
+    TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob();
     TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault();
     TestPendingSafetyCommandCannotBeOverwritten();
     TestEmergencyStopConfirmationTimesOut();
