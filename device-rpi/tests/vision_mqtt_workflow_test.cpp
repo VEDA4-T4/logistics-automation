@@ -156,43 +156,26 @@ void TestBarcodeSurvivesDetectionConfirmation() {
     assert(!payload->error_code.has_value());
 }
 
-void TestMissingBarcodeProducesFailedResult() {
-    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1, 2);
+void TestMissingBarcodeRetriesUntilRecognitionSucceeds() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
     assert(workflow.Observe(Observation(), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
     assert(!workflow.HasPendingBarcode());
     assert(workflow.AssignWork(WorkCreated()));
-    assert(!workflow.TakeAssignedWork().has_value());
-    assert(!workflow.Observe(Observation(), "IGNORED-01", "2026-07-21T11:00:01Z").has_value());
-    assert(!workflow.TakeAssignedWork().has_value());
-    assert(!workflow.Observe(Observation(), "IGNORED-02", "2026-07-21T11:00:02Z").has_value());
+    for (int attempt = 0; attempt < 120; ++attempt) {
+        assert(!workflow.Observe(Observation(std::nullopt, true), "IGNORED", "2026-07-21T11:00:01Z").has_value());
+        assert(!workflow.TakeAssignedWork().has_value());
+    }
+
+    assert(!workflow.Observe(Observation("8801234567893", true), "IGNORED", "2026-07-21T11:00:02Z").has_value());
     const auto work = workflow.TakeAssignedWork();
     assert(work.has_value());
     const auto barcode =
-        vision::MakeBarcodeDetectedMessage("PI-VISION-01", *work, "MSG-BARCODE-FAIL", "2026-07-21T11:00:02Z");
+        vision::MakeBarcodeDetectedMessage("PI-VISION-01", *work, "MSG-BARCODE-RETRY", "2026-07-21T11:00:02Z");
     const auto* payload = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(barcode);
     assert(payload != nullptr);
-    assert(payload->recognition_status == "FAILED");
-    assert(payload->barcode.empty());
-    assert(payload->message.has_value());
-    assert(payload->error_code == "ERR-VISION-BARCODE-REGION-NOT-DETECTED");
-    assert(payload->failure_stage == "BARCODE_DETECTION");
-}
-
-void TestBarcodeDecodeFailureIdentifiesStage() {
-    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1, 1);
-    assert(workflow.Observe(Observation(std::nullopt, true), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
-    assert(workflow.AssignWork(WorkCreated()));
-    assert(!workflow.Observe(Observation(std::nullopt, true), "IGNORED", "2026-07-21T11:00:01Z").has_value());
-    const auto work = workflow.TakeAssignedWork();
-    assert(work.has_value());
-
-    const auto barcode =
-        vision::MakeBarcodeDetectedMessage("PI-VISION-01", *work, "MSG-BARCODE-FAIL", "2026-07-21T11:00:02Z");
-    const auto* payload = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(barcode);
-    assert(payload != nullptr);
-    assert(payload->recognition_status == "FAILED");
-    assert(payload->error_code == "ERR-VISION-BARCODE-DECODE-FAILED");
-    assert(payload->failure_stage == "BARCODE_DECODE");
+    assert(payload->recognition_status == "SUCCESS");
+    assert(payload->barcode == "8801234567893");
+    assert(!payload->error_code.has_value());
 }
 
 void TestResultOutboxRetriesFromFirstUnsentPublication() {
@@ -345,8 +328,7 @@ void TestStopClearsPendingVisionWork() {
 int main() {
     TestDetectionAssignmentAndResultMessages();
     TestBarcodeSurvivesDetectionConfirmation();
-    TestMissingBarcodeProducesFailedResult();
-    TestBarcodeDecodeFailureIdentifiesStage();
+    TestMissingBarcodeRetriesUntilRecognitionSucceeds();
     TestResultOutboxRetriesFromFirstUnsentPublication();
     TestVisionControlLifecycle();
     TestStopClearsPendingVisionWork();
