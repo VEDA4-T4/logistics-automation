@@ -1,6 +1,7 @@
 #include "logistics/control_center/process_control_panel.hpp"
 
 #include <QApplication>
+#include <QFrame>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
@@ -20,12 +21,19 @@ int main(int argc, char* argv[]) {
     auto* emergency_stop = panel.findChild<QPushButton*>(QStringLiteral("emergencyStopButton"));
     auto* target_label = panel.findChild<QLabel*>(QStringLiteral("processControlTarget"));
     auto* command_status = panel.findChild<QLabel*>(QStringLiteral("commandStatus"));
+    auto* title = panel.findChild<QLabel*>(QStringLiteral("processControlTitle"));
+    auto* connection_hint = panel.findChild<QLabel*>(QStringLiteral("processControlConnectionHint"));
     assert(start != nullptr);
     assert(stop != nullptr);
     assert(recovery != nullptr);
     assert(emergency_stop != nullptr);
     assert(target_label != nullptr);
     assert(command_status != nullptr);
+    assert(title != nullptr);
+    assert(connection_hint != nullptr);
+    assert(panel.findChild<QFrame*>(QStringLiteral("standardCommandGroup")) != nullptr);
+    assert(panel.findChild<QFrame*>(QStringLiteral("recoveryCommandGroup")) != nullptr);
+    assert(panel.findChild<QFrame*>(QStringLiteral("safetyCommandGroup")) != nullptr);
     panel.resize(900, 92);
     panel.show();
     application.processEvents();
@@ -35,10 +43,12 @@ int main(int argc, char* argv[]) {
     assert(start->height() == 28);
     assert(stop->height() == 28);
     assert(recovery->height() == 28);
+    assert(recovery->width() == 78);
     assert(emergency_stop->height() == 32);
-    for (const auto* widget : { static_cast<QWidget*>(start), static_cast<QWidget*>(stop),
-                                static_cast<QWidget*>(recovery), static_cast<QWidget*>(emergency_stop),
-                                static_cast<QWidget*>(target_label), static_cast<QWidget*>(command_status) }) {
+    for (const auto* widget :
+         { static_cast<QWidget*>(start), static_cast<QWidget*>(stop), static_cast<QWidget*>(recovery),
+           static_cast<QWidget*>(emergency_stop), static_cast<QWidget*>(title), static_cast<QWidget*>(target_label),
+           static_cast<QWidget*>(command_status), static_cast<QWidget*>(connection_hint) }) {
         const QRect rect(widget->mapTo(&panel, QPoint{}), widget->size());
         assert(!rect.isEmpty());
         assert(panel.rect().contains(rect));
@@ -59,9 +69,23 @@ int main(int argc, char* argv[]) {
     assert(recovery->text() == QStringLiteral("전체 복구"));
     assert(panel.findChild<QPushButton*>(QStringLiteral("restartButton")) == nullptr);
     assert(panel.findChild<QPushButton*>(QStringLiteral("initializeButton")) == nullptr);
-    assert(!recovery->isEnabled());
+    for (const auto* button : { start, stop, recovery, emergency_stop }) {
+        assert(!button->isEnabled());
+        assert(button->toolTip().contains(QStringLiteral("MQTT")));
+    }
+    assert(panel.styleSheet().contains(QStringLiteral("QPushButton#emergencyStopButton:disabled")));
 
+    const auto information_geometry = [&panel, title, target_label, command_status, connection_hint] {
+        QList<QRect> geometry;
+        for (const auto* widget : { title, target_label, command_status, connection_hint }) {
+            geometry.append(QRect(widget->mapTo(&panel, QPoint{}), widget->size()));
+        }
+        return geometry;
+    };
+    const auto disconnected_information_geometry = information_geometry();
     panel.setMqttConnected(true);
+    application.processEvents();
+    assert(information_geometry() == disconnected_information_geometry);
     assert(!start->isEnabled());
     assert(!recovery->isEnabled());
 
@@ -97,7 +121,22 @@ int main(int argc, char* argv[]) {
         },
     };
     panel.setProcessStates(logistics::control_center::OverallProcessState::Error, processes);
+    const QList<int> system_button_x_positions{
+        start->mapTo(&panel, QPoint{}).x(),
+        stop->mapTo(&panel, QPoint{}).x(),
+        recovery->mapTo(&panel, QPoint{}).x(),
+        emergency_stop->mapTo(&panel, QPoint{}).x(),
+    };
     panel.setControlTarget(QStringLiteral("PI-VISION-01"), QStringLiteral("비전 처리"));
+    application.processEvents();
+    assert(information_geometry() == disconnected_information_geometry);
+    const QList<int> node_button_x_positions{
+        start->mapTo(&panel, QPoint{}).x(),
+        stop->mapTo(&panel, QPoint{}).x(),
+        recovery->mapTo(&panel, QPoint{}).x(),
+        emergency_stop->mapTo(&panel, QPoint{}).x(),
+    };
+    assert(node_button_x_positions == system_button_x_positions);
     assert(panel.selectedTargetDeviceId() == QStringLiteral("PI-VISION-01"));
     assert(target_label->text() == QStringLiteral("제어 대상 · 비전 처리"));
     assert(start->isEnabled());

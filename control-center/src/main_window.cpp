@@ -509,9 +509,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
     operations_workspace->addWidget(video_container);
     operations_workspace->addWidget(factory_top_view_);
-    operations_workspace->setStretchFactor(0, 1);
-    operations_workspace->setStretchFactor(1, 1);
-    operations_workspace->setSizes({ 640, 640 });
+    operations_workspace->setStretchFactor(0, 11);
+    operations_workspace->setStretchFactor(1, 9);
+    operations_workspace->setSizes({ 704, 576 });
 
     auto* detail_splitter = new QSplitter(Qt::Horizontal, central_widget);
     detail_splitter->setObjectName(QStringLiteral("detailSplitter"));
@@ -1193,7 +1193,7 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
             reconnect_timers_[channel]->stop();
             status_labels_[channel]->setText(QStringLiteral("연결 중…\n영상을 불러오는 중입니다"));
             status_labels_[channel]->setStyleSheet(
-                "color:#cca700;background-color:transparent;font-size:22px;font-weight:700;");
+                "color:#cca700;background-color:transparent;border:0;font-size:22px;font-weight:700;");
             status_labels_[channel]->setToolTip({});
             state_overlays_[channel]->setToolTip({});
             break;
@@ -1218,7 +1218,7 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
                 }
             }
             status_labels_[channel]->setStyleSheet(
-                "color:#f14c4c;background-color:transparent;font-size:22px;font-weight:700;");
+                "color:#f14c4c;background-color:transparent;border:0;font-size:22px;font-weight:700;");
             status_labels_[channel]->setToolTip(detail);
             state_overlays_[channel]->setToolTip(detail);
             if (previous_state != ChannelState::Error) {

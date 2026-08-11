@@ -269,7 +269,8 @@ bool CheckConfiguredSingleChannel(QApplication& application) {
         window.resize(size);
         window.show();
         application.processEvents();
-        if (qAbs(video->width() - factory->width()) > 2) {
+        const int ratio_error = qAbs(video->width() * 9 - factory->width() * 11);
+        if (video->width() <= factory->width() || ratio_error > 40) {
             std::fprintf(stderr, "main_window_layout_test: single channel at %dx%d produced %d/%d workspace widths\n",
                          size.width(), size.height(), video->width(), factory->width());
             return false;
@@ -346,6 +347,11 @@ int main(int argc, char* argv[]) {
         }
     }
     if (!check(video_cells.size() == 1, "expected one stacked video channel cell")) {
+        return 1;
+    }
+    auto* channel_status = window.findChild<QLabel*>(QStringLiteral("channelStatus1"));
+    if (!check(channel_status != nullptr && channel_status->styleSheet().contains(QStringLiteral("border:0")),
+               "video connection status label border is not transparent")) {
         return 1;
     }
     auto* video_viewport = video_cells.front()->parentWidget();

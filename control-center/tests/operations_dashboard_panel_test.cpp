@@ -8,6 +8,7 @@
 #include <QMouseEvent>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QSet>
 #include <cassert>
 
 namespace {
@@ -64,7 +65,7 @@ int main(int argc, char* argv[]) {
     assert(state.applyEnvelope(DeviceEnvelope("LINE", "PI-LT-01", "DELIVERING", "WORK-101", 4)).applied);
 
     logistics::control_center::OperationsDashboardPanel panel;
-    panel.resize(1280, 300);
+    panel.resize(1600, 300);
     panel.setState(state);
     panel.setMqttConnected(true);
     panel.show();
@@ -79,6 +80,23 @@ int main(int argc, char* argv[]) {
         assert(qAbs(card->mapTo(&panel, QPoint{}).y() - top) <= 2);
     }
     assert(panel.maximumHeight() <= 140);
+
+    panel.resize(1280, 300);
+    application.processEvents();
+    QSet<int> compact_row_tops;
+    for (const auto* card : cards) {
+        compact_row_tops.insert(card->mapTo(&panel, QPoint{}).y());
+    }
+    assert(compact_row_tops.size() == 2);
+    for (const auto row_top : compact_row_tops) {
+        int cards_in_row = 0;
+        for (const auto* card : cards) {
+            cards_in_row += card->mapTo(&panel, QPoint{}).y() == row_top ? 1 : 0;
+        }
+        assert(cards_in_row == 3);
+    }
+    assert(panel.minimumHeight() == 148);
+    assert(panel.maximumHeight() == 168);
     assert(panel.findChild<QWidget*>(QStringLiteral("processCardGrid")) != nullptr);
     assert(panel.findChild<QFrame*>(QStringLiteral("conveyorSystemGroup")) == nullptr);
     assert(panel.findChildren<QLabel*>(QStringLiteral("sensorStatusIndicator")).size() == 4);
