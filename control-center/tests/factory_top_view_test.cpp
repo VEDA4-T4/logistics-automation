@@ -2,10 +2,12 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QGraphicsObject>
 #include <QGraphicsLineItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsScene>
 #include <QGraphicsSimpleTextItem>
+#include <QKeyEvent>
 #include <QLineF>
 #include <QPointF>
 #include <QRectF>
@@ -15,6 +17,7 @@
 using logistics::control_center::BuildFactoryNodeVisual;
 using logistics::control_center::FactoryDistanceText;
 using logistics::control_center::FactoryMotionPhase;
+using logistics::control_center::FactoryNodeColor;
 using logistics::control_center::FactoryNodeVisualState;
 using logistics::control_center::FactoryRouteIndex;
 using logistics::control_center::LineTracerPositionStatus;
@@ -58,6 +61,11 @@ int main(int argc, char* argv[]) {
     assert(visual.state == FactoryNodeVisualState::EmergencyStop);
     assert(!visual.motion_enabled);
 
+    auto emergency_with_error = emergency;
+    emergency_with_error.has_error = true;
+    assert(BuildFactoryNodeVisual(emergency_with_error).state == FactoryNodeVisualState::EmergencyStop);
+    assert(FactoryNodeColor(FactoryNodeVisualState::EmergencyStop) != FactoryNodeColor(FactoryNodeVisualState::Error));
+
     ProcessUnitStatus active = emergency;
     active.key = QStringLiteral("gripper");
     active.current_state = QStringLiteral("  transferring  ");
@@ -99,6 +107,20 @@ int main(int argc, char* argv[]) {
     visual = BuildFactoryNodeVisual(error);
     assert(visual.state == FactoryNodeVisualState::Error);
     assert(!visual.motion_enabled);
+
+    ProcessUnitStatus recovery = active;
+    recovery.current_state = QStringLiteral("RECOVERY");
+    recovery.has_error = false;
+    visual = BuildFactoryNodeVisual(recovery);
+    assert(visual.state == FactoryNodeVisualState::Recovery);
+    assert(FactoryNodeColor(visual.state) == QColor(QStringLiteral("#75beff")));
+
+    ProcessUnitStatus stopped = active;
+    stopped.current_state = QStringLiteral("STOPPED");
+    stopped.has_error = false;
+    visual = BuildFactoryNodeVisual(stopped);
+    assert(visual.state == FactoryNodeVisualState::Stopped);
+    assert(FactoryNodeColor(visual.state) == QColor(QStringLiteral("#cca700")));
 
     ProcessUnitStatus lifecycle = active;
     lifecycle.key = QStringLiteral("linetracer");
@@ -208,8 +230,11 @@ int main(int argc, char* argv[]) {
             const auto wrong_process =
                 Process(wrong_key, QStringLiteral("WRONG-NODE"), vision_state, QStringLiteral("WORK-WRONG"));
             const auto wrong_visual = BuildFactoryNodeVisual(wrong_process);
-            assert(wrong_visual.state == FactoryNodeVisualState::Waiting);
-            assert(!wrong_visual.motion_enabled);
+            const bool valid_gripper_assignment =
+                wrong_key == QStringLiteral("gripper") && vision_state == QStringLiteral("WORK_ASSIGNED");
+            assert(wrong_visual.state == (valid_gripper_assignment ? FactoryNodeVisualState::Working
+                                                                    : FactoryNodeVisualState::Waiting));
+            assert(wrong_visual.motion_enabled == valid_gripper_assignment);
         }
     }
 
@@ -236,7 +261,7 @@ int main(int argc, char* argv[]) {
     cross_process_view.advanceAnimationsForTest();
     assert(cross_process_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#ffffff")));
     assert(cross_process_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#ffffff")));
-    assert(cross_process_view.nodeColor(QStringLiteral("gripper")) == QColor(QStringLiteral("#ffffff")));
+    assert(cross_process_view.nodeColor(QStringLiteral("gripper")) == QColor(QStringLiteral("#75beff")));
     assert(cross_process_view.nodeColor(QStringLiteral("linetracer")) == QColor(QStringLiteral("#ffffff")));
     assert(cross_process_view.boxPosition(QStringLiteral("input")) == wrong_input_position);
     assert(cross_process_view.boxPosition(QStringLiteral("sorting")) == wrong_sorting_position);
@@ -384,7 +409,7 @@ int main(int argc, char* argv[]) {
     assert(emergency_visual.state != FactoryNodeVisualState::Error);
     concurrent_view.setProcesses(
         { emergency_input, concurrent_vision, concurrent_gripper, concurrent_sorting, concurrent_line_tracer });
-    assert(concurrent_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#f14c4c")));
+    assert(concurrent_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#ff3b30")));
     assert(concurrent_view.nodeOpacity(QStringLiteral("input")) == 1.0);
     const auto emergency_input_position = concurrent_view.boxPosition(QStringLiteral("input"));
     concurrent_view.advanceAnimationsForTest();
@@ -394,6 +419,15 @@ int main(int argc, char* argv[]) {
     logistics::control_center::FactoryTopViewWidget view;
     view.resize(700, 500);
     view.setProcesses({ input, vision, gripper, sorting, line_tracer });
+    const auto line_selection = view.nodeSelectionRect(QStringLiteral("linetracer"));
+    assert(line_selection.left() <= view.lineTracerDestinationPosition(1).x());
+    assert(line_selection.right() >= view.lineTracerPickupPosition(1).x());
+    assert(line_selection.top() <= view.lineTracerPickupPosition(1).y());
+    assert(line_selection.bottom() >= view.lineTracerDestinationPosition(3).y());
+    assert(line_selection.top() > 200.0);
+    assert(view.gripperPivotPosition() == QPointF(504, 81));
+    assert(QLineF(view.gripperPivotPosition(), QPointF(440, 81)).length() == 64.0);
+    assert(QLineF(view.gripperPivotPosition(), QPointF(504, 145)).length() == 64.0);
     view.show();
     application.processEvents();
     const auto scene_item_count = view.scene()->items().size();
@@ -745,8 +779,8 @@ int main(int argc, char* argv[]) {
     safety_input.current_state = QStringLiteral("STOPPED");
     safety_view.setProcesses({ safety_input, safety_sorting, safety_line },
                              logistics::control_center::OverallProcessState::EmergencyStop);
-    assert(safety_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#ffffff")));
-    assert(safety_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#f14c4c")));
+    assert(safety_view.nodeColor(QStringLiteral("input")) == QColor(QStringLiteral("#cca700")));
+    assert(safety_view.nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#ff3b30")));
 
     logistics::control_center::FactoryTopViewWidget sensor_stale_view;
     auto sensor_stale_input = Process(QStringLiteral("input"), QStringLiteral("PI-INPUT-STALE"),
@@ -857,5 +891,19 @@ int main(int argc, char* argv[]) {
     assert(selected == QStringLiteral("PI-VISION-01"));
     view.setSelectedDeviceId(QStringLiteral("PI-VISION-01"));
     assert(view.selectedDeviceId() == QStringLiteral("PI-VISION-01"));
+    assert(view.focusPolicy() == Qt::StrongFocus);
+    QGraphicsObject* vision_node = nullptr;
+    for (auto* item : view.scene()->items()) {
+        auto* object = item->toGraphicsObject();
+        if (object != nullptr && object->property("processKey").toString() == QStringLiteral("vision")) {
+            vision_node = object;
+            break;
+        }
+    }
+    assert(vision_node != nullptr);
+    selected.clear();
+    QKeyEvent select_with_keyboard(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    assert(view.scene()->sendEvent(vision_node, &select_with_keyboard));
+    assert(selected == QStringLiteral("PI-VISION-01"));
     assert(view.scene()->items().size() == scene_item_count);
 }

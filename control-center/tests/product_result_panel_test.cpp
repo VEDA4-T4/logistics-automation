@@ -7,11 +7,13 @@
 #include <QHostAddress>
 #include <QLabel>
 #include <QListWidget>
+#include <QSizePolicy>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
 #include <QWidget>
 #include <cassert>
+#include <cstdlib>
 
 namespace {
 
@@ -31,6 +33,15 @@ void AssertHasFullValueToolTip(const QWidget& parent, const QString& value) {
     assert(false);
 }
 
+QLabel* FindLabel(const QWidget& parent, const QString& text) {
+    for (auto* label : parent.findChildren<QLabel*>()) {
+        if (label->text() == text) {
+            return label;
+        }
+    }
+    return nullptr;
+}
+
 void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel& panel, const QSize& size) {
     panel.resize(size);
     panel.show();
@@ -40,10 +51,14 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
     auto* work_list = panel.findChild<QListWidget*>(QStringLiteral("activeWorkList"));
     auto* metadata = panel.findChild<QWidget*>(QStringLiteral("productMetadata"));
     auto* status_row = panel.findChild<QWidget*>(QStringLiteral("productStatusRow"));
+    auto* work_title = panel.findChild<QLabel*>(QStringLiteral("activeWorkListTitle"));
+    auto* image_title = panel.findChild<QLabel*>(QStringLiteral("productImageTitle"));
+    auto* metadata_title = panel.findChild<QLabel*>(QStringLiteral("productMetadataTitle"));
     assert(image != nullptr);
     assert(work_list != nullptr);
     assert(metadata != nullptr);
     assert(status_row != nullptr);
+    assert(work_title != nullptr && image_title != nullptr && metadata_title != nullptr);
     assert(panel.size() == size);
 
     const auto image_rect = PanelRect(panel, *image);
@@ -56,6 +71,15 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
     }
     assert(work_list_rect.right() < image_rect.left());
     assert(image_rect.right() < metadata_rect.left());
+    assert(std::abs(work_list_rect.top() - image_rect.top()) <= 1);
+    assert(std::abs(image_rect.top() - metadata_rect.top()) <= 1);
+    assert(std::abs(work_list_rect.bottom() - image_rect.bottom()) <= 1);
+    assert(std::abs(image_rect.bottom() - metadata_rect.bottom()) <= 1);
+    const auto work_title_rect = PanelRect(panel, *work_title);
+    const auto image_title_rect = PanelRect(panel, *image_title);
+    const auto metadata_title_rect = PanelRect(panel, *metadata_title);
+    assert(std::abs(work_title_rect.top() - image_title_rect.top()) <= 1);
+    assert(std::abs(image_title_rect.top() - metadata_title_rect.top()) <= 1);
     assert(image_rect.width() > metadata_rect.width());
     const auto ratio_error = image_rect.width() * 2 - metadata_rect.width() * 3;
     assert(ratio_error >= -3 && ratio_error <= 3);
@@ -103,6 +127,16 @@ int main(int argc, char* argv[]) {
     };
     for (const auto& value : expected_values) {
         AssertHasFullValueToolTip(panel, value);
+    }
+    auto* info_card = panel.findChild<QWidget*>(QStringLiteral("productInfoCard"));
+    assert(info_card != nullptr);
+    int previous_value_top = -1;
+    for (const auto& value : expected_values) {
+        auto* label = FindLabel(panel, value);
+        assert(label != nullptr && info_card->isAncestorOf(label));
+        const int value_top = label->mapTo(info_card, QPoint{}).y();
+        assert(value_top > previous_value_top);
+        previous_value_top = value_top;
     }
 
     auto second_product = product;
@@ -174,6 +208,19 @@ int main(int argc, char* argv[]) {
         QThread::msleep(1);
     }
     assert(!image->pixmap().isNull());
+    assert(image->sizePolicy().horizontalPolicy() == QSizePolicy::Ignored);
+    assert(image->sizePolicy().verticalPolicy() == QSizePolicy::Ignored);
+    image_panel.resize(640, 260);
+    application.processEvents();
+    const auto expanded_image_size = image->size();
+    const auto expanded_pixmap_size = image->pixmap().size();
+    image_panel.resize(400, 190);
+    application.processEvents();
+    assert(image->width() < expanded_image_size.width());
+    assert(image->height() < expanded_image_size.height());
+    assert(image->pixmap().width() <= image->contentsRect().width());
+    assert(image->pixmap().height() <= image->contentsRect().height());
+    assert(image->pixmap().size() != expanded_pixmap_size);
 
     logistics::control_center::CurrentProduct image_less_product;
     image_less_product.work_id = QStringLiteral("different-work-without-image");

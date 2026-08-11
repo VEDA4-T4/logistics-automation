@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <algorithm>
 
+#include "logistics/contracts/device.hpp"
 #include "logistics/control_center/ui_dialog.hpp"
 
 namespace logistics::control_center {
@@ -87,31 +88,30 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
         process.connection_state == mqtt::ConnectionState::kOffline) {
         return ProcessControlPhase::Unknown;
     }
-    if (process.has_error) {
-        return ProcessControlPhase::Error;
-    }
 
     const auto state = process.current_state.trimmed().toUpper();
-    if (state == QStringLiteral("EMERGENCY_STOP") || state == QStringLiteral("ESTOP")) {
+    const auto role = logistics::contracts::DeviceRoleFromString(process.key.toStdString());
+    const auto meaning = role.has_value()
+                             ? logistics::contracts::DeviceStateMeaningFor(*role, state.toStdString())
+                             : logistics::contracts::DeviceStateMeaning::kUnknown;
+    if (meaning == logistics::contracts::DeviceStateMeaning::kEmergencyStop) {
         return ProcessControlPhase::EmergencyStop;
     }
-    if (state == QStringLiteral("RECOVERY") || state == QStringLiteral("RECOVERING")) {
-        return ProcessControlPhase::Recovering;
-    }
-    if (state == QStringLiteral("RECOVERY_READY")) {
-        return ProcessControlPhase::Stopped;
-    }
-    if (state == QStringLiteral("STOPPED")) {
-        return ProcessControlPhase::Stopped;
-    }
-    if (state == QStringLiteral("ERROR") || state.endsWith(QStringLiteral("_ERROR"))) {
+    if (process.has_error || meaning == logistics::contracts::DeviceStateMeaning::kError) {
         return ProcessControlPhase::Error;
     }
-    if (state == QStringLiteral("WAITING_FOR_PRODUCT")) {
+    if (meaning == logistics::contracts::DeviceStateMeaning::kRecovery) {
+        return ProcessControlPhase::Recovering;
+    }
+    if (meaning == logistics::contracts::DeviceStateMeaning::kStopped) {
+        return ProcessControlPhase::Stopped;
+    }
+    if (state == QStringLiteral("WAITING_FOR_PRODUCT") ||
+        meaning == logistics::contracts::DeviceStateMeaning::kWorking) {
         return ProcessControlPhase::Running;
     }
-    if (state == QStringLiteral("IDLE") || state == QStringLiteral("READY") || state == QStringLiteral("WAITING") ||
-        state == QStringLiteral("ONLINE") || state == QStringLiteral("COMPLETED")) {
+    if (meaning == logistics::contracts::DeviceStateMeaning::kIdle ||
+        meaning == logistics::contracts::DeviceStateMeaning::kCompleted) {
         return ProcessControlPhase::Idle;
     }
     return ProcessControlPhase::Running;

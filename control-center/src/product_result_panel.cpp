@@ -1,6 +1,7 @@
 #include "logistics/control_center/product_result_panel.hpp"
 
 #include <QDebug>
+#include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -172,8 +173,9 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     image_label_ = new QLabel(this);
     image_label_->setObjectName(QStringLiteral("productImage"));
     image_label_->setMinimumSize(0, 0);
-    image_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    image_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     image_label_->setAlignment(Qt::AlignCenter);
+    image_label_->installEventFilter(this);
     setImagePlaceholder(QStringLiteral("상품 이미지 대기 중"));
 
     auto* info_card = new QFrame(this);
@@ -181,21 +183,17 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     auto* info_layout = new QVBoxLayout(info_card);
     info_layout->setContentsMargins(9, 7, 9, 7);
     info_layout->setSpacing(5);
-    auto* info_title = new QLabel(QStringLiteral("상품 정보"), info_card);
-    info_title->setStyleSheet("color:#e7eef3;font-size:10px;font-weight:700;");
     auto* fields = new QGridLayout();
     fields->setHorizontalSpacing(6);
-    fields->setVerticalSpacing(3);
+    fields->setVerticalSpacing(2);
     fields->setColumnStretch(1, 1);
-    fields->setColumnStretch(3, 1);
-    work_id_value_ = AddValueRow(fields, 0, 0, QStringLiteral("작업"), info_card, 3);
+    work_id_value_ = AddValueRow(fields, 0, 0, QStringLiteral("작업"), info_card);
     barcode_value_ = AddValueRow(fields, 1, 0, QStringLiteral("바코드"), info_card);
-    product_id_value_ = AddValueRow(fields, 1, 2, QStringLiteral("상품 ID"), info_card);
-    product_name_value_ = AddValueRow(fields, 2, 0, QStringLiteral("상품명"), info_card);
-    destination_value_ = AddValueRow(fields, 2, 2, QStringLiteral("목적지"), info_card);
-    confidence_value_ = AddValueRow(fields, 3, 0, QStringLiteral("신뢰도"), info_card);
-    updated_at_value_ = AddValueRow(fields, 3, 2, QStringLiteral("갱신"), info_card);
-    info_layout->addWidget(info_title);
+    product_id_value_ = AddValueRow(fields, 2, 0, QStringLiteral("상품 ID"), info_card);
+    product_name_value_ = AddValueRow(fields, 3, 0, QStringLiteral("상품명"), info_card);
+    destination_value_ = AddValueRow(fields, 4, 0, QStringLiteral("목적지"), info_card);
+    confidence_value_ = AddValueRow(fields, 5, 0, QStringLiteral("신뢰도"), info_card);
+    updated_at_value_ = AddValueRow(fields, 6, 0, QStringLiteral("갱신"), info_card);
     info_layout->addLayout(fields);
 
     auto* detail_card = new QFrame(this);
@@ -228,6 +226,7 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     work_list_layout->setContentsMargins(0, 0, 0, 0);
     work_list_layout->setSpacing(4);
     auto* work_list_title = new QLabel(QStringLiteral("작업 중"), work_list_panel);
+    work_list_title->setObjectName(QStringLiteral("activeWorkListTitle"));
     work_list_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
     active_work_list_ = new QListWidget(work_list_panel);
     active_work_list_->setObjectName(QStringLiteral("activeWorkList"));
@@ -241,9 +240,34 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
         "QListWidget::item:selected{background:#264f78;color:#ffffff;}");
     work_list_layout->addWidget(work_list_title);
     work_list_layout->addWidget(active_work_list_, 1);
+
+    auto* image_panel = new QWidget(this);
+    image_panel->setObjectName(QStringLiteral("productImageColumn"));
+    image_panel->setMinimumWidth(0);
+    auto* image_layout = new QVBoxLayout(image_panel);
+    image_layout->setContentsMargins(0, 0, 0, 0);
+    image_layout->setSpacing(4);
+    auto* image_title = new QLabel(QStringLiteral("바코드 인식 이미지"), image_panel);
+    image_title->setObjectName(QStringLiteral("productImageTitle"));
+    image_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
+    image_layout->addWidget(image_title);
+    image_layout->addWidget(image_label_, 1);
+
+    auto* metadata_panel = new QWidget(this);
+    metadata_panel->setObjectName(QStringLiteral("productMetadataColumn"));
+    metadata_panel->setMinimumWidth(0);
+    auto* metadata_column_layout = new QVBoxLayout(metadata_panel);
+    metadata_column_layout->setContentsMargins(0, 0, 0, 0);
+    metadata_column_layout->setSpacing(4);
+    auto* metadata_title = new QLabel(QStringLiteral("상품 정보"), metadata_panel);
+    metadata_title->setObjectName(QStringLiteral("productMetadataTitle"));
+    metadata_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
+    metadata_column_layout->addWidget(metadata_title);
+    metadata_column_layout->addWidget(metadata, 1);
+
     content_layout->addWidget(work_list_panel);
-    content_layout->addWidget(image_label_, 3);
-    content_layout->addWidget(metadata, 2);
+    content_layout->addWidget(image_panel, 3);
+    content_layout->addWidget(metadata_panel, 2);
 
     layout->addLayout(header_layout);
     layout->addLayout(content_layout, 1);
@@ -457,6 +481,13 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
         updateImagePixmap();
         image_label_->setToolTip({});
     });
+}
+
+bool ProductResultPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == image_label_ && event->type() == QEvent::Resize) {
+        updateImagePixmap();
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void ProductResultPanel::resizeEvent(QResizeEvent* event) {

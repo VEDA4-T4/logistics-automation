@@ -5,6 +5,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLayoutItem>
 #include <QMouseEvent>
@@ -69,6 +70,10 @@ StatusPresentation ProcessPresentation(const ProcessUnitStatus& process) {
             return { QStringLiteral("비상정지"), QStringLiteral("#521b20"), foreground, QStringLiteral("#a1262f") };
         case FactoryNodeVisualState::Error:
             return { QStringLiteral("오류"), QStringLiteral("#3b1f22"), foreground, QStringLiteral("#6e2b2f") };
+        case FactoryNodeVisualState::Recovery:
+            return { QStringLiteral("복구 중"), QStringLiteral("#17324a"), foreground, QStringLiteral("#285a7e") };
+        case FactoryNodeVisualState::Stopped:
+            return { QStringLiteral("정지"), QStringLiteral("#3a3000"), foreground, QStringLiteral("#6b5d00") };
         case FactoryNodeVisualState::Working:
             return { process.has_warning ? QStringLiteral("센서 경고") : QStringLiteral("작업 중"),
                      QStringLiteral("#17324a"), foreground, QStringLiteral("#285a7e") };
@@ -191,6 +196,7 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
         "#overallProcessCard,#processUnitCard{background:#181818;border:1px solid #303030;border-radius:6px;}"
         "#overallProcessCard[selectedControlTarget=\"true\"],#processUnitCard[selectedControlTarget=\"true\"]{"
         "background:#172534;border:2px solid #4daafc;}"
+        "#overallProcessCard:focus,#processUnitCard:focus{border:2px solid #d7ba7d;}"
         "#overallProcessCard:hover,#processUnitCard:hover{border-color:#75beff;}"
         "#processStatusSection,#processStatusContent{background:#1f1f1f;border:0;}"
         "QLabel{color:#cccccc;}");
@@ -203,6 +209,9 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     overall_card_->setObjectName(QStringLiteral("overallProcessCard"));
     overall_card_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     overall_card_->setCursor(Qt::PointingHandCursor);
+    overall_card_->setFocusPolicy(Qt::StrongFocus);
+    overall_card_->setAccessibleName(QStringLiteral("전체 공정 제어 대상"));
+    overall_card_->setAccessibleDescription(QStringLiteral("Enter 또는 Space 키로 전체 공정을 제어 대상으로 선택"));
     overall_card_->setProperty("controlTargetDeviceId", QStringLiteral("SYSTEM"));
     overall_card_->installEventFilter(this);
     auto* overall_layout = new QVBoxLayout(overall_card_);
@@ -312,7 +321,14 @@ void OperationsDashboardPanel::setControlTarget(const QString& target_device_id)
 }
 
 bool OperationsDashboardPanel::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::MouseButtonRelease && static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+    const bool mouse_activated = event->type() == QEvent::MouseButtonRelease &&
+                                 static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton;
+    const bool keyboard_activated =
+        event->type() == QEvent::KeyPress &&
+        (static_cast<QKeyEvent*>(event)->key() == Qt::Key_Return ||
+         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Enter ||
+         static_cast<QKeyEvent*>(event)->key() == Qt::Key_Space);
+    if (mouse_activated || keyboard_activated) {
         const auto target_device_id = watched->property("controlTargetDeviceId").toString();
         if (!target_device_id.isEmpty()) {
             QString display_name = QStringLiteral("전체 공정");
@@ -338,6 +354,10 @@ OperationsDashboardPanel::ProcessCardWidgets OperationsDashboardPanel::createPro
     widgets.card->setAttribute(Qt::WA_StyledBackground);
     widgets.card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     widgets.card->setCursor(Qt::PointingHandCursor);
+    widgets.card->setFocusPolicy(Qt::StrongFocus);
+    widgets.card->setAccessibleName(QStringLiteral("%1 제어 대상").arg(process.display_name));
+    widgets.card->setAccessibleDescription(
+        QStringLiteral("Enter 또는 Space 키로 %1을 제어 대상으로 선택").arg(process.display_name));
     widgets.card->setProperty("controlTargetDeviceId", process.device_id);
     widgets.card->installEventFilter(this);
     widgets.card->setToolTip(QStringLiteral("클릭하여 제어 대상으로 선택 · %1").arg(process.device_id));

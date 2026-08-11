@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QBrush>
+#include <QFocusEvent>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsObject>
@@ -10,6 +11,7 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsSimpleTextItem>
 #include <QHash>
+#include <QKeyEvent>
 #include <QLineF>
 #include <QPainter>
 #include <QPen>
@@ -130,6 +132,20 @@ FactoryNodeVisual ErrorVisual(const ProcessUnitStatus& process) {
     return visual;
 }
 
+FactoryNodeVisual RecoveryVisual(const ProcessUnitStatus& process) {
+    auto visual = BaseVisual(process);
+    visual.state = FactoryNodeVisualState::Recovery;
+    visual.opacity = 1.0;
+    return visual;
+}
+
+FactoryNodeVisual StoppedVisual(const ProcessUnitStatus& process) {
+    auto visual = BaseVisual(process);
+    visual.state = FactoryNodeVisualState::Stopped;
+    visual.opacity = 1.0;
+    return visual;
+}
+
 FactoryNodeVisual WorkingVisual(const ProcessUnitStatus& process, const QString& state) {
     auto visual = BaseVisual(process);
     visual.state = FactoryNodeVisualState::Working;
@@ -175,6 +191,12 @@ FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
     if (process.has_error || meaning == contracts::DeviceStateMeaning::kError) {
         return ErrorVisual(process);
     }
+    if (meaning == contracts::DeviceStateMeaning::kRecovery) {
+        return RecoveryVisual(process);
+    }
+    if (meaning == contracts::DeviceStateMeaning::kStopped) {
+        return StoppedVisual(process);
+    }
     if (UsesRunningVisual(process, state)) {
         return RunningVisual(process);
     }
@@ -192,8 +214,13 @@ QColor FactoryNodeColor(FactoryNodeVisualState state) {
         case FactoryNodeVisualState::Disconnected:
             return QColor(QStringLiteral("#777777"));
         case FactoryNodeVisualState::EmergencyStop:
+            return QColor(QStringLiteral("#ff3b30"));
         case FactoryNodeVisualState::Error:
             return QColor(QStringLiteral("#f14c4c"));
+        case FactoryNodeVisualState::Recovery:
+            return QColor(QStringLiteral("#75beff"));
+        case FactoryNodeVisualState::Stopped:
+            return QColor(QStringLiteral("#cca700"));
         case FactoryNodeVisualState::Working:
             return QColor(QStringLiteral("#75beff"));
         case FactoryNodeVisualState::Running:
@@ -208,12 +235,13 @@ namespace {
 
 constexpr QRectF kFactoryScene{ 0, 0, 700, 500 };
 constexpr QPointF kInputPositions[]{ { 143, 81 }, { 242, 81 }, { 341, 81 }, { 440, 81 } };
-constexpr QPointF kGripperPivot{ 440, 145 };
+constexpr QPointF kGripperPivot{ 504, 81 };
 constexpr qreal kGripperReach = 64.0;
 constexpr QPointF kSortingFeed{ 504, 145 };
 constexpr QPointF kSortingPositions[]{ { 504, 250 }, { 504, 345 }, { 504, 442 } };
 constexpr QPointF kLineIntersections[]{ { 292, 250 }, { 292, 345 }, { 292, 442 } };
 constexpr QPointF kLineDestinations[]{ { 80, 250 }, { 80, 345 }, { 80, 442 } };
+constexpr QRectF kLineTracerSelectionRect{ 70, 235, 445, 222 };
 
 std::optional<int> LineTracerPositionRoute(const LineTracerPositionStatus& position) {
     const auto location = position.location.trimmed().toUpper();
@@ -269,13 +297,30 @@ public:
         : process_key_(std::move(process_key)), selected_(std::move(selected)) {
         setAcceptedMouseButtons(Qt::LeftButton);
         setCursor(Qt::PointingHandCursor);
+        setFlag(QGraphicsItem::ItemIsFocusable);
+        setObjectName(QStringLiteral("factoryProcessNode"));
+        setProperty("processKey", process_key_);
+    }
+
+    void setFocusOutlineRect(const QRectF& rect) {
+        focus_outline_rect_ = rect;
+        update();
     }
 
     [[nodiscard]] QRectF boundingRect() const override {
         return childrenBoundingRect().adjusted(-4, -4, 4, 4);
     }
 
-    void paint(QPainter*, const QStyleOptionGraphicsItem*, QWidget*) override {}
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override {
+        if (!hasFocus() || !focus_outline_visible_) {
+            return;
+        }
+        QPen focus_pen(QColor(QStringLiteral("#d7ba7d")), 2, Qt::DashLine);
+        focus_pen.setCosmetic(true);
+        painter->setPen(focus_pen);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRoundedRect(focus_outline_rect_.value_or(boundingRect()), 4, 4);
+    }
 
 protected:
     void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override {
@@ -287,9 +332,34 @@ protected:
         QGraphicsObject::mouseReleaseEvent(event);
     }
 
+    void keyPressEvent(QKeyEvent* event) override {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter || event->key() == Qt::Key_Space) {
+            selected_(process_key_);
+            event->accept();
+            return;
+        }
+        QGraphicsObject::keyPressEvent(event);
+    }
+
+    void focusInEvent(QFocusEvent* event) override {
+        focus_outline_visible_ = event->reason() == Qt::TabFocusReason ||
+                                 event->reason() == Qt::BacktabFocusReason ||
+                                 event->reason() == Qt::ShortcutFocusReason;
+        QGraphicsObject::focusInEvent(event);
+        update();
+    }
+
+    void focusOutEvent(QFocusEvent* event) override {
+        focus_outline_visible_ = false;
+        QGraphicsObject::focusOutEvent(event);
+        update();
+    }
+
 private:
     QString process_key_;
     std::function<void(const QString&)> selected_;
+    std::optional<QRectF> focus_outline_rect_;
+    bool focus_outline_visible_{ false };
 };
 
 bool AllowsMotion(const QString& process_key, const FactoryNodeVisual& visual) {
@@ -346,6 +416,7 @@ struct FactoryTopViewWidget::Impl {
         owner->setFrameShape(QFrame::NoFrame);
         owner->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         owner->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        owner->setFocusPolicy(Qt::StrongFocus);
         owner->setRenderHint(QPainter::Antialiasing);
         buildScene();
         QObject::connect(&timer, &QTimer::timeout, owner, [this] { tick(); });
@@ -382,12 +453,15 @@ struct FactoryTopViewWidget::Impl {
         return box;
     }
 
-    static void finalizeNode(NodeItems& node) {
+    static void finalizeNode(NodeItems& node, std::optional<QRectF> selection_rect = std::nullopt) {
         for (auto* child : node.group->childItems()) {
             child->setAcceptedMouseButtons(Qt::NoButton);
         }
-        node.selection_outline =
-            new QGraphicsRectItem(node.group->childrenBoundingRect().adjusted(-5, -5, 5, 5), node.group);
+        const auto outline_rect = selection_rect.value_or(node.group->childrenBoundingRect()).adjusted(-5, -5, 5, 5);
+        node.selection_outline = new QGraphicsRectItem(outline_rect, node.group);
+        if (selection_rect.has_value()) {
+            node.group->setFocusOutlineRect(outline_rect);
+        }
         QPen selection_pen(QColor(QStringLiteral("#4daafc")), 2);
         selection_pen.setCosmetic(true);
         node.selection_outline->setPen(selection_pen);
@@ -420,15 +494,17 @@ struct FactoryTopViewWidget::Impl {
         scene->addItem(vision.group);
         finalizeNode(vision);
 
-        auto& gripper = addNode(QString::fromLatin1(kGripperProcessKey), QStringLiteral("Gripper"), QPointF(405, 105));
+        auto& gripper = addNode(QString::fromLatin1(kGripperProcessKey), QStringLiteral("Gripper"),
+                                kGripperPivot - QPointF(5, 5));
+        gripper.state_marker->setZValue(10);
         auto* pivot =
             new QGraphicsEllipseItem(QRectF(kGripperPivot.x() - 8, kGripperPivot.y() - 8, 16, 16), gripper.group);
         pivot->setBrush(QColor(QStringLiteral("#2d2d30")));
         pivot->setPen(QPen(gripper.color, 3));
         gripper.state_shapes.append(pivot);
-        gripper_arm = addStateLine(gripper, QLineF(kGripperPivot, kGripperPivot - QPointF(0, kGripperReach)), 7);
-        gripper_jaw_left = addStateLine(gripper, QLineF(432, 81, 440, 81), 3);
-        gripper_jaw_right = addStateLine(gripper, QLineF(440, 81, 448, 81), 3);
+        gripper_arm = addStateLine(gripper, QLineF(kGripperPivot, kGripperPivot - QPointF(kGripperReach, 0)), 7);
+        gripper_jaw_left = addStateLine(gripper, QLineF(440, 73, 440, 81), 3);
+        gripper_jaw_right = addStateLine(gripper, QLineF(440, 81, 440, 89), 3);
         gripper_product = new QGraphicsRectItem(QRectF(-8, -8, 16, 16), gripper.group);
         gripper_product->setBrush(QColor(QStringLiteral("#ce9178")));
         gripper_product->setPen(QPen(QColor(QStringLiteral("#f0f0f0")), 1));
@@ -474,7 +550,7 @@ struct FactoryTopViewWidget::Impl {
             line_arrows.append(arrow);
         }
         scene->addItem(line_tracer.group);
-        finalizeNode(line_tracer);
+        finalizeNode(line_tracer, kLineTracerSelectionRect);
 
         for (auto iterator = nodes.begin(); iterator != nodes.end(); ++iterator) {
             applyVisual(iterator.value());
@@ -524,17 +600,17 @@ struct FactoryTopViewWidget::Impl {
         }
         gripper_angle = phase == FactoryMotionPhase::GripperPick ? 0.0 : 90.0;
         const bool open = phase == FactoryMotionPhase::GripperPlaced;
-        const QPointF end = gripper_angle == 0.0 ? kGripperPivot - QPointF(0, kGripperReach)
-                                                 : kGripperPivot + QPointF(kGripperReach, 0);
+        const QPointF end = gripper_angle == 0.0 ? kGripperPivot - QPointF(kGripperReach, 0)
+                                                 : kGripperPivot + QPointF(0, kGripperReach);
         gripper_arm->setLine(QLineF(kGripperPivot, end));
         if (gripper_angle == 0.0) {
             const qreal spread = open ? 8.0 : 3.0;
-            gripper_jaw_left->setLine(QLineF(end.x() - spread, end.y(), end.x(), end.y()));
-            gripper_jaw_right->setLine(QLineF(end.x(), end.y(), end.x() + spread, end.y()));
-        } else {
-            const qreal spread = open ? 8.0 : 3.0;
             gripper_jaw_left->setLine(QLineF(end.x(), end.y() - spread, end.x(), end.y()));
             gripper_jaw_right->setLine(QLineF(end.x(), end.y(), end.x(), end.y() + spread));
+        } else {
+            const qreal spread = open ? 8.0 : 3.0;
+            gripper_jaw_left->setLine(QLineF(end.x() - spread, end.y(), end.x(), end.y()));
+            gripper_jaw_right->setLine(QLineF(end.x(), end.y(), end.x() + spread, end.y()));
         }
     }
 
@@ -986,8 +1062,17 @@ QList<QPointF> FactoryTopViewWidget::lineArrowPositions() const {
     return positions;
 }
 
+QRectF FactoryTopViewWidget::nodeSelectionRect(const QString& process_key) const {
+    const auto iterator = impl_->nodes.constFind(process_key);
+    return iterator == impl_->nodes.cend() ? QRectF{} : iterator->selection_outline->rect();
+}
+
 qreal FactoryTopViewWidget::gripperAngle() const {
     return impl_->gripper_angle;
+}
+
+QPointF FactoryTopViewWidget::gripperPivotPosition() const {
+    return kGripperPivot;
 }
 
 bool FactoryTopViewWidget::gripperProductVisible() const {

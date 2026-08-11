@@ -533,7 +533,7 @@ int main(int argc, char* argv[]) {
     factory->advanceAnimationsForTest();
     for (const auto& key : { QStringLiteral("input"), QStringLiteral("vision"), QStringLiteral("gripper"),
                              QStringLiteral("sorting"), QStringLiteral("linetracer") }) {
-        if (!check(factory->nodeColor(key) == QColor(QStringLiteral("#f14c4c")),
+        if (!check(factory->nodeColor(key) == QColor(QStringLiteral("#ff3b30")),
                    "global emergency stop did not turn a connected factory node red")) {
             return 2;
         }
