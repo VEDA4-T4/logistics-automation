@@ -380,6 +380,25 @@ void TestActiveWorkPreventsAutomaticRecovery() {
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kFailed);
 }
 
+void TestIdleEmergencyStopRecoversAfterEveryNodeReportsHealthy() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    const auto emergency_stop = orchestrator.Handle(
+        Status("MSG-ESTOP-INPUT", "PI-INPUT-01", "EMERGENCY_STOP", mqtt::ConnectionState::kOnline, std::nullopt));
+    assert(emergency_stop.handled && emergency_stop.transition.Applied());
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kEmergencyStop);
+
+    assert(!orchestrator.Handle(Heartbeat("MSG-ESTOP-VISION", "PI-VISION-01", "STOPPED")).handled);
+    assert(!orchestrator.Handle(Heartbeat("MSG-ESTOP-GRIPPER", "PI-GRIPPER-01", "STOPPED")).handled);
+    assert(!orchestrator.Handle(Heartbeat("MSG-ESTOP-SORTING", "PI-SORTING-01", "STOPPED")).handled);
+    assert(!orchestrator.Handle(Heartbeat("MSG-ESTOP-LT", "PI-LT-01", "IDLE")).handled);
+
+    const auto recovered = orchestrator.Handle(
+        Status("MSG-ESTOP-INPUT-RECOVERED", "PI-INPUT-01", "STOPPED", mqtt::ConnectionState::kOnline, std::nullopt));
+    assert(recovered.handled && recovered.transition.Applied());
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
+}
+
 void TestDeviceEmergencyStopPreservesEmergencyState() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-ESTOP-WORK", kWorkId, "PI-INPUT-01").Applied());
@@ -748,6 +767,7 @@ int main() {
     TestHealthyStoppedNodesDoNotFailTheProcess();
     TestIdleSystemRecoversAfterEveryNodeReportsHealthy();
     TestActiveWorkPreventsAutomaticRecovery();
+    TestIdleEmergencyStopRecoversAfterEveryNodeReportsHealthy();
     TestDeviceEmergencyStopPreservesEmergencyState();
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();
