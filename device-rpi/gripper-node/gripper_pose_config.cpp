@@ -181,8 +181,7 @@ void AssignGripperValue(GripperPoseConfig& config, std::string_view origin, std:
 
 bool GripperPoseConfig::IsValid() const noexcept {
     return home.IsValid() && pick_approach.IsValid() && pick.IsValid() && pick_lift.IsValid() && transfer.IsValid() &&
-           place_approach.IsValid() && place.IsValid() &&
-           uart_gripper_position_is_valid(open_position_percent) != 0U &&
+           place_approach.IsValid() && place.IsValid() && uart_gripper_position_is_valid(open_position_percent) != 0U &&
            uart_gripper_position_is_valid(closed_position_percent) != 0U &&
            uart_gripper_duration_is_valid(arm_duration_ms) != 0U &&
            uart_gripper_duration_is_valid(claw_duration_ms) != 0U &&
