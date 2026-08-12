@@ -14,7 +14,9 @@
 #include <QMediaPlayer>
 #include <QMouseEvent>
 #include <QPalette>
+#include <QPushButton>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSize>
 #include <QSplitter>
 #include <QStackedLayout>
@@ -122,6 +124,8 @@ bool CheckHistoryPaging(QApplication& application) {
     }
     config.close();
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
+    const auto danger_zone_config_path = directory.filePath(QStringLiteral("danger-zones.ini"));
+    qputenv("LOGISTICS_CONTROL_CENTER_DANGER_ZONE_CONFIG", danger_zone_config_path.toUtf8());
     logistics::control_center::MainWindow window;
     auto* table = window.findChild<QTableView*>(QStringLiteral("operationalLogTable"));
     auto* log_panel_widget = window.findChild<QWidget*>(QStringLiteral("operationalLogPanel"));
@@ -300,7 +304,11 @@ int main(int argc, char* argv[]) {
         return condition;
     };
 
+#ifdef Q_OS_WIN
+    qputenv("QT_QPA_PLATFORM", "windows");
+#else
     qputenv("QT_QPA_PLATFORM", "offscreen");
+#endif
     QApplication::setDesktopSettingsAware(false);
     QApplication application(argc, argv);
     QApplication::setEffectEnabled(Qt::UI_AnimateCombo, true);
@@ -323,7 +331,41 @@ int main(int argc, char* argv[]) {
         "onvif_metadata_enabled=false\n");
     config.close();
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
+    const auto danger_zone_config_path = directory.filePath(QStringLiteral("danger-zones.ini"));
+    qputenv("LOGISTICS_CONTROL_CENTER_DANGER_ZONE_CONFIG", danger_zone_config_path.toUtf8());
     logistics::control_center::MainWindow window;
+
+    auto* danger_settings = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSettingsButton"));
+    auto* danger_visibility = window.findChild<QPushButton*>(QStringLiteral("dangerZoneVisibilityButton"));
+    auto* danger_add = window.findChild<QPushButton*>(QStringLiteral("dangerZoneAddButton"));
+    auto* danger_save = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSaveButton"));
+    if (!check(danger_settings != nullptr && danger_visibility != nullptr && danger_add != nullptr &&
+                   danger_save != nullptr,
+               "danger-zone controls are missing") ||
+        !check(danger_add->isHidden() && danger_save->isHidden(), "danger-zone edit controls start visible")) {
+        return 1;
+    }
+    danger_settings->click();
+    if (!check(!danger_add->isHidden() && !danger_save->isHidden(), "danger-zone edit controls did not open")) {
+        return 1;
+    }
+    danger_add->click();
+    danger_save->click();
+    {
+        QSettings saved_settings(danger_zone_config_path, QSettings::IniFormat);
+        if (!check(!saved_settings.value(QStringLiteral("danger_zone/regions")).toString().isEmpty(),
+                   "danger-zone regions were not persisted")) {
+            return 1;
+        }
+    }
+    danger_visibility->click();
+    {
+        QSettings saved_settings(danger_zone_config_path, QSettings::IniFormat);
+        if (!check(!saved_settings.value(QStringLiteral("danger_zone/overlay_visible"), true).toBool(),
+                   "danger-zone visibility was not persisted")) {
+            return 1;
+        }
+    }
 
     auto* operations_workspace = window.findChild<QSplitter*>(QStringLiteral("operationsWorkspaceSplitter"));
     if (!check(operations_workspace != nullptr, "operationsWorkspaceSplitter is missing")) {

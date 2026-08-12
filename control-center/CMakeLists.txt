@@ -22,6 +22,7 @@ qt_standard_project_setup()
 set(
     CONTROL_CENTER_APP_SOURCES
     src/main_window.cpp
+    src/aruco_detector.cpp
     src/control_center_theme.cpp
     src/command_response.cpp
     src/current_product_state.cpp
@@ -41,6 +42,7 @@ set(
     src/rtsp_stream_worker.cpp
     src/ui_dialog.cpp
     include/logistics/control_center/main_window.hpp
+    include/logistics/control_center/aruco_detector.hpp
     include/logistics/control_center/control_center_theme.hpp
     include/logistics/control_center/command_response.hpp
     include/logistics/control_center/current_product_state.hpp
@@ -160,9 +162,11 @@ if(BUILD_TESTING)
     add_executable(
         control_center_detection_overlay_test
         tests/detection_overlay_test.cpp
+        src/aruco_detector.cpp
         src/detection_overlay.cpp
         src/onvif_metadata.cpp
         include/logistics/control_center/detection_overlay.hpp
+        include/logistics/control_center/aruco_detector.hpp
         include/logistics/control_center/onvif_metadata.hpp
     )
     target_include_directories(control_center_detection_overlay_test PRIVATE include)
