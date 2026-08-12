@@ -310,6 +310,14 @@ void TestDigitalLineStateOwnsPidDirection() {
     (void)UpdateLineWithCenter(context, 0U, 1U, 0U, 10U);
     (void)UpdateLineWithCenter(context, 0U, 1U, 0U, 20U);
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
+    CHECK_TRUE(context.snapshot.line_error > (int16_t)SENSOR_LINE_ERROR_DEADBAND);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRaw(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_RIGHT_WHITE_RAW);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 0U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 10U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 20U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
     CHECK_TRUE(context.snapshot.line_error == 0);
 }
 

@@ -73,7 +73,8 @@ static linetracer_line_state_t SensorLogic_CalculateTrackingState(uint8_t left_b
     return LINETRACER_LINE_CENTERED;
 }
 
-static int16_t SensorLogic_ApplyDigitalPidDirection(int16_t analog_error, linetracer_line_state_t line_state) {
+static int16_t SensorLogic_ApplyDigitalPidDirection(int16_t analog_error, linetracer_line_state_t line_state,
+                                                    uint8_t center_black) {
     int32_t magnitude = analog_error;
 
     if (magnitude < 0) {
@@ -93,8 +94,8 @@ static int16_t SensorLogic_ApplyDigitalPidDirection(int16_t analog_error, linetr
             return (int16_t)-magnitude;
 
         case LINETRACER_LINE_CENTERED:
-            /* Both outer DO sensors own straight travel; ignore static outer AO mismatch. */
-            return 0;
+            /* 010 is a confirmed centred line, so retain AO error for small continuous PID corrections. */
+            return (center_black != 0U) ? analog_error : 0;
 
         case LINETRACER_LINE_UNKNOWN:
         case LINETRACER_LINE_WHITE_GAP:
@@ -381,7 +382,8 @@ void SensorLogic_UpdateLine(sensor_logic_context_t* context, uint8_t line_left, 
     previous_state = context->snapshot.line_state;
     next_state = SensorLogic_CalculateTrackingState(context->snapshot.line_left, context->snapshot.line_center,
                                                     context->snapshot.line_right);
-    context->snapshot.line_error = SensorLogic_ApplyDigitalPidDirection(context->snapshot.line_error, next_state);
+    context->snapshot.line_error =
+        SensorLogic_ApplyDigitalPidDirection(context->snapshot.line_error, next_state, context->snapshot.line_center);
     if (((left_changed != 0U) || (center_changed != 0U) || (right_changed != 0U)) && (next_state != previous_state)) {
         context->snapshot.line_state = next_state;
         context->diagnostics.line_changed_at_ms = now_ms;

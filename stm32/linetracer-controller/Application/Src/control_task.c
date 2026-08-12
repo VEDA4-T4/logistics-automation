@@ -102,7 +102,9 @@ bool ControlTask_ShouldMonitorUltrasonic(void) {
     bool enabled = false;
     uint32_t primask = ControlTask_EnterShortCriticalSection();
 
-    if ((controlTaskInitialized != 0U) && (controlTaskContext.safety_latched == 0U)) {
+    /* A pivoting U-turn points the sensors across the floor and chassis; stop the triggers until line reacquisition. */
+    if ((controlTaskInitialized != 0U) && (controlTaskContext.safety_latched == 0U) &&
+        (ControlLogic_IsTurnAroundActive(&controlTaskContext) == 0U)) {
         enabled = ControlTask_StateRequiresUltrasonic(controlTaskContext.state);
         if (controlTaskContext.state == LINETRACER_CONTROL_OBSTACLE_STOP) {
             enabled = (controlTaskContext.resume_valid != 0U) &&

@@ -63,9 +63,9 @@ uint8_t MotorControlLogic_ComputeDifferentialForward(uint16_t left_base_pwm, uin
     /* Slow the detected-line side and give the opposite wheel a small, bounded boost. */
     if (correction > 0) {
         MotorControlLogic_MakeForward(MotorControlLogic_ClampTrackingPwm((int32_t)left_base_pwm - (int32_t)correction),
-                                      (int32_t)right_base_pwm + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM, output);
+                                      (int32_t)right_base_pwm + MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM, output);
     } else if (correction < 0) {
-        MotorControlLogic_MakeForward((int32_t)left_base_pwm + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM,
+        MotorControlLogic_MakeForward((int32_t)left_base_pwm + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM,
                                       MotorControlLogic_ClampTrackingPwm((int32_t)right_base_pwm + (int32_t)correction),
                                       output);
     } else {
@@ -113,12 +113,9 @@ uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output
             return 1U;
 
         case ROUTE_ACTION_TURN_LEFT:
-            MotorControlLogic_MakePivot(
-                MOTOR_DIRECTION_REVERSE,
-                MOTOR_DIRECTION_FORWARD,
-                MOTOR_CONTROL_LEFT_PIVOT_PWM,
-                MOTOR_CONTROL_RIGHT_PIVOT_PWM + MOTOR_CONTROL_LEFT_TURN_RIGHT_BOOST_PWM,
-                output);
+            MotorControlLogic_MakePivot(MOTOR_DIRECTION_REVERSE, MOTOR_DIRECTION_FORWARD, MOTOR_CONTROL_LEFT_PIVOT_PWM,
+                                        MOTOR_CONTROL_RIGHT_PIVOT_PWM + MOTOR_CONTROL_LEFT_TURN_RIGHT_BOOST_PWM,
+                                        output);
             return 1U;
 
         case ROUTE_ACTION_TURN_RIGHT:

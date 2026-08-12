@@ -30,8 +30,9 @@ extern "C" {
  */
 #define CONTROL_JUNCTION_CENTER_ADVANCE_MS 300U
 #define CONTROL_JUNCTION_CROSS_TIMEOUT_MS 1000U
+#define CONTROL_JUNCTION_CROSS_CLEAR_MS 50U
 #define CONTROL_TURN_SOURCE_CLEAR_MS 60U
-#define CONTROL_TURN_TARGET_CENTERED_MS 50U
+#define CONTROL_TURN_TARGET_CENTERED_MS 10U
 #define CONTROL_JUNCTION_EXIT_GUARD_MS 100U
 
 #if ((CONTROL_ROUTE_TIMEOUTS_ENABLED != 0U) && (CONTROL_ROUTE_TIMEOUTS_ENABLED != 1U))
@@ -143,6 +144,7 @@ uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
                                            uart_linetracer_load_state_t load_state, uint32_t now_ms,
                                            app_tx_event_t* event);
 uint8_t ControlLogic_IsTurning(const control_context_t* context);
+uint8_t ControlLogic_IsTurnAroundActive(const control_context_t* context);
 uint8_t ControlLogic_JunctionManeuverActive(const control_context_t* context);
 uint8_t ControlLogic_StartPendingManeuver(control_context_t* context, uint32_t now_ms);
 route_action_t ControlLogic_JunctionMotorAction(const control_context_t* context);

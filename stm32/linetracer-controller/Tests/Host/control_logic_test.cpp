@@ -486,6 +486,38 @@ void TestTurningStateDetection() {
     assert(ControlLogic_IsTurning(&context) == 0U);
 }
 
+void TestTurnAroundActivityDetection() {
+    control_context_t context{};
+    ControlLogic_Init(&context, 0U);
+    assert(ControlLogic_IsTurnAroundActive(&context) == 0U);
+
+    context.state = LINETRACER_CONTROL_TURNING_AT_PICKUP;
+    context.pending_route_action = ROUTE_ACTION_TURN_AROUND;
+    assert(ControlLogic_IsTurnAroundActive(&context) != 0U);
+
+    context.junction_phase = CONTROL_JUNCTION_TURN_SEARCH_TARGET;
+    context.junction_action = ROUTE_ACTION_TURN_AROUND;
+    assert(ControlLogic_IsTurnAroundActive(&context) != 0U);
+
+    context.state = LINETRACER_CONTROL_OBSTACLE_STOP;
+    context.resume_valid = 1U;
+    context.resume_state = LINETRACER_CONTROL_TURNING_AT_PICKUP;
+    context.junction_phase = CONTROL_JUNCTION_IDLE;
+    context.junction_action = ROUTE_ACTION_NONE;
+    assert(ControlLogic_IsTurnAroundActive(&context) != 0U);
+
+    context.state = LINETRACER_CONTROL_MOVING_TO_DEST;
+    context.resume_valid = 0U;
+    context.pending_route_action = ROUTE_ACTION_GO_STRAIGHT;
+    assert(ControlLogic_IsTurnAroundActive(&context) == 0U);
+
+    context.state = LINETRACER_CONTROL_TURNING_TO_PICKUP;
+    context.pending_route_action = ROUTE_ACTION_TURN_LEFT;
+    context.junction_phase = CONTROL_JUNCTION_TURN_SEARCH_TARGET;
+    context.junction_action = ROUTE_ACTION_TURN_LEFT;
+    assert(ControlLogic_IsTurnAroundActive(&context) == 0U);
+}
+
 void AdvanceToTargetSearch(control_context_t& context, route_action_t action, std::uint32_t started_at_ms) {
     context.junction_phase = CONTROL_JUNCTION_TURN_CLEAR_SOURCE;
     context.junction_action = action;
@@ -496,6 +528,14 @@ void AdvanceToTargetSearch(control_context_t& context, route_action_t action, st
     (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, started_at_ms);
     (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, started_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+
+    if (action == ROUTE_ACTION_TURN_AROUND) {
+        /* A U-turn accepts 100 immediately; a stable 000/60 ms interval is not required. */
+        (void)ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
+                                                       started_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 1U);
+        assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
+        return;
+    }
 
     /* Search starts only after all three sensors are white for the clear interval. */
     const auto clear_at = started_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 10U;
@@ -561,21 +601,11 @@ void TestRightTurnCompletesOnStableRightTargetSide() {
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
-    /* 011 without a preceding 001 is still the old/source line and must be ignored. */
+    /* A fast turn may first sample the target at 011; accept it without requiring an earlier 001 sample. */
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U, search_at + 20U);
     assert(result.maneuver_completed == 0U);
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U,
                                                       search_at + 20U + CONTROL_TURN_TARGET_CENTERED_MS);
-    assert(result.maneuver_completed == 0U);
-
-    /* The new right target must enter through 001 before 011 can finish alignment. */
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, search_at + 80U);
-    assert(result.maneuver_completed == 0U);
-    assert(context.junction_target_edge_seen != 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U, search_at + 90U);
-    assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U,
-                                                      search_at + 90U + CONTROL_TURN_TARGET_CENTERED_MS);
     assert(result.maneuver_completed != 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
@@ -588,19 +618,11 @@ void TestTurnCompletesWhenCenterIsStable() {
     AdvanceToTargetSearch(context, ROUTE_ACTION_TURN_RIGHT, 100U);
     const auto search_at = 100U + (2U * CONTROL_TURN_SOURCE_CLEAR_MS) + 10U;
 
-    /* Center-only 010 cannot complete a turn before the direction-specific edge is seen. */
+    /* A fast turn may first sample the target at 010; accept it and hand the rest to PID quickly. */
     auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, search_at + 10U);
     assert(result.maneuver_completed == 0U);
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U,
                                                       search_at + 10U + CONTROL_TURN_TARGET_CENTERED_MS);
-    assert(result.maneuver_completed == 0U);
-
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, search_at + 80U);
-    assert(context.junction_target_edge_seen != 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, search_at + 90U);
-    assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U,
-                                                      search_at + 90U + CONTROL_TURN_TARGET_CENTERED_MS);
     assert(result.maneuver_completed != 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
@@ -620,19 +642,25 @@ void TestTurnAroundCompletesOnStableRightTargetSide() {
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
-    /* 001 arms target alignment but cannot complete the turn by itself. */
+    /* Stable 001 only records the target edge; the pivot must continue until centre is black. */
     const auto completed_at = search_at + 50U;
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, completed_at);
     assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U, completed_at + 10U);
+    result =
+        ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, completed_at + CONTROL_TURN_TARGET_CENTERED_MS);
+    assert(result.maneuver_completed == 0U);
+
+    /* 011 brings the line under the centre sensor and completes after the short stability interval. */
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U,
+                                                      completed_at + CONTROL_TURN_TARGET_CENTERED_MS + 10U);
     assert(result.maneuver_completed == 0U);
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U,
-                                                      completed_at + 10U + CONTROL_TURN_TARGET_CENTERED_MS);
+                                                      completed_at + (2U * CONTROL_TURN_TARGET_CENTERED_MS) + 10U);
     assert(result.maneuver_completed != 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
 
-    const auto stable_completed_at = completed_at + 10U + CONTROL_TURN_TARGET_CENTERED_MS;
+    const auto stable_completed_at = completed_at + (2U * CONTROL_TURN_TARGET_CENTERED_MS) + 10U;
     const auto after_guard = stable_completed_at + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U;
     assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, search_at, after_guard) != 0U);
     assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, stable_completed_at + 1U, after_guard) == 0U);
@@ -651,21 +679,18 @@ void TestLeftTurnCompletesOnStableLeftTargetSide() {
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
-    /* 110 without a preceding 100 is still the old/source line and must be ignored. */
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, search_at + 20U);
+    /* 100 only records the left target edge and must not release the vehicle to PID. */
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, search_at + 20U);
     assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U,
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
                                                       search_at + 20U + CONTROL_TURN_TARGET_CENTERED_MS);
     assert(result.maneuver_completed == 0U);
 
-    /* The new left target must enter through 100 before 110 can finish alignment. */
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, search_at + 80U);
-    assert(result.maneuver_completed == 0U);
-    assert(context.junction_target_edge_seen != 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, search_at + 90U);
+    /* Continue pivoting until 110 reaches the centre sensor. */
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, search_at + 40U);
     assert(result.maneuver_completed == 0U);
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U,
-                                                      search_at + 90U + CONTROL_TURN_TARGET_CENTERED_MS);
+                                                      search_at + 40U + CONTROL_TURN_TARGET_CENTERED_MS);
     assert(result.maneuver_completed != 0U);
     assert(result.state_changed == 0U);
     assert(context.state == original_state);
@@ -688,9 +713,9 @@ void TestStraightJunctionCrossingAndGuard() {
 
     auto completed = ControlLogic_ProcessLineSample(&context, 0U, 0U, 200U);
     assert(completed.maneuver_completed == 0U);
-    completed = ControlLogic_ProcessLineSample(&context, 0U, 0U, 200U + CONTROL_TURN_TARGET_CENTERED_MS);
+    completed = ControlLogic_ProcessLineSample(&context, 0U, 0U, 200U + CONTROL_JUNCTION_CROSS_CLEAR_MS);
     assert(completed.maneuver_completed != 0U);
-    const auto completed_at_ms = 200U + CONTROL_TURN_TARGET_CENTERED_MS;
+    const auto completed_at_ms = 200U + CONTROL_JUNCTION_CROSS_CLEAR_MS;
     assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_JUNCTION, 100U, completed_at_ms + 1U) != 0U);
 
     const auto after_guard_ms = completed_at_ms + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U;
@@ -949,6 +974,7 @@ int main() {
     TestUnclassifiedMarkerIsRejected();
     TestRouteTimeouts();
     TestTurningStateDetection();
+    TestTurnAroundActivityDetection();
     TestJunctionAcceptsOneDebouncedOuterBlackSample();
     TestRouteBTargetJunctionStartsLeftTurnFromLineSample();
     TestEndpointStopPrioritizesOuterDo();

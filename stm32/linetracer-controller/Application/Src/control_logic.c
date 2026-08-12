@@ -253,6 +253,39 @@ uint8_t ControlLogic_IsTurning(const control_context_t* context) {
                : 0U;
 }
 
+uint8_t ControlLogic_IsTurnAroundActive(const control_context_t* context) {
+    if (context == NULL) {
+        return 0U;
+    }
+
+    if (context->junction_phase != CONTROL_JUNCTION_IDLE && context->junction_action == ROUTE_ACTION_TURN_AROUND) {
+        return 1U;
+    }
+
+    if (context->pending_route_action != ROUTE_ACTION_TURN_AROUND) {
+        return 0U;
+    }
+
+    if (ControlLogic_IsTurning(context) != 0U) {
+        return 1U;
+    }
+
+    /* Cover an in-flight obstacle event received just as the U-turn starts. */
+    if (context->state == LINETRACER_CONTROL_OBSTACLE_STOP && context->resume_valid != 0U) {
+        switch (context->resume_state) {
+            case LINETRACER_CONTROL_TURNING_FROM_DEST:
+            case LINETRACER_CONTROL_TURNING_TO_PICKUP:
+            case LINETRACER_CONTROL_TURNING_AT_PICKUP:
+                return 1U;
+
+            default:
+                break;
+        }
+    }
+
+    return 0U;
+}
+
 uint8_t ControlLogic_JunctionManeuverActive(const control_context_t* context) {
     return (context != NULL && context->junction_phase != CONTROL_JUNCTION_IDLE) ? 1U : 0U;
 }
@@ -1236,12 +1269,12 @@ static uint8_t ControlLogic_TargetEdgeDetected(const control_context_t* context,
     }
 
     if (context->junction_action == ROUTE_ACTION_TURN_LEFT) {
-        /* A left turn must encounter the target line at the left outer sensor first (100). */
-        return (line_left != 0U && line_center == 0U && line_right == 0U) ? 1U : 0U;
+        /* Accept 100, 110, or 010 so a fast left turn cannot skip a narrow target edge. */
+        return (line_right == 0U && (line_left != 0U || line_center != 0U)) ? 1U : 0U;
     }
 
-    /* A right turn/U-turn must encounter the target line at the right outer sensor first (001). */
-    return (line_left == 0U && line_center == 0U && line_right != 0U) ? 1U : 0U;
+    /* Accept 001, 011, or 010 so a fast right turn/U-turn cannot skip a narrow target edge. */
+    return (line_left == 0U && (line_center != 0U || line_right != 0U)) ? 1U : 0U;
 }
 
 static uint8_t ControlLogic_TargetAligned(const control_context_t* context, uint8_t line_left, uint8_t line_center,
@@ -1251,11 +1284,11 @@ static uint8_t ControlLogic_TargetAligned(const control_context_t* context, uint
     }
 
     if (context->junction_action == ROUTE_ACTION_TURN_LEFT) {
-        /* After 100, accept 110 or 010 and let PID finish the remaining centering. */
+        /* 100 only arms target detection; finish on 110 or 010, then let PID centre. */
         return (line_right == 0U) ? 1U : 0U;
     }
 
-    /* After 001, accept 011 or 010 for right turns and U-turns. */
+    /* 001 only arms target detection; finish on 011 or 010 for right turns/U-turns. */
     return (line_left == 0U) ? 1U : 0U;
 }
 
@@ -1351,7 +1384,7 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
             break;
 
         case CONTROL_JUNCTION_CROSS_STRAIGHT:
-            if (ControlLogic_ConditionStable(context, both_white, now_ms, CONTROL_TURN_TARGET_CENTERED_MS) != 0U) {
+            if (ControlLogic_ConditionStable(context, both_white, now_ms, CONTROL_JUNCTION_CROSS_CLEAR_MS) != 0U) {
                 ControlLogic_ResetJunctionManeuver(context);
                 ControlLogic_StartJunctionGuard(context, now_ms);
                 result.maneuver_completed = 1U;
@@ -1359,8 +1392,17 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
             break;
 
         case CONTROL_JUNCTION_TURN_CLEAR_SOURCE:
-            /* All three sensors must leave the old line before the new line can be accepted. */
-            if (ControlLogic_ConditionStable(context, all_white, now_ms, CONTROL_TURN_SOURCE_CLEAR_MS) != 0U) {
+            /*
+             * A clockwise U-turn does not wait for a stable 000 interval. Once the
+             * centre
+             * and right sensors have left the source line (000 or 100), search
+             * continuously. Regular
+             * 90-degree turns retain the stronger all-white guard.
+             */
+            if (context->junction_action == ROUTE_ACTION_TURN_AROUND && line_center == 0U && line_right == 0U) {
+                ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_SEARCH_TARGET, now_ms);
+            } else if (context->junction_action != ROUTE_ACTION_TURN_AROUND &&
+                       ControlLogic_ConditionStable(context, all_white, now_ms, CONTROL_TURN_SOURCE_CLEAR_MS) != 0U) {
                 ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_SEARCH_TARGET, now_ms);
             }
             break;
@@ -1370,8 +1412,9 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
                 if (ControlLogic_TargetEdgeDetected(context, line_left, line_center, line_right) != 0U) {
                     context->junction_target_edge_seen = 1U;
                     context->junction_condition_active = 0U;
+                } else {
+                    break;
                 }
-                break;
             }
 
             target_aligned = ControlLogic_TargetAligned(context, line_left, line_center, line_right);

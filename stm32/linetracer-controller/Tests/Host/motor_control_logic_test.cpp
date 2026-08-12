@@ -49,12 +49,12 @@ void TestLineFollow() {
     AssertForward(output,
                   MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_BASE_PWM - MOTOR_CONTROL_LINE_RECOVERY_CORRECTION_PWM +
                                              MOTOR_CONTROL_LEFT_TRIM),
-                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM +
-                                             MOTOR_CONTROL_RIGHT_TRIM));
+                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM +
+                                             MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 
     assert(MotorControlLogic_ComputeLineFollow(LINETRACER_LINE_RIGHT_ONLY, &output) != 0U);
     AssertForward(output,
-                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_BASE_PWM + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM +
+                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_BASE_PWM + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM +
                                              MOTOR_CONTROL_LEFT_TRIM),
                   MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM - MOTOR_CONTROL_LINE_RECOVERY_CORRECTION_PWM +
                                              MOTOR_CONTROL_RIGHT_TRIM));
@@ -64,26 +64,28 @@ void TestDifferentialForward() {
     motor_output_t output{};
 
     assert(MotorControlLogic_ComputeDifferentialForward(300U, 305U, 100, &output) != 0U);
-    AssertForward(output, MotorControlLogic_ClampPwm(200 + MOTOR_CONTROL_LEFT_TRIM),
-                  MotorControlLogic_ClampPwm(305 + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+    AssertForward(
+        output, MotorControlLogic_ClampPwm(200 + MOTOR_CONTROL_LEFT_TRIM),
+        MotorControlLogic_ClampPwm(305 + MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 
     assert(MotorControlLogic_ComputeDifferentialForward(300U, 305U, -100, &output) != 0U);
-    AssertForward(output,
-                  MotorControlLogic_ClampPwm(300 + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_LEFT_TRIM),
-                  MotorControlLogic_ClampPwm(205 + MOTOR_CONTROL_RIGHT_TRIM));
+    AssertForward(
+        output, MotorControlLogic_ClampPwm(300 + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_LEFT_TRIM),
+        MotorControlLogic_ClampPwm(205 + MOTOR_CONTROL_RIGHT_TRIM));
 }
 
 void TestDifferentialForwardKeepsBothWheelsTurning() {
     motor_output_t output{};
 
     assert(MotorControlLogic_ComputeDifferentialForward(240U, 265U, 1000, &output) != 0U);
-    AssertForward(output, MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_LEFT_TRIM),
-                  MotorControlLogic_ClampPwm(265 + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+    AssertForward(
+        output, MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_LEFT_TRIM),
+        MotorControlLogic_ClampPwm(265 + MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 
     assert(MotorControlLogic_ComputeDifferentialForward(240U, 265U, -1000, &output) != 0U);
-    AssertForward(output,
-                  MotorControlLogic_ClampPwm(240 + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_LEFT_TRIM),
-                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+    AssertForward(
+        output, MotorControlLogic_ClampPwm(240 + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_LEFT_TRIM),
+        MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 }
 
 void TestWhiteGapKeepsPreviousOutput() {
@@ -174,7 +176,7 @@ void TestControlStateOutputPriority() {
     assert(MotorControlLogic_ComputeControlOutput(LINETRACER_CONTROL_MOVING_TO_DEST, ROUTE_ACTION_GO_STRAIGHT,
                                                   LINETRACER_LINE_RIGHT_ONLY, 1U, 0U, &output) != 0U);
     AssertForward(output,
-                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_BASE_PWM + MOTOR_CONTROL_TRACKING_FAST_BOOST_PWM +
+                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_BASE_PWM + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM +
                                              MOTOR_CONTROL_LEFT_TRIM),
                   MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM - MOTOR_CONTROL_LINE_RECOVERY_CORRECTION_PWM +
                                              MOTOR_CONTROL_RIGHT_TRIM));
