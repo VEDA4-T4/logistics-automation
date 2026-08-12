@@ -131,8 +131,8 @@ bool CheckHistoryPaging(QApplication& application) {
                      "first history page was not loaded") ||
         !LayoutCheck(requests.front().contains("Authorization: Bearer local-history-token"),
                      "history authorization header is missing") ||
-        !LayoutCheck(requests.front().contains("GET /api/v1/history?limit=500 HTTP/1.1"),
-                     "initial history request did not use limit=500")) {
+        !LayoutCheck(requests.front().contains("GET /api/v1/history?limit=100 HTTP/1.1"),
+                     "initial history request did not use limit=100")) {
         return false;
     }
 
@@ -179,9 +179,9 @@ bool CheckHistoryPaging(QApplication& application) {
     }
     if (!LayoutCheck(requests.size() == 4, "duplicate history page was not skipped automatically") ||
         !LayoutCheck(
-            requests[1].contains("limit=500&cursor=100.2.1") && requests[2].contains("limit=500&cursor=100.2.1"),
+            requests[1].contains("limit=100&cursor=100.2.1") && requests[2].contains("limit=100&cursor=100.2.1"),
             "history retry did not preserve its cursor") ||
-        !LayoutCheck(requests[3].contains("limit=500&cursor=90.2.5"),
+        !LayoutCheck(requests[3].contains("limit=100&cursor=90.2.5"),
                      "duplicate history page did not advance to its next cursor")) {
         return false;
     }

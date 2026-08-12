@@ -70,7 +70,7 @@ constexpr std::size_t kChannelCount = 1;
 constexpr int kDefaultMqttPort = 1883;
 constexpr int kOperationalLogBatchIntervalMs = 100;
 constexpr qsizetype kOperationalLogBatchSize = 200;
-constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kDefaultMaximumEntries);
+constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kPageSize);
 constexpr qsizetype kMinimumOperationalLogEntries = OperationalLogState::kPageSize;
 constexpr qsizetype kMaximumOperationalLogEntries = 5000;
 
