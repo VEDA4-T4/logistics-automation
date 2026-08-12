@@ -13,6 +13,7 @@ class QNetworkAccessManager;
 class QNetworkReply;
 class QEvent;
 class QResizeEvent;
+class QStackedLayout;
 
 namespace logistics::control_center {
 
@@ -27,7 +28,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
-    void setValue(QLabel* label, const QString& value);
+    void setValue(QLabel* label, const QString& value, bool awaiting_product);
     void setImagePlaceholder(const QString& text, bool is_error = false);
     void loadImage(const CurrentProduct& product);
     void updateImagePixmap();
@@ -37,6 +38,8 @@ private:
     QNetworkAccessManager* network_manager_{ nullptr };
     QNetworkReply* active_image_reply_{ nullptr };
     QListWidget* active_work_list_{ nullptr };
+    QLabel* active_work_empty_state_{ nullptr };
+    QStackedLayout* active_work_stack_{ nullptr };
     QLabel* tracking_status_{ nullptr };
     QLabel* recognition_status_{ nullptr };
     QLabel* processing_status_{ nullptr };

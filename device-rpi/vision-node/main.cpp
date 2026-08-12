@@ -48,7 +48,6 @@ constexpr int kMaximumConsecutiveFrameErrors = 3;
 constexpr int kReconnectPollIntervalMs = 100;
 constexpr int kMaximumCameraDimension = 8192;
 constexpr int kMaximumCameraFps = 240;
-constexpr int kBarcodeRecognitionTimeoutSeconds = 3;
 constexpr std::size_t kBarcodeCornerCount = 4;
 constexpr double kLatencySmoothingFactor = 0.1;
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
@@ -385,8 +384,7 @@ int main(const int argc, char* argv[]) {
     std::optional<std::string> pending_image_upload_work_id;
     std::atomic_uint64_t work_generation{};
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
-    logistics::vision::VisionMqttWorkflow mqtt_workflow(
-        device_id, 3, 5, static_cast<std::size_t>(settings.fps * kBarcodeRecognitionTimeoutSeconds));
+    logistics::vision::VisionMqttWorkflow mqtt_workflow(device_id);
     logistics::vision::VisionResultOutbox result_outbox;
     logistics::device::DeviceControlState control_state({
         .device_id = device_id,

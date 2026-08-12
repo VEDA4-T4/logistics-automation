@@ -7,7 +7,10 @@
 #include <QHostAddress>
 #include <QLabel>
 #include <QListWidget>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSizePolicy>
+#include <QStackedLayout>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -49,7 +52,8 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
 
     auto* image = panel.findChild<QLabel*>(QStringLiteral("productImage"));
     auto* work_list = panel.findChild<QListWidget*>(QStringLiteral("activeWorkList"));
-    auto* metadata = panel.findChild<QWidget*>(QStringLiteral("productMetadata"));
+    auto* metadata = panel.findChild<QWidget*>(QStringLiteral("productMetadataColumn"));
+    auto* info_card = panel.findChild<QWidget*>(QStringLiteral("productInfoCard"));
     auto* status_row = panel.findChild<QWidget*>(QStringLiteral("productStatusRow"));
     auto* work_title = panel.findChild<QLabel*>(QStringLiteral("activeWorkListTitle"));
     auto* image_title = panel.findChild<QLabel*>(QStringLiteral("productImageTitle"));
@@ -57,13 +61,15 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
     assert(image != nullptr);
     assert(work_list != nullptr);
     assert(metadata != nullptr);
+    assert(info_card != nullptr);
     assert(status_row != nullptr);
     assert(work_title != nullptr && image_title != nullptr && metadata_title != nullptr);
     assert(panel.size() == size);
 
     const auto image_rect = PanelRect(panel, *image);
     const auto work_list_rect = PanelRect(panel, *work_list);
-    const auto metadata_rect = PanelRect(panel, *metadata);
+    auto metadata_rect = PanelRect(panel, *metadata);
+    metadata_rect.setTop(PanelRect(panel, *info_card).top());
     const auto status_rect = PanelRect(panel, *status_row);
     for (const auto& rect : { work_list_rect, image_rect, metadata_rect, status_rect }) {
         assert(!rect.isEmpty());
@@ -92,14 +98,24 @@ int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
 
     logistics::control_center::ProductResultPanel panel(QUrl(QStringLiteral("http://127.0.0.1/")));
-    int empty_value_count = 0;
+    int awaiting_value_count = 0;
     for (const auto* label : panel.findChildren<QLabel*>()) {
-        if (label->text() == QStringLiteral("데이터 없음")) {
-            assert(label->styleSheet().contains(QStringLiteral("color:#cca700")));
-            ++empty_value_count;
+        if (label->text() == QStringLiteral("—")) {
+            assert(label->styleSheet().contains(QStringLiteral("color:#6e6e6e")));
+            ++awaiting_value_count;
         }
     }
-    assert(empty_value_count == 7);
+    assert(awaiting_value_count == 7);
+    auto* work_stack = panel.findChild<QStackedLayout*>(QStringLiteral("activeWorkStack"));
+    auto* work_empty_state = panel.findChild<QLabel*>(QStringLiteral("activeWorkListEmptyState"));
+    auto* image_empty_state = panel.findChild<QLabel*>(QStringLiteral("productImage"));
+    auto* detail_value = panel.findChild<QLabel*>(QStringLiteral("productDetailValue"));
+    assert(work_stack != nullptr && work_empty_state != nullptr);
+    assert(image_empty_state != nullptr && detail_value != nullptr);
+    assert(work_stack->currentWidget() == work_empty_state);
+    assert(work_empty_state->text() == QStringLiteral("진행 중인 작업 없음"));
+    assert(work_empty_state->styleSheet() == image_empty_state->styleSheet());
+    assert(detail_value->text() == QStringLiteral("상품 데이터 수신 대기 중"));
 
     logistics::control_center::CurrentProduct product;
     product.work_id = QStringLiteral("work-20260804-very-long-identifier");
@@ -138,6 +154,38 @@ int main(int argc, char* argv[]) {
         assert(value_top > previous_value_top);
         previous_value_top = value_top;
     }
+    panel.resize(460, 180);
+    application.processEvents();
+    auto* metadata_scroll = panel.findChild<QScrollArea*>(QStringLiteral("productMetadata"));
+    auto* metadata_content = panel.findChild<QWidget*>(QStringLiteral("productMetadataContent"));
+    auto* detail_card = panel.findChild<QWidget*>(QStringLiteral("productDetailCard"));
+    assert(metadata_scroll != nullptr && metadata_content != nullptr && detail_card != nullptr);
+    assert(metadata_content->styleSheet().contains(QStringLiteral("background-color:#141d26")));
+    assert(metadata_scroll->viewport()->styleSheet().contains(QStringLiteral("background-color:#141d26")));
+    assert(metadata_scroll->styleSheet().contains(QStringLiteral("QScrollBar::add-line:vertical")));
+    assert(metadata_scroll->styleSheet().contains(QStringLiteral("background:#1f1f1f")));
+    assert(metadata_scroll->styleSheet().contains(QStringLiteral("min-height:8px")));
+    assert(metadata_content->minimumHeight() == 140);
+    assert(metadata_scroll->verticalScrollBar()->maximum() > 0);
+    const auto info_card_geometry = info_card->geometry();
+    metadata_scroll->verticalScrollBar()->setValue(metadata_scroll->verticalScrollBar()->maximum());
+    application.processEvents();
+    assert(metadata_scroll->verticalScrollBar()->value() == metadata_scroll->verticalScrollBar()->maximum());
+    assert(metadata_scroll->verticalScrollBar()->value() > metadata_scroll->verticalScrollBar()->minimum());
+    assert(info_card->geometry() == info_card_geometry);
+    assert(info_card->rect().contains(QRect(metadata_scroll->mapTo(info_card, QPoint{}), metadata_scroll->size())));
+    assert(detail_card->isVisible());
+    assert(detail_card->height() == 46);
+    assert(panel.rect().contains(QRect(detail_card->mapTo(&panel, QPoint{}), detail_card->size())));
+    assert(detail_value->isVisible());
+    assert(!detail_value->wordWrap());
+    assert(detail_value->height() == 18);
+    assert(detail_value->styleSheet().contains(QStringLiteral("font-size:9px")));
+    assert(detail_card->rect().contains(QRect(detail_value->mapTo(detail_card, QPoint{}), detail_value->size())));
+    for (const auto& value : expected_values) {
+        const auto* label = FindLabel(panel, value);
+        assert(label != nullptr && label->height() >= 16);
+    }
 
     auto second_product = product;
     second_product.work_id = QStringLiteral("work-second");
@@ -158,6 +206,7 @@ int main(int argc, char* argv[]) {
     auto* work_list = panel.findChild<QListWidget*>(QStringLiteral("activeWorkList"));
     auto* tracking = panel.findChild<QLabel*>(QStringLiteral("workTrackingStatus"));
     assert(work_list != nullptr && work_list->count() == 1);
+    assert(work_stack->currentWidget() == work_list);
     assert(tracking != nullptr);
     assert(tracking->wordWrap());
     work_list->setCurrentRow(0);
@@ -168,6 +217,7 @@ int main(int argc, char* argv[]) {
     second_product.processing_result = logistics::control_center::ProductProcessingResult::Success;
     panel.setActiveWorks({ product, second_product }, { line_tracer });
     assert(work_list->count() == 0);
+    assert(work_stack->currentWidget() == work_empty_state);
     for (const auto* label : panel.findChildren<QLabel*>()) {
         assert(label->text() != product.work_id);
         assert(label->text() != second_product.work_id);

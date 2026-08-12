@@ -429,7 +429,7 @@ void DetectionOverlay::paintEvent(QPaintEvent* event) {
         painter.drawText(status_rect, Qt::AlignCenter, status);
     }
 
-    if (!has_frame_) {
+    if (!has_frame_ || !video_frame_.isValid()) {
         return;
     }
 

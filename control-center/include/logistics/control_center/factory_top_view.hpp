@@ -77,6 +77,8 @@ public:
     [[nodiscard]] QList<QPointF> lineArrowPositions() const;
     [[nodiscard]] QRectF nodeSelectionRect(const QString& process_key) const;
     [[nodiscard]] qreal gripperAngle() const;
+    [[nodiscard]] qreal gripperArmLength() const;
+    [[nodiscard]] QPointF gripperEndPosition() const;
     [[nodiscard]] QPointF gripperPivotPosition() const;
     [[nodiscard]] bool gripperProductVisible() const;
     [[nodiscard]] QPointF gripperProductPosition() const;

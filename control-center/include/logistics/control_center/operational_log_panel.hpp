@@ -11,7 +11,6 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
-class QStackedLayout;
 class QTableView;
 
 namespace logistics::control_center {
@@ -59,7 +58,6 @@ private:
     QLineEdit* query_filter_{ nullptr };
     QCheckBox* unacknowledged_filter_{ nullptr };
     QPushButton* acknowledge_all_button_{ nullptr };
-    QStackedLayout* table_stack_{ nullptr };
     QTableView* table_{ nullptr };
     OperationalLogTableModel* table_model_{ nullptr };
     OperationalLogFilterProxyModel* filter_model_{ nullptr };

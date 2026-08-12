@@ -23,6 +23,8 @@ typedef struct {
 
 static control_pending_response_t controlPendingResponses[CONTROL_TASK_PENDING_RESPONSE_CAPACITY];
 
+static void ControlTask_PublishStateChanged(uint32_t now_ms);
+
 static uint32_t ControlTask_EnterShortCriticalSection(void) {
     uint32_t primask = __get_PRIMASK();
 
@@ -194,6 +196,9 @@ static void ControlTask_ProcessSafetyEvents(void) {
             if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
                                                    &fault_event) != 0U) {
                 ControlTask_PublishTxEvent(&fault_event, now_ms);
+            }
+            if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
+                ControlTask_PublishStateChanged(now_ms);
             }
             ControlTask_PublishSafetyResetResult(&event, now_ms);
         }
@@ -422,7 +427,7 @@ static void ControlTask_ProcessSensorSnapshots(void) {
 }
 
 static void ControlTask_PublishCommandResult(const app_control_command_t* command,
-                                              const control_command_result_t* result, uint32_t now_ms) {
+                                             const control_command_result_t* result, uint32_t now_ms) {
     app_tx_event_t event = ControlTask_MakeTxEvent(APP_TX_EVENT_COMMAND_ACK, command, result, now_ms);
     app_tx_event_t started_event;
 

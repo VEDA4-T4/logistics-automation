@@ -17,7 +17,7 @@ namespace mqtt = logistics::contracts::mqtt;
 
 QString IdleCommandStyle() {
     return QStringLiteral(
-        "background-color:#1f1f1f;color:#cccccc;border:1px solid #2b2b2b;border-radius:4px;padding:4px;");
+        "background-color:#1f1f1f;color:#cccccc;border:1px solid #4a4a4a;border-radius:4px;padding:4px;");
 }
 
 QString PendingCommandStyle() {
@@ -91,9 +91,8 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
 
     const auto state = process.current_state.trimmed().toUpper();
     const auto role = logistics::contracts::DeviceRoleFromString(process.key.toStdString());
-    const auto meaning = role.has_value()
-                             ? logistics::contracts::DeviceStateMeaningFor(*role, state.toStdString())
-                             : logistics::contracts::DeviceStateMeaning::kUnknown;
+    const auto meaning = role.has_value() ? logistics::contracts::DeviceStateMeaningFor(*role, state.toStdString())
+                                          : logistics::contracts::DeviceStateMeaning::kUnknown;
     if (meaning == logistics::contracts::DeviceStateMeaning::kEmergencyStop) {
         return ProcessControlPhase::EmergencyStop;
     }
@@ -122,8 +121,8 @@ ProcessControlPhase PhaseForProcess(const ProcessUnitStatus& process) {
 ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("processControlPanel"));
     setMinimumWidth(0);
-    setMinimumHeight(72);
-    setMaximumHeight(92);
+    setMinimumHeight(44);
+    setMaximumHeight(58);
     setStyleSheet(
         "#processControlPanel{background-color:#181818;border:1px solid #303030;border-radius:6px;}"
         "QPushButton{font-size:12px;font-weight:600;padding:0 8px;}"
@@ -134,25 +133,31 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         "QPushButton#recoveryButton{color:#75beff;}"
         "QPushButton#emergencyStopButton{background-color:#a1260d;color:#ffffff;"
         "font-size:13px;border:1px solid #c42b1c;}"
-        "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}");
+        "QPushButton#emergencyStopButton:hover:enabled{background-color:#c42b1c;}"
+        "#standardCommandGroup,#recoveryCommandGroup,#safetyCommandGroup{background:transparent;border:0;}"
+        "QPushButton#startButton:disabled,QPushButton#stopButton:disabled,"
+        "QPushButton#recoveryButton:disabled,QPushButton#emergencyStopButton:disabled{"
+        "background:#202020;color:#626262;border:1px solid #2b2b2b;}");
 
-    auto* layout = new QVBoxLayout(this);
+    auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(4);
+    layout->setSpacing(8);
 
     auto* title = new QLabel(QStringLiteral("공정 제어"), this);
+    title->setObjectName(QStringLiteral("processControlTitle"));
+    title->setFixedWidth(64);
+    title->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     title->setStyleSheet("color:#f0f0f0;font-size:14px;font-weight:700;");
     target_label_ = new QLabel(QStringLiteral("제어 대상 · 전체 공정"), this);
     target_label_->setObjectName(QStringLiteral("processControlTarget"));
+    target_label_->setFixedWidth(170);
+    target_label_->setFixedHeight(28);
+    target_label_->setAlignment(Qt::AlignCenter);
     target_label_->setStyleSheet(
         "background:#172534;color:#75beff;border:1px solid #285a7e;border-radius:4px;"
         "font-size:10px;font-weight:700;padding:4px 8px;");
     target_label_->setToolTip(
         QStringLiteral("상단 공정 카드를 클릭하여 대상을 변경합니다. 비상정지는 항상 전체 공정에 적용됩니다."));
-    connection_hint_ = new QLabel(QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."), this);
-    connection_hint_->setWordWrap(false);
-    connection_hint_->setStyleSheet("color:#9d9d9d;font-size:10px;");
-
     command_status_ = new QLabel(QStringLiteral("대기 중"), this);
     command_status_->setObjectName(QStringLiteral("commandStatus"));
     command_status_->setFixedHeight(28);
@@ -171,6 +176,7 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
     for (auto* button : { start_button_, stop_button_, recovery_button_ }) {
         button->setFixedHeight(28);
     }
+    recovery_button_->setFixedWidth(78);
     emergency_stop_button_->setFixedHeight(32);
 
     connect(start_button_, &QPushButton::clicked, this,
@@ -185,29 +191,42 @@ ProcessControlPanel::ProcessControlPanel(QWidget* parent) : QWidget(parent) {
         emit commandRequested(mqtt::ControlCommand::kEmergencyStop, command_target_device_id_);
     });
 
-    auto* information_row = new QHBoxLayout();
-    information_row->setContentsMargins(0, 0, 0, 0);
-    information_row->setSpacing(8);
-    information_row->addWidget(title);
-    information_row->addWidget(target_label_);
-    information_row->addWidget(command_status_, 1);
-    information_row->addWidget(connection_hint_);
+    auto* standard_group = new QFrame(this);
+    standard_group->setObjectName(QStringLiteral("standardCommandGroup"));
+    standard_group->setAccessibleName(QStringLiteral("일반 공정 제어"));
+    auto* standard_layout = new QHBoxLayout(standard_group);
+    standard_layout->setContentsMargins(0, 0, 0, 0);
+    standard_layout->setSpacing(6);
+    standard_layout->addWidget(start_button_);
+    standard_layout->addWidget(stop_button_);
 
-    auto* command_row = new QHBoxLayout();
-    command_row->setContentsMargins(0, 0, 0, 0);
-    command_row->setSpacing(8);
-    command_row->addStretch(1);
-    command_row->addWidget(start_button_);
-    command_row->addWidget(stop_button_);
-    command_row->addWidget(recovery_button_);
+    auto* recovery_group = new QFrame(this);
+    recovery_group->setObjectName(QStringLiteral("recoveryCommandGroup"));
+    recovery_group->setAccessibleName(QStringLiteral("공정 복구 제어"));
+    auto* recovery_layout = new QHBoxLayout(recovery_group);
+    recovery_layout->setContentsMargins(0, 0, 0, 0);
+    recovery_layout->addWidget(recovery_button_);
 
-    auto* divider = new QFrame(this);
-    divider->setFrameShape(QFrame::VLine);
-    divider->setStyleSheet("color:#303030;");
-    command_row->addWidget(divider);
-    command_row->addWidget(emergency_stop_button_);
-    layout->addLayout(information_row);
-    layout->addLayout(command_row);
+    auto* safety_group = new QFrame(this);
+    safety_group->setObjectName(QStringLiteral("safetyCommandGroup"));
+    safety_group->setAccessibleName(QStringLiteral("비상 안전 제어"));
+    auto* safety_layout = new QHBoxLayout(safety_group);
+    safety_layout->setContentsMargins(0, 0, 0, 0);
+    safety_layout->addWidget(emergency_stop_button_);
+
+    auto* safety_divider = new QFrame(this);
+    safety_divider->setObjectName(QStringLiteral("safetyCommandDivider"));
+    safety_divider->setFrameShape(QFrame::VLine);
+    safety_divider->setFixedHeight(24);
+    safety_divider->setStyleSheet("color:#3c3c3c;");
+
+    layout->addWidget(title);
+    layout->addWidget(target_label_);
+    layout->addWidget(command_status_, 1);
+    layout->addWidget(standard_group);
+    layout->addWidget(recovery_group);
+    layout->addWidget(safety_divider, 0, Qt::AlignVCenter);
+    layout->addWidget(safety_group);
 
     updateTargetPresentation();
     updateButtonStates();
@@ -223,8 +242,6 @@ void ProcessControlPanel::setControlTarget(const QString& target_device_id, cons
 
 void ProcessControlPanel::setMqttConnected(bool connected) {
     control_state_.setMqttConnected(connected);
-    connection_hint_->setText(connected ? QStringLiteral("중앙 서버 MQTT 연결됨")
-                                        : QStringLiteral("MQTT 연결 후 명령을 사용할 수 있습니다."));
     if (connected) {
         updateCommandPresentation();
     } else if (!connected) {
@@ -398,10 +415,13 @@ void ProcessControlPanel::updateCommandPresentation() {
 }
 
 void ProcessControlPanel::updateTargetPresentation() {
-    target_label_->setText(QStringLiteral("제어 대상 · %1").arg(selected_target_display_name_));
-    target_label_->setToolTip(selectedTargetDeviceId() == QStringLiteral("SYSTEM")
-                                  ? QStringLiteral("시작·정지·복구는 전체 공정에 적용됩니다.")
-                                  : QStringLiteral("시작·정지·복구는 선택한 노드에 적용됩니다."));
+    const auto target_text = QStringLiteral("제어 대상 · %1").arg(selected_target_display_name_);
+    target_label_->setText(
+        target_label_->fontMetrics().elidedText(target_text, Qt::ElideRight, target_label_->width() - 18));
+    target_label_->setToolTip(
+        QStringLiteral("%1\n%2").arg(target_text, selectedTargetDeviceId() == QStringLiteral("SYSTEM")
+                                                      ? QStringLiteral("시작·정지·복구는 전체 공정에 적용됩니다.")
+                                                      : QStringLiteral("시작·정지·복구는 선택한 노드에 적용됩니다.")));
     recovery_button_->setText(selectedTargetDeviceId() == QStringLiteral("SYSTEM") ? QStringLiteral("전체 복구")
                                                                                    : QStringLiteral("복구"));
     recovery_button_->setToolTip(
@@ -434,6 +454,20 @@ void ProcessControlPanel::updateButtonStates() {
 
     // Emergency stop stays available while a normal command is pending so it can always take priority.
     emergency_stop_button_->setEnabled(control_state_.emergencyStopEnabled());
+
+    if (!control_state_.isMqttConnected()) {
+        const auto disconnected_hint = QStringLiteral("MQTT 연결 후 사용할 수 있습니다.");
+        start_button_->setToolTip(disconnected_hint);
+        stop_button_->setToolTip(disconnected_hint);
+        recovery_button_->setToolTip(disconnected_hint);
+        emergency_stop_button_->setToolTip(disconnected_hint);
+        return;
+    }
+    start_button_->setToolTip(QStringLiteral("선택한 제어 대상의 공정을 시작합니다."));
+    stop_button_->setToolTip(QStringLiteral("선택한 제어 대상의 공정을 정지합니다."));
+    recovery_button_->setToolTip(sensor_warning ? QStringLiteral("센서 응답이 정상화되어야 복구할 수 있습니다.")
+                                                : QStringLiteral("선택한 제어 대상의 오류 상태를 복구합니다."));
+    emergency_stop_button_->setToolTip(QStringLiteral("전체 공정에 비상 정지 명령을 전송합니다."));
 }
 
 }  // namespace logistics::control_center

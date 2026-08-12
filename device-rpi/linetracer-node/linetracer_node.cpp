@@ -114,6 +114,10 @@ namespace mqtt = contracts::mqtt;
     }
 }
 
+[[nodiscard]] std::string SensorMeasurementStatus(std::uint8_t state) {
+    return state == UART_SENSOR_DETECTED ? "DETECTED" : "CLEAR";
+}
+
 [[nodiscard]] mqtt::ConnectionState StateConnection(std::uint8_t state) noexcept {
     if (state == UART_LINETRACER_STATE_FAULT) {
         return mqtt::ConnectionState::kUartError;
@@ -124,7 +128,8 @@ namespace mqtt = contracts::mqtt;
 }  // namespace
 
 bool LineTracerCommandResult::Succeeded() const noexcept {
-    return status == LineTracerCommandStatus::kSent || status == LineTracerCommandStatus::kSentNoReply;
+    return status == LineTracerCommandStatus::kCompleted || status == LineTracerCommandStatus::kSent ||
+           status == LineTracerCommandStatus::kSentNoReply;
 }
 
 LineTracerNode::LineTracerNode(std::string device_id, UartSession& uart_session)
@@ -497,7 +502,7 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
             break;
         case DeviceControlAction::kStart:
             if (!HasActiveJob()) {
-                result.status = LineTracerCommandStatus::kNoActiveJob;
+                result.status = LineTracerCommandStatus::kCompleted;
                 return result;
             }
             uart_command = UART_CMD_LINETRACER_RESUME_DRIVE;
@@ -541,7 +546,11 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
             break;
         case DeviceControlAction::kSafetyRecovery:
             uart_command = UART_CMD_RESET_DEVICE;
-            effect = PendingEffect::kClearJob;
+            /*
+             * A safety recovery clears the controller latch, but the controller
+             * resumes an active route. Preserve its MQTT work/job/position mapping.
+             */
+            effect = HasActiveJob() ? PendingEffect::kNone : PendingEffect::kClearJob;
             break;
         case DeviceControlAction::kStatusRequest:
         case DeviceControlAction::kComponentRecovery:
@@ -657,6 +666,35 @@ void LineTracerNode::ResetStatusKeepalive() noexcept {
 }
 
 void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
+    if (frame.command == UART_CMD_SENSOR_STATUS) {
+        if (frame.length != UART_SENSOR_STATUS_PAYLOAD_SIZE) {
+            return;
+        }
+
+        const std::uint8_t sensor_id = frame.payload[UART_SENSOR_ID_INDEX];
+        const std::uint8_t sensor_state = frame.payload[UART_SENSOR_STATE_INDEX];
+        if (sensor_id == 0U || sensor_id > 4U ||
+            (sensor_state != UART_SENSOR_CLEAR && sensor_state != UART_SENSOR_DETECTED)) {
+            return;
+        }
+
+        const std::uint16_t distance_cm =
+            static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
+            static_cast<std::uint16_t>(static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX])
+                                       << 8U);
+        EmitReport({
+            .channel = LineTracerReportChannel::kEvent,
+            .message_type = mqtt::MessageType::kSensorStatus,
+            .data =
+                mqtt::SensorStatusPayload{
+                    .sensor_id = static_cast<std::int32_t>(sensor_id),
+                    .measurement_status = SensorMeasurementStatus(sensor_state),
+                    .distance_cm = static_cast<std::int32_t>(distance_cm),
+                },
+        });
+        return;
+    }
+
     if (frame.command != UART_CMD_EVENT || UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(frame.payload, frame.length) == 0U) {
         return;
     }

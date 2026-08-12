@@ -98,6 +98,10 @@ namespace mqtt = contracts::mqtt;
     });
 }
 
+[[nodiscard]] bool CanAutomaticallyRecover(ProcessSystemState state) noexcept {
+    return state == ProcessSystemState::kError || state == ProcessSystemState::kEmergencyStop;
+}
+
 }  // namespace
 
 bool ProcessOrchestratorConfig::IsValid() const noexcept {
@@ -313,6 +317,7 @@ ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
     ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
     std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence) {
     std::vector<InvalidatedRestoredWork> invalidated_works;
+    std::erase_if(works, [](const WorkProcessSnapshot& work) { return work.stage == WorkStage::kFailed; });
     if (!homography_.Enabled()) {
         gripper_targets.clear();
     } else {
@@ -392,7 +397,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         }
         const auto meaning = contracts::DeviceStateMeaningFor(*role, Uppercase(heartbeat->current_state));
         RememberDeviceHealth(message.source_id, meaning, heartbeat->status, heartbeat->error_code);
-        if (machine.SystemState() == ProcessSystemState::kError && machine.ActiveWorks().empty() &&
+        if (CanAutomaticallyRecover(machine.SystemState()) && machine.ActiveWorks().empty() &&
             AllProcessDevicesHealthy()) {
             return {
                 .handled = true,
@@ -408,7 +413,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                                               : contracts::DeviceStateMeaning::kUnknown;
         if (role.has_value()) {
             RememberDeviceHealth(message.source_id, meaning, status->status, status->error_code);
-            if (machine.SystemState() == ProcessSystemState::kError && machine.ActiveWorks().empty() &&
+            if (CanAutomaticallyRecover(machine.SystemState()) && machine.ActiveWorks().empty() &&
                 AllProcessDevicesHealthy()) {
                 return {
                     .handled = true,
