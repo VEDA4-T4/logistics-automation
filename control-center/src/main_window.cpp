@@ -70,7 +70,7 @@ constexpr std::size_t kChannelCount = 1;
 constexpr int kDefaultMqttPort = 1883;
 constexpr int kOperationalLogBatchIntervalMs = 100;
 constexpr qsizetype kOperationalLogBatchSize = 200;
-constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kDefaultMaximumEntries);
+constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kPageSize);
 constexpr qsizetype kMinimumOperationalLogEntries = OperationalLogState::kPageSize;
 constexpr qsizetype kMaximumOperationalLogEntries = 5000;
 
@@ -470,10 +470,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* app_header = new QFrame(central_widget);
     app_header->setObjectName(QStringLiteral("appHeader"));
-    app_header->setMinimumHeight(76);
-    app_header->setMaximumHeight(92);
+    app_header->setMinimumHeight(46);
+    app_header->setMaximumHeight(58);
     auto* app_header_layout = new QHBoxLayout(app_header);
-    app_header_layout->setContentsMargins(16, 7, 16, 7);
+    app_header_layout->setContentsMargins(16, 4, 16, 4);
     auto* app_title_layout = new QVBoxLayout();
     app_title_layout->setContentsMargins(0, 0, 0, 0);
     app_title_layout->setSpacing(1);
@@ -483,15 +483,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     app_title->setStyleSheet("color:#f0f0f0;font-size:18px;font-weight:700;");
     app_title_layout->addWidget(app_eyebrow);
     app_title_layout->addWidget(app_title);
-    auto* channel_badge = new QLabel(QStringLiteral("1 CHANNEL"), app_header);
-    channel_badge->setAlignment(Qt::AlignCenter);
-    channel_badge->setStyleSheet(
-        "background:#252526;color:#cccccc;border:1px solid #3c3c3c;border-radius:4px;"
-        "font-size:10px;font-weight:700;padding:5px 10px;");
-    process_control_panel_ = new ProcessControlPanel(app_header);
     app_header_layout->addLayout(app_title_layout);
-    app_header_layout->addWidget(process_control_panel_, 1);
-    app_header_layout->addWidget(channel_badge);
+    app_header_layout->addStretch(1);
+    mqtt_status_label_ = new QLabel(QStringLiteral("● 중앙 서버 · 연결 준비"), app_header);
+    mqtt_status_label_->setObjectName(QStringLiteral("mqttConnectionStatus"));
+    mqtt_status_label_->setFixedSize(176, 30);
+    mqtt_status_label_->setAlignment(Qt::AlignCenter);
+    mqtt_status_label_->setAccessibleName(QStringLiteral("중앙 서버 연결 상태"));
+    mqtt_status_label_->setStyleSheet(
+        "color:#9d9d9d;background:#202020;border:1px solid #3a3a3a;border-radius:5px;"
+        "font-size:10px;font-weight:700;");
+    app_header_layout->addWidget(mqtt_status_label_, 0, Qt::AlignVCenter);
     root_layout->addWidget(app_header);
 
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
@@ -509,9 +511,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
     operations_workspace->addWidget(video_container);
     operations_workspace->addWidget(factory_top_view_);
-    operations_workspace->setStretchFactor(0, 1);
-    operations_workspace->setStretchFactor(1, 1);
-    operations_workspace->setSizes({ 640, 640 });
+    operations_workspace->setStretchFactor(0, 11);
+    operations_workspace->setStretchFactor(1, 9);
+    operations_workspace->setSizes({ 704, 576 });
+    process_control_panel_ = new ProcessControlPanel(central_widget);
 
     auto* detail_splitter = new QSplitter(Qt::Horizontal, central_widget);
     detail_splitter->setObjectName(QStringLiteral("detailSplitter"));
@@ -543,15 +546,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     selectControlTarget(config.control_target_device_id, initial_control_target_name);
 
     root_layout->addWidget(operations_workspace, 1);
+    root_layout->addSpacing(6);
+    root_layout->addWidget(process_control_panel_);
     root_layout->addWidget(operations_dashboard_panel_);
     root_layout->addWidget(detail_splitter, 1);
     setCentralWidget(central_widget);
 
-    mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
-    mqtt_status_label_->setObjectName(QStringLiteral("mqttConnectionStatus"));
-    mqtt_status_label_->setMargin(4);
     statusBar()->setSizeGripEnabled(false);
-    statusBar()->addPermanentWidget(mqtt_status_label_);
 
     command_response_timer_ = new QTimer(this);
     command_response_timer_->setSingleShot(true);
@@ -606,32 +607,38 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(mqtt_client_, &MqttClient::connectionStateChanged, this,
             [this](MqttClient::ConnectionState state, const QString& detail) {
                 mqtt_status_label_->setToolTip(detail);
+                const auto set_central_server_status = [this](const QString& text, const QString& color,
+                                                              const QString& background, const QString& border) {
+                    mqtt_status_label_->setText(text);
+                    mqtt_status_label_->setStyleSheet(
+                        QStringLiteral("color:%1;background:%2;border:1px solid %3;border-radius:5px;"
+                                       "font-size:10px;font-weight:700;")
+                            .arg(color, background, border));
+                };
                 switch (state) {
                     case MqttClient::ConnectionState::Connected:
                         process_control_panel_->setMqttConnected(true);
                         operations_dashboard_state_.markMqttConnectedAwaitingStatus(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(true);
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
-                        mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결됨"), QStringLiteral("#89d185"),
+                                                  QStringLiteral("#17251b"), QStringLiteral("#345c3d"));
                         appendOperationalLog(OperationalLogSeverity::Info, QStringLiteral("central-server"),
                                              QStringLiteral("통신"), QStringLiteral("MQTT_CONNECTED"), detail);
                         break;
                     case MqttClient::ConnectionState::Connecting:
                         process_control_panel_->setMqttConnected(false);
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결 중"));
-                        mqtt_status_label_->setStyleSheet("color:#cca700;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결 중"), QStringLiteral("#cca700"),
+                                                  QStringLiteral("#282411"), QStringLiteral("#5b5015"));
                         break;
                     case MqttClient::ConnectionState::Reconnecting:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
-                        mqtt_status_label_->setStyleSheet("color:#ce9178;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 재연결 대기"),
+                                                  QStringLiteral("#ce9178"), QStringLiteral("#2c211c"),
+                                                  QStringLiteral("#614234"));
                         appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
                                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_RECONNECTING"), detail);
                         break;
@@ -639,19 +646,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
-                        mqtt_status_label_->setStyleSheet("color:#f14c4c;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 오류"), QStringLiteral("#f14c4c"),
+                                                  QStringLiteral("#30191a"), QStringLiteral("#713234"));
                         break;
                     case MqttClient::ConnectionState::Disconnected:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
-                        mqtt_status_label_->setStyleSheet("color:#9d9d9d;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결 해제"), QStringLiteral("#9d9d9d"),
+                                                  QStringLiteral("#202020"), QStringLiteral("#3a3a3a"));
                         appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
                                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_DISCONNECTED"), detail);
                         break;
@@ -1193,7 +1198,7 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
             reconnect_timers_[channel]->stop();
             status_labels_[channel]->setText(QStringLiteral("연결 중…\n영상을 불러오는 중입니다"));
             status_labels_[channel]->setStyleSheet(
-                "color:#cca700;background-color:transparent;font-size:22px;font-weight:700;");
+                "color:#cca700;background-color:transparent;border:0;font-size:22px;font-weight:700;");
             status_labels_[channel]->setToolTip({});
             state_overlays_[channel]->setToolTip({});
             break;
@@ -1218,7 +1223,7 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
                 }
             }
             status_labels_[channel]->setStyleSheet(
-                "color:#f14c4c;background-color:transparent;font-size:22px;font-weight:700;");
+                "color:#f14c4c;background-color:transparent;border:0;font-size:22px;font-weight:700;");
             status_labels_[channel]->setToolTip(detail);
             state_overlays_[channel]->setToolTip(detail);
             if (previous_state != ChannelState::Error) {

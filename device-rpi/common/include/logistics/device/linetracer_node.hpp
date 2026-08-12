@@ -15,6 +15,7 @@
 namespace logistics::device {
 
 enum class LineTracerCommandStatus {
+    kCompleted,
     kSent,
     kSentNoReply,
     kInvalidMessage,
