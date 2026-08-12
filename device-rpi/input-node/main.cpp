@@ -292,8 +292,7 @@ int RunInputDaemon(int argc, char* argv[]) {
                           << "; commandsSent=" << diagnostics.commands_sent
                           << "; responsesMatched=" << diagnostics.responses_matched
                           << "; retries=" << diagnostics.retries << "; timeouts=" << diagnostics.timeouts
-                          << "; parserErrors=" << diagnostics.parser_errors
-                          << "; crcErrors=" << diagnostics.crc_errors
+                          << "; parserErrors=" << diagnostics.parser_errors << "; crcErrors=" << diagnostics.crc_errors
                           << "; transportErrors=" << diagnostics.transport_errors << '\n';
                 uart_session.Close();
             } else if (!keepalive.Succeeded()) {
