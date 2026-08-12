@@ -19,6 +19,7 @@ class QJsonObject;
 class QLabel;
 class QMediaPlayer;
 class QNetworkAccessManager;
+class QPushButton;
 class QStackedLayout;
 class QTimer;
 class QWidget;
@@ -63,6 +64,10 @@ private:
     void resetOperationalLogHistory();
     void appendOperationalLog(OperationalLogSeverity severity, const QString& device_id, const QString& category,
                               const QString& code, const QString& message);
+    void saveDangerZoneSettings();
+    void setDangerZoneEditing(bool editing, bool save_changes = false);
+    void handleDangerZoneOccupancy(bool occupied, int zone_index, const QString& class_name, double confidence);
+    void updateDangerZoneControls();
     void refreshOperationsPresentation();
     void selectControlTarget(const QString& device_id, const QString& display_name);
     std::vector<QMediaPlayer*> players_{};
@@ -89,6 +94,12 @@ private:
     QTimer* command_response_timer_{ nullptr };
     QTimer* node_status_timer_{ nullptr };
     QTimer* operational_log_flush_timer_{ nullptr };
+    QPushButton* danger_zone_settings_button_{ nullptr };
+    QPushButton* danger_zone_visibility_button_{ nullptr };
+    QPushButton* danger_zone_add_button_{ nullptr };
+    QPushButton* danger_zone_delete_button_{ nullptr };
+    QPushButton* danger_zone_save_button_{ nullptr };
+    QPushButton* danger_zone_cancel_button_{ nullptr };
     QNetworkAccessManager* history_network_manager_{ nullptr };
     QString control_target_device_id_{ "SYSTEM" };
     QString pending_target_device_id_;
@@ -99,6 +110,7 @@ private:
     QUrl history_base_url_;
     QString history_bearer_token_;
     QString history_next_cursor_;
+    QString danger_zone_settings_path_;
     QSet<QString> history_current_page_ids_;
     logistics::contracts::mqtt::ControlCommand pending_command_{ logistics::contracts::mqtt::ControlCommand::kUnknown };
     CurrentProductState current_product_state_;
@@ -114,6 +126,10 @@ private:
     int metadata_stale_timeout_ms_{ 1500 };
     bool history_request_in_flight_{ false };
     bool history_page_loaded_{ false };
+    bool mqtt_connected_{ false };
+    bool danger_zone_overlay_visible_{ true };
+    bool danger_zone_incident_logged_{ false };
+    bool danger_zone_estop_pending_{ false };
     quint64 history_request_generation_{ 0 };
 };
 
