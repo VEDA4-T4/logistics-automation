@@ -244,6 +244,7 @@ constexpr QPointF kSortingFeed{ 504, 137 };
 constexpr QPointF kSortingPositions[]{ { 504, 250 }, { 504, 345 }, { 504, 442 } };
 constexpr QPointF kLineIntersections[]{ { 292, 250 }, { 292, 345 }, { 292, 442 } };
 constexpr QPointF kLineDestinations[]{ { 80, 250 }, { 80, 345 }, { 80, 442 } };
+constexpr QPointF kLineTracerSensorPositions[]{ { 80, 165 }, { 195, 165 }, { 80, 183 }, { 195, 183 } };
 constexpr QRectF kLineTracerSelectionRect{ 70, 235, 445, 222 };
 
 std::optional<int> LineTracerPositionRoute(const LineTracerPositionStatus& position) {
@@ -403,6 +404,7 @@ struct FactoryTopViewWidget::Impl {
         QList<QGraphicsLineItem*> state_lines;
         QList<QAbstractGraphicsShapeItem*> state_shapes;
         QHash<int, QGraphicsSimpleTextItem*> sensor_labels;
+        QHash<int, QString> sensor_label_prefixes;
         QHash<int, QString> sensor_text;
         FactoryNodeVisual visual;
         QString display_name;
@@ -553,6 +555,18 @@ struct FactoryTopViewWidget::Impl {
 
         auto& line_tracer =
             addNode(QString::fromLatin1(kLineTracerProcessKey), QStringLiteral("Line tracer"), QPointF(80, 205));
+        const QString sensor_directions[]{ QStringLiteral("전"), QStringLiteral("후"), QStringLiteral("좌"),
+                                           QStringLiteral("우") };
+        for (int sensor_index = 0; sensor_index < 4; ++sensor_index) {
+            const auto sensor_id = sensor_index + 1;
+            const auto& direction = sensor_directions[sensor_index];
+            auto* sensor =
+                new QGraphicsSimpleTextItem(QStringLiteral("%1 -- cm").arg(direction), line_tracer.group);
+            sensor->setBrush(QColor(QStringLiteral("#cccccc")));
+            sensor->setPos(kLineTracerSensorPositions[sensor_index]);
+            line_tracer.sensor_labels.insert(sensor_id, sensor);
+            line_tracer.sensor_label_prefixes.insert(sensor_id, direction);
+        }
         for (int route = 0; route < 3; ++route) {
             addStateLine(line_tracer, QLineF(kLineIntersections[route], kLineDestinations[route]), 3);
             addStateLine(line_tracer, QLineF(kLineIntersections[route], kSortingPositions[route]), 3);
@@ -602,9 +616,11 @@ struct FactoryTopViewWidget::Impl {
     void updateSensors(NodeItems& node) {
         node.sensor_text.clear();
         for (auto iterator = node.sensor_labels.begin(); iterator != node.sensor_labels.end(); ++iterator) {
+            const auto fallback_number = iterator.key() + (node.sensor_labels.size() == 1 ? 0 : 1);
+            const auto prefix =
+                node.sensor_label_prefixes.value(iterator.key(), QStringLiteral("US%1").arg(fallback_number));
             node.sensor_text.insert(iterator.key(), QStringLiteral("-- cm"));
-            iterator.value()->setText(
-                QStringLiteral("US%1 -- cm").arg(iterator.key() + (node.sensor_labels.size() == 1 ? 0 : 1)));
+            iterator.value()->setText(QStringLiteral("%1 -- cm").arg(prefix));
         }
         if (node.sensor_labels.size() == 3) {
             alignSortingLabels(node);
@@ -615,8 +631,10 @@ struct FactoryTopViewWidget::Impl {
         for (const auto& sensor : node.visual.sensors) {
             node.sensor_text.insert(sensor.sensor_id, sensor.distance_text);
             if (auto* label = node.sensor_labels.value(sensor.sensor_id, nullptr); label != nullptr) {
-                const auto number = sensor.sensor_id + (node.sensor_labels.size() == 1 ? 0 : 1);
-                label->setText(QStringLiteral("US%1 %2").arg(number).arg(sensor.distance_text));
+                const auto fallback_number = sensor.sensor_id + (node.sensor_labels.size() == 1 ? 0 : 1);
+                const auto prefix = node.sensor_label_prefixes.value(
+                    sensor.sensor_id, QStringLiteral("US%1").arg(fallback_number));
+                label->setText(QStringLiteral("%1 %2").arg(prefix, sensor.distance_text));
             }
         }
         if (node.sensor_labels.size() == 3) {

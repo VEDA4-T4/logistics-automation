@@ -345,6 +345,28 @@ int main(int argc, char* argv[]) {
     concurrent_line_tracer.current_state = QStringLiteral("DELIVERING");
     concurrent_line_tracer.work_id = QStringLiteral("WORK-CONCURRENT");
     concurrent_line_tracer.destination = QStringLiteral("2");
+    concurrent_line_tracer.sensors = {
+        { .sensor_id = 1,
+          .display_name = QStringLiteral("FRONT"),
+          .measurement_status = QStringLiteral("DETECTED"),
+          .distance_cm = 4,
+          .updated_at = {} },
+        { .sensor_id = 2,
+          .display_name = QStringLiteral("REAR"),
+          .measurement_status = QStringLiteral("CLEAR"),
+          .distance_cm = 18,
+          .updated_at = {} },
+        { .sensor_id = 3,
+          .display_name = QStringLiteral("LEFT"),
+          .measurement_status = QStringLiteral("CLEAR"),
+          .distance_cm = 27,
+          .updated_at = {} },
+        { .sensor_id = 4,
+          .display_name = QStringLiteral("RIGHT"),
+          .measurement_status = QStringLiteral("CLEAR"),
+          .distance_cm = 31,
+          .updated_at = {} },
+    };
 
     logistics::control_center::FactoryTopViewWidget concurrent_view;
     concurrent_view.setProcesses(
@@ -370,6 +392,28 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.sensorText(QStringLiteral("sorting"), 1) == QStringLiteral("17 cm"));
     assert(concurrent_view.sensorText(QStringLiteral("sorting"), 2) == QStringLiteral("11 cm"));
     assert(concurrent_view.sensorText(QStringLiteral("sorting"), 3) == QStringLiteral("29 cm"));
+    assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 1) == QStringLiteral("4 cm"));
+    assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 2) == QStringLiteral("18 cm"));
+    assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 3) == QStringLiteral("27 cm"));
+    assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 4) == QStringLiteral("31 cm"));
+
+    QStringList line_tracer_sensor_labels;
+    for (auto* item : concurrent_view.scene()->items()) {
+        const auto* label = dynamic_cast<QGraphicsSimpleTextItem*>(item);
+        if (label != nullptr &&
+            (label->text().startsWith(QStringLiteral("전 ")) || label->text().startsWith(QStringLiteral("후 ")) ||
+             label->text().startsWith(QStringLiteral("좌 ")) || label->text().startsWith(QStringLiteral("우 ")))) {
+            line_tracer_sensor_labels.append(label->text());
+            const auto bounds = label->mapRectToScene(label->boundingRect());
+            assert(bounds.left() >= 80.0);
+            assert(bounds.right() < concurrent_view.lineTracerJunctionPosition(1).x());
+            assert(bounds.bottom() < concurrent_view.lineTracerPickupPosition(1).y());
+        }
+    }
+    assert(line_tracer_sensor_labels.contains(QStringLiteral("전 4 cm")));
+    assert(line_tracer_sensor_labels.contains(QStringLiteral("후 18 cm")));
+    assert(line_tracer_sensor_labels.contains(QStringLiteral("좌 27 cm")));
+    assert(line_tracer_sensor_labels.contains(QStringLiteral("우 31 cm")));
 
     concurrent_view.advanceAnimationsForTest();
     assert(concurrent_view.nodeOpacity(QStringLiteral("input")) == 1.0);
