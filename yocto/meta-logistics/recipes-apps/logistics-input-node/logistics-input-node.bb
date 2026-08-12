@@ -9,7 +9,7 @@ SRC_URI = " \
     file://logistics-input-node.service \
 "
 
-SRCREV = "1de4c9e35cb5e48039208ed64d9f4193c70e43e0"
+SRCREV = "05ee802d96d2bac75d048d6eaf9b1f07747535fb"
 
 S = "${WORKDIR}/git"
 
