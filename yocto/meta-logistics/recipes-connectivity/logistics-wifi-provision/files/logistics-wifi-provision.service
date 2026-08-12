@@ -1,0 +1,26 @@
+[Unit]
+Description=Import logistics Wi-Fi configuration from the Boot partition
+Documentation=file:/boot/logistics-wifi.conf.example
+ConditionPathExists=/boot/logistics-wifi.conf
+RequiresMountsFor=/boot
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/logistics-wifi-provision
+RemainAfterExit=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=network-pre.target

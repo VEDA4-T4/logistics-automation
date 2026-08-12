@@ -276,13 +276,27 @@ InputCommandResult InputNode::HandleMqttCommand(const mqtt::MqttMessage& message
     return result;
 }
 
+bool InputNode::RecordConveyorState(const uart_frame_t& response) noexcept {
+    if (response.command != UART_CMD_RESPONSE || response.length != UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE) {
+        return false;
+    }
+    const std::uint8_t conveyor_state = response.payload[UART_INPUT_CONVEYOR_STATUS_STATE_INDEX];
+    const bool changed = !last_conveyor_state_.has_value() || *last_conveyor_state_ != conveyor_state;
+    last_conveyor_state_ = conveyor_state;
+    return changed;
+}
+
 InputCommandResult InputNode::RequestControllerStatus() {
     InputCommandResult result{
         .mqtt_command = mqtt::ControlCommand::kUnknown,
         .uart_command = UART_CMD_INPUT_CONVEYOR_GET_STATUS,
     };
     result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_GET_STATUS, {});
-    if (result.Succeeded()) {
+    // This is the link keepalive, not a request from anyone: it runs every two
+    // seconds only to prove the UART still answers. Publishing each identical
+    // reply put one unchanged DEVICE_STATUS on the bus every two seconds, so
+    // report the state only when it actually moves.
+    if (result.Succeeded() && RecordConveyorState(result.uart_result.response_frame)) {
         EmitConveyorStatus(result.uart_result.response_frame);
     }
     return result;
@@ -378,6 +392,9 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
         case DeviceControlAction::kStatusRequest:
             result = Execute(std::move(result), UART_CMD_INPUT_CONVEYOR_GET_STATUS, conveyor_payload);
             if (result.Succeeded()) {
+                // The server asked, so answer regardless; recording the state keeps
+                // the keepalive from repeating this same report two seconds later.
+                static_cast<void>(RecordConveyorState(result.uart_result.response_frame));
                 EmitConveyorStatus(result.uart_result.response_frame);
             }
             EmitCommandResponse(result, "input conveyor status");

@@ -1,0 +1,67 @@
+#!/bin/sh
+set -eu
+
+source_config="/boot/logistics-wifi.conf"
+target_dir="/etc/wpa_supplicant"
+target_config="${target_dir}/wpa_supplicant-wlan0.conf"
+temporary_config="${target_config}.tmp"
+
+cleanup() {
+    if [ -n "${temporary_config:-}" ]; then
+        rm -f "$temporary_config"
+    fi
+}
+
+trap cleanup 0 1 2 15
+
+if [ ! -f "$source_config" ]; then
+    exit 0
+fi
+
+config_size=$(wc -c < "$source_config")
+
+if [ "$config_size" -gt 16384 ]; then
+    echo "Wi-Fi provisioning file is larger than 16 KiB" >&2
+    exit 1
+fi
+
+umask 077
+mkdir -p "$target_dir"
+
+# Windows editors can produce CRLF line endings. Normalize them while copying.
+tr -d '\r' < "$source_config" > "$temporary_config"
+
+if grep -q 'REPLACE_WITH_' "$temporary_config"; then
+    echo "Wi-Fi provisioning file still contains placeholder values" >&2
+    exit 1
+fi
+
+if ! grep -q 'network[[:space:]]*={' "$temporary_config"; then
+    echo "Wi-Fi provisioning file has no network block" >&2
+    exit 1
+fi
+
+if ! grep -q 'ssid[[:space:]]*=' "$temporary_config"; then
+    echo "Wi-Fi provisioning file has no SSID" >&2
+    exit 1
+fi
+
+if ! grep -q 'psk[[:space:]]*=' "$temporary_config" &&
+   ! grep -q 'sae_password[[:space:]]*=' "$temporary_config"; then
+    echo "Wi-Fi provisioning file has no PSK or SAE password" >&2
+    exit 1
+fi
+
+chown root:root "$temporary_config"
+chmod 0600 "$temporary_config"
+mv "$temporary_config" "$target_config"
+temporary_config=""
+
+systemctl enable wpa_supplicant@wlan0.service
+systemctl restart wpa_supplicant@wlan0.service
+
+# Remove the plaintext credential from the Windows-readable Boot partition
+# only after wpa_supplicant has started successfully.
+rm -f "$source_config"
+
+echo "Wi-Fi configuration imported successfully"

@@ -1,0 +1,14 @@
+[Match]
+Name=wlan0
+
+[Link]
+# Wi-Fi 설정이 없어도 부팅을 지연시키지 않는다.
+RequiredForOnline=no
+
+[Network]
+DHCP=ipv4
+IPv6AcceptRA=yes
+
+[DHCPv4]
+# 유선과 Wi-Fi가 동시에 연결되면 유선을 우선한다.
+RouteMetric=2048
