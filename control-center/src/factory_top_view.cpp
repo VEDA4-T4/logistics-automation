@@ -560,8 +560,7 @@ struct FactoryTopViewWidget::Impl {
         for (int sensor_index = 0; sensor_index < 4; ++sensor_index) {
             const auto sensor_id = sensor_index + 1;
             const auto& direction = sensor_directions[sensor_index];
-            auto* sensor =
-                new QGraphicsSimpleTextItem(QStringLiteral("%1 -- cm").arg(direction), line_tracer.group);
+            auto* sensor = new QGraphicsSimpleTextItem(QStringLiteral("%1 -- cm").arg(direction), line_tracer.group);
             sensor->setBrush(QColor(QStringLiteral("#cccccc")));
             sensor->setPos(kLineTracerSensorPositions[sensor_index]);
             line_tracer.sensor_labels.insert(sensor_id, sensor);
@@ -632,8 +631,8 @@ struct FactoryTopViewWidget::Impl {
             node.sensor_text.insert(sensor.sensor_id, sensor.distance_text);
             if (auto* label = node.sensor_labels.value(sensor.sensor_id, nullptr); label != nullptr) {
                 const auto fallback_number = sensor.sensor_id + (node.sensor_labels.size() == 1 ? 0 : 1);
-                const auto prefix = node.sensor_label_prefixes.value(
-                    sensor.sensor_id, QStringLiteral("US%1").arg(fallback_number));
+                const auto prefix =
+                    node.sensor_label_prefixes.value(sensor.sensor_id, QStringLiteral("US%1").arg(fallback_number));
                 label->setText(QStringLiteral("%1 %2").arg(prefix, sensor.distance_text));
             }
         }
