@@ -503,11 +503,10 @@ int main(int argc, char* argv[]) {
           { QStringLiteral("messageType"), QStringLiteral("SENSOR_STATUS") },
           { QStringLiteral("sourceId"), QStringLiteral("PI-LT-01") },
           { QStringLiteral("timestamp"), now.addMSecs(6).toString(Qt::ISODateWithMs) },
-          { QStringLiteral("data"),
-            QJsonObject{ { QStringLiteral("sensorId"), 1 },
-                         { QStringLiteral("sensorName"), QStringLiteral("FRONT") },
-                         { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
-                         { QStringLiteral("distanceCm"), 12 } } } });
+          { QStringLiteral("data"), QJsonObject{ { QStringLiteral("sensorId"), 1 },
+                                                 { QStringLiteral("sensorName"), QStringLiteral("FRONT") },
+                                                 { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                                                 { QStringLiteral("distanceCm"), 12 } } } });
     application.processEvents();
 
     if (!check(factory->sensorText(QStringLiteral("linetracer"), 1) == QStringLiteral("12 cm"),
