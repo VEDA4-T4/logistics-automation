@@ -30,6 +30,7 @@
 #include <QWidget>
 #include <cstdio>
 
+#include "logistics/control_center/detection_overlay.hpp"
 #include "logistics/control_center/factory_top_view.hpp"
 #include "logistics/control_center/main_window.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
@@ -342,19 +343,26 @@ int main(int argc, char* argv[]) {
     auto* danger_add = window.findChild<QPushButton*>(QStringLiteral("dangerZoneAddButton"));
     auto* danger_save = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSaveButton"));
     auto* danger_cancel = window.findChild<QPushButton*>(QStringLiteral("dangerZoneCancelButton"));
+    auto* detection_overlay = window.findChild<logistics::control_center::DetectionOverlay*>();
     if (!check(danger_toggle != nullptr && danger_actions != nullptr && danger_settings != nullptr &&
                    danger_visibility != nullptr && danger_add != nullptr && danger_save != nullptr &&
-                   danger_cancel != nullptr,
+                   danger_cancel != nullptr && detection_overlay != nullptr,
                "danger-zone controls are missing") ||
         !check(danger_actions->isHidden(), "danger-zone controls start expanded")) {
         return 1;
     }
     danger_toggle->click();
     if (!check(!danger_actions->isHidden() && !danger_settings->isHidden() && !danger_visibility->isHidden(),
-               "danger-zone controls did not expand")) {
+               "danger-zone controls did not expand") ||
+        !check(!danger_settings->isEnabled() &&
+                   danger_settings->toolTip() == QStringLiteral("영상 연결 후 설정할 수 있습니다."),
+               "danger-zone settings are enabled while video is offline") ||
+        !check(danger_visibility->isEnabled(), "existing danger-zone visibility cannot be changed offline")) {
         return 1;
     }
-    danger_settings->click();
+    detection_overlay->beginDangerZoneEditing();
+    danger_visibility->click();
+    danger_visibility->click();
     if (!check(!danger_add->isHidden() && !danger_save->isHidden(), "danger-zone edit controls did not open")) {
         return 1;
     }
@@ -380,7 +388,9 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
-    danger_settings->click();
+    detection_overlay->beginDangerZoneEditing();
+    danger_visibility->click();
+    danger_visibility->click();
     danger_cancel->click();
     if (!check(!danger_actions->isHidden() && danger_toggle->isChecked() && !danger_settings->isHidden() &&
                    !danger_visibility->isHidden() && danger_add->isHidden() && danger_save->isHidden(),
@@ -504,6 +514,14 @@ int main(int argc, char* argv[]) {
     const auto header_labels = app_header == nullptr ? QList<QLabel*>{} : app_header->findChildren<QLabel*>();
     const bool has_channel_badge = std::ranges::any_of(
         header_labels, [](const QLabel* label) { return label->text() == QStringLiteral("1 CHANNEL"); });
+    danger_toggle->click();
+    danger_settings->click();
+    application.processEvents();
+    if (!check(!danger_settings->isEnabled() && danger_add->isHidden() && !factory->hasFocus(),
+               "offline danger-zone settings entered editing or moved focus to the factory top-view")) {
+        return 2;
+    }
+    danger_toggle->click();
     if (!check(window.size() == QSize(1280, 720), "offscreen window did not keep 1280x720") ||
         !check(factory != nullptr && factory->isVisible(), "factoryTopView is not visible") ||
         !check(video != nullptr && video->isVisible(), "videoWorkspace is not visible") ||

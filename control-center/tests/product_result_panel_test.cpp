@@ -173,7 +173,21 @@ int main(int argc, char* argv[]) {
     assert(metadata_scroll->styleSheet().contains(QStringLiteral("background:#1f1f1f")));
     assert(metadata_scroll->styleSheet().contains(QStringLiteral("min-height:8px")));
     assert(metadata_content->minimumHeight() == 140);
+    assert(metadata_scroll->minimumHeight() >= 20);
+    const auto* first_metadata_value = FindLabel(panel, product.work_id);
+    assert(first_metadata_value != nullptr);
+    assert(metadata_scroll->viewport()->height() >= first_metadata_value->height());
+    assert(metadata_scroll->viewport()->height() % 20 == 0);
+    assert(metadata_scroll->verticalScrollBar()->singleStep() == 20);
+    for (const auto& value : expected_values) {
+        const auto* label = FindLabel(panel, value);
+        assert(label != nullptr);
+        const QRect row_rect(label->mapTo(metadata_scroll->viewport(), QPoint{}), label->size());
+        assert(!metadata_scroll->viewport()->rect().intersects(row_rect) ||
+               metadata_scroll->viewport()->rect().contains(row_rect));
+    }
     assert(metadata_scroll->verticalScrollBar()->maximum() > 0);
+    assert(metadata_scroll->verticalScrollBar()->maximum() % 20 == 0);
     const auto info_card_geometry = info_card->geometry();
     metadata_scroll->verticalScrollBar()->setValue(metadata_scroll->verticalScrollBar()->maximum());
     application.processEvents();

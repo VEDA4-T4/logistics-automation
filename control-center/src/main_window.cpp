@@ -1414,6 +1414,16 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
             }
             break;
     }
+
+    if (channel == 0) {
+        const bool editing = !detection_overlays_.empty() && detection_overlays_.front() != nullptr &&
+                             detection_overlays_.front()->isDangerZoneEditing();
+        if (state != ChannelState::Playing && editing) {
+            setDangerZoneEditing(false);
+        } else {
+            updateDangerZoneControls();
+        }
+    }
 }
 
 void MainWindow::reconnectChannel(std::size_t channel) {
@@ -1599,6 +1609,11 @@ void MainWindow::setDangerZoneEditing(const bool editing, const bool save_change
     if (detection_overlays_.empty() || detection_overlays_.front() == nullptr) {
         return;
     }
+    if (editing && (channel_states_.empty() || channel_states_.front() != ChannelState::Playing)) {
+        statusBar()->showMessage(QStringLiteral("영상 연결 후 위험 영역을 설정할 수 있습니다."), 3000);
+        updateDangerZoneControls();
+        return;
+    }
     if (editing) {
         detection_overlays_.front()->beginDangerZoneEditing();
     } else if (save_changes) {
@@ -1609,6 +1624,14 @@ void MainWindow::setDangerZoneEditing(const bool editing, const bool save_change
         detection_overlays_.front()->cancelDangerZoneEditing();
     }
     updateDangerZoneControls();
+    if (editing && danger_zone_add_button_ != nullptr) {
+        danger_zone_add_button_->setFocus(Qt::OtherFocusReason);
+    } else if (danger_zone_controls_expanded_ && danger_zone_settings_button_ != nullptr &&
+               danger_zone_settings_button_->isEnabled()) {
+        danger_zone_settings_button_->setFocus(Qt::OtherFocusReason);
+    } else if (danger_zone_toggle_button_ != nullptr) {
+        danger_zone_toggle_button_->setFocus(Qt::OtherFocusReason);
+    }
 }
 
 void MainWindow::updateDangerZoneControls() {
@@ -1624,6 +1647,10 @@ void MainWindow::updateDangerZoneControls() {
                                                       : QStringLiteral("위험 영역 도구 펼치기"));
     danger_zone_actions_->setVisible(danger_zone_controls_expanded_);
     danger_zone_settings_button_->setVisible(danger_zone_controls_expanded_ && !editing);
+    const bool video_ready = !channel_states_.empty() && channel_states_.front() == ChannelState::Playing;
+    danger_zone_settings_button_->setEnabled(video_ready);
+    danger_zone_settings_button_->setToolTip(video_ready ? QString{}
+                                                         : QStringLiteral("영상 연결 후 설정할 수 있습니다."));
     danger_zone_visibility_button_->setVisible(danger_zone_controls_expanded_ && !editing);
     danger_zone_visibility_button_->setText(danger_zone_overlay_visible_ ? QStringLiteral("위험 영역 숨기기")
                                                                          : QStringLiteral("위험 영역 보이기"));

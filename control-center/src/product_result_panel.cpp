@@ -14,6 +14,7 @@
 #include <QPointer>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QStackedLayout>
@@ -26,6 +27,9 @@ namespace logistics::control_center {
 namespace {
 
 constexpr qint64 kMaximumProductImageBytes = 10 * 1024 * 1024;
+constexpr int kMetadataRowHeight = 18;
+constexpr int kMetadataRowSpacing = 2;
+constexpr int kMetadataRowExtent = kMetadataRowHeight + kMetadataRowSpacing;
 constexpr auto kSurfaceColor = "#141d26";
 constexpr auto kBorderColor = "#24313d";
 constexpr auto kPrimaryTextColor = "#e7eef3";
@@ -43,17 +47,39 @@ QString EmptyStateStyle() {
         "font-size:11px;font-weight:600;");
 }
 
+class WholeRowScrollArea final : public QScrollArea {
+public:
+    explicit WholeRowScrollArea(QWidget* parent = nullptr) : QScrollArea(parent) {
+        setMinimumHeight(kMetadataRowExtent);
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QScrollArea::resizeEvent(event);
+        const int available_height = viewport()->height() + bottom_margin_;
+        const int next_margin = available_height >= kMetadataRowExtent ? available_height % kMetadataRowExtent : 0;
+        if (next_margin == bottom_margin_) {
+            return;
+        }
+        bottom_margin_ = next_margin;
+        setViewportMargins(0, 0, 0, bottom_margin_);
+    }
+
+private:
+    int bottom_margin_{ 0 };
+};
+
 QLabel* AddValueRow(QGridLayout* layout, int row, int column, const QString& title, QWidget* parent,
                     int value_column_span = 1) {
     auto* title_label = new QLabel(title, parent);
     title_label->setMinimumWidth(36);
-    title_label->setMinimumHeight(16);
+    title_label->setFixedHeight(kMetadataRowHeight);
     title_label->setStyleSheet("color:#91a3b0;font-size:10px;font-weight:600;");
     auto* value_label = new QLabel(QStringLiteral("—"), parent);
     value_label->setStyleSheet("color:#6e6e6e;font-size:10px;font-weight:600;");
     value_label->setWordWrap(false);
     value_label->setMinimumWidth(0);
-    value_label->setMinimumHeight(16);
+    value_label->setFixedHeight(kMetadataRowHeight);
     value_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     layout->addWidget(title_label, row, column);
     layout->addWidget(value_label, row, column + 1, 1, value_column_span);
@@ -205,7 +231,7 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     metadata_layout->setContentsMargins(0, 0, 0, 0);
     auto* fields = new QGridLayout();
     fields->setHorizontalSpacing(6);
-    fields->setVerticalSpacing(2);
+    fields->setVerticalSpacing(kMetadataRowSpacing);
     fields->setColumnStretch(1, 1);
     work_id_value_ = AddValueRow(fields, 0, 0, QStringLiteral("작업"), metadata);
     barcode_value_ = AddValueRow(fields, 1, 0, QStringLiteral("바코드"), metadata);
@@ -215,11 +241,11 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     confidence_value_ = AddValueRow(fields, 5, 0, QStringLiteral("신뢰도"), metadata);
     updated_at_value_ = AddValueRow(fields, 6, 0, QStringLiteral("갱신"), metadata);
     metadata_layout->addLayout(fields);
+    metadata_layout->addStretch(1);
 
-    auto* metadata_scroll = new QScrollArea(info_card);
+    auto* metadata_scroll = new WholeRowScrollArea(info_card);
     metadata_scroll->setObjectName(QStringLiteral("productMetadata"));
     metadata_scroll->setFrameShape(QFrame::NoFrame);
-    metadata_scroll->setMinimumHeight(0);
     metadata_scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
     metadata_scroll->setWidgetResizable(true);
     metadata_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -232,6 +258,7 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
         "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:#1f1f1f;}");
     metadata_scroll->viewport()->setStyleSheet("background-color:#141d26;");
     metadata_scroll->setWidget(metadata);
+    metadata_scroll->verticalScrollBar()->setSingleStep(kMetadataRowExtent);
     info_layout->addWidget(metadata_scroll);
 
     auto* detail_card = new QFrame(this);
@@ -314,6 +341,12 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     auto* metadata_title = new QLabel(QStringLiteral("상품 정보"), metadata_panel);
     metadata_title->setObjectName(QStringLiteral("productMetadataTitle"));
     metadata_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
+    metadata_title->ensurePolished();
+    work_id_value_->ensurePolished();
+    const int metadata_row_minimum_width =
+        36 + 6 + work_id_value_->fontMetrics().horizontalAdvance(QStringLiteral("미수신")) + 16;
+    metadata_panel->setMinimumWidth(std::max(
+        metadata_title->fontMetrics().horizontalAdvance(metadata_title->text()) + 2, metadata_row_minimum_width));
     metadata_column_layout->addWidget(metadata_title);
     metadata_column_layout->addWidget(info_card, 1);
     metadata_column_layout->addWidget(detail_card);
