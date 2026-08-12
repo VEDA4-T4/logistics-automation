@@ -185,6 +185,7 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     image_label_->setMinimumSize(0, 0);
     image_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     image_label_->setAlignment(Qt::AlignCenter);
+    image_label_->setWordWrap(false);
     image_label_->installEventFilter(this);
     setImagePlaceholder(QStringLiteral("상품 데이터 수신 대기 중"));
 
@@ -295,6 +296,12 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     auto* image_title = new QLabel(QStringLiteral("바코드 인식 이미지"), image_panel);
     image_title->setObjectName(QStringLiteral("productImageTitle"));
     image_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
+    image_title->ensurePolished();
+    image_title->setMinimumWidth(image_title->fontMetrics().horizontalAdvance(image_title->text()) + 2);
+    image_title->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+    image_label_->ensurePolished();
+    image_panel->setMinimumWidth(std::max(image_title->minimumWidth(),
+                                          image_label_->fontMetrics().horizontalAdvance(image_label_->text()) + 12));
     image_layout->addWidget(image_title);
     image_layout->addWidget(image_label_, 1);
 
@@ -468,6 +475,7 @@ void ProductResultPanel::setImagePlaceholder(const QString& text, bool is_error)
     source_image_ = {};
     image_label_->clear();
     image_label_->setText(text);
+    image_label_->setWordWrap(is_error);
     image_label_->setToolTip({});
     image_label_->setStyleSheet(
         is_error ? QStringLiteral("background:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;")

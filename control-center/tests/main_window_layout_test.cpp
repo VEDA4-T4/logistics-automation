@@ -335,14 +335,23 @@ int main(int argc, char* argv[]) {
     qputenv("LOGISTICS_CONTROL_CENTER_DANGER_ZONE_CONFIG", danger_zone_config_path.toUtf8());
     logistics::control_center::MainWindow window;
 
+    auto* danger_toggle = window.findChild<QPushButton*>(QStringLiteral("dangerZoneToggleButton"));
+    auto* danger_actions = window.findChild<QWidget*>(QStringLiteral("dangerZoneActions"));
     auto* danger_settings = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSettingsButton"));
     auto* danger_visibility = window.findChild<QPushButton*>(QStringLiteral("dangerZoneVisibilityButton"));
     auto* danger_add = window.findChild<QPushButton*>(QStringLiteral("dangerZoneAddButton"));
     auto* danger_save = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSaveButton"));
-    if (!check(danger_settings != nullptr && danger_visibility != nullptr && danger_add != nullptr &&
-                   danger_save != nullptr,
+    auto* danger_cancel = window.findChild<QPushButton*>(QStringLiteral("dangerZoneCancelButton"));
+    if (!check(danger_toggle != nullptr && danger_actions != nullptr && danger_settings != nullptr &&
+                   danger_visibility != nullptr && danger_add != nullptr && danger_save != nullptr &&
+                   danger_cancel != nullptr,
                "danger-zone controls are missing") ||
-        !check(danger_add->isHidden() && danger_save->isHidden(), "danger-zone edit controls start visible")) {
+        !check(danger_actions->isHidden(), "danger-zone controls start expanded")) {
+        return 1;
+    }
+    danger_toggle->click();
+    if (!check(!danger_actions->isHidden() && !danger_settings->isHidden() && !danger_visibility->isHidden(),
+               "danger-zone controls did not expand")) {
         return 1;
     }
     danger_settings->click();
@@ -351,6 +360,10 @@ int main(int argc, char* argv[]) {
     }
     danger_add->click();
     danger_save->click();
+    if (!check(danger_actions->isHidden() && !danger_toggle->isChecked(),
+               "danger-zone controls did not collapse after saving")) {
+        return 1;
+    }
     {
         QSettings saved_settings(danger_zone_config_path, QSettings::IniFormat);
         if (!check(!saved_settings.value(QStringLiteral("danger_zone/regions")).toString().isEmpty(),
@@ -358,6 +371,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
+    danger_toggle->click();
     danger_visibility->click();
     {
         QSettings saved_settings(danger_zone_config_path, QSettings::IniFormat);
@@ -365,6 +379,18 @@ int main(int argc, char* argv[]) {
                    "danger-zone visibility was not persisted")) {
             return 1;
         }
+    }
+    danger_settings->click();
+    danger_cancel->click();
+    if (!check(!danger_actions->isHidden() && danger_toggle->isChecked() && !danger_settings->isHidden() &&
+                   !danger_visibility->isHidden() && danger_add->isHidden() && danger_save->isHidden(),
+               "danger-zone cancel did not return to the expanded default controls")) {
+        return 1;
+    }
+    danger_toggle->click();
+    if (!check(danger_actions->isHidden() && !danger_toggle->isChecked(),
+               "danger-zone controls did not collapse from the default controls")) {
+        return 1;
     }
 
     auto* operations_workspace = window.findChild<QSplitter*>(QStringLiteral("operationsWorkspaceSplitter"));
@@ -409,6 +435,21 @@ int main(int argc, char* argv[]) {
 
     window.resize(1280, 720);
     window.show();
+    application.processEvents();
+    const auto compact_danger_toggle_size = danger_toggle->size();
+    if (!check(danger_toggle->text() == QStringLiteral("위험 영역 ▾"),
+               "danger-zone toggle label was shortened at 1280x720")) {
+        return 2;
+    }
+    window.resize(1600, 900);
+    application.processEvents();
+    const auto expanded_danger_toggle_size = danger_toggle->size();
+    if (!check(expanded_danger_toggle_size.width() > compact_danger_toggle_size.width() &&
+                   expanded_danger_toggle_size.height() > compact_danger_toggle_size.height(),
+               "danger-zone toggle does not adapt to the video workspace size")) {
+        return 2;
+    }
+    window.resize(1280, 720);
     application.processEvents();
 
     auto* severity_filter = window.findChild<QComboBox*>(QStringLiteral("logSeverityFilter"));

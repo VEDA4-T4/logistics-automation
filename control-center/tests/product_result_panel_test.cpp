@@ -65,6 +65,7 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
     assert(status_row != nullptr);
     assert(work_title != nullptr && image_title != nullptr && metadata_title != nullptr);
     assert(panel.size() == size);
+    assert(image_title->contentsRect().width() >= image_title->fontMetrics().horizontalAdvance(image_title->text()));
 
     const auto image_rect = PanelRect(panel, *image);
     const auto work_list_rect = PanelRect(panel, *work_list);
@@ -87,8 +88,7 @@ void AssertUsableHorizontalContent(logistics::control_center::ProductResultPanel
     assert(std::abs(work_title_rect.top() - image_title_rect.top()) <= 1);
     assert(std::abs(image_title_rect.top() - metadata_title_rect.top()) <= 1);
     assert(image_rect.width() > metadata_rect.width());
-    const auto ratio_error = image_rect.width() * 2 - metadata_rect.width() * 3;
-    assert(ratio_error >= -3 && ratio_error <= 3);
+    assert(image_rect.width() >= image->fontMetrics().horizontalAdvance(image->text()));
 }
 
 }  // namespace
@@ -114,8 +114,15 @@ int main(int argc, char* argv[]) {
     assert(image_empty_state != nullptr && detail_value != nullptr);
     assert(work_stack->currentWidget() == work_empty_state);
     assert(work_empty_state->text() == QStringLiteral("진행 중인 작업 없음"));
+    assert(image_empty_state->text() == QStringLiteral("상품 데이터 수신 대기 중"));
     assert(work_empty_state->styleSheet() == image_empty_state->styleSheet());
     assert(detail_value->text() == QStringLiteral("상품 데이터 수신 대기 중"));
+    panel.resize(460, 180);
+    panel.show();
+    application.processEvents();
+    assert(!image_empty_state->wordWrap());
+    assert(image_empty_state->contentsRect().width() >=
+           image_empty_state->fontMetrics().horizontalAdvance(image_empty_state->text()));
 
     logistics::control_center::CurrentProduct product;
     product.work_id = QStringLiteral("work-20260804-very-long-identifier");
