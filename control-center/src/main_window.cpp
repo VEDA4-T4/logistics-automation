@@ -485,6 +485,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     app_title_layout->addWidget(app_title);
     app_header_layout->addLayout(app_title_layout);
     app_header_layout->addStretch(1);
+    mqtt_status_label_ = new QLabel(QStringLiteral("● 중앙 서버 · 연결 준비"), app_header);
+    mqtt_status_label_->setObjectName(QStringLiteral("mqttConnectionStatus"));
+    mqtt_status_label_->setFixedSize(176, 30);
+    mqtt_status_label_->setAlignment(Qt::AlignCenter);
+    mqtt_status_label_->setAccessibleName(QStringLiteral("중앙 서버 연결 상태"));
+    mqtt_status_label_->setStyleSheet(
+        "color:#9d9d9d;background:#202020;border:1px solid #3a3a3a;border-radius:5px;"
+        "font-size:10px;font-weight:700;");
+    app_header_layout->addWidget(mqtt_status_label_, 0, Qt::AlignVCenter);
     root_layout->addWidget(app_header);
 
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
@@ -543,11 +552,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     root_layout->addWidget(detail_splitter, 1);
     setCentralWidget(central_widget);
 
-    mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
-    mqtt_status_label_->setObjectName(QStringLiteral("mqttConnectionStatus"));
-    mqtt_status_label_->setMargin(4);
     statusBar()->setSizeGripEnabled(false);
-    statusBar()->addPermanentWidget(mqtt_status_label_);
 
     command_response_timer_ = new QTimer(this);
     command_response_timer_->setSingleShot(true);
@@ -602,32 +607,38 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(mqtt_client_, &MqttClient::connectionStateChanged, this,
             [this](MqttClient::ConnectionState state, const QString& detail) {
                 mqtt_status_label_->setToolTip(detail);
+                const auto set_central_server_status = [this](const QString& text, const QString& color,
+                                                              const QString& background, const QString& border) {
+                    mqtt_status_label_->setText(text);
+                    mqtt_status_label_->setStyleSheet(
+                        QStringLiteral("color:%1;background:%2;border:1px solid %3;border-radius:5px;"
+                                       "font-size:10px;font-weight:700;")
+                            .arg(color, background, border));
+                };
                 switch (state) {
                     case MqttClient::ConnectionState::Connected:
                         process_control_panel_->setMqttConnected(true);
                         operations_dashboard_state_.markMqttConnectedAwaitingStatus(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(true);
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
-                        mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결됨"), QStringLiteral("#89d185"),
+                                                  QStringLiteral("#17251b"), QStringLiteral("#345c3d"));
                         appendOperationalLog(OperationalLogSeverity::Info, QStringLiteral("central-server"),
                                              QStringLiteral("통신"), QStringLiteral("MQTT_CONNECTED"), detail);
                         break;
                     case MqttClient::ConnectionState::Connecting:
                         process_control_panel_->setMqttConnected(false);
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결 중"));
-                        mqtt_status_label_->setStyleSheet("color:#cca700;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결 중"), QStringLiteral("#cca700"),
+                                                  QStringLiteral("#282411"), QStringLiteral("#5b5015"));
                         break;
                     case MqttClient::ConnectionState::Reconnecting:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
-                        mqtt_status_label_->setStyleSheet("color:#ce9178;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 재연결 대기"),
+                                                  QStringLiteral("#ce9178"), QStringLiteral("#2c211c"),
+                                                  QStringLiteral("#614234"));
                         appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
                                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_RECONNECTING"), detail);
                         break;
@@ -635,19 +646,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
-                        mqtt_status_label_->setStyleSheet("color:#f14c4c;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 오류"), QStringLiteral("#f14c4c"),
+                                                  QStringLiteral("#30191a"), QStringLiteral("#713234"));
                         break;
                     case MqttClient::ConnectionState::Disconnected:
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
-                        mqtt_status_label_->setStyleSheet("color:#9d9d9d;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결 해제"), QStringLiteral("#9d9d9d"),
+                                                  QStringLiteral("#202020"), QStringLiteral("#3a3a3a"));
                         appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
                                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_DISCONNECTED"), detail);
                         break;

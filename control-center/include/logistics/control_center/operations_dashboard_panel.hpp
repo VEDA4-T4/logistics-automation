@@ -22,7 +22,6 @@ public:
     explicit OperationsDashboardPanel(QWidget* parent = nullptr);
 
     void setState(const OperationsDashboardState& state);
-    void setMqttConnected(bool connected);
     void setControlTarget(const QString& target_device_id);
 
 signals:
@@ -51,7 +50,6 @@ private:
     void refreshControlTargetSelection();
 
     QFrame* overall_card_{ nullptr };
-    QLabel* live_status_{ nullptr };
     QLabel* overall_status_{ nullptr };
     QLabel* overall_summary_{ nullptr };
     QLabel* overall_work_count_{ nullptr };

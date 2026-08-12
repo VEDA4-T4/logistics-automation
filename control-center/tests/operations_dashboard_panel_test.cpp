@@ -70,13 +70,7 @@ int main(int argc, char* argv[]) {
     panel.show();
     application.processEvents();
 
-    auto* live_status = panel.findChild<QLabel*>(QStringLiteral("dashboardLiveStatus"));
-    assert(live_status != nullptr);
-    assert(live_status->text() == QStringLiteral("● MQTT 연결 끊김"));
-    assert(live_status->styleSheet().contains(QStringLiteral("#9d9d9d")));
-    panel.setMqttConnected(true);
-    assert(live_status->text() == QStringLiteral("● 실시간 수신 중"));
-    assert(live_status->styleSheet().contains(QStringLiteral("#89d185")));
+    assert(panel.findChild<QLabel*>(QStringLiteral("dashboardLiveStatus")) == nullptr);
     assert(panel.findChild<QScrollArea*>(QStringLiteral("processStatusSection")) == nullptr);
     const auto cards =
         panel.findChildren<QFrame*>(QRegularExpression(QStringLiteral("(overallProcessCard|processUnitCard)")));

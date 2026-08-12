@@ -416,6 +416,8 @@ int main(int argc, char* argv[]) {
         window.findChild<logistics::control_center::ProcessControlPanel*>(QStringLiteral("processControlPanel"));
     auto* operations_dashboard = window.findChild<QWidget*>(QStringLiteral("operationsDashboard"));
     auto* app_header = window.findChild<QWidget*>(QStringLiteral("appHeader"));
+    auto* central_server_status =
+        app_header == nullptr ? nullptr : app_header->findChild<QLabel*>(QStringLiteral("mqttConnectionStatus"));
     const auto header_labels = app_header == nullptr ? QList<QLabel*>{} : app_header->findChildren<QLabel*>();
     const bool has_channel_badge = std::ranges::any_of(
         header_labels, [](const QLabel* label) { return label->text() == QStringLiteral("1 CHANNEL"); });
@@ -433,10 +435,14 @@ int main(int argc, char* argv[]) {
                "processControlPanel is still contained by appHeader") ||
         !check(app_header->minimumHeight() == 46 && app_header->maximumHeight() == 58,
                "appHeader height range is not 46-58") ||
+        !check(central_server_status != nullptr && central_server_status->text().contains(QStringLiteral("중앙 서버")),
+               "appHeader central server status is missing") ||
+        !check(central_server_status->width() == 176 && central_server_status->height() == 30,
+               "central server status does not keep its fixed footprint") ||
         !check(factory->findChild<QLabel*>(QStringLiteral("factoryTopViewLiveStatus")) == nullptr,
                "factory top-view still contains the MQTT status") ||
-        !check(operations_dashboard->findChild<QLabel*>(QStringLiteral("dashboardLiveStatus")) != nullptr,
-               "operations dashboard MQTT status is missing")) {
+        !check(operations_dashboard->findChild<QLabel*>(QStringLiteral("dashboardLiveStatus")) == nullptr,
+               "operations dashboard still contains the duplicate MQTT status")) {
         return 2;
     }
 
