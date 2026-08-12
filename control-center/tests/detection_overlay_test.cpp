@@ -22,11 +22,6 @@ int main(int argc, char* argv[]) {
     logistics::control_center::DetectionOverlay widget;
     widget.resize(640, 360);
 
-    const QColor video_color(12, 24, 36);
-    QImage video_image(1280, 720, QImage::Format_ARGB32_Premultiplied);
-    video_image.fill(video_color);
-    widget.videoSink()->setVideoFrame(QVideoFrame(video_image));
-
     logistics::control_center::OnvifDetectionFrame frame;
     frame.translate = { -1.0, 1.0 };
     frame.scale = { 2.0 / 1280.0, -2.0 / 720.0 };
@@ -39,15 +34,31 @@ int main(int argc, char* argv[]) {
     widget.setMetadataState(true);
     widget.setDetectionFrame(frame);
 
+    const QColor box_color(78, 201, 176);
+    QImage before_video(widget.size(), QImage::Format_ARGB32_Premultiplied);
+    before_video.fill(Qt::transparent);
+    widget.render(&before_video);
+    for (int y = 47; y <= 53; ++y) {
+        for (int x = 47; x <= 53; ++x) {
+            if (isNear(before_video.pixelColor(x, y), box_color, 10)) {
+                return 1;
+            }
+        }
+    }
+
+    const QColor video_color(12, 24, 36);
+    QImage video_image(1280, 720, QImage::Format_ARGB32_Premultiplied);
+    video_image.fill(video_color);
+    widget.videoSink()->setVideoFrame(QVideoFrame(video_image));
+
     QImage rendered(widget.size(), QImage::Format_ARGB32_Premultiplied);
     rendered.fill(Qt::transparent);
     widget.render(&rendered);
 
     if (!isNear(rendered.pixelColor(320, 180), video_color)) {
-        return 1;
+        return 2;
     }
 
-    const QColor box_color(78, 201, 176);
     bool found_box_pixel = false;
     for (int y = 47; y <= 53 && !found_box_pixel; ++y) {
         for (int x = 47; x <= 53; ++x) {
@@ -57,5 +68,5 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-    return found_box_pixel ? 0 : 2;
+    return found_box_pixel ? 0 : 3;
 }
