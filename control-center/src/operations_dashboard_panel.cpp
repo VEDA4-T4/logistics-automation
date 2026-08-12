@@ -252,12 +252,8 @@ OperationsDashboardPanel::OperationsDashboardPanel(QWidget* parent) : QWidget(pa
     process_header->setContentsMargins(2, 0, 2, 0);
     auto* process_title = new QLabel(QStringLiteral("공정·지원 노드 실시간 상태"), process_section);
     process_title->setStyleSheet("color:#f0f0f0;font-size:10px;font-weight:700;");
-    live_status_ = new QLabel(QStringLiteral("● MQTT 연결 끊김"), process_section);
-    live_status_->setObjectName(QStringLiteral("dashboardLiveStatus"));
-    live_status_->setStyleSheet("color:#9d9d9d;font-size:9px;font-weight:700;");
     process_header->addWidget(process_title);
     process_header->addStretch();
-    process_header->addWidget(live_status_);
     process_section_layout->addLayout(process_header);
 
     auto* process_content = new QWidget(process_section);
@@ -309,12 +305,6 @@ void OperationsDashboardPanel::setState(const OperationsDashboardState& state) {
     }
     refreshOverall();
     refreshProcesses();
-}
-
-void OperationsDashboardPanel::setMqttConnected(bool connected) {
-    live_status_->setText(connected ? QStringLiteral("● 실시간 수신 중") : QStringLiteral("● MQTT 연결 끊김"));
-    live_status_->setStyleSheet(connected ? QStringLiteral("color:#89d185;font-size:9px;font-weight:700;")
-                                          : QStringLiteral("color:#9d9d9d;font-size:9px;font-weight:700;"));
 }
 
 void OperationsDashboardPanel::setControlTarget(const QString& target_device_id) {

@@ -282,6 +282,18 @@ int RunInputDaemon(int argc, char* argv[]) {
             if (keepalive.status == InputCommandStatus::kTimeout ||
                 keepalive.status == InputCommandStatus::kUartNotOpen ||
                 keepalive.status == InputCommandStatus::kUartError) {
+                // Name the failure before dropping the link. "disconnected" alone
+                // cannot tell a response timeout apart from a transport error, and
+                // the sequence plus the CRC/transport counters are what identify a
+                // recurring fault rather than a one-off glitch.
+                const InputUartDiagnostics& diagnostics = uart_session.Diagnostics();
+                std::cerr << "[input][uart][WARN] keepalive failed: status=" << static_cast<int>(keepalive.status)
+                          << "; sequence=" << static_cast<int>(keepalive.uart_result.sequence)
+                          << "; commandsSent=" << diagnostics.commands_sent
+                          << "; responsesMatched=" << diagnostics.responses_matched
+                          << "; retries=" << diagnostics.retries << "; timeouts=" << diagnostics.timeouts
+                          << "; parserErrors=" << diagnostics.parser_errors << "; crcErrors=" << diagnostics.crc_errors
+                          << "; transportErrors=" << diagnostics.transport_errors << '\n';
                 uart_session.Close();
             } else if (!keepalive.Succeeded()) {
                 std::cerr << "[input][uart][WARN] keepalive rejected: status="

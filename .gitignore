@@ -197,3 +197,7 @@ docs/superpowers/
 .worktrees/
 
 .codex/
+
+# Track Yocto image recipes
+!yocto/meta-logistics/recipes-core/images/
+!yocto/meta-logistics/recipes-core/images/**
