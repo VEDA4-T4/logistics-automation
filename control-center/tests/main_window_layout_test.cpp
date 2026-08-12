@@ -496,7 +496,24 @@ int main(int argc, char* argv[]) {
                        QStringLiteral("SORTING"), 4);
     emit_device_status(QStringLiteral("LAYOUT-LINETRACER-LIVE"), QStringLiteral("PI-LT-01"), QStringLiteral("STOPPED"),
                        5);
+    mqtt_client->messageReceived(
+        QStringLiteral("device/PI-LT-01/event"),
+        { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+          { QStringLiteral("messageId"), QStringLiteral("LAYOUT-LINETRACER-SENSOR-FRONT") },
+          { QStringLiteral("messageType"), QStringLiteral("SENSOR_STATUS") },
+          { QStringLiteral("sourceId"), QStringLiteral("PI-LT-01") },
+          { QStringLiteral("timestamp"), now.addMSecs(6).toString(Qt::ISODateWithMs) },
+          { QStringLiteral("data"),
+            QJsonObject{ { QStringLiteral("sensorId"), 1 },
+                         { QStringLiteral("sensorName"), QStringLiteral("FRONT") },
+                         { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                         { QStringLiteral("distanceCm"), 12 } } } });
     application.processEvents();
+
+    if (!check(factory->sensorText(QStringLiteral("linetracer"), 1) == QStringLiteral("12 cm"),
+               "line-tracer sensor telemetry did not refresh factoryTopView")) {
+        return 2;
+    }
 
     const auto input_before_tick = factory->boxPosition(QStringLiteral("input"));
     const auto sorting_before_tick = factory->boxPosition(QStringLiteral("sorting"));
