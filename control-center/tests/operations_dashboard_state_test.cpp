@@ -328,13 +328,13 @@ int main() {
     assert(SensorById(sorting_after_clear, 2).measurement_status == QStringLiteral("CLEAR"));
     assert(stopped_sensor_state.overall().state == OverallProcessState::Stopped);
 
-    result = stopped_sensor_state.applyEnvelope(
-        Envelope("SORTING-SENSOR-1-DETECTED", "SENSOR_STATUS",
-                 { { QStringLiteral("sensorId"), 1 },
-                   { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
-                   { QStringLiteral("detectionStatus"), QStringLiteral("DETECTED") },
-                   { QStringLiteral("distanceCm"), 10 } },
-                 "PI-SORTING-01", "2026-07-23T01:00:00.600Z"));
+    result =
+        stopped_sensor_state.applyEnvelope(Envelope("SORTING-SENSOR-1-DETECTED", "SENSOR_STATUS",
+                                                    { { QStringLiteral("sensorId"), 1 },
+                                                      { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                      { QStringLiteral("detectionStatus"), QStringLiteral("DETECTED") },
+                                                      { QStringLiteral("distanceCm"), 10 } },
+                                                    "PI-SORTING-01", "2026-07-23T01:00:00.600Z"));
     assert(result.applied);
     result = stopped_sensor_state.applyEnvelope(
         Envelope("SORTING-SENSORS-STALE", "ERROR_OCCURRED",

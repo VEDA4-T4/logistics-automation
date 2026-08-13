@@ -473,9 +473,9 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         const auto detection_status = StringValue(data, "detectionStatus").toUpper();
         const auto sensor_id = sensor_id_value.toInt();
         const auto distance_cm = distance_value.toInt();
-        const bool detection_is_valid =
-            detection_status.isEmpty() || detection_status == QStringLiteral("CLEAR") ||
-            detection_status == QStringLiteral("DETECTED") || detection_status == QStringLiteral("UNKNOWN");
+        const bool detection_is_valid = detection_status.isEmpty() || detection_status == QStringLiteral("CLEAR") ||
+                                        detection_status == QStringLiteral("DETECTED") ||
+                                        detection_status == QStringLiteral("UNKNOWN");
         if (!sensor_id_value.isDouble() || sensor_id_value.toDouble() != sensor_id || sensor_id <= 0 ||
             !distance_value.isDouble() || distance_value.toDouble() != distance_cm || distance_cm < 0 ||
             (measurement_status != QStringLiteral("OK") && measurement_status != QStringLiteral("FAULT")) ||
