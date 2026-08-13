@@ -231,6 +231,16 @@ int main() {
     assert(error_payload->current_state == "RECALIBRATION_REQUIRED");
     assert(error_payload->message == invalidation.reason);
     assert(mqtt::ValidateTopicMessage(mqtt::QtErrorTopic("control-center"), error).IsSuccess());
+    const auto failed =
+        server::MakeWorkFailureCompletion("central-server", "RECOVERY-FAILED-" + invalidated_work_id,
+                                          invalidated_work_id, invalidation.reason, "2026-07-31T00:00:00Z");
+    assert(failed.message_type == mqtt::MessageType::kWorkCompleted);
+    const auto* failed_payload = mqtt::GetPayload<mqtt::WorkCompletedPayload>(failed);
+    assert(failed_payload != nullptr);
+    assert(failed_payload->work_id == invalidated_work_id);
+    assert(failed_payload->result == "FAILED");
+    assert(failed_payload->message == invalidation.reason);
+    assert(mqtt::ValidateTopicMessage(mqtt::QtEventTopic("control-center"), failed).IsSuccess());
     assert(Scalar(database, "SELECT count(*) FROM product WHERE work_id='" + invalidated_work_id +
                                 "' AND lifecycle_state='ERROR'") == 1);
     assert(Scalar(database, "SELECT count(*) FROM error_log WHERE work_id='" + invalidated_work_id +

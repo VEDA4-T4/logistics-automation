@@ -677,6 +677,22 @@ void TestMqttTopicMessageValidation() {
                                             });
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", work_completed).IsSuccess());
 
+    const auto position = MakeMessage("MSG-TOPIC-04-P", mqtt::MessageType::kPositionDetected,
+                                      mqtt::PositionDetectedPayload{
+                                          .work_id = std::string(kTestWorkId),
+                                          .box_x = 10,
+                                          .box_y = 20,
+                                          .box_width = 100,
+                                          .box_height = 50,
+                                          .center_x = 60,
+                                          .center_y = 45,
+                                          .offset_x = 0,
+                                          .offset_y = 0,
+                                          .position_status = "DETECTED",
+                                          .box_corners = std::nullopt,
+                                      });
+    assert(mqtt::ValidateTopicMessage("qt/QT-01/event", position).IsSuccess());
+
     const auto sensor_status = MakeMessage("MSG-TOPIC-04-S", mqtt::MessageType::kSensorStatus,
                                            mqtt::SensorStatusPayload{
                                                .sensor_id = 1,

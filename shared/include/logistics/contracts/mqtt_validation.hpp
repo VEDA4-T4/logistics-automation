@@ -56,10 +56,10 @@ namespace validation_detail {
 }
 
 [[nodiscard]] constexpr bool IsQtProductMessage(MessageType type) noexcept {
-    return type == MessageType::kWorkCreated || type == MessageType::kBarcodeDetected ||
-           type == MessageType::kProductImage || type == MessageType::kProductInfo ||
-           type == MessageType::kDestinationSet || type == MessageType::kWorkCompleted ||
-           type == MessageType::kSensorStatus;
+    return type == MessageType::kWorkCreated || type == MessageType::kPositionDetected ||
+           type == MessageType::kBarcodeDetected || type == MessageType::kProductImage ||
+           type == MessageType::kProductInfo || type == MessageType::kDestinationSet ||
+           type == MessageType::kWorkCompleted || type == MessageType::kSensorStatus;
 }
 
 [[nodiscard]] constexpr bool IsMessageTypeAllowed(TopicKind kind, MessageType type) noexcept {

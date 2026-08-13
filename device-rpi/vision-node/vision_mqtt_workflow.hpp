@@ -27,13 +27,14 @@ struct VisionObservation final {
 
 struct AssignedVisionWork final {
     std::string work_id;
-    VisionObservation observation;
+    std::optional<VisionObservation> observation;
 };
 
 class VisionMqttWorkflow final {
 public:
     explicit VisionMqttWorkflow(std::string device_id, std::size_t detection_confirm_frames = 3,
-                                std::size_t clear_confirm_frames = 5, std::size_t barcode_wait_frames = 90);
+                                std::size_t clear_confirm_frames = 5, std::size_t barcode_wait_frames = 90,
+                                std::size_t preassignment_wait_frames = 90);
 
     [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> Observe(std::optional<VisionObservation> observation,
                                                                       std::string message_id, std::string timestamp);
@@ -46,17 +47,19 @@ public:
     void Reset();
 
 private:
-    enum class Phase { kIdle, kAwaitingWork, kAssigned, kProcessing, kAwaitingClear };
+    enum class Phase { kIdle, kPreassigned, kAwaitingWork, kAssigned, kProcessing, kAwaitingClear };
 
     std::string device_id_;
     std::size_t detection_confirm_frames_;
     std::size_t clear_confirm_frames_;
     std::size_t barcode_wait_frames_;
+    std::size_t preassignment_wait_frames_;
     mutable std::mutex mutex_;
     Phase phase_{ Phase::kIdle };
     std::size_t detected_frames_{};
     std::size_t clear_frames_{};
     std::size_t assigned_frames_{};
+    std::size_t preassignment_frames_{};
     std::optional<VisionObservation> observation_;
     std::optional<std::string> work_id_;
     std::optional<std::string> last_completed_work_id_;

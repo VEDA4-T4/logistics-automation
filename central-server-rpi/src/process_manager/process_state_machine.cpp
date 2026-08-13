@@ -241,11 +241,16 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
             return false;
         }
 
+        const bool resumed_transport_after_recovery =
+            stored_state == ProcessSystemState::kStopped && !work.suspended_stage.has_value() &&
+            IsOneOf(work.stage, { WorkStage::kTransportRequested, WorkStage::kTransporting });
         const WorkStage resumable_stage = work.suspended_stage.value_or(work.stage);
         if (IsTerminal(resumable_stage) || IsSuspended(resumable_stage)) {
             return false;
         }
-        work.suspended_stage = resumable_stage;
+        if (!resumed_transport_after_recovery) {
+            work.suspended_stage = resumable_stage;
+        }
         if (stored_state == ProcessSystemState::kEmergencyStop) {
             work.stage = WorkStage::kEmergencyStopped;
         } else if (stored_state == ProcessSystemState::kError) {
@@ -253,7 +258,7 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
         } else if (stored_state == ProcessSystemState::kRecovery) {
             work.stage = WorkStage::kFailed;
             work.failure_reason = "server restarted while recovery was in progress";
-        } else {
+        } else if (!resumed_transport_after_recovery) {
             work.stage = WorkStage::kStopped;
         }
         restored.emplace(work.work_id, std::move(work));

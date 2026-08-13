@@ -221,6 +221,33 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
         assert(handler.Handle("device/PI-VISION-01/event", Encode(box)));
         assert(!work_id.empty());
 
+        const mqtt::MqttMessage position{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-POSITION-QT-01",
+            .message_type = mqtt::MessageType::kPositionDetected,
+            .source_id = "PI-VISION-01",
+            .timestamp = "2026-07-21T01:00:00Z",
+            .data =
+                mqtt::PositionDetectedPayload{
+                    .work_id = work_id,
+                    .box_x = 100,
+                    .box_y = 50,
+                    .box_width = 200,
+                    .box_height = 100,
+                    .center_x = 200,
+                    .center_y = 100,
+                    .offset_x = 0,
+                    .offset_y = 0,
+                    .position_status = "DETECTED",
+                    .box_corners = std::nullopt,
+                },
+        };
+        assert(handler.Handle("device/PI-VISION-01/event", Encode(position)));
+        assert(qt_events.size() == 1);
+        const auto* forwarded_position = mqtt::GetPayload<mqtt::PositionDetectedPayload>(qt_events.front());
+        assert(forwarded_position != nullptr);
+        assert(forwarded_position->work_id == work_id);
+
         const mqtt::MqttMessage barcode{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
             .message_id = "MSG-BARCODE-CATALOG",
@@ -237,9 +264,9 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
                 },
         };
         assert(handler.Handle("device/PI-VISION-01/event", Encode(barcode)));
-        assert(qt_events.size() == 2);
-        assert(qt_events[0].message_type == mqtt::MessageType::kBarcodeDetected);
-        const auto* product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events[1]);
+        assert(qt_events.size() == 3);
+        assert(qt_events[1].message_type == mqtt::MessageType::kBarcodeDetected);
+        const auto* product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events[2]);
         assert(product != nullptr);
         assert(product->work_id == work_id);
         assert(product->barcode == "5901234123457");
@@ -274,7 +301,7 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
                 },
         };
         assert(handler.Handle("device/PI-VISION-01/event", Encode(unknown_barcode)));
-        assert(qt_events.size() == 4);
+        assert(qt_events.size() == 5);
         const auto* unknown_product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events.back());
         assert(unknown_product != nullptr);
         assert(unknown_product->product_id == "UNREGISTERED");

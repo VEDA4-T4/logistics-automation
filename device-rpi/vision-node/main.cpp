@@ -738,14 +738,16 @@ int main(const int argc, char* argv[]) {
         if (auto work = mqtt_workflow.TakeAssignedWork(); work.has_value() && control_state.IsOperational()) {
             const std::string timestamp = logistics::device::CurrentIso8601Timestamp();
             std::vector<logistics::vision::VisionPublication> publications;
-            const auto position = logistics::vision::MakePositionDetectedMessage(
-                device_id, *work,
-                logistics::device::MakeMessageId(device_id, mqtt_session_id,
-                                                 mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
-                timestamp);
-            publications.push_back({ logistics::vision::VisionPublicationChannel::kEvent, position });
+            if (work->observation.has_value()) {
+                const auto position = logistics::vision::MakePositionDetectedMessage(
+                    device_id, *work,
+                    logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                     mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                    timestamp);
+                publications.push_back({ logistics::vision::VisionPublicationChannel::kEvent, position });
+            }
             bool result_deferred = false;
-            const bool barcode_detected = work->observation.barcode.has_value();
+            const bool barcode_detected = work->observation.has_value() && work->observation->barcode.has_value();
             if (barcode_detected) {
                 publications.push_back({
                     logistics::vision::VisionPublicationChannel::kEvent,
@@ -810,7 +812,7 @@ int main(const int argc, char* argv[]) {
                                     if (completion.encoded) {
                                         completion.result = uploader->Upload(
                                             device_id, completion.work.work_id, upload_message_id, captured_at,
-                                            completion.work.observation.image_name, "image/jpeg", jpeg);
+                                            completion.work.observation->image_name, "image/jpeg", jpeg);
                                     }
                                 } catch (const std::exception& error) {
                                     completion.result.error = error.what();

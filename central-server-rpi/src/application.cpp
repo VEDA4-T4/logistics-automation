@@ -360,8 +360,16 @@ int Application::Run(int argc, char* argv[]) {
             return mqtt_client.PublishMessage(contracts::mqtt::QtResponseTopic(qt_client_id), message,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         };
+    const auto publish_failed_work =
+        [&mqtt_client, qt_client_id = server_config.qt_client_id, source_id = server_config.process.server_id](
+            std::string_view message_id, std::string_view work_id, std::string_view reason) {
+            const auto completed =
+                MakeWorkFailureCompletion(source_id, message_id, work_id, reason, CurrentIso8601Timestamp());
+            return mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), completed,
+                                              contracts::mqtt::Qos::kAtLeastOnce);
+        };
     std::unordered_map<std::string, contracts::mqtt::ControlCommand> pending_system_commands;
-    const auto finish_system_command = [&pending_system_commands, &process_orchestrator,
+    const auto finish_system_command = [&pending_system_commands, &process_orchestrator, &publish_failed_work,
                                         &replay_restored_process_commands,
                                         &persist_process_state](const contracts::mqtt::MqttMessage& message) {
         const auto* response = contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(message);
@@ -376,6 +384,7 @@ int Application::Run(int argc, char* argv[]) {
         pending_system_commands.erase(pending);
         const bool succeeded = response->result == contracts::mqtt::CommandResult::kSuccess ||
                                response->result == contracts::mqtt::CommandResult::kDuplicated;
+        std::vector<WorkProcessSnapshot> failed_works;
         ProcessTransition transition{
             .disposition = TransitionDisposition::kDuplicate,
             .previous_stage = std::nullopt,
@@ -384,6 +393,13 @@ int Application::Run(int argc, char* argv[]) {
         };
         if (succeeded) {
             if (command == contracts::mqtt::ControlCommand::kRecovery) {
+                failed_works = process_orchestrator.StateMachine().ActiveWorks();
+                for (const auto& work : failed_works) {
+                    if (!work.failure_reason.empty() &&
+                        !publish_failed_work("RECOVERY-FAILED-" + work.work_id, work.work_id, work.failure_reason)) {
+                        return false;
+                    }
+                }
                 transition = process_orchestrator.CompleteSystemRecovery();
             }
         } else {
@@ -588,12 +604,30 @@ int Application::Run(int argc, char* argv[]) {
         }
         return false;
     };
+    const auto fail_process_dispatch = [&command_manager, &process_orchestrator, &persist_process_state,
+                                        &publish_failed_work, &publish_qt_response](const ProcessCommandIntent& intent,
+                                                                                    std::string_view reason) {
+        const auto transition = process_orchestrator.FailDispatch(intent, std::string(reason));
+        if (!transition.Applied() || !persist_process_state()) {
+            return false;
+        }
+        if (!publish_failed_work(intent.message.message_id + "-WORK-FAILED", intent.work_id, reason)) {
+            return false;
+        }
+        const auto response = command_manager.MakeImmediateResult(
+            intent.message, contracts::mqtt::CommandResult::kFailed, CurrentIso8601Timestamp(),
+            std::string("ERR-PROCESS-DISPATCH"), std::string(reason));
+        return response.has_value() && publish_qt_response(*response);
+    };
     dispatch_process_commands = [&device_manager, &dispatch_command, &process_orchestrator, &process_command_tracker,
-                                 &persist_process_state](const std::vector<ProcessCommandIntent>& commands) {
+                                 &persist_process_state,
+                                 &fail_process_dispatch](const std::vector<ProcessCommandIntent>& commands) {
         for (const auto& intent : commands) {
             if (!ResolveCommandTargets(intent.message, device_manager->RegisteredDevices()).IsValid()) {
-                static_cast<void>(process_orchestrator.FailDispatch(intent, "target process node is unavailable"));
-                static_cast<void>(persist_process_state());
+                if (!fail_process_dispatch(intent, "target process node is unavailable")) {
+                    std::cerr << "[server][ERROR] process command failure could not be reported: " << intent.work_id
+                              << '\n';
+                }
                 std::cerr << "[server][ERROR] process command target is unavailable: " << intent.work_id << '\n';
                 return false;
             }

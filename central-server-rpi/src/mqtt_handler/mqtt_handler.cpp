@@ -52,9 +52,10 @@ void DefaultLog(MqttHandlerLogLevel level, std::string_view message) {
 }
 
 [[nodiscard]] constexpr bool IsQtProductEvent(mqtt::MessageType type) noexcept {
-    return type == mqtt::MessageType::kBarcodeDetected || type == mqtt::MessageType::kProductImage ||
-           type == mqtt::MessageType::kProductInfo || type == mqtt::MessageType::kDestinationSet ||
-           type == mqtt::MessageType::kWorkCompleted || type == mqtt::MessageType::kSensorStatus;
+    return type == mqtt::MessageType::kPositionDetected || type == mqtt::MessageType::kBarcodeDetected ||
+           type == mqtt::MessageType::kProductImage || type == mqtt::MessageType::kProductInfo ||
+           type == mqtt::MessageType::kDestinationSet || type == mqtt::MessageType::kWorkCompleted ||
+           type == mqtt::MessageType::kSensorStatus;
 }
 
 [[nodiscard]] std::string RejectedMessageContext(std::string_view topic, std::string_view payload) {
