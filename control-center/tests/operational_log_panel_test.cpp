@@ -70,6 +70,11 @@ int main(int argc, char* argv[]) {
     assert(table->rowHeight(0) == 34);
     assert(table->horizontalHeader()->sectionResizeMode(3) == QHeaderView::Stretch);
     assert(severity->view()->styleSheet().isEmpty());
+    panel.resize(640, 180);
+    application.processEvents();
+    auto* table_surface = panel.findChild<QWidget*>(QStringLiteral("operationalLogTableSurface"));
+    assert(table_surface != nullptr && table_surface->height() >= 60);
+    assert(table->height() >= table->horizontalHeader()->height() + table->rowHeight(0));
 
     severity->setCurrentIndex(severity->findData(static_cast<int>(OperationalLogSeverity::Error)));
     application.processEvents();
@@ -87,6 +92,11 @@ int main(int argc, char* argv[]) {
     application.processEvents();
     assert(table->model()->rowCount() == 0);
     assert(empty_state->isVisible());
+    assert(table->isVisible());
+    assert(empty_state->parentWidget() == table->viewport());
+    const QRect empty_state_rect(empty_state->mapTo(table, QPoint{}), empty_state->size());
+    assert(!empty_state_rect.intersects(table->horizontalHeader()->geometry()));
+    assert(table->rect().contains(empty_state_rect));
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
     query->clear();
     application.processEvents();
@@ -210,7 +220,8 @@ int main(int argc, char* argv[]) {
     panel.reloadEntries(state.activeAlertCount());
     application.processEvents();
     assert(empty_state != nullptr && empty_state->isVisible());
-    assert(empty_state->text() == QStringLiteral("표시할 운영 로그가 없습니다"));
+    assert(table->isVisible());
+    assert(empty_state->text() == QStringLiteral("표시할 운영로그 없음"));
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
 
     for (qsizetype index = 0; index < OperationalLogState::kDefaultMaximumEntries + 10; ++index) {

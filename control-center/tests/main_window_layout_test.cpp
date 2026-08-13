@@ -7,13 +7,16 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFrame>
+#include <QHeaderView>
 #include <QHostAddress>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMediaPlayer>
 #include <QMouseEvent>
 #include <QPalette>
+#include <QPushButton>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSize>
 #include <QSplitter>
 #include <QStackedLayout>
@@ -121,6 +124,8 @@ bool CheckHistoryPaging(QApplication& application) {
     }
     config.close();
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
+    const auto danger_zone_config_path = directory.filePath(QStringLiteral("danger-zones.ini"));
+    qputenv("LOGISTICS_CONTROL_CENTER_DANGER_ZONE_CONFIG", danger_zone_config_path.toUtf8());
     logistics::control_center::MainWindow window;
     auto* table = window.findChild<QTableView*>(QStringLiteral("operationalLogTable"));
     auto* log_panel_widget = window.findChild<QWidget*>(QStringLiteral("operationalLogPanel"));
@@ -130,8 +135,8 @@ bool CheckHistoryPaging(QApplication& application) {
                      "first history page was not loaded") ||
         !LayoutCheck(requests.front().contains("Authorization: Bearer local-history-token"),
                      "history authorization header is missing") ||
-        !LayoutCheck(requests.front().contains("GET /api/v1/history?limit=500 HTTP/1.1"),
-                     "initial history request did not use limit=500")) {
+        !LayoutCheck(requests.front().contains("GET /api/v1/history?limit=100 HTTP/1.1"),
+                     "initial history request did not use limit=100")) {
         return false;
     }
 
@@ -178,9 +183,9 @@ bool CheckHistoryPaging(QApplication& application) {
     }
     if (!LayoutCheck(requests.size() == 4, "duplicate history page was not skipped automatically") ||
         !LayoutCheck(
-            requests[1].contains("limit=500&cursor=100.2.1") && requests[2].contains("limit=500&cursor=100.2.1"),
+            requests[1].contains("limit=100&cursor=100.2.1") && requests[2].contains("limit=100&cursor=100.2.1"),
             "history retry did not preserve its cursor") ||
-        !LayoutCheck(requests[3].contains("limit=500&cursor=90.2.5"),
+        !LayoutCheck(requests[3].contains("limit=100&cursor=90.2.5"),
                      "duplicate history page did not advance to its next cursor")) {
         return false;
     }
@@ -217,6 +222,11 @@ bool CheckVideoCells(logistics::control_center::MainWindow& window, QWidget& vid
     QList<QRect> cell_rects;
     for (auto* cell : cells) {
         const QRect rect(cell->mapTo(&video, QPoint{}), cell->size());
+        if (!video.rect().contains(rect)) {
+            std::fprintf(stderr,
+                         "main_window_layout_test: video cell geometry (%d,%d %dx%d) exceeds workspace (%dx%d)\n",
+                         rect.x(), rect.y(), rect.width(), rect.height(), video.width(), video.height());
+        }
         if (!LayoutCheck(cell->isVisible(), "configured video cell is hidden") ||
             !LayoutCheck(!rect.isEmpty(), "configured video cell has empty geometry") ||
             !LayoutCheck(video.rect().contains(rect), "configured video cell is clipped by videoWorkspace")) {
@@ -269,7 +279,8 @@ bool CheckConfiguredSingleChannel(QApplication& application) {
         window.resize(size);
         window.show();
         application.processEvents();
-        if (qAbs(video->width() - factory->width()) > 2) {
+        const int ratio_error = qAbs(video->width() * 9 - factory->width() * 11);
+        if (video->width() <= factory->width() || ratio_error > 40) {
             std::fprintf(stderr, "main_window_layout_test: single channel at %dx%d produced %d/%d workspace widths\n",
                          size.width(), size.height(), video->width(), factory->width());
             return false;
@@ -293,7 +304,11 @@ int main(int argc, char* argv[]) {
         return condition;
     };
 
+#ifdef Q_OS_WIN
+    qputenv("QT_QPA_PLATFORM", "windows");
+#else
     qputenv("QT_QPA_PLATFORM", "offscreen");
+#endif
     QApplication::setDesktopSettingsAware(false);
     QApplication application(argc, argv);
     QApplication::setEffectEnabled(Qt::UI_AnimateCombo, true);
@@ -316,7 +331,41 @@ int main(int argc, char* argv[]) {
         "onvif_metadata_enabled=false\n");
     config.close();
     qputenv("LOGISTICS_CONTROL_CENTER_CONFIG", config_path.toUtf8());
+    const auto danger_zone_config_path = directory.filePath(QStringLiteral("danger-zones.ini"));
+    qputenv("LOGISTICS_CONTROL_CENTER_DANGER_ZONE_CONFIG", danger_zone_config_path.toUtf8());
     logistics::control_center::MainWindow window;
+
+    auto* danger_settings = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSettingsButton"));
+    auto* danger_visibility = window.findChild<QPushButton*>(QStringLiteral("dangerZoneVisibilityButton"));
+    auto* danger_add = window.findChild<QPushButton*>(QStringLiteral("dangerZoneAddButton"));
+    auto* danger_save = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSaveButton"));
+    if (!check(danger_settings != nullptr && danger_visibility != nullptr && danger_add != nullptr &&
+                   danger_save != nullptr,
+               "danger-zone controls are missing") ||
+        !check(danger_add->isHidden() && danger_save->isHidden(), "danger-zone edit controls start visible")) {
+        return 1;
+    }
+    danger_settings->click();
+    if (!check(!danger_add->isHidden() && !danger_save->isHidden(), "danger-zone edit controls did not open")) {
+        return 1;
+    }
+    danger_add->click();
+    danger_save->click();
+    {
+        QSettings saved_settings(danger_zone_config_path, QSettings::IniFormat);
+        if (!check(!saved_settings.value(QStringLiteral("danger_zone/regions")).toString().isEmpty(),
+                   "danger-zone regions were not persisted")) {
+            return 1;
+        }
+    }
+    danger_visibility->click();
+    {
+        QSettings saved_settings(danger_zone_config_path, QSettings::IniFormat);
+        if (!check(!saved_settings.value(QStringLiteral("danger_zone/overlay_visible"), true).toBool(),
+                   "danger-zone visibility was not persisted")) {
+            return 1;
+        }
+    }
 
     auto* operations_workspace = window.findChild<QSplitter*>(QStringLiteral("operationsWorkspaceSplitter"));
     if (!check(operations_workspace != nullptr, "operationsWorkspaceSplitter is missing")) {
@@ -348,6 +397,11 @@ int main(int argc, char* argv[]) {
     if (!check(video_cells.size() == 1, "expected one stacked video channel cell")) {
         return 1;
     }
+    auto* channel_status = window.findChild<QLabel*>(QStringLiteral("channelStatus1"));
+    if (!check(channel_status != nullptr && channel_status->styleSheet().contains(QStringLiteral("border:0")),
+               "video connection status label border is not transparent")) {
+        return 1;
+    }
     auto* video_viewport = video_cells.front()->parentWidget();
     if (!check(video_viewport != nullptr, "video grid viewport is missing")) {
         return 1;
@@ -364,6 +418,9 @@ int main(int argc, char* argv[]) {
                "operational log popup overrides the shared item-view style") ||
         !check(log_table != nullptr && log_table->palette().color(QPalette::Highlight) == QColor("#264f78"),
                "operational log selection does not use the shared highlight") ||
+        !check(log_table != nullptr &&
+                   log_table->height() >= log_table->horizontalHeader()->height() + log_table->rowHeight(0),
+               "operational log does not preserve one visible row at 1280x720") ||
         !check(log_flush_timer != nullptr && log_flush_timer->interval() == 100,
                "operational log batch timer is missing or has the wrong interval")) {
         return 1;
@@ -399,7 +456,13 @@ int main(int argc, char* argv[]) {
     auto* log = window.findChild<QWidget*>(QStringLiteral("operationalLogPanel"));
     auto* process_control =
         window.findChild<logistics::control_center::ProcessControlPanel*>(QStringLiteral("processControlPanel"));
+    auto* operations_dashboard = window.findChild<QWidget*>(QStringLiteral("operationsDashboard"));
     auto* app_header = window.findChild<QWidget*>(QStringLiteral("appHeader"));
+    auto* central_server_status =
+        app_header == nullptr ? nullptr : app_header->findChild<QLabel*>(QStringLiteral("mqttConnectionStatus"));
+    const auto header_labels = app_header == nullptr ? QList<QLabel*>{} : app_header->findChildren<QLabel*>();
+    const bool has_channel_badge = std::ranges::any_of(
+        header_labels, [](const QLabel* label) { return label->text() == QStringLiteral("1 CHANNEL"); });
     if (!check(window.size() == QSize(1280, 720), "offscreen window did not keep 1280x720") ||
         !check(factory != nullptr && factory->isVisible(), "factoryTopView is not visible") ||
         !check(video != nullptr && video->isVisible(), "videoWorkspace is not visible") ||
@@ -407,10 +470,21 @@ int main(int argc, char* argv[]) {
         !check(product != nullptr && product->isVisible(), "productResultPanel is not visible") ||
         !check(log != nullptr && log->isVisible(), "operationalLogPanel is not visible") ||
         !check(process_control != nullptr && process_control->isVisible(), "processControlPanel is not visible") ||
-        !check(app_header != nullptr && app_header->isAncestorOf(process_control),
-               "processControlPanel is not contained by appHeader") ||
-        !check(app_header->minimumHeight() == 76 && app_header->maximumHeight() == 92,
-               "appHeader height range is not 76-92")) {
+        !check(operations_dashboard != nullptr && operations_dashboard->isVisible(),
+               "operationsDashboard is not visible") ||
+        !check(!has_channel_badge, "legacy 1 CHANNEL badge is still visible") ||
+        !check(app_header != nullptr && !app_header->isAncestorOf(process_control),
+               "processControlPanel is still contained by appHeader") ||
+        !check(app_header->minimumHeight() == 46 && app_header->maximumHeight() == 58,
+               "appHeader height range is not 46-58") ||
+        !check(central_server_status != nullptr && central_server_status->text().contains(QStringLiteral("중앙 서버")),
+               "appHeader central server status is missing") ||
+        !check(central_server_status->width() == 176 && central_server_status->height() == 30,
+               "central server status does not keep its fixed footprint") ||
+        !check(factory->findChild<QLabel*>(QStringLiteral("factoryTopViewLiveStatus")) == nullptr,
+               "factory top-view still contains the MQTT status") ||
+        !check(operations_dashboard->findChild<QLabel*>(QStringLiteral("dashboardLiveStatus")) == nullptr,
+               "operations dashboard still contains the duplicate MQTT status")) {
         return 2;
     }
 
@@ -470,7 +544,23 @@ int main(int argc, char* argv[]) {
                        QStringLiteral("SORTING"), 4);
     emit_device_status(QStringLiteral("LAYOUT-LINETRACER-LIVE"), QStringLiteral("PI-LT-01"), QStringLiteral("STOPPED"),
                        5);
+    mqtt_client->messageReceived(
+        QStringLiteral("device/PI-LT-01/event"),
+        { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+          { QStringLiteral("messageId"), QStringLiteral("LAYOUT-LINETRACER-SENSOR-FRONT") },
+          { QStringLiteral("messageType"), QStringLiteral("SENSOR_STATUS") },
+          { QStringLiteral("sourceId"), QStringLiteral("PI-LT-01") },
+          { QStringLiteral("timestamp"), now.addMSecs(6).toString(Qt::ISODateWithMs) },
+          { QStringLiteral("data"), QJsonObject{ { QStringLiteral("sensorId"), 1 },
+                                                 { QStringLiteral("sensorName"), QStringLiteral("FRONT") },
+                                                 { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                                                 { QStringLiteral("distanceCm"), 12 } } } });
     application.processEvents();
+
+    if (!check(factory->sensorText(QStringLiteral("linetracer"), 1) == QStringLiteral("12 cm"),
+               "line-tracer sensor telemetry did not refresh factoryTopView")) {
+        return 2;
+    }
 
     const auto input_before_tick = factory->boxPosition(QStringLiteral("input"));
     const auto sorting_before_tick = factory->boxPosition(QStringLiteral("sorting"));
@@ -533,7 +623,7 @@ int main(int argc, char* argv[]) {
     factory->advanceAnimationsForTest();
     for (const auto& key : { QStringLiteral("input"), QStringLiteral("vision"), QStringLiteral("gripper"),
                              QStringLiteral("sorting"), QStringLiteral("linetracer") }) {
-        if (!check(factory->nodeColor(key) == QColor(QStringLiteral("#f14c4c")),
+        if (!check(factory->nodeColor(key) == QColor(QStringLiteral("#ff3b30")),
                    "global emergency stop did not turn a connected factory node red")) {
             return 2;
         }
@@ -569,8 +659,23 @@ int main(int argc, char* argv[]) {
             return 3;
         }
     }
+    const auto workspace_bottom = qMax(factory_rect.bottom(), video_rect.bottom());
+    const auto process_control_gap = process_control_rect.top() - workspace_bottom - 1;
+    if (!check(process_control_gap >= 5 && process_control_gap <= 7,
+               "processControlPanel does not have the expected gap below the workspace") ||
+        !check(process_control_rect.top() >= workspace_bottom,
+               "processControlPanel is not below the video and factory workspace") ||
+        !check(process_control_rect.bottom() <= process_status_rect.top(),
+               "processControlPanel is not above the real-time process status")) {
+        return 3;
+    }
     for (const auto* cell : video_cells) {
         const QRect rect(cell->mapTo(video, QPoint{}), cell->size());
+        if (!video->rect().contains(rect)) {
+            std::fprintf(stderr,
+                         "main_window_layout_test: live video cell geometry (%d,%d %dx%d) exceeds workspace (%dx%d)\n",
+                         rect.x(), rect.y(), rect.width(), rect.height(), video->width(), video->height());
+        }
         if (!check(cell->minimumSize() == QSize(480, 270), "video cell minimum is not 480x270") ||
             !check(cell->width() >= 480 && cell->height() >= 270, "video cell is smaller than 480x270") ||
             !check(video->rect().contains(rect), "video cell is clipped by videoWorkspace")) {

@@ -52,6 +52,7 @@ private:
     void requestOlderEntriesAtBoundary();
 
     QLabel* alert_count_{ nullptr };
+    QLabel* empty_state_{ nullptr };
     QLabel* result_count_{ nullptr };
     QComboBox* severity_filter_{ nullptr };
     QLineEdit* query_filter_{ nullptr };

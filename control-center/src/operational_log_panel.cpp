@@ -17,7 +17,6 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSortFilterProxyModel>
-#include <QStackedLayout>
 #include <QTableView>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -440,8 +439,8 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
         "QTableView::item:hover{background:#202a33;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 10, 10, 10);
-    layout->setSpacing(8);
+    layout->setContentsMargins(10, 6, 10, 6);
+    layout->setSpacing(4);
 
     auto* header = new QHBoxLayout();
     auto* header_text = new QVBoxLayout();
@@ -498,9 +497,10 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     layout->addLayout(secondary_filters);
 
     auto* table_surface = new QWidget(this);
-    auto* table_stack = new QStackedLayout(table_surface);
-    table_stack->setContentsMargins(0, 0, 0, 0);
-    table_stack->setStackingMode(QStackedLayout::StackAll);
+    table_surface->setObjectName(QStringLiteral("operationalLogTableSurface"));
+    table_surface->setMinimumHeight(60);
+    auto* table_layout = new QVBoxLayout(table_surface);
+    table_layout->setContentsMargins(0, 0, 0, 0);
     table_model_ = new OperationalLogTableModel(this);
     filter_model_ = new OperationalLogFilterProxyModel(this);
     filter_model_->setSourceModel(table_model_);
@@ -524,13 +524,14 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-    table_stack->addWidget(table_);
-    auto* empty_state = new QLabel(QStringLiteral("표시할 운영 로그가 없습니다"), table_surface);
-    empty_state->setObjectName(QStringLiteral("operationalLogEmptyState"));
-    empty_state->setAlignment(Qt::AlignCenter);
-    empty_state->setAttribute(Qt::WA_TransparentForMouseEvents);
-    empty_state->setStyleSheet("color:#777777;font-size:11px;");
-    table_stack->addWidget(empty_state);
+    table_layout->addWidget(table_);
+    empty_state_ = new QLabel(QStringLiteral("표시할 운영로그 없음"), table_->viewport());
+    empty_state_->setObjectName(QStringLiteral("operationalLogEmptyState"));
+    empty_state_->setAlignment(Qt::AlignCenter);
+    empty_state_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    empty_state_->setStyleSheet("color:#777777;font-size:11px;");
+    empty_state_->setGeometry(table_->viewport()->rect());
+    empty_state_->raise();
     layout->addWidget(table_surface, 1);
 
     connect(severity_filter_, &QComboBox::currentIndexChanged, this, [this]() { applyFilter(); });
@@ -659,6 +660,9 @@ void OperationalLogPanel::setAcknowledgeAllHandler(AcknowledgeAllHandler handler
 }
 
 bool OperationalLogPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == table_->viewport() && event->type() == QEvent::Resize && empty_state_ != nullptr) {
+        empty_state_->setGeometry(table_->viewport()->rect());
+    }
     if ((watched == table_ || watched == table_->viewport()) && event->type() == QEvent::Wheel) {
         auto* wheel_event = static_cast<QWheelEvent*>(event);
         auto vertical_delta =
@@ -719,8 +723,11 @@ void OperationalLogPanel::updateSummary() {
     alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(displayed_alert_count));
     alert_count_->setVisible(displayed_alert_count > 0);
     acknowledge_all_button_->setEnabled(displayed_alert_count > 0);
-    if (auto* empty_state = findChild<QLabel*>(QStringLiteral("operationalLogEmptyState")); empty_state != nullptr) {
-        empty_state->setVisible(filtered_count == 0);
+    const bool is_empty = filtered_count == 0;
+    empty_state_->setVisible(is_empty);
+    if (is_empty) {
+        empty_state_->setGeometry(table_->viewport()->rect());
+        empty_state_->raise();
     }
 }
 

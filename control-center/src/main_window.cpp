@@ -17,9 +17,11 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPlaybackOptions>
+#include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedLayout>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStringList>
 #include <QTimeZone>
@@ -70,12 +72,14 @@ constexpr std::size_t kChannelCount = 1;
 constexpr int kDefaultMqttPort = 1883;
 constexpr int kOperationalLogBatchIntervalMs = 100;
 constexpr qsizetype kOperationalLogBatchSize = 200;
-constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kDefaultMaximumEntries);
+constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kPageSize);
 constexpr qsizetype kMinimumOperationalLogEntries = OperationalLogState::kPageSize;
 constexpr qsizetype kMaximumOperationalLogEntries = 5000;
+constexpr double kMinimumDangerZoneSize = 0.02;
 
 struct ControlCenterConfig {
     QString path;
+    QString danger_zone_settings_path;
     QString mqtt_host{ "127.0.0.1" };
     QString mqtt_client_id{ "control-center" };
     QString mqtt_username;
@@ -98,6 +102,10 @@ struct ControlCenterConfig {
     bool onvif_metadata_enabled{ true };
     bool onvif_log_payload{ false };
     int metadata_stale_timeout_ms{ kDefaultMetadataStaleTimeoutMs };
+    QList<QRectF> danger_zones;
+    QStringList danger_person_classes{ QStringLiteral("Head"), QStringLiteral("Face"), QStringLiteral("Human") };
+    double danger_minimum_confidence{ 0.5 };
+    bool danger_zones_visible{ true };
     std::vector<QUrl> stream_urls;
     std::vector<QUrl> metadata_stream_urls;
     QStringList warnings;
@@ -148,6 +156,15 @@ QString controlCenterConfigPath() {
     return QDir(QCoreApplication::applicationDirPath()).filePath("config/control-centor.ini");
 }
 
+QString dangerZoneSettingsPath() {
+    const auto environment_path = qEnvironmentVariable("LOGISTICS_CONTROL_CENTER_DANGER_ZONE_CONFIG");
+    if (!environment_path.isEmpty()) {
+        return QFileInfo(environment_path).absoluteFilePath();
+    }
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+        .filePath(QStringLiteral("danger-zones.ini"));
+}
+
 bool isValidRtspUrl(const QUrl& url) {
     const auto scheme = url.scheme();
     const bool valid_scheme =
@@ -169,15 +186,74 @@ bool isValidHttpBaseUrl(const QUrl& url) {
            !url.hasFragment();
 }
 
+QList<QRectF> parseDangerZones(const QString& value, QStringList& warnings) {
+    QList<QRectF> zones;
+    for (const auto& region : value.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const auto values = region.split(QLatin1Char(','));
+        bool valid = values.size() == 4;
+        std::array<double, 4> coordinates{};
+        for (qsizetype index = 0; valid && index < values.size(); ++index) {
+            bool converted = false;
+            coordinates[static_cast<std::size_t>(index)] = values[index].trimmed().toDouble(&converted);
+            valid = converted;
+        }
+        const QRectF zone(coordinates[0], coordinates[1], coordinates[2], coordinates[3]);
+        valid = valid && zone.left() >= 0.0 && zone.top() >= 0.0 && zone.right() <= 1.0 && zone.bottom() <= 1.0 &&
+                zone.width() >= kMinimumDangerZoneSize && zone.height() >= kMinimumDangerZoneSize;
+        if (valid) {
+            zones.append(zone);
+        } else {
+            warnings.append(QStringLiteral("danger_zone/regions의 잘못된 영역을 무시했습니다: %1").arg(region));
+        }
+    }
+    return zones;
+}
+
+QString serializeDangerZones(const QList<QRectF>& zones) {
+    QStringList values;
+    for (const auto& zone : zones) {
+        values.append(QStringLiteral("%1,%2,%3,%4")
+                          .arg(zone.x(), 0, 'g', 8)
+                          .arg(zone.y(), 0, 'g', 8)
+                          .arg(zone.width(), 0, 'g', 8)
+                          .arg(zone.height(), 0, 'g', 8));
+    }
+    return values.join(QLatin1Char(';'));
+}
+
 ControlCenterConfig loadControlCenterConfig() {
     ControlCenterConfig config;
     config.path = controlCenterConfigPath();
+    config.danger_zone_settings_path = dangerZoneSettingsPath();
 
     if (!QFileInfo::exists(config.path)) {
         config.warnings.append(QStringLiteral("설정 파일을 찾을 수 없어 기본값을 사용합니다."));
     }
 
     QSettings settings(config.path, QSettings::IniFormat);
+    QSettings danger_zone_settings(config.danger_zone_settings_path, QSettings::IniFormat);
+    const auto danger_value = [&settings, &danger_zone_settings](const QString& key, const QVariant& fallback = {}) {
+        return danger_zone_settings.value(key, settings.value(key, fallback));
+    };
+
+    config.danger_zones =
+        parseDangerZones(danger_value(QStringLiteral("danger_zone/regions")).toString(), config.warnings);
+    config.danger_zones_visible = danger_value(QStringLiteral("danger_zone/overlay_visible"), true).toBool();
+    const auto person_classes = danger_value(QStringLiteral("danger_zone/person_classes"))
+                                    .toString()
+                                    .split(QLatin1Char(','), Qt::SkipEmptyParts);
+    if (!person_classes.isEmpty()) {
+        config.danger_person_classes = person_classes;
+    }
+    bool danger_confidence_valid = false;
+    const auto danger_confidence =
+        danger_value(QStringLiteral("danger_zone/minimum_confidence"), 0.5).toDouble(&danger_confidence_valid);
+    if (danger_confidence_valid && danger_confidence >= 0.0 && danger_confidence <= 1.0) {
+        config.danger_minimum_confidence = danger_confidence;
+    } else {
+        config.warnings.append(
+            QStringLiteral("danger_zone/minimum_confidence는 0~1이어야 하므로 기본값 0.5를 사용합니다."));
+    }
 
     const auto mqtt_host = settings.value("mqtt/host", config.mqtt_host).toString().trimmed();
     if (!isValidMqttHost(mqtt_host)) {
@@ -434,6 +510,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setStyleSheet(ControlCenterStyleSheet());
 
     const auto config = loadControlCenterConfig();
+    danger_zone_settings_path_ = config.danger_zone_settings_path;
+    danger_zone_overlay_visible_ = config.danger_zones_visible;
     operational_log_state_.setMaximumEntries(config.operational_log_maximum_entries);
     control_target_device_id_ = config.control_target_device_id;
     operations_dashboard_state_.configureProcesses(config.process_definitions);
@@ -470,10 +548,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* app_header = new QFrame(central_widget);
     app_header->setObjectName(QStringLiteral("appHeader"));
-    app_header->setMinimumHeight(76);
-    app_header->setMaximumHeight(92);
+    app_header->setMinimumHeight(46);
+    app_header->setMaximumHeight(58);
     auto* app_header_layout = new QHBoxLayout(app_header);
-    app_header_layout->setContentsMargins(16, 7, 16, 7);
+    app_header_layout->setContentsMargins(16, 4, 16, 4);
     auto* app_title_layout = new QVBoxLayout();
     app_title_layout->setContentsMargins(0, 0, 0, 0);
     app_title_layout->setSpacing(1);
@@ -483,15 +561,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     app_title->setStyleSheet("color:#f0f0f0;font-size:18px;font-weight:700;");
     app_title_layout->addWidget(app_eyebrow);
     app_title_layout->addWidget(app_title);
-    auto* channel_badge = new QLabel(QStringLiteral("1 CHANNEL"), app_header);
-    channel_badge->setAlignment(Qt::AlignCenter);
-    channel_badge->setStyleSheet(
-        "background:#252526;color:#cccccc;border:1px solid #3c3c3c;border-radius:4px;"
-        "font-size:10px;font-weight:700;padding:5px 10px;");
-    process_control_panel_ = new ProcessControlPanel(app_header);
     app_header_layout->addLayout(app_title_layout);
-    app_header_layout->addWidget(process_control_panel_, 1);
-    app_header_layout->addWidget(channel_badge);
+    app_header_layout->addStretch(1);
+    mqtt_status_label_ = new QLabel(QStringLiteral("● 중앙 서버 · 연결 준비"), app_header);
+    mqtt_status_label_->setObjectName(QStringLiteral("mqttConnectionStatus"));
+    mqtt_status_label_->setFixedSize(176, 30);
+    mqtt_status_label_->setAlignment(Qt::AlignCenter);
+    mqtt_status_label_->setAccessibleName(QStringLiteral("중앙 서버 연결 상태"));
+    mqtt_status_label_->setStyleSheet(
+        "color:#9d9d9d;background:#202020;border:1px solid #3a3a3a;border-radius:5px;"
+        "font-size:10px;font-weight:700;");
+    app_header_layout->addWidget(mqtt_status_label_, 0, Qt::AlignVCenter);
     root_layout->addWidget(app_header);
 
     operations_dashboard_panel_ = new OperationsDashboardPanel(central_widget);
@@ -504,14 +584,57 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* video_grid = new QGridLayout(video_container);
     video_grid->setContentsMargins(10, 0, 0, 0);
     video_grid->setHorizontalSpacing(8);
-    video_grid->setVerticalSpacing(0);
+    video_grid->setVerticalSpacing(6);
+    auto* danger_zone_toolbar = new QWidget(video_container);
+    danger_zone_toolbar->setObjectName(QStringLiteral("dangerZoneToolbar"));
+    auto* danger_zone_toolbar_layout = new QHBoxLayout(danger_zone_toolbar);
+    danger_zone_toolbar_layout->setContentsMargins(0, 0, 0, 0);
+    danger_zone_settings_button_ = new QPushButton(QStringLiteral("위험 영역 설정"), danger_zone_toolbar);
+    danger_zone_settings_button_->setObjectName(QStringLiteral("dangerZoneSettingsButton"));
+    danger_zone_visibility_button_ = new QPushButton(danger_zone_toolbar);
+    danger_zone_visibility_button_->setObjectName(QStringLiteral("dangerZoneVisibilityButton"));
+    danger_zone_add_button_ = new QPushButton(QStringLiteral("영역 추가"), danger_zone_toolbar);
+    danger_zone_add_button_->setObjectName(QStringLiteral("dangerZoneAddButton"));
+    danger_zone_delete_button_ = new QPushButton(QStringLiteral("선택 삭제"), danger_zone_toolbar);
+    danger_zone_delete_button_->setObjectName(QStringLiteral("dangerZoneDeleteButton"));
+    danger_zone_save_button_ = new QPushButton(QStringLiteral("저장"), danger_zone_toolbar);
+    danger_zone_save_button_->setObjectName(QStringLiteral("dangerZoneSaveButton"));
+    danger_zone_cancel_button_ = new QPushButton(QStringLiteral("취소"), danger_zone_toolbar);
+    danger_zone_cancel_button_->setObjectName(QStringLiteral("dangerZoneCancelButton"));
+    danger_zone_toolbar_layout->addWidget(danger_zone_settings_button_);
+    danger_zone_toolbar_layout->addWidget(danger_zone_visibility_button_);
+    danger_zone_toolbar_layout->addStretch();
+    danger_zone_toolbar_layout->addWidget(danger_zone_add_button_);
+    danger_zone_toolbar_layout->addWidget(danger_zone_delete_button_);
+    danger_zone_toolbar_layout->addWidget(danger_zone_save_button_);
+    danger_zone_toolbar_layout->addWidget(danger_zone_cancel_button_);
+    video_grid->addWidget(danger_zone_toolbar, 0, 0, Qt::AlignTop);
+    connect(danger_zone_settings_button_, &QPushButton::clicked, this, [this]() { setDangerZoneEditing(true); });
+    connect(danger_zone_visibility_button_, &QPushButton::clicked, this, [this]() {
+        danger_zone_overlay_visible_ = !danger_zone_overlay_visible_;
+        for (auto* overlay : detection_overlays_) {
+            if (overlay != nullptr) {
+                overlay->setDangerZonesVisible(danger_zone_overlay_visible_);
+            }
+        }
+        saveDangerZoneSettings();
+        updateDangerZoneControls();
+    });
+    connect(danger_zone_add_button_, &QPushButton::clicked, this,
+            [this]() { detection_overlays_.front()->addDangerZone(); });
+    connect(danger_zone_delete_button_, &QPushButton::clicked, this,
+            [this]() { detection_overlays_.front()->deleteSelectedDangerZone(); });
+    connect(danger_zone_save_button_, &QPushButton::clicked, this, [this]() { setDangerZoneEditing(false, true); });
+    connect(danger_zone_cancel_button_, &QPushButton::clicked, this, [this]() { setDangerZoneEditing(false); });
+    updateDangerZoneControls();
     factory_top_view_ = new FactoryTopViewWidget(operations_workspace);
     factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
     operations_workspace->addWidget(video_container);
     operations_workspace->addWidget(factory_top_view_);
-    operations_workspace->setStretchFactor(0, 1);
-    operations_workspace->setStretchFactor(1, 1);
-    operations_workspace->setSizes({ 640, 640 });
+    operations_workspace->setStretchFactor(0, 11);
+    operations_workspace->setStretchFactor(1, 9);
+    operations_workspace->setSizes({ 704, 576 });
+    process_control_panel_ = new ProcessControlPanel(central_widget);
 
     auto* detail_splitter = new QSplitter(Qt::Horizontal, central_widget);
     detail_splitter->setObjectName(QStringLiteral("detailSplitter"));
@@ -543,15 +666,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     selectControlTarget(config.control_target_device_id, initial_control_target_name);
 
     root_layout->addWidget(operations_workspace, 1);
+    root_layout->addSpacing(6);
+    root_layout->addWidget(process_control_panel_);
     root_layout->addWidget(operations_dashboard_panel_);
     root_layout->addWidget(detail_splitter, 1);
     setCentralWidget(central_widget);
 
-    mqtt_status_label_ = new QLabel(QStringLiteral("MQTT 연결 준비"), this);
-    mqtt_status_label_->setObjectName(QStringLiteral("mqttConnectionStatus"));
-    mqtt_status_label_->setMargin(4);
     statusBar()->setSizeGripEnabled(false);
-    statusBar()->addPermanentWidget(mqtt_status_label_);
 
     command_response_timer_ = new QTimer(this);
     command_response_timer_->setSingleShot(true);
@@ -606,52 +727,65 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(mqtt_client_, &MqttClient::connectionStateChanged, this,
             [this](MqttClient::ConnectionState state, const QString& detail) {
                 mqtt_status_label_->setToolTip(detail);
+                const auto set_central_server_status = [this](const QString& text, const QString& color,
+                                                              const QString& background, const QString& border) {
+                    mqtt_status_label_->setText(text);
+                    mqtt_status_label_->setStyleSheet(
+                        QStringLiteral("color:%1;background:%2;border:1px solid %3;border-radius:5px;"
+                                       "font-size:10px;font-weight:700;")
+                            .arg(color, background, border));
+                };
                 switch (state) {
                     case MqttClient::ConnectionState::Connected:
+                        mqtt_connected_ = true;
                         process_control_panel_->setMqttConnected(true);
                         operations_dashboard_state_.markMqttConnectedAwaitingStatus(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(true);
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결됨"));
-                        mqtt_status_label_->setStyleSheet("color:#89d185;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결됨"), QStringLiteral("#89d185"),
+                                                  QStringLiteral("#17251b"), QStringLiteral("#345c3d"));
                         appendOperationalLog(OperationalLogSeverity::Info, QStringLiteral("central-server"),
                                              QStringLiteral("통신"), QStringLiteral("MQTT_CONNECTED"), detail);
                         break;
                     case MqttClient::ConnectionState::Connecting:
+                        mqtt_connected_ = false;
+                        danger_zone_estop_pending_ = false;
                         process_control_panel_->setMqttConnected(false);
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결 중"));
-                        mqtt_status_label_->setStyleSheet("color:#cca700;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결 중"), QStringLiteral("#cca700"),
+                                                  QStringLiteral("#282411"), QStringLiteral("#5b5015"));
                         break;
                     case MqttClient::ConnectionState::Reconnecting:
+                        mqtt_connected_ = false;
+                        danger_zone_estop_pending_ = false;
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 재연결 대기"));
-                        mqtt_status_label_->setStyleSheet("color:#ce9178;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 재연결 대기"),
+                                                  QStringLiteral("#ce9178"), QStringLiteral("#2c211c"),
+                                                  QStringLiteral("#614234"));
                         appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
                                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_RECONNECTING"), detail);
                         break;
                     case MqttClient::ConnectionState::Error:
+                        mqtt_connected_ = false;
+                        danger_zone_estop_pending_ = false;
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 오류"));
-                        mqtt_status_label_->setStyleSheet("color:#f14c4c;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 오류"), QStringLiteral("#f14c4c"),
+                                                  QStringLiteral("#30191a"), QStringLiteral("#713234"));
                         break;
                     case MqttClient::ConnectionState::Disconnected:
+                        mqtt_connected_ = false;
+                        danger_zone_estop_pending_ = false;
                         process_control_panel_->setMqttConnected(false);
                         operations_dashboard_state_.markMqttDisconnected(QDateTime::currentDateTimeUtc());
                         refreshOperationsPresentation();
-                        operations_dashboard_panel_->setMqttConnected(false);
                         clearPendingCommand();
-                        mqtt_status_label_->setText(QStringLiteral("MQTT 연결 해제"));
-                        mqtt_status_label_->setStyleSheet("color:#9d9d9d;font-weight:700;");
+                        set_central_server_status(QStringLiteral("● 중앙 서버 · 연결 해제"), QStringLiteral("#9d9d9d"),
+                                                  QStringLiteral("#202020"), QStringLiteral("#3a3a3a"));
                         appendOperationalLog(OperationalLogSeverity::Warning, QStringLiteral("central-server"),
                                              QStringLiteral("통신 장애"), QStringLiteral("MQTT_DISCONNECTED"), detail);
                         break;
@@ -742,6 +876,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         channel_stacks_[channel]->addWidget(state_overlays_[channel]);
 
         detection_overlays_[channel]->setMinimumSize(channel_minimum_size);
+        detection_overlays_[channel]->setDangerZones(config.danger_zones);
+        detection_overlays_[channel]->setDangerZonesVisible(config.danger_zones_visible);
+        detection_overlays_[channel]->setPersonClasses(config.danger_person_classes);
+        detection_overlays_[channel]->setMinimumPersonConfidence(config.danger_minimum_confidence);
         players_[channel]->setVideoSink(detection_overlays_[channel]->videoSink());
         reconnect_timers_[channel]->setInterval(reconnect_interval_ms_);
         detection_overlays_[channel]->setStaleTimeout(metadata_stale_timeout_ms_);
@@ -749,6 +887,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             players_[channel]->setActiveAudioTrack(-1);
             players_[channel]->setActiveSubtitleTrack(-1);
         });
+        connect(detection_overlays_[channel], &DetectionOverlay::dangerZoneOccupancyEvaluated, this,
+                [this](bool occupied, int zone_index, const QString& class_name, double confidence) {
+                    handleDangerZoneOccupancy(occupied, zone_index, class_name, confidence);
+                });
         connect(video_streams_[channel], &RtspH264Stream::streamReady, this, [this, channel]() {
             players_[channel]->stop();
             players_[channel]->setSource({});
@@ -938,6 +1080,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         }
 
         video_grid->addWidget(channel_panel, 0, 0);
+        danger_zone_toolbar->raise();
     }
 
     if (!config.warnings.isEmpty()) {
@@ -1193,7 +1336,7 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
             reconnect_timers_[channel]->stop();
             status_labels_[channel]->setText(QStringLiteral("연결 중…\n영상을 불러오는 중입니다"));
             status_labels_[channel]->setStyleSheet(
-                "color:#cca700;background-color:transparent;font-size:22px;font-weight:700;");
+                "color:#cca700;background-color:transparent;border:0;font-size:22px;font-weight:700;");
             status_labels_[channel]->setToolTip({});
             state_overlays_[channel]->setToolTip({});
             break;
@@ -1218,7 +1361,7 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
                 }
             }
             status_labels_[channel]->setStyleSheet(
-                "color:#f14c4c;background-color:transparent;font-size:22px;font-weight:700;");
+                "color:#f14c4c;background-color:transparent;border:0;font-size:22px;font-weight:700;");
             status_labels_[channel]->setToolTip(detail);
             state_overlays_[channel]->setToolTip(detail);
             if (previous_state != ChannelState::Error) {
@@ -1276,6 +1419,9 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
         operations_dashboard_state_.applyEnvelope(envelope, QDateTime::currentDateTimeUtc(), !is_individual_response);
     if (dashboard_update.applied) {
         refreshOperationsPresentation();
+        if (operations_dashboard_state_.overall().state == OverallProcessState::EmergencyStop) {
+            danger_zone_estop_pending_ = false;
+        }
         completePendingRecoveryFromDeviceState();
     } else if (dashboard_update.handled && !dashboard_update.error.isEmpty()) {
         statusBar()->showMessage(dashboard_update.error, 4000);
@@ -1320,6 +1466,10 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
 
     if (logistics::contracts::mqtt::IsTerminal(response.result)) {
         command_response_timer_->stop();
+        if (response.command == logistics::contracts::mqtt::ControlCommand::kEmergencyStop &&
+            response.result != logistics::contracts::mqtt::CommandResult::kSuccess) {
+            danger_zone_estop_pending_ = false;
+        }
         if (response.command == logistics::contracts::mqtt::ControlCommand::kRecovery &&
             response.result == logistics::contracts::mqtt::CommandResult::kSuccess &&
             pending_target_device_id_ != QStringLiteral("SYSTEM") &&
@@ -1366,6 +1516,9 @@ void MainWindow::handleCommandTimeout() {
     if (pending_command_ == logistics::contracts::mqtt::ControlCommand::kUnknown) {
         return;
     }
+    if (pending_command_ == logistics::contracts::mqtt::ControlCommand::kEmergencyStop) {
+        danger_zone_estop_pending_ = false;
+    }
     process_control_panel_->setCommandFinished(pending_command_, logistics::contracts::mqtt::CommandResult::kTimeout);
     appendOperationalLog(OperationalLogSeverity::Error,
                          pending_target_device_id_.isEmpty() ? control_target_device_id_ : pending_target_device_id_,
@@ -1379,6 +1532,87 @@ void MainWindow::clearPendingCommand() {
     pending_request_id_.clear();
     pending_target_device_id_.clear();
     pending_command_ = logistics::contracts::mqtt::ControlCommand::kUnknown;
+}
+
+void MainWindow::saveDangerZoneSettings() {
+    if (danger_zone_settings_path_.isEmpty() || detection_overlays_.empty() || detection_overlays_.front() == nullptr) {
+        return;
+    }
+    QDir().mkpath(QFileInfo(danger_zone_settings_path_).absolutePath());
+    QSettings settings(danger_zone_settings_path_, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("danger_zone/regions"),
+                      serializeDangerZones(detection_overlays_.front()->dangerZones()));
+    settings.setValue(QStringLiteral("danger_zone/overlay_visible"), danger_zone_overlay_visible_);
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        appendOperationalLog(OperationalLogSeverity::Error, QStringLiteral("control-center"),
+                             QStringLiteral("위험 영역"), QStringLiteral("DANGER_ZONE_SAVE_FAILED"),
+                             QStringLiteral("위험 영역 설정 파일을 저장하지 못했습니다."));
+        statusBar()->showMessage(QStringLiteral("위험 영역 설정 저장에 실패했습니다."), 5000);
+    }
+}
+
+void MainWindow::setDangerZoneEditing(const bool editing, const bool save_changes) {
+    if (detection_overlays_.empty() || detection_overlays_.front() == nullptr) {
+        return;
+    }
+    if (editing) {
+        detection_overlays_.front()->beginDangerZoneEditing();
+    } else if (save_changes) {
+        detection_overlays_.front()->commitDangerZoneEditing();
+        saveDangerZoneSettings();
+        statusBar()->showMessage(QStringLiteral("위험 영역을 저장했습니다."), 3000);
+    } else {
+        detection_overlays_.front()->cancelDangerZoneEditing();
+    }
+    updateDangerZoneControls();
+}
+
+void MainWindow::updateDangerZoneControls() {
+    const bool editing = !detection_overlays_.empty() && detection_overlays_.front() != nullptr &&
+                         detection_overlays_.front()->isDangerZoneEditing();
+    if (danger_zone_settings_button_ == nullptr) {
+        return;
+    }
+    danger_zone_settings_button_->setVisible(!editing);
+    danger_zone_visibility_button_->setVisible(!editing);
+    danger_zone_visibility_button_->setText(danger_zone_overlay_visible_ ? QStringLiteral("위험 영역 숨기기")
+                                                                         : QStringLiteral("위험 영역 보이기"));
+    danger_zone_add_button_->setVisible(editing);
+    danger_zone_delete_button_->setVisible(editing);
+    danger_zone_save_button_->setVisible(editing);
+    danger_zone_cancel_button_->setVisible(editing);
+}
+
+void MainWindow::handleDangerZoneOccupancy(const bool occupied, const int zone_index, const QString& class_name,
+                                           const double confidence) {
+    if (!occupied) {
+        danger_zone_incident_logged_ = false;
+        return;
+    }
+    if (!danger_zone_incident_logged_) {
+        const auto zone_label =
+            zone_index < 0 ? QStringLiteral("ArUco marker %1").arg(-zone_index - 1) : QString::number(zone_index + 1);
+        appendOperationalLog(OperationalLogSeverity::Critical, QStringLiteral("CCTV-CH-1"), QStringLiteral("위험 영역"),
+                             QStringLiteral("DANGER_ZONE_INTRUSION"),
+                             QStringLiteral("위험 영역 %1에서 사람을 감지했습니다. class=%2, confidence=%3")
+                                 .arg(zone_label)
+                                 .arg(class_name.isEmpty() ? QStringLiteral("unknown") : class_name)
+                                 .arg(confidence, 0, 'f', 3));
+        danger_zone_incident_logged_ = true;
+    }
+    if (operations_dashboard_state_.overall().state == OverallProcessState::EmergencyStop) {
+        danger_zone_estop_pending_ = false;
+        return;
+    }
+    if (!mqtt_connected_ || danger_zone_estop_pending_) {
+        return;
+    }
+    danger_zone_estop_pending_ = true;
+    sendControlCommand(logistics::contracts::mqtt::ControlCommand::kEmergencyStop, QStringLiteral("SYSTEM"));
+    if (pending_command_ != logistics::contracts::mqtt::ControlCommand::kEmergencyStop) {
+        danger_zone_estop_pending_ = false;
+    }
 }
 
 void MainWindow::appendOperationalLog(OperationalLogSeverity severity, const QString& device_id,
