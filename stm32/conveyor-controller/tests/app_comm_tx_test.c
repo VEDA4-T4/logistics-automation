@@ -399,8 +399,8 @@ static void test_heartbeat_routes_to_both_channels(void) {
     uint32_t captureBefore = fakeCaptureCount;
 
     CommTx_SetDeviceStatus(UART_DEVICE_RUNNING, UART_ERROR_NONE);
-    CommTx_SetSensorState(COMM_TX_CH_INPUT, UART_SENSOR_DETECTED);
-    CommTx_SetSensorState(COMM_TX_CH_SORTING, UART_SENSOR_CLEAR);
+    CommTx_SetSensorState(COMM_TX_CH_INPUT, UART_SENSOR_FAULT);
+    CommTx_SetSensorState(COMM_TX_CH_SORTING, UART_SENSOR_OK);
     osDelay(1000U);
     CommTx_ProcessOnce();
 
@@ -412,8 +412,8 @@ static void test_heartbeat_routes_to_both_channels(void) {
     assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(inputFrame.payload, inputFrame.length) != 0U);
     assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(inputFrame.payload, inputFrame.length - 1U) == 0U);
     assert(inputFrame.payload[APP_HEARTBEAT_STATE_INDEX] == UART_DEVICE_RUNNING);
-    assert(inputFrame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX] == UART_SENSOR_DETECTED);
-    assert(sortingFrame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] == UART_SENSOR_CLEAR);
+    assert(inputFrame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX] == UART_SENSOR_FAULT);
+    assert(sortingFrame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] == UART_SENSOR_OK);
     assert(stats->heartbeat_sent == heartbeatBefore + 2U);
     complete_channel(&huart1);
     complete_channel(&huart6);

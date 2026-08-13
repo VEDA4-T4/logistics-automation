@@ -627,15 +627,17 @@ void TestConveyorStatusUsesHeartbeatStateNames() {
 void TestSensorStatusPublishesEveryDistanceMeasurement() {
     Fixture fixture;
 
-    fixture.PushSensorStatus(UART_SORTING_SENSOR_ID_1, UART_SENSOR_CLEAR, 42U);
-    fixture.PushSensorStatus(UART_SORTING_SENSOR_ID_1, UART_SENSOR_CLEAR, 37U);
+    fixture.PushSensorStatus(UART_SORTING_SENSOR_ID_1, UART_SENSOR_OK, 42U);
+    fixture.PushSensorStatus(UART_SORTING_SENSOR_ID_1, UART_SENSOR_OK, 37U);
 
     assert(fixture.reports.size() == 2U);
     assert(fixture.reports[0].channel == SortingReportChannel::kEvent);
     const auto& first = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[0]);
     assert(first.sensor_id == UART_SORTING_SENSOR_ID_1);
-    assert(first.measurement_status == "CLEAR");
+    assert(first.measurement_status == "OK");
     assert(first.distance_cm == 42);
+    // Box arrival is the central server's call, so the node leaves it unset.
+    assert(!first.detection_status.has_value());
     const auto& second = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[1]);
     assert(second.distance_cm == 37);
 }

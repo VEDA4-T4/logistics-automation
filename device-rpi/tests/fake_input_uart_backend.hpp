@@ -103,7 +103,7 @@ namespace input_test {
     frame.payload[APP_HEARTBEAT_UPTIME_INDEX + 2U] = static_cast<std::uint8_t>((uptime_seconds >> 16U) & 0xFFU);
     frame.payload[APP_HEARTBEAT_UPTIME_INDEX + 3U] = static_cast<std::uint8_t>((uptime_seconds >> 24U) & 0xFFU);
     frame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX] = input_sensor_state;
-    frame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] = UART_SENSOR_CLEAR;
+    frame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] = UART_SENSOR_OK;
     return frame;
 }
 

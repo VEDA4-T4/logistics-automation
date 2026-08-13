@@ -109,11 +109,22 @@ void TestAllMqttMessageRoundTrips() {
                                                               .image_name = "JOB-0001-BOX.jpg",
                                                           }));
 
+    // Device -> server leg: measurement health only, no detection field yet.
     AssertRoundTrip<mqtt::SensorStatusPayload>(MakeMessage("MSG-0003-S", mqtt::MessageType::kSensorStatus,
                                                            mqtt::SensorStatusPayload{
                                                                .sensor_id = 2,
-                                                               .measurement_status = "DETECTED",
+                                                               .measurement_status = "OK",
                                                                .distance_cm = 17,
+                                                               .detection_status = std::nullopt,
+                                                           }));
+
+    // Server -> Qt leg: same reading, now carrying the server's judgement.
+    AssertRoundTrip<mqtt::SensorStatusPayload>(MakeMessage("MSG-0003-T", mqtt::MessageType::kSensorStatus,
+                                                           mqtt::SensorStatusPayload{
+                                                               .sensor_id = 2,
+                                                               .measurement_status = "OK",
+                                                               .distance_cm = 17,
+                                                               .detection_status = "DETECTED",
                                                            }));
 
     AssertRoundTrip<mqtt::WorkCreatedPayload>(MakeMessage("MSG-0003-A", mqtt::MessageType::kWorkCreated,
@@ -669,8 +680,9 @@ void TestMqttTopicMessageValidation() {
     const auto sensor_status = MakeMessage("MSG-TOPIC-04-S", mqtt::MessageType::kSensorStatus,
                                            mqtt::SensorStatusPayload{
                                                .sensor_id = 1,
-                                               .measurement_status = "CLEAR",
+                                               .measurement_status = "OK",
                                                .distance_cm = 42,
+                                               .detection_status = "CLEAR",
                                            });
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", sensor_status).IsSuccess());
     assert(mqtt::ValidateTopicMessage("qt/QT-01/event", sensor_status).IsSuccess());

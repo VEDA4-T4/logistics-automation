@@ -75,6 +75,7 @@ inline constexpr std::string_view kDistanceField = "distance";
 inline constexpr std::string_view kSensorIdField = "sensorId";
 inline constexpr std::string_view kMeasurementStatusField = "measurementStatus";
 inline constexpr std::string_view kDistanceCmField = "distanceCm";
+inline constexpr std::string_view kDetectionStatusField = "detectionStatus";
 
 [[nodiscard]] constexpr bool IsValidErrorLevel(std::string_view value) noexcept {
     return value == "INFO" || value == "WARNING" || value == "ERROR" || value == "CRITICAL";
@@ -84,8 +85,19 @@ inline constexpr std::string_view kDistanceCmField = "distanceCm";
     return value == "SUCCESS" || value == "FAILED" || value == "MISSING_DATA";
 }
 
+// Reported by the device: does the ultrasonic sensor currently produce a
+// trustworthy reading? Box presence is NOT part of this - the STM32 no longer
+// judges it. See IsValidDetectionStatus below.
 [[nodiscard]] constexpr bool IsValidMeasurementStatus(std::string_view value) noexcept {
-    return value == "CLEAR" || value == "DETECTED" || value == "FAULT";
+    return value == "OK" || value == "FAULT";
+}
+
+// Derived by the central server from distanceCm and the [sensor_detection]
+// thresholds in server.ini. Devices never populate this field; the server
+// stamps it before forwarding SENSOR_STATUS onwards, which is what lets an
+// operator retune detection without reflashing the STM32.
+[[nodiscard]] constexpr bool IsValidDetectionStatus(std::string_view value) noexcept {
+    return value == "CLEAR" || value == "DETECTED" || value == "UNKNOWN";
 }
 
 enum class CodecError : std::uint8_t {
@@ -177,11 +189,16 @@ struct SensorStatusPayload {
     std::int32_t sensor_id{ 0 };
     std::string measurement_status;
     std::int32_t distance_cm{ 0 };
+    // Absent on the device -> server leg, present once the server has applied
+    // its detection thresholds. Optional so a device build never has to know
+    // the thresholds exist.
+    std::optional<std::string> detection_status;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return sensor_id > 0 && sensor_id <= std::numeric_limits<std::uint8_t>::max() &&
                IsValidMeasurementStatus(measurement_status) && distance_cm >= 0 &&
-               distance_cm <= std::numeric_limits<std::uint16_t>::max();
+               distance_cm <= std::numeric_limits<std::uint16_t>::max() &&
+               (!detection_status.has_value() || IsValidDetectionStatus(*detection_status));
     }
 };
 
@@ -1085,11 +1102,14 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline Json SerializePayload(const SensorStatusPayload& payload) {
-    return {
+    Json data = {
         { std::string(kSensorIdField), payload.sensor_id },
         { std::string(kMeasurementStatusField), payload.measurement_status },
         { std::string(kDistanceCmField), payload.distance_cm },
     };
+
+    WriteOptionalString(data, kDetectionStatusField, payload.detection_status);
+    return data;
 }
 
 [[nodiscard]] inline Json SerializePayload(const WorkCreatedPayload& payload) {
@@ -1295,7 +1315,8 @@ inline void WriteOptionalLineTracerPosition(Json& data, std::string_view field,
 [[nodiscard]] inline bool DeserializePayload(const Json& data, SensorStatusPayload& payload, CodecStatus& status) {
     return ReadRequiredSignedInteger(data, kSensorIdField, payload.sensor_id, status) &&
            ReadRequiredString(data, kMeasurementStatusField, payload.measurement_status, status) &&
-           ReadRequiredSignedInteger(data, kDistanceCmField, payload.distance_cm, status);
+           ReadRequiredSignedInteger(data, kDistanceCmField, payload.distance_cm, status) &&
+           ReadOptionalString(data, kDetectionStatusField, payload.detection_status, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, WorkCreatedPayload& payload, CodecStatus& status) {

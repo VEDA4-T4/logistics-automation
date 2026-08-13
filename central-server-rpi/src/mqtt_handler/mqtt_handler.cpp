@@ -139,11 +139,12 @@ void DefaultLog(MqttHandlerLogLevel level, std::string_view message) {
 }  // namespace
 
 MqttHandler::MqttHandler(DeviceManager& device_manager, Logger logger, PersistenceService* persistence_service,
-                         std::string default_destination)
+                         std::string default_destination, SensorDetectionConfig sensor_detection)
     : device_manager_(device_manager),
       logger_(logger ? std::move(logger) : Logger(DefaultLog)),
       persistence_service_(persistence_service),
-      default_destination_(std::move(default_destination)) {}
+      default_destination_(std::move(default_destination)),
+      sensor_detector_(std::move(sensor_detection)) {}
 
 void MqttHandler::SetWorkCreatedHandler(WorkCreatedHandler handler) {
     work_created_handler_ = std::move(handler);
@@ -178,7 +179,7 @@ void MqttHandler::SetProcessMessageHandler(ProcessMessageHandler handler) {
 }
 
 bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::string_view received_at) {
-    const auto decoded = mqtt::DeserializeMessage(payload);
+    auto decoded = mqtt::DeserializeMessage(payload);
     if (!decoded.IsSuccess()) {
         Log(MqttHandlerLogLevel::kError,
             "invalid MQTT JSON; error=" + std::string(mqtt::ToString(decoded.status.error)) + "; field=" +
@@ -194,6 +195,21 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
         return false;
     }
 
+    // The controller reports a distance and whether that reading is trustworthy;
+    // it no longer decides whether a box is there. Derive that here, before
+    // persistence and before any routing, so the stored event and every
+    // downstream consumer agree on one value - and so retuning detection is a
+    // server.ini edit rather than an STM32 reflash.
+    bool detection_stamped = false;
+    if (auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(decoded.value); sensor != nullptr) {
+        auto detection = sensor_detector_.Evaluate(decoded.value.source_id, sensor->sensor_id,
+                                                   sensor->measurement_status, sensor->distance_cm);
+        if (detection.has_value()) {
+            sensor->detection_status = std::move(detection);
+            detection_stamped = true;
+        }
+    }
+
     const auto parsed_topic = mqtt::ParseTopic(topic);
     bool device_registry_updated = false;
     if (process_message_guard_ && !process_message_guard_(decoded.value)) {
@@ -202,7 +218,18 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
     }
     if (persistence_service_ != nullptr) {
         const auto root = mqtt::Json::parse(payload.begin(), payload.end());
-        const std::string details_json = root.at(std::string(mqtt::kDataField)).dump();
+        std::string details_json = root.at(std::string(mqtt::kDataField)).dump();
+        if (detection_stamped) {
+            // Re-render from the stamped message so the persisted event carries
+            // detectionStatus too. transport.raw_payload below still keeps the
+            // untouched wire bytes.
+            const auto restamped = mqtt::SerializeMessage(decoded.value);
+            if (!restamped.IsSuccess()) {
+                Log(MqttHandlerLogLevel::kError, "SENSOR_STATUS re-serialization failed after detection stamping");
+                return false;
+            }
+            details_json = mqtt::Json::parse(restamped.payload).at(std::string(mqtt::kDataField)).dump();
+        }
         const mqtt::EnvelopeView envelope{
             .protocol_version = decoded.value.protocol_version,
             .message_id = decoded.value.message_id,

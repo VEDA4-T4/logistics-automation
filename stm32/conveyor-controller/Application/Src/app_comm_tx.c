@@ -115,8 +115,8 @@ static volatile uint8_t comm_tx_error_codes[COMM_TX_CH_COUNT] = {
     (uint8_t)UART_ERROR_NONE,
 };
 static volatile uint8_t comm_tx_sensor_states[COMM_TX_CH_COUNT] = {
-    (uint8_t)UART_SENSOR_CLEAR,
-    (uint8_t)UART_SENSOR_CLEAR,
+    (uint8_t)UART_SENSOR_OK,
+    (uint8_t)UART_SENSOR_OK,
 };
 
 /* static을 붙이지 않는다 - 디버거 Live Expressions에서 관찰한다. */

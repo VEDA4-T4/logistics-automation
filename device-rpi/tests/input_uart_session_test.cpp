@@ -178,7 +178,7 @@ void TestSpontaneousFrameDuringWait() {
         spontaneous_command = frame.command;
     });
     fixture.backend->responder = [](const uart_frame_t& request) {
-        return std::vector<uart_frame_t>{ MakeSensorStatus(UART_SENSOR_DETECTED, 12U),
+        return std::vector<uart_frame_t>{ MakeSensorStatus(UART_SENSOR_OK, 12U),
                                           MakeOperationResult(request.sequence, UART_STATUS_SUCCESS, UART_ERROR_NONE) };
     };
 
@@ -211,7 +211,7 @@ void TestTrailingFrameInSameReadIsNotDropped() {
     // No responder is set, so Write() queues nothing on its own; the reply
     // comes entirely from the combined chunk queued below, ahead of time.
     fixture.backend->PreloadCombinedIncoming(
-        { MakeOperationResult(1U, UART_STATUS_SUCCESS, UART_ERROR_NONE), MakeSensorStatus(UART_SENSOR_DETECTED, 7U) });
+        { MakeOperationResult(1U, UART_STATUS_SUCCESS, UART_ERROR_NONE), MakeSensorStatus(UART_SENSOR_OK, 7U) });
 
     const InputTransactResult result = fixture.session->Transact(UART_CMD_INPUT_CONVEYOR_START);
 
@@ -230,7 +230,7 @@ void TestPollSpontaneous() {
         assert(frame.command == UART_CMD_SENSOR_STATUS);
         ++spontaneous;
     });
-    fixture.backend->PreloadIncoming(MakeSensorStatus(UART_SENSOR_CLEAR, 40U));
+    fixture.backend->PreloadIncoming(MakeSensorStatus(UART_SENSOR_OK, 40U));
 
     const UartIoResult io = fixture.session->PollSpontaneous(std::chrono::milliseconds{ 5 });
 

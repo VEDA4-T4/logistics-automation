@@ -59,6 +59,20 @@ line_tracer_initial_position=A
 # Product-catalog misses are routed here instead of stalling the work.
 default_destination=3
 
+[sensor_detection]
+# Box presence is decided here, from the distanceCm the STM32 reports.
+# The controller does not judge DETECTED/CLEAR any more, so these values are
+# the only place detection is tuned - no firmware rebuild required.
+enabled=true
+# A reading at or below enter_threshold_cm starts a box.
+enter_threshold_cm=10
+# The box is only released once the reading climbs above exit_threshold_cm.
+# Must be >= enter_threshold_cm; the gap is the hysteresis band that stops
+# DETECTED/CLEAR from chattering when a box parks near the limit.
+exit_threshold_cm=12
+# Consecutive agreeing readings required before the state flips.
+debounce_count=3
+
 [homography]
 # Keep disabled until pixel_to_conveyor is replaced with a matrix measured for the installed camera.
 enabled=false

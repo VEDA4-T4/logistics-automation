@@ -126,17 +126,17 @@ namespace mqtt = contracts::mqtt;
     return std::string("ERR-INTERNAL");
 }
 
-// SensorStatusPayload.measurement_status only accepts these three values
-// (IsValidMeasurementStatus in mqtt_codec.hpp).
+// SensorStatusPayload.measurement_status only accepts these two values
+// (IsValidMeasurementStatus in mqtt_codec.hpp). It reports whether the reading
+// is trustworthy - box presence is derived by the central server from
+// distanceCm, so this node relays the measurement without judging it.
 [[nodiscard]] std::string MeasurementStatusName(std::uint8_t state) {
     switch (state) {
-        case UART_SENSOR_DETECTED:
-            return "DETECTED";
         case UART_SENSOR_FAULT:
             return "FAULT";
-        case UART_SENSOR_CLEAR:
+        case UART_SENSOR_OK:
         default:
-            return "CLEAR";
+            return "OK";
     }
 }
 
@@ -771,7 +771,7 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
             last_heartbeat_state_->device_state = UART_DEVICE_EMERGENCY_STOP;
             last_heartbeat_state_->error_code = UART_ERROR_NONE;
         } else {
-            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE, UART_SENSOR_CLEAR };
+            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE, UART_SENSOR_OK };
         }
         return;
     }
@@ -793,12 +793,12 @@ void InputNode::HandleControllerEvent(const uart_frame_t& frame) {
         // The next ~1 Hz heartbeat will carry this same READY/NONE state; record it
         // now so that heartbeat's own change detection does not re-report it a
         // second later. The sensor field is left as whatever heartbeat last saw (or
-        // CLEAR if none yet) since this event carries no sensor information.
+        // OK if none yet) since this event carries no sensor information.
         if (last_heartbeat_state_.has_value()) {
             last_heartbeat_state_->device_state = UART_DEVICE_STOPPED;
             last_heartbeat_state_->error_code = UART_ERROR_NONE;
         } else {
-            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR };
+            last_heartbeat_state_ = HeartbeatState{ UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_OK };
         }
         return;
     }

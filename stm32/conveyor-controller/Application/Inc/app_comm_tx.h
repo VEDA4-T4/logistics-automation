@@ -68,8 +68,11 @@ typedef struct {
  *   [4] uptime
  *   [5] uptime
  *   [6] uptime
- *   [7] 투입 센서 상태  (uart_sensor_state_t)
- *   [8] 분류 센서 상태  (uart_sensor_state_t)
+ *   [7] 투입 센서 측정 건전성 (uart_sensor_state_t: OK/FAULT)
+ *   [8] 분류 센서 측정 건전성 (uart_sensor_state_t: OK/FAULT, 3개 중 최악)
+ *
+ * 상자 존재 판단은 담기지 않는다 - 중앙 서버가 SENSOR_STATUS의 거리값으로
+ * 판정한다.
  */
 
 /* 송신 통계. 디버거 Live Expressions로 관찰한다. */
@@ -126,9 +129,9 @@ void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code);
 void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code);
 
 /*
- * Updates the per-process sensor state included in heartbeat frames. The
- * process must be COMM_TX_CH_INPUT or
- * COMM_TX_CH_SORTING.
+ * Updates the per-process sensor measurement health (UART_SENSOR_OK or
+ * UART_SENSOR_FAULT) included in heartbeat frames. The process must be
+ * COMM_TX_CH_INPUT or COMM_TX_CH_SORTING.
  */
 void CommTx_SetSensorState(comm_tx_channel_t process, uint8_t sensor_state);
 

@@ -27,8 +27,30 @@ export LOGISTICS_INSTALL_DEPENDENCIES=1
 - `[http]`: 이미지/로그 업로드와 조회
 - `[routing]`: Control Center client ID
 - `[process]`: 공정 오케스트레이터와 장치 ID
+- `[sensor_detection]`: 초음파 상자 존재 판정 임계값
 
 상세 설정은 [런타임 설정](../docs/guides/runtime-configuration.md)을 참고하세요.
+
+### `[sensor_detection]` — 초음파 상자 판정
+
+STM32는 거리(cm)와 측정 건전성(`OK`/`FAULT`)만 보고하고, **상자가 있는지는 서버가
+판정합니다.** 예전에는 STM32 헤더의 `#define`이라 임계값 하나 바꾸는 데 펌웨어
+재빌드와 재플래시가 필요했지만, 이제는 이 섹션을 고치고 서버를 재시작하면 됩니다.
+
+| 키 | 기본값 | 의미 |
+|---|---|---|
+| `enabled` | `true` | `false`면 판정하지 않고 거리값만 통과시킵니다 |
+| `enter_threshold_cm` | `10` | 이 이하로 들어오면 상자 있음 후보 |
+| `exit_threshold_cm` | `12` | 이 초과로 나가야 상자 없음 후보 |
+| `debounce_count` | `3` | 후보가 이만큼 연속 같아야 상태가 바뀝니다 |
+
+`exit_threshold_cm`은 `enter_threshold_cm` 이상이어야 하며, 두 값의 간격이
+히스테리시스 폭입니다. 하나로 합치면(둘을 같게 두면) 상자가 문턱에 걸쳐 있을 때
+판정이 깜빡입니다.
+
+판정 결과는 `SENSOR_STATUS`의 `detectionStatus`(`DETECTED`/`CLEAR`/`UNKNOWN`) 필드로
+Control Center에 전달됩니다. 장치가 보내는 `measurementStatus`와는 별개 필드이며,
+센서가 `FAULT`이면 판정은 `UNKNOWN`이 됩니다.
 
 ## 실행
 

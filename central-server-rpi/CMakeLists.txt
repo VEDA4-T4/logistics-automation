@@ -186,6 +186,7 @@ logistics_enable_warnings(logistics_central_server_config)
 add_library(
     logistics_central_server_mqtt_handler
     src/mqtt_handler/mqtt_handler.cpp
+    src/mqtt_handler/sensor_detection.cpp
 )
 add_library(
     logistics::central_server_mqtt_handler
@@ -464,6 +465,20 @@ if(BUILD_TESTING)
     )
     logistics_enable_warnings(central_server_homography_test)
     add_test(NAME central_server_homography_test COMMAND central_server_homography_test)
+
+    add_executable(
+        central_server_sensor_detection_test
+        tests/sensor_detection_test.cpp
+    )
+    target_link_libraries(
+        central_server_sensor_detection_test
+        PRIVATE logistics::central_server_mqtt_handler
+    )
+    logistics_enable_warnings(central_server_sensor_detection_test)
+    add_test(
+        NAME central_server_sensor_detection_test
+        COMMAND central_server_sensor_detection_test
+    )
 
     add_executable(
         central_server_mqtt_handler_test

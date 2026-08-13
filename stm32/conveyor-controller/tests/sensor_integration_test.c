@@ -29,12 +29,15 @@ void Health_TaskAlive(health_task_id_t id) {
  * ============================================================================
  *
  * sensor_task_test.c 대신 이 파일 하나로 SensorTask 오케스트레이션을 검증한다.
- * sensor_filter.c(실제 판정 로직)는 그대로 링크해, SensorTask가 raw 거리값을
+ * sensor_filter.c(median + FAULT 래치)는 그대로 링크해, SensorTask가 raw 거리값을
  * 실제 필터를 거쳐 올바른 CommTx 호출(채널 라우팅/payload 인코딩/heartbeat
  * 최악상태 합산)로 이어지는지 확인한다. hc_sr04 드라이버(GPIO/TIM 직접 접근)와
  * CommTxTask 자체(큐/DMA)는 이 경계 밖이라 fake로 대체한다 - hc_sr04는
  * hc_sr04_test.c가, CommTxTask 인코딩/전송은 app_comm_tx_test.c가 각각 이미
  * 단독으로 검증한다.
+ *
+ * 상자 존재 판단(DETECTED/CLEAR)은 중앙 서버로 옮겼으므로 여기서 검증하지
+ * 않는다. 이 경계에서 확인할 것은 "거리값이 손실 없이 올바른 채널로 나가는가"다.
  */
 
 GPIO_TypeDef sensorTestTrigGpioC;
@@ -178,10 +181,10 @@ static void reset_all(void) {
 }
 
 /*
- * US1(투입)에서 근접 물체를 3회 연속 감지 -> sensor_filter가 DETECTED로 확정
- * -> COMM_TX_CH_INPUT/UART_CMD_SENSOR_STATUS로 정확히 보고되는지 확인한다.
+ * US1(투입) 측정값이 COMM_TX_CH_INPUT/UART_CMD_SENSOR_STATUS로 거리값 그대로
+ * 나가는지 확인한다. 근접 거리라도 상태는 OK다 - 상자 유무는 서버가 판정한다.
  */
-static void test_input_channel_detection_routes_to_input_comm_channel(void) {
+static void test_input_channel_measurement_routes_to_input_comm_channel(void) {
     reset_all();
     fakeChannels[0].distanceCm = 5U;
 
@@ -199,11 +202,40 @@ static void test_input_channel_detection_routes_to_input_comm_channel(void) {
         assert(last->command == UART_CMD_SENSOR_STATUS);
         assert(last->length == UART_SENSOR_STATUS_PAYLOAD_SIZE);
         assert(last->payload[UART_SENSOR_ID_INDEX] == UART_INPUT_SENSOR_ID_1);
-        assert(last->payload[UART_SENSOR_STATE_INDEX] == UART_SENSOR_DETECTED);
+        assert(last->payload[UART_SENSOR_STATE_INDEX] == UART_SENSOR_OK);
         assert(last->payload[UART_SENSOR_DISTANCE_LOW_INDEX] == 5U);
         assert(last->payload[UART_SENSOR_DISTANCE_HIGH_INDEX] == 0U);
     }
-    assert(lastSensorState[COMM_TX_CH_INPUT] == UART_SENSOR_DETECTED);
+    assert(lastSensorState[COMM_TX_CH_INPUT] == UART_SENSOR_OK);
+}
+
+/*
+ * 매 폴링마다 그 시점의 거리값이 보고되어야 한다. 서버가 임계값을 적용하려면
+ * 상태 전이 시점이 아니라 측정값 자체가 계속 올라와야 하기 때문이다.
+ */
+static void test_every_poll_reports_current_distance(void) {
+    reset_all();
+
+    fakeChannels[0].distanceCm = 40U;
+    SensorTask_PollChannel(0U);
+    fakeChannels[0].distanceCm = 40U;
+    SensorTask_PollChannel(0U);
+    fakeChannels[0].distanceCm = 40U;
+    SensorTask_PollChannel(0U);
+    assert(commTxSendCalls[2].payload[UART_SENSOR_DISTANCE_LOW_INDEX] == 40U);
+
+    /* median 창이 8cm로 교체될 때까지 3회 - 이후 새 거리가 그대로 보고된다. */
+    fakeChannels[0].distanceCm = 8U;
+    SensorTask_PollChannel(0U);
+    SensorTask_PollChannel(0U);
+    SensorTask_PollChannel(0U);
+
+    {
+        const comm_tx_send_call_t* last = &commTxSendCalls[commTxSendCallCount - 1U];
+        assert(last->payload[UART_SENSOR_STATE_INDEX] == UART_SENSOR_OK);
+        assert(last->payload[UART_SENSOR_DISTANCE_LOW_INDEX] == 8U);
+        assert(last->payload[UART_SENSOR_DISTANCE_HIGH_INDEX] == 0U);
+    }
 }
 
 /*
@@ -241,27 +273,28 @@ static void test_full_cycle_polls_in_order_with_correct_routing(void) {
 
 /*
  * 분류 센서 3개(US2/US3/US4)는 heartbeat 페이로드 1바이트를 공유하므로
- * "가장 나쁜 상태"로 합산된다. FAULT > DETECTED > CLEAR 우선순위를 확인한다.
+ * "가장 나쁜 상태"로 합산된다. 담기는 값이 측정 건전성이므로 하나라도
+ * FAULT면 FAULT다.
  */
 static void test_sorting_heartbeat_reports_worst_state_across_three_sensors(void) {
     uint32_t i;
 
     reset_all();
 
-    /* US2: 근접 3회 -> DETECTED */
+    /* US2: 정상 측정 -> OK */
     fakeChannels[1].distanceCm = 5U;
     SensorTask_PollChannel(1U);
     SensorTask_PollChannel(1U);
     SensorTask_PollChannel(1U);
-    assert(lastSensorState[COMM_TX_CH_SORTING] == UART_SENSOR_DETECTED);
+    assert(lastSensorState[COMM_TX_CH_SORTING] == UART_SENSOR_OK);
 
-    /* US3: 연속 무효 측정 threshold회 -> FAULT (DETECTED보다 나쁨) */
+    /* US3: 연속 무효 측정 threshold회 -> FAULT가 합산 결과를 지배한다 */
     fakeChannels[2].readResult = HC_SR04_OUT_OF_RANGE;
     for (i = 0U; i < SENSOR_FILTER_FAULT_THRESHOLD; i++) {
         SensorTask_PollChannel(2U);
     }
 
-    /* US4는 한 번도 폴링되지 않아 기본 CLEAR로 남는다. */
+    /* US4는 한 번도 폴링되지 않아 기본 OK로 남는다. */
     assert(lastSensorState[COMM_TX_CH_SORTING] == UART_SENSOR_FAULT);
 }
 
@@ -319,7 +352,8 @@ static void test_failed_measurements_still_advance_poll_tick(void) {
 }
 
 int main(void) {
-    test_input_channel_detection_routes_to_input_comm_channel();
+    test_input_channel_measurement_routes_to_input_comm_channel();
+    test_every_poll_reports_current_distance();
     test_full_cycle_polls_in_order_with_correct_routing();
     test_sorting_heartbeat_reports_worst_state_across_three_sensors();
     test_fault_after_threshold_reports_fault_and_unknown_distance();

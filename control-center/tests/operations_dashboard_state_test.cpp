@@ -272,9 +272,12 @@ int main() {
         Envelope("SORTING-STOPPED", "DEVICE_STATUS", DeviceStatus("ONLINE", "STOPPED"), "PI-SORTING-01"));
     assert(result.applied);
     result = stopped_sensor_state.applyEnvelope(
+        // measurementStatus is the device's measurement health; detectionStatus
+        // is what the central server derived from distanceCm.
         Envelope("SORTING-SENSOR-2-DETECTED", "SENSOR_STATUS",
                  { { QStringLiteral("sensorId"), 2 },
-                   { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                   { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                   { QStringLiteral("detectionStatus"), QStringLiteral("DETECTED") },
                    { QStringLiteral("distanceCm"), 12 } },
                  "PI-SORTING-01", "2026-07-23T01:00:00.100Z"));
     assert(result.applied);
@@ -313,7 +316,8 @@ int main() {
     result =
         stopped_sensor_state.applyEnvelope(Envelope("SORTING-SENSOR-2-CLEAR", "SENSOR_STATUS",
                                                     { { QStringLiteral("sensorId"), 2 },
-                                                      { QStringLiteral("measurementStatus"), QStringLiteral("CLEAR") },
+                                                      { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                      { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
                                                       { QStringLiteral("distanceCm"), 45 } },
                                                     "PI-SORTING-01", "2026-07-23T01:00:00.500Z"));
     assert(result.applied);
@@ -327,7 +331,8 @@ int main() {
     result = stopped_sensor_state.applyEnvelope(
         Envelope("SORTING-SENSOR-1-DETECTED", "SENSOR_STATUS",
                  { { QStringLiteral("sensorId"), 1 },
-                   { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                   { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                   { QStringLiteral("detectionStatus"), QStringLiteral("DETECTED") },
                    { QStringLiteral("distanceCm"), 10 } },
                  "PI-SORTING-01", "2026-07-23T01:00:00.600Z"));
     assert(result.applied);
