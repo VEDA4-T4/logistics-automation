@@ -107,17 +107,27 @@ void UpdateDeviceStatus(const InputReport& report, DeviceStatus& device_status) 
     // controller state transition emitted a new DEVICE_STATUS.
 }
 
+[[nodiscard]] bool PublishOutbound(MqttNodeClient& mqtt_client, const OutboundMessage& outbound);
+
 [[nodiscard]] bool EnqueueOutbound(std::deque<OutboundMessage>& outbox, const InputReport& report,
                                    std::string_view device_id, std::string_view message_session_id,
-                                   std::uint64_t& message_sequence, DeviceStatus& device_status) {
+                                   std::uint64_t& message_sequence, DeviceStatus& device_status,
+                                   MqttNodeClient* durable_client = nullptr) {
     UpdateDeviceStatus(report, device_status);
+    auto outbound = MakeOutboundMessage(report, device_id, message_session_id, message_sequence);
+    if (durable_client != nullptr && report.channel != InputReportChannel::kStatus &&
+        report.message_type != mqtt::MessageType::kSensorStatus) {
+        if (PublishOutbound(*durable_client, outbound)) {
+            return true;
+        }
+    }
     if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
             return queued.channel == InputReportChannel::kStatus;
         })) {
         std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued messages\n";
         return false;
     }
-    outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
+    outbox.push_back(std::move(outbound));
     return true;
 }
 
@@ -186,21 +196,23 @@ int RunInputDaemon(int argc, char* argv[]) {
     std::uint64_t message_sequence = 1U;
 
     const auto queue_report = [&](const InputReport& report) {
-        static_cast<void>(
-            EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence, *device_status));
+        static_cast<void>(EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence,
+                                          *device_status, &mqtt_client));
     };
     input_node.SetReportHandler(queue_report);
     uart_session.SetSpontaneousFrameHandler(
         [&input_node](const uart_frame_t& frame) { input_node.HandleUartFrame(frame); });
     mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
         std::deque<mqtt::MqttMessage> preempted;
-        if (!command_inbox.Push(message, &preempted)) {
+        bool handled = command_inbox.Push(message, &preempted);
+        if (!handled) {
             std::cerr << "[input][mqtt][ERROR] command queue full; command rejected: " << message.message_id << '\n';
             const auto response = MakeTerminalCommandResponse(
                 message, device_id, message.message_id + "-QUEUE-FULL", CurrentIso8601Timestamp(),
                 mqtt::CommandResult::kRejected, std::string("ERR-COMMAND-QUEUE-FULL"),
                 "input command rejected because the local command queue is full");
             if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                handled = false;
                 std::cerr << "[input][mqtt][ERROR] unable to publish command queue full response: "
                           << message.message_id << '\n';
             }
@@ -211,10 +223,12 @@ int RunInputDaemon(int argc, char* argv[]) {
                 mqtt::CommandResult::kRejected, std::string("ERR-EMERGENCY-STOP-PREEMPTED"),
                 "input command was preempted by an emergency stop");
             if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                handled = false;
                 std::cerr << "[input][mqtt][ERROR] unable to publish emergency preemption response: "
                           << command.message_id << '\n';
             }
         }
+        return handled;
     });
 
     device_status->SetUartConnected(false);

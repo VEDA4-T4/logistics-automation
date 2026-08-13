@@ -425,7 +425,8 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
 
 ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
     ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
-    std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence) {
+    std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence,
+    std::vector<std::string> processed_message_ids) {
     std::vector<InvalidatedRestoredWork> invalidated_works;
     std::erase_if(works, [](const WorkProcessSnapshot& work) { return work.stage == WorkStage::kFailed; });
     if (!homography_.Enabled()) {
@@ -450,7 +451,7 @@ ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
             }
         }
     }
-    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
+    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works), std::move(processed_message_ids))) {
         return {};
     }
     gripper_targets_ = std::move(gripper_targets);

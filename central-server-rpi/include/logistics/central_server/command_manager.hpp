@@ -47,6 +47,22 @@ struct CommandResponseDecision final {
     std::string reason;
 };
 
+struct PendingCommandSnapshot final {
+    std::string request_id;
+    contracts::mqtt::MqttMessage original_message;
+    std::vector<std::string> expected_devices;
+    std::vector<std::string> completed_devices;
+    std::vector<std::string> response_message_ids;
+    std::optional<contracts::mqtt::CommandResponsePayload> failure;
+    std::int64_t deadline_at_ms{};
+};
+
+struct CommandManagerSnapshot final {
+    std::vector<PendingCommandSnapshot> pending;
+    std::vector<std::string> completed_requests;
+    std::uint64_t message_sequence{};
+};
+
 class CommandManager final {
 public:
     using Clock = std::chrono::steady_clock;
@@ -62,19 +78,26 @@ public:
         const contracts::mqtt::MqttMessage& command, contracts::mqtt::CommandResult result, std::string timestamp,
         std::optional<std::string> error_code, std::string message);
     [[nodiscard]] CommandResponseDecision HandleResponse(const contracts::mqtt::MqttMessage& message);
+    // Produces the response that HandleResponse would consume without changing pending state.
+    [[nodiscard]] CommandResponseDecision PreviewResponse(const contracts::mqtt::MqttMessage& message) const;
     [[nodiscard]] std::vector<contracts::mqtt::MqttMessage> CheckTimeouts(std::string_view checked_at);
+    [[nodiscard]] std::vector<contracts::mqtt::MqttMessage> PreviewTimeouts(std::string_view checked_at) const;
     [[nodiscard]] std::size_t PendingCount() const;
     [[nodiscard]] std::string LastError() const;
+    [[nodiscard]] CommandManagerSnapshot Snapshot() const;
+    [[nodiscard]] bool Restore(CommandManagerSnapshot snapshot);
 
 private:
     struct PendingCommand final {
         contracts::mqtt::ControlCommand command{ contracts::mqtt::ControlCommand::kUnknown };
+        contracts::mqtt::MqttMessage original_message;
         Clock::time_point started_at;
         std::chrono::seconds timeout{};
         std::unordered_set<std::string> expected_devices;
         std::unordered_set<std::string> completed_devices;
         std::unordered_set<std::string> response_message_ids;
         std::optional<contracts::mqtt::CommandResponsePayload> failure;
+        std::int64_t deadline_at_ms{};
     };
 
     [[nodiscard]] contracts::mqtt::MqttMessage MakeAggregateResponse(

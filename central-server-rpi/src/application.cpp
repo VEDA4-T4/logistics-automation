@@ -1,6 +1,7 @@
 #include "logistics/central_server/application.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -195,6 +196,7 @@ int Application::Run(int argc, char* argv[]) {
     MqttHandler mqtt_handler(*device_manager, {}, &persistence, server_config.process.default_destination,
                              server_config.sensor_detection);
     CommandManager command_manager;
+    std::unordered_map<std::string, contracts::mqtt::ControlCommand> pending_system_commands;
     ProcessOrchestrator process_orchestrator(server_config.process);
     ProcessCommandTracker process_command_tracker;
     std::unordered_set<std::string> restored_pending_process_commands;
@@ -205,6 +207,7 @@ int Application::Run(int argc, char* argv[]) {
     std::mutex process_mutex;
 
     std::optional<StoredProcessState> stored_process_state;
+    std::vector<PendingMqttDelivery> restored_mqtt_deliveries;
     std::vector<InvalidatedRestoredWork> invalidated_restored_works;
     database_status = process_state_store.Load(stored_process_state);
     if (!database_status.ok()) {
@@ -215,7 +218,8 @@ int Application::Run(int argc, char* argv[]) {
         auto pending_commands = std::move(stored_process_state->pending_commands);
         auto restore = process_orchestrator.RestoreAfterServerRestart(
             stored_process_state->system_state, std::move(stored_process_state->works),
-            std::move(stored_process_state->gripper_targets), stored_process_state->message_sequence);
+            std::move(stored_process_state->gripper_targets), stored_process_state->message_sequence,
+            std::move(stored_process_state->processed_message_ids));
         if (!restore.restored) {
             std::cerr << "[server][ERROR] stored process state is invalid\n";
             return 5;
@@ -228,6 +232,11 @@ int Application::Run(int argc, char* argv[]) {
             std::cerr << "[server][ERROR] stored process command outbox is invalid\n";
             return 5;
         }
+        if (!command_manager.Restore(std::move(stored_process_state->command_manager))) {
+            std::cerr << "[server][ERROR] stored command manager state is invalid\n";
+            return 5;
+        }
+        pending_system_commands = std::move(stored_process_state->pending_system_commands);
         for (const auto& intent : process_command_tracker.PendingCommands()) {
             if (const auto request_id = ProcessCommandRequestId(intent.message)) {
                 restored_pending_process_commands.insert(*request_id);
@@ -236,6 +245,25 @@ int Application::Run(int argc, char* argv[]) {
                     contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(intent.message);
                 command != nullptr && command->command == contracts::mqtt::ControlCommand::kStop) {
                 safe_restored_replay_pending = true;
+            }
+        }
+    }
+    database_status = process_state_store.LoadPendingMqttDeliveries(restored_mqtt_deliveries);
+    if (!database_status.ok()) {
+        std::cerr << "[server][ERROR] stored MQTT delivery outbox is invalid: " << database_status.message << '\n';
+        return 5;
+    }
+    std::unordered_set<std::string> restored_input_detected_work_ids;
+    std::unordered_set<std::string> restored_vision_assigned_work_ids;
+    if (process_orchestrator.StateMachine().SystemState() == ProcessSystemState::kStopped) {
+        for (const auto& work : process_orchestrator.StateMachine().ActiveWorks()) {
+            if (work.stage != WorkStage::kStopped || !work.suspended_stage.has_value()) {
+                continue;
+            }
+            if (work.suspended_stage == WorkStage::kInputDetected) {
+                restored_input_detected_work_ids.insert(work.work_id);
+            } else if (work.suspended_stage == WorkStage::kVisionAssigned) {
+                restored_vision_assigned_work_ids.insert(work.work_id);
             }
         }
     }
@@ -261,9 +289,34 @@ int Application::Run(int argc, char* argv[]) {
         }
     }
 
-    bool process_state_persistence_healthy = true;
-    const auto persist_process_state = [&process_orchestrator, &process_command_tracker, &process_state_store,
-                                        &process_state_persistence_healthy]() {
+    std::atomic_bool process_state_persistence_healthy{ true };
+    std::mutex runtime_store_mutex;
+    const auto run_runtime_store = [&process_state_persistence_healthy, &runtime_store_mutex](
+                                       auto&& operation, std::string_view context) {
+        if (!process_state_persistence_healthy.load()) {
+            return false;
+        }
+        DatabaseStatus status;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            {
+                const std::lock_guard store_lock(runtime_store_mutex);
+                status = operation();
+            }
+            if (status.ok()) {
+                return true;
+            }
+            if (!status.retryable()) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25 * (attempt + 1)));
+        }
+        std::cerr << "[server][ERROR] " << context << " failed: " << status.message << '\n';
+        process_state_persistence_healthy = false;
+        stop_requested = 1;
+        return false;
+    };
+    const auto persist_process_state = [&process_orchestrator, &process_command_tracker, &command_manager,
+                                        &pending_system_commands, &process_state_store, &run_runtime_store]() {
         const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
         for (const auto& intent : process_command_tracker.PendingCommands()) {
             if (std::ranges::find(active_works, intent.work_id, &WorkProcessSnapshot::work_id) == active_works.end()) {
@@ -273,36 +326,118 @@ int Application::Run(int argc, char* argv[]) {
                 }
             }
         }
-        DatabaseStatus status;
-        for (int attempt = 0; attempt < 3; ++attempt) {
-            status = process_state_store.Save(process_orchestrator.StateMachine().SystemState(),
-                                              process_orchestrator.MessageSequence(), active_works,
-                                              process_orchestrator.GripperTargets(),
-                                              process_command_tracker.PendingCommands(), CurrentUnixTimeMilliseconds());
-            if (status.ok()) {
-                return true;
-            }
-            if (!status.retryable()) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(25 * (attempt + 1)));
-        }
-        std::cerr << "[server][ERROR] process state persistence failed: " << status.message << '\n';
-        process_state_persistence_healthy = false;
-        stop_requested = 1;
-        return false;
+        return run_runtime_store(
+            [&] {
+                return process_state_store.Save(
+                    process_orchestrator.StateMachine().SystemState(), process_orchestrator.MessageSequence(),
+                    active_works, process_orchestrator.GripperTargets(), process_command_tracker.PendingCommands(),
+                    CurrentUnixTimeMilliseconds(), {}, process_orchestrator.StateMachine().ProcessedMessageIds(),
+                    command_manager.Snapshot(), pending_system_commands);
+            },
+            "process state persistence");
     };
     if (!persist_process_state()) {
         return 5;
     }
 
     MqttClient mqtt_client(std::move(mqtt_config), CreateMosquittoTransport());
+    std::mutex mqtt_delivery_mutex;
+    std::unordered_set<std::string> mqtt_deliveries_in_flight;
+    std::unordered_map<std::string, PendingMqttDelivery> mqtt_deliveries_acknowledged;
+    mqtt_client.SetDisconnectedHandler([&mqtt_delivery_mutex, &mqtt_deliveries_in_flight] {
+        const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+        mqtt_deliveries_in_flight.clear();
+    });
+    const auto delivery_key = [](std::string_view topic, std::string_view message_id) {
+        return std::string(topic) + "\n" + std::string(message_id);
+    };
+    const auto publish_enqueued =
+        [&mqtt_client, &mqtt_delivery_mutex, &mqtt_deliveries_in_flight, &mqtt_deliveries_acknowledged, &delivery_key,
+         vision_device_id = server_config.process.vision_device_id](const PendingMqttDelivery& delivery) {
+            if (!mqtt_client.IsReady()) {
+                return true;
+            }
+            const auto key = delivery_key(delivery.topic, delivery.message.message_id);
+            {
+                const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+                if (!mqtt_deliveries_in_flight.insert(key).second) {
+                    return true;
+                }
+            }
+            const bool accepted = mqtt_client.PublishMessageAcknowledged(
+                delivery.topic, delivery.message, contracts::mqtt::Qos::kAtLeastOnce,
+                [&mqtt_delivery_mutex, &mqtt_deliveries_in_flight, &mqtt_deliveries_acknowledged, key, delivery,
+                 vision_device_id](int) {
+                    const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+                    if (!IsVisionWorkCreatedDelivery(delivery, vision_device_id)) {
+                        mqtt_deliveries_in_flight.erase(key);
+                        mqtt_deliveries_acknowledged.insert_or_assign(key, delivery);
+                    }
+                });
+            if (!accepted) {
+                const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+                mqtt_deliveries_in_flight.erase(key);
+            }
+            return true;
+        };
+    const auto publish_durable = [&publish_enqueued, &process_state_store, &run_runtime_store](
+                                     std::string_view topic, const contracts::mqtt::MqttMessage& message) {
+        if (!run_runtime_store(
+                [&] { return process_state_store.EnqueueMqttDelivery(topic, message, CurrentUnixTimeMilliseconds()); },
+                "MQTT delivery outbox enqueue")) {
+            return false;
+        }
+        return publish_enqueued(PendingMqttDelivery{ .topic = std::string(topic), .message = message });
+    };
+    const auto pump_durable = [&mqtt_client, &publish_enqueued, &process_state_store, &run_runtime_store,
+                               &mqtt_delivery_mutex, &mqtt_deliveries_acknowledged, &restored_input_detected_work_ids,
+                               &restored_vision_assigned_work_ids, &delivery_key,
+                               vision_device_id = server_config.process.vision_device_id]() {
+        std::vector<PendingMqttDelivery> acknowledged;
+        {
+            const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+            for (const auto& [_, delivery] : mqtt_deliveries_acknowledged) {
+                acknowledged.push_back(delivery);
+            }
+        }
+        for (const auto& delivery : acknowledged) {
+            if (!run_runtime_store(
+                    [&] { return process_state_store.RemoveMqttDelivery(delivery.topic, delivery.message.message_id); },
+                    "MQTT delivery outbox acknowledgement")) {
+                return false;
+            }
+            const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+            mqtt_deliveries_acknowledged.erase(delivery_key(delivery.topic, delivery.message.message_id));
+        }
+        std::vector<PendingMqttDelivery> pending;
+        if (!run_runtime_store([&] { return process_state_store.LoadPendingMqttDeliveries(pending); },
+                               "MQTT delivery outbox load")) {
+            return false;
+        }
+        if (!mqtt_client.IsReady()) {
+            return true;
+        }
+        for (const auto& delivery : pending) {
+            if (IsVisionWorkCreatedDelivery(delivery, vision_device_id)) {
+                const auto* created =
+                    contracts::mqtt::GetPayload<contracts::mqtt::WorkCreatedPayload>(delivery.message);
+                if (created != nullptr && (restored_input_detected_work_ids.contains(created->work_id) ||
+                                           restored_vision_assigned_work_ids.contains(created->work_id))) {
+                    continue;
+                }
+            }
+            static_cast<void>(publish_enqueued(delivery));
+        }
+        return true;
+    };
     std::function<bool(const std::vector<ProcessCommandIntent>&)> dispatch_process_commands;
     std::function<bool(bool)> replay_restored_process_commands;
 
-    mqtt_handler.SetWorkCreatedHandler([&mqtt_client, &process_orchestrator, &persist_process_state,
-                                        &dispatch_process_commands, qt_client_id = server_config.qt_client_id](
-                                           std::string_view device_id, std::string_view work_id) {
+    mqtt_handler.SetWorkCreatedHandler([&publish_enqueued, &process_orchestrator, &process_command_tracker,
+                                        &persist_process_state, &process_state_store, &run_runtime_store,
+                                        &dispatch_process_commands, &command_manager, &pending_system_commands,
+                                        qt_client_id = server_config.qt_client_id](std::string_view device_id,
+                                                                                   std::string_view work_id) {
         const contracts::mqtt::MqttMessage message{
             .protocol_version = std::string(contracts::mqtt::kCurrentProtocolVersion),
             .message_id = "WORK-" + std::string(work_id),
@@ -313,11 +448,17 @@ int Application::Run(int argc, char* argv[]) {
         };
         const auto begin = process_orchestrator.BeginWork(message.message_id, work_id, device_id, message.timestamp);
         if (begin.transition.disposition == TransitionDisposition::kRejected) {
+            // The BOX event is durable and can be replayed after a dispatch-failure path
+            // has already terminally reported this work.  Do not leave that inbox row
+            // RECEIVED forever merely because BeginWork is no longer applicable.
+            const auto existing = process_orchestrator.StateMachine().FindWork(work_id);
+            if (existing.has_value() &&
+                (existing->stage == WorkStage::kFailed || existing->stage == WorkStage::kStopped ||
+                 existing->stage == WorkStage::kEmergencyStopped)) {
+                return true;
+            }
             std::cerr << "[server][ERROR] WORK_CREATED process transition rejected: " << begin.transition.reason
                       << '\n';
-            return false;
-        }
-        if (!persist_process_state()) {
             return false;
         }
         if (!dispatch_process_commands || !dispatch_process_commands(begin.commands)) {
@@ -326,52 +467,52 @@ int Application::Run(int argc, char* argv[]) {
         }
         const std::string_view vision_device_id =
             process_orchestrator.Enabled() ? process_orchestrator.VisionDeviceId() : device_id;
-        const bool sent_to_device = mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(vision_device_id),
-                                                               message, contracts::mqtt::Qos::kAtLeastOnce);
-        const bool sent_to_qt = mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
-                                                           contracts::mqtt::Qos::kAtLeastOnce);
-        if (!sent_to_device || !sent_to_qt) {
-            const ProcessCommandIntent failed_intent{
-                .message = message,
-                .dispatched_event = ProcessEventType::kWorkCreated,
-                .work_id = std::string(work_id),
-            };
-            static_cast<void>(process_orchestrator.FailDispatch(failed_intent, "WORK_CREATED MQTT publication failed"));
-            static_cast<void>(persist_process_state());
-        } else {
-            const auto assigned = process_orchestrator.ConfirmVisionAssignment(message.message_id, work_id);
-            if (assigned.disposition == TransitionDisposition::kRejected) {
-                std::cerr << "[server][ERROR] vision assignment transition rejected: " << assigned.reason << '\n';
-                return false;
-            }
-            if (!persist_process_state()) {
-                return false;
-            }
+        const auto device_topic = contracts::mqtt::DeviceCommandTopic(vision_device_id);
+        const auto qt_topic = contracts::mqtt::QtEventTopic(qt_client_id);
+        const std::vector deliveries{
+            PendingMqttDelivery{ .topic = device_topic, .message = message },
+            PendingMqttDelivery{ .topic = qt_topic, .message = message },
+        };
+        const auto assigned = process_orchestrator.ConfirmVisionAssignment(message.message_id, work_id);
+        if (!assigned.Applied()) {
+            return false;
         }
-        return sent_to_device && sent_to_qt;
+        if (!run_runtime_store(
+                [&] {
+                    return process_state_store.Save(
+                        process_orchestrator.StateMachine().SystemState(), process_orchestrator.MessageSequence(),
+                        process_orchestrator.StateMachine().ActiveWorks(), process_orchestrator.GripperTargets(),
+                        process_command_tracker.PendingCommands(), CurrentUnixTimeMilliseconds(), deliveries,
+                        process_orchestrator.StateMachine().ProcessedMessageIds(), command_manager.Snapshot(),
+                        pending_system_commands);
+                },
+                "WORK_CREATED state/outbox persistence")) {
+            return false;
+        }
+        return publish_enqueued(deliveries[0]) && publish_enqueued(deliveries[1]);
     });
     mqtt_handler.SetQtEventHandler(
-        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
-            return mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
-                                              contracts::mqtt::Qos::kAtLeastOnce);
+        [&publish_durable, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+            return publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), message);
         });
     const auto publish_qt_response =
-        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
-            return mqtt_client.PublishMessage(contracts::mqtt::QtResponseTopic(qt_client_id), message,
-                                              contracts::mqtt::Qos::kAtLeastOnce);
+        [&publish_durable, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+            return publish_durable(contracts::mqtt::QtResponseTopic(qt_client_id), message);
         };
     const auto publish_failed_work =
-        [&mqtt_client, qt_client_id = server_config.qt_client_id, source_id = server_config.process.server_id](
+        [&publish_durable, qt_client_id = server_config.qt_client_id, source_id = server_config.process.server_id](
             std::string_view message_id, std::string_view work_id, std::string_view reason) {
             const auto completed =
                 MakeWorkFailureCompletion(source_id, message_id, work_id, reason, CurrentIso8601Timestamp());
-            return mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), completed,
-                                              contracts::mqtt::Qos::kAtLeastOnce);
+            return publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), completed);
         };
-    std::unordered_map<std::string, contracts::mqtt::ControlCommand> pending_system_commands;
-    const auto finish_system_command = [&pending_system_commands, &process_orchestrator, &publish_failed_work,
-                                        &replay_restored_process_commands,
-                                        &persist_process_state](const contracts::mqtt::MqttMessage& message) {
+    const auto finish_system_command = [&pending_system_commands, &process_orchestrator, &process_command_tracker,
+                                        &command_manager, &process_state_store, &publish_enqueued,
+                                        &replay_restored_process_commands, &persist_process_state, &run_runtime_store,
+                                        &restored_input_detected_work_ids, &restored_vision_assigned_work_ids,
+                                        qt_client_id = server_config.qt_client_id,
+                                        source_id = server_config.process.server_id](
+                                           const contracts::mqtt::MqttMessage& message) {
         const auto* response = contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(message);
         if (response == nullptr || !contracts::mqtt::IsTerminal(response->result)) {
             return true;
@@ -394,13 +535,38 @@ int Application::Run(int argc, char* argv[]) {
         if (succeeded) {
             if (command == contracts::mqtt::ControlCommand::kRecovery) {
                 failed_works = process_orchestrator.StateMachine().ActiveWorks();
+                std::vector<PendingMqttDelivery> completions;
                 for (const auto& work : failed_works) {
-                    if (!work.failure_reason.empty() &&
-                        !publish_failed_work("RECOVERY-FAILED-" + work.work_id, work.work_id, work.failure_reason)) {
-                        return false;
+                    const auto message_id = "RECOVERY-FAILED-" + work.work_id;
+                    if (!work.failure_reason.empty()) {
+                        completions.push_back({
+                            .topic = contracts::mqtt::QtEventTopic(qt_client_id),
+                            .message = MakeWorkFailureCompletion(source_id, message_id, work.work_id,
+                                                                 work.failure_reason, CurrentIso8601Timestamp()),
+                        });
                     }
                 }
                 transition = process_orchestrator.CompleteSystemRecovery();
+                if (!transition.Applied()) {
+                    return false;
+                }
+                if (!run_runtime_store(
+                        [&] {
+                            return process_state_store.Save(process_orchestrator.StateMachine().SystemState(),
+                                                            process_orchestrator.MessageSequence(),
+                                                            process_orchestrator.StateMachine().ActiveWorks(),
+                                                            process_orchestrator.GripperTargets(),
+                                                            process_command_tracker.PendingCommands(),
+                                                            CurrentUnixTimeMilliseconds(), completions,
+                                                            process_orchestrator.StateMachine().ProcessedMessageIds(),
+                                                            command_manager.Snapshot(), pending_system_commands);
+                        },
+                        "recovery state/outbox persistence")) {
+                    return false;
+                }
+                for (const auto& completion : completions) {
+                    static_cast<void>(publish_enqueued(completion));
+                }
             }
         } else {
             transition = process_orchestrator.FailSystemCommand(
@@ -410,8 +576,62 @@ int Application::Run(int argc, char* argv[]) {
             std::cerr << "[server][ERROR] system command result transition failed: " << transition.reason << '\n';
             return false;
         }
-        if (transition.Applied() && !persist_process_state()) {
+        const bool resumes_unassigned_work = succeeded &&
+                                             (command == contracts::mqtt::ControlCommand::kStart ||
+                                              command == contracts::mqtt::ControlCommand::kRestart) &&
+                                             !restored_input_detected_work_ids.empty();
+        if (transition.Applied() && !resumes_unassigned_work && !persist_process_state()) {
             return false;
+        }
+        if (succeeded && (command == contracts::mqtt::ControlCommand::kStart ||
+                          command == contracts::mqtt::ControlCommand::kRestart)) {
+            std::vector<PendingMqttDelivery> restored_deliveries;
+            for (const auto& work_id : restored_input_detected_work_ids) {
+                const auto assignment = process_orchestrator.ConfirmVisionAssignment("WORK-" + work_id, work_id);
+                if (!assignment.Applied()) {
+                    std::cerr << "[server][ERROR] restored vision assignment failed: " << work_id << '\n';
+                    return false;
+                }
+                const auto work = process_orchestrator.StateMachine().FindWork(work_id);
+                if (!work.has_value()) {
+                    return false;
+                }
+                const contracts::mqtt::MqttMessage created{
+                    .protocol_version = std::string(contracts::mqtt::kCurrentProtocolVersion),
+                    .message_id = "WORK-" + work_id,
+                    .message_type = contracts::mqtt::MessageType::kWorkCreated,
+                    .source_id = "central-server",
+                    .timestamp = CurrentIso8601Timestamp(),
+                    .data = contracts::mqtt::WorkCreatedPayload{ .work_id = work_id },
+                };
+                restored_deliveries.push_back({
+                    .topic = contracts::mqtt::DeviceCommandTopic(process_orchestrator.VisionDeviceId()),
+                    .message = created,
+                });
+                restored_deliveries.push_back(
+                    { .topic = contracts::mqtt::QtEventTopic(qt_client_id), .message = created });
+            }
+            if (!restored_deliveries.empty() &&
+                !run_runtime_store(
+                    [&] {
+                        return process_state_store.Save(
+                            process_orchestrator.StateMachine().SystemState(), process_orchestrator.MessageSequence(),
+                            process_orchestrator.StateMachine().ActiveWorks(), process_orchestrator.GripperTargets(),
+                            process_command_tracker.PendingCommands(), CurrentUnixTimeMilliseconds(),
+                            restored_deliveries, process_orchestrator.StateMachine().ProcessedMessageIds(),
+                            command_manager.Snapshot(), pending_system_commands);
+                    },
+                    "restored vision state/outbox persistence")) {
+                return false;
+            }
+            // A VisionAssigned snapshot already has its durable WORK_CREATED row.
+            // START only needs to release that row; it must not remain held just
+            // because no InputDetected assignment had to be rebuilt.
+            restored_input_detected_work_ids.clear();
+            restored_vision_assigned_work_ids.clear();
+            for (const auto& delivery : restored_deliveries) {
+                static_cast<void>(publish_enqueued(delivery));
+            }
         }
         return !succeeded ||
                (command != contracts::mqtt::ControlCommand::kStart &&
@@ -421,11 +641,20 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_handler.SetQtResponseHandler([&command_manager, &process_orchestrator, &finish_system_command,
                                        &process_command_tracker, &persist_process_state,
                                        &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
-        const auto decision = command_manager.HandleResponse(message);
+        const auto decision = command_manager.PreviewResponse(message);
         switch (decision.disposition) {
             case CommandResponseDisposition::kForward: {
                 if (!decision.message.has_value()) {
                     return false;
+                }
+                // The terminal response is the durable commit point.  Do not consume the
+                // aggregate before it is recoverable in the MQTT outbox.
+                if (!publish_qt_response(*decision.message)) {
+                    return false;
+                }
+                const auto committed = command_manager.HandleResponse(message);
+                if (committed.disposition != CommandResponseDisposition::kForward) {
+                    return committed.disposition == CommandResponseDisposition::kDuplicate;
                 }
                 const auto* response =
                     contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(*decision.message);
@@ -439,13 +668,11 @@ int Application::Run(int argc, char* argv[]) {
                         return false;
                     }
                 }
-                if (process_command_tracker.PendingCount() < pending_process_commands && !persist_process_state()) {
-                    return false;
-                }
+                static_cast<void>(pending_process_commands);
                 if (!finish_system_command(*decision.message)) {
                     return false;
                 }
-                return publish_qt_response(*decision.message);
+                return persist_process_state();
             }
             case CommandResponseDisposition::kDuplicate:
                 std::clog << "[server][INFO] duplicate command response ignored: " << decision.reason << '\n';
@@ -460,14 +687,27 @@ int Application::Run(int argc, char* argv[]) {
         return false;
     });
     mqtt_handler.SetQtStatusHandler(
-        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+        [&mqtt_client, &process_state_store, &run_runtime_store, &mqtt_delivery_mutex, &mqtt_deliveries_in_flight,
+         &mqtt_deliveries_acknowledged, &delivery_key, qt_client_id = server_config.qt_client_id,
+         vision_device_id = server_config.process.vision_device_id](const contracts::mqtt::MqttMessage& message) {
+            if (const auto work_id = AcknowledgedVisionWorkId(message, vision_device_id)) {
+                const auto device_topic = contracts::mqtt::DeviceCommandTopic(vision_device_id);
+                const auto message_id = "WORK-" + *work_id;
+                if (!run_runtime_store([&] { return process_state_store.RemoveMqttDelivery(device_topic, message_id); },
+                                       "vision WORK_CREATED device acknowledgement")) {
+                    return false;
+                }
+                const auto key = delivery_key(device_topic, message_id);
+                const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+                mqtt_deliveries_in_flight.erase(key);
+                mqtt_deliveries_acknowledged.erase(key);
+            }
             return mqtt_client.PublishMessage(contracts::mqtt::QtStatusTopic(qt_client_id), message,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         });
     mqtt_handler.SetQtErrorHandler(
-        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
-            return mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(qt_client_id), message,
-                                              contracts::mqtt::Qos::kAtLeastOnce);
+        [&publish_durable, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+            return publish_durable(contracts::mqtt::QtErrorTopic(qt_client_id), message);
         });
     mqtt_handler.SetProcessMessageGuard([&process_orchestrator](const contracts::mqtt::MqttMessage& message) {
         const auto preview = process_orchestrator.Preview(message);
@@ -478,11 +718,12 @@ int Application::Run(int argc, char* argv[]) {
         return false;
     });
 
-    const auto dispatch_command = [&mqtt_client, &mqtt_handler, &device_manager, &command_manager,
-                                   &process_orchestrator, &server_config, &pending_system_commands,
-                                   &finish_system_command, &process_state_persistence_healthy, &persist_process_state,
-                                   &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
-        if (!process_state_persistence_healthy) {
+    const auto dispatch_command = [&mqtt_handler, &device_manager, &command_manager, &process_orchestrator,
+                                   &server_config, &pending_system_commands, &finish_system_command,
+                                   &process_state_persistence_healthy, &persist_process_state, &publish_durable,
+                                   &publish_qt_response, &restored_input_detected_work_ids,
+                                   &restored_vision_assigned_work_ids](const contracts::mqtt::MqttMessage& message) {
+        if (!process_state_persistence_healthy.load()) {
             const auto rejected = command_manager.MakeImmediateResult(
                 message, contracts::mqtt::CommandResult::kRejected, CurrentIso8601Timestamp(),
                 std::string("ERR-PROCESS-STATE-PERSISTENCE"), "process state persistence is unavailable");
@@ -519,16 +760,30 @@ int Application::Run(int argc, char* argv[]) {
                 return rejected.has_value() && publish_qt_response(*rejected);
             }
         }
-        const auto commit_system_command = [&process_orchestrator, &system_command, &persist_process_state]() {
+        const auto commit_system_command = [&process_orchestrator, &system_command, &restored_input_detected_work_ids,
+                                            &restored_vision_assigned_work_ids]() {
             if (!system_command.has_value()) {
                 return true;
+            }
+            // Keep same-runtime suspended assignments as well as startup-restored ones.
+            // START uses these sets to reissue/retain WORK_CREATED exactly once.
+            if (*system_command == contracts::mqtt::ControlCommand::kStop ||
+                *system_command == contracts::mqtt::ControlCommand::kEmergencyStop ||
+                *system_command == contracts::mqtt::ControlCommand::kRecovery) {
+                for (const auto& work : process_orchestrator.StateMachine().ActiveWorks()) {
+                    if (work.stage == WorkStage::kInputDetected) {
+                        restored_input_detected_work_ids.insert(work.work_id);
+                    } else if (work.stage == WorkStage::kVisionAssigned) {
+                        restored_vision_assigned_work_ids.insert(work.work_id);
+                    }
+                }
             }
             const auto transition = process_orchestrator.ApplySystemCommand(*system_command);
             if (transition.disposition == TransitionDisposition::kRejected) {
                 std::cerr << "[server][ERROR] system process command commit failed: " << transition.reason << '\n';
                 return false;
             }
-            return persist_process_state();
+            return true;
         };
 
         const auto route = ResolveCommandTargets(message, device_manager->RegisteredDevices());
@@ -560,6 +815,9 @@ int Application::Run(int argc, char* argv[]) {
         if (system_command.has_value()) {
             pending_system_commands.insert_or_assign(request_id, *system_command);
         }
+        if (!persist_process_state()) {
+            return false;
+        }
 
         if (route.broadcast) {
             auto forwarded = message;
@@ -568,8 +826,7 @@ int Application::Run(int argc, char* argv[]) {
                 return false;
             }
             payload->target_device_id = "ALL";
-            if (mqtt_client.PublishMessage(contracts::mqtt::kSystemBroadcastCommandTopic, forwarded,
-                                           contracts::mqtt::Qos::kAtLeastOnce)) {
+            if (publish_durable(contracts::mqtt::kSystemBroadcastCommandTopic, forwarded)) {
                 return true;
             }
             const auto failed =
@@ -580,12 +837,11 @@ int Application::Run(int argc, char* argv[]) {
             return false;
         }
 
-        const auto publish_to_device = [&mqtt_client, &message, &server_config](std::string_view device_id) {
+        const auto publish_to_device = [&publish_durable, &message, &server_config](std::string_view device_id) {
             const auto forwarded =
                 PrepareCommandForDevice(message, device_id, server_config.process.line_tracer_device_id,
                                         server_config.process.line_tracer_initial_position);
-            return mqtt_client.PublishMessage(contracts::mqtt::DeviceCommandTopic(device_id), forwarded,
-                                              contracts::mqtt::Qos::kAtLeastOnce);
+            return publish_durable(contracts::mqtt::DeviceCommandTopic(device_id), forwarded);
         };
 
         std::vector<std::string> failed_devices;
@@ -643,8 +899,10 @@ int Application::Run(int argc, char* argv[]) {
             }
             if (!dispatch_command(intent.message)) {
                 static_cast<void>(process_command_tracker.Remove(*request_id));
-                static_cast<void>(process_orchestrator.FailDispatch(intent, "process command publication failed"));
-                static_cast<void>(persist_process_state());
+                if (!fail_process_dispatch(intent, "process command publication failed")) {
+                    std::cerr << "[server][ERROR] process command publication failure could not be reported: "
+                              << intent.work_id << '\n';
+                }
                 return false;
             }
             const auto confirmed = process_orchestrator.ConfirmDispatch(intent);
@@ -708,7 +966,7 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_process_commands,
                                            &input_detection_gate, &process_state_persistence_healthy,
                                            &persist_process_state](const contracts::mqtt::MqttMessage& message) {
-        if (!process_state_persistence_healthy) {
+        if (!process_state_persistence_healthy.load()) {
             return false;
         }
         const auto system_state = process_orchestrator.StateMachine().SystemState();
@@ -731,8 +989,8 @@ int Application::Run(int argc, char* argv[]) {
                     },
             };
             const auto encoded = contracts::mqtt::SerializeMessage(box_detected);
-            if (!encoded.IsSuccess() ||
-                !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(message.source_id), encoded.payload)) {
+            if (!encoded.IsSuccess() || !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(message.source_id),
+                                                             encoded.payload, {}, 1, false)) {
                 input_detection_gate.Retry();
                 return false;
             }
@@ -745,17 +1003,21 @@ int Application::Run(int argc, char* argv[]) {
             std::cerr << "[server][ERROR] process transition commit rejected: " << result.transition.reason << '\n';
             return false;
         }
-        if (!persist_process_state()) {
-            return false;
-        }
-        return dispatch_process_commands(result.commands);
+        // A transition that emits commands is persisted by dispatch_process_commands together with
+        // its command tracker entry.  Saving it first leaves a restart window with no replayable
+        // command, so only command-free transitions are saved here.
+        return result.commands.empty() ? persist_process_state() : dispatch_process_commands(result.commands);
     });
 
-    mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state, &process_mutex](
-                                      std::string_view topic, std::string_view payload) {
+    mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state,
+                                   &process_state_persistence_healthy, &process_mutex](
+                                      std::string_view topic, std::string_view payload, int qos, bool retained) {
         const std::lock_guard process_lock(process_mutex);
+        if (!process_state_persistence_healthy.load()) {
+            return;
+        }
         const auto previous_revision = process_orchestrator.Revision();
-        if (!mqtt_handler.Handle(topic, payload)) {
+        if (!mqtt_handler.Handle(topic, payload, {}, qos, retained)) {
             std::cerr << "[server][ERROR] MQTT message processing failed; topic=" << topic << '\n';
         }
         if (process_orchestrator.Revision() != previous_revision) {
@@ -773,12 +1035,15 @@ int Application::Run(int argc, char* argv[]) {
         std::cerr << "[server][ERROR] MQTT client startup failed\n";
         return 6;
     }
-    const auto publish_recalibration_notifications = [&work_invalidations, &mqtt_client, &server_config]() {
+    {
+        const std::lock_guard process_lock(process_mutex);
+        static_cast<void>(pump_durable());
+    }
+    const auto publish_recalibration_notifications = [&work_invalidations, &publish_durable, &server_config]() {
         bool published = true;
         for (const auto& invalidation : work_invalidations) {
             const auto error = MakeWorkInvalidationError("central-server", invalidation, CurrentIso8601Timestamp());
-            if (!mqtt_client.PublishMessage(contracts::mqtt::QtErrorTopic(server_config.qt_client_id), error,
-                                            contracts::mqtt::Qos::kAtLeastOnce)) {
+            if (!publish_durable(contracts::mqtt::QtErrorTopic(server_config.qt_client_id), error)) {
                 std::cerr << "[server][ERROR] recalibration notification publish failed; work_id="
                           << invalidation.work_id << '\n';
                 published = false;
@@ -825,6 +1090,25 @@ int Application::Run(int argc, char* argv[]) {
     while (stop_requested == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         const auto loop_now = std::chrono::steady_clock::now();
+        {
+            const std::lock_guard process_lock(process_mutex);
+            static_cast<void>(pump_durable());
+            // A restored input work may have been persisted after its STOP tracker was
+            // recorded but before WORK_CREATED was committed.  Restore that interlock
+            // before replaying the BOX event, otherwise replay could assign vision first.
+            if (safe_restored_replay_pending && mqtt_client.IsConnected()) {
+                safe_restored_replay_pending = false;
+                if (!replay_restored_process_commands(true)) {
+                    std::cerr << "[server][ERROR] restored input STOP command replay failed\n";
+                    safe_restored_replay_pending = true;
+                    continue;
+                }
+            }
+            if (mqtt_client.IsReady() && process_state_persistence_healthy.load() &&
+                !mqtt_handler.ReplayPendingReceivedEvents()) {
+                std::cerr << "[server][ERROR] pending MQTT event replay failed; retrying from the oldest event\n";
+            }
+        }
         if (loop_now >= next_retention_cleanup) {
             next_retention_cleanup = loop_now + std::chrono::hours(server_config.storage.cleanup_interval_hours);
             const auto retention_status = scheduled_retention.RunOnce(CurrentUnixTimeMilliseconds());
@@ -833,17 +1117,14 @@ int Application::Run(int argc, char* argv[]) {
             }
         }
         if (recalibration_notifications_pending && mqtt_client.IsConnected()) {
-            recalibration_notifications_pending = !publish_recalibration_notifications();
+            const std::lock_guard process_lock(process_mutex);
+            if (process_state_persistence_healthy.load()) {
+                recalibration_notifications_pending = !publish_recalibration_notifications();
+            }
         }
         {
             const std::lock_guard process_lock(process_mutex);
             const auto previous_revision = process_orchestrator.Revision();
-            if (safe_restored_replay_pending && mqtt_client.IsConnected()) {
-                safe_restored_replay_pending = false;
-                if (!replay_restored_process_commands(true)) {
-                    std::cerr << "[server][ERROR] restored input STOP command replay failed\n";
-                }
-            }
             static_cast<void>(mqtt_handler.CheckHeartbeatTimeouts());
             if (process_orchestrator.Revision() != previous_revision) {
                 if (!persist_process_state()) {
@@ -852,10 +1133,30 @@ int Application::Run(int argc, char* argv[]) {
                 }
             }
         }
-        for (const auto& timeout : command_manager.CheckTimeouts(CurrentIso8601Timestamp())) {
-            {
-                const std::lock_guard process_lock(process_mutex);
-                const auto previous_revision = process_orchestrator.Revision();
+        {
+            const std::lock_guard process_lock(process_mutex);
+            if (!process_state_persistence_healthy.load()) {
+                continue;
+            }
+            const auto checked_at = CurrentIso8601Timestamp();
+            const auto pending_timeouts = command_manager.PreviewTimeouts(checked_at);
+            bool all_timeout_responses_durable = true;
+            for (const auto& timeout : pending_timeouts) {
+                if (!publish_qt_response(timeout)) {
+                    std::cerr << "[server][ERROR] command timeout publish failed\n";
+                    all_timeout_responses_durable = false;
+                    break;
+                }
+            }
+            if (!all_timeout_responses_durable) {
+                continue;
+            }
+            const auto consumed_timeouts = command_manager.CheckTimeouts(checked_at);
+            if (consumed_timeouts.size() != pending_timeouts.size()) {
+                std::cerr << "[server][ERROR] command timeout set changed before commit\n";
+                continue;
+            }
+            for (const auto& timeout : consumed_timeouts) {
                 if (const auto failed_intent = process_command_tracker.HandleResponse(timeout)) {
                     const auto* response =
                         contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(timeout);
@@ -865,12 +1166,10 @@ int Application::Run(int argc, char* argv[]) {
                 if (!finish_system_command(timeout)) {
                     std::cerr << "[server][ERROR] system command timeout transition failed\n";
                 }
-                if (process_orchestrator.Revision() != previous_revision) {
-                    static_cast<void>(persist_process_state());
+                if (!persist_process_state()) {
+                    std::cerr << "[server][ERROR] command timeout state persistence failed\n";
+                    break;
                 }
-            }
-            if (!publish_qt_response(timeout)) {
-                std::cerr << "[server][ERROR] command timeout publish failed\n";
             }
         }
     }
@@ -878,7 +1177,7 @@ int Application::Run(int argc, char* argv[]) {
     upload_server.Stop();
     mqtt_client.Stop();
 
-    bool shutdown_ok = persist_process_state();
+    bool shutdown_ok = process_state_persistence_healthy.load() && persist_process_state();
     database_status = maintenance_database.Close();
     if (!database_status.ok()) {
         std::cerr << "[server][ERROR] maintenance database close failed during shutdown: " << database_status.message

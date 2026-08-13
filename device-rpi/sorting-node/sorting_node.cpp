@@ -816,6 +816,13 @@ void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
     const std::uint8_t kind = frame.payload[APP_SAFETY_EVENT_KIND_INDEX];
     const std::uint8_t cause = frame.payload[APP_SAFETY_EVENT_CAUSE_INDEX];
     const std::uint8_t result = frame.payload[APP_SAFETY_EVENT_RESULT_INDEX];
+    const bool repeated = IsRepeatedControllerEvent(APP_EVENT_SAFETY, kind, cause, result);
+    // Enqueue the work failure before acknowledging the safety command.  The
+    // central state machine can then persist failure_reason while it is still
+    // in EmergencyStop, before a recovery request is accepted.
+    if (!repeated && kind == SAFETY_EVENT_ESTOP_LATCHED && HasActiveCycle()) {
+        EmitError("ERR-SORTING-CYCLE-ABORTED", "ERROR", "EMERGENCY_STOP", "sorting cycle aborted by emergency stop");
+    }
     if (pending_safety_.active) {
         const bool estopConfirmed =
             pending_safety_.expected == PendingSafetyEvent::kEstopLatched && kind == SAFETY_EVENT_ESTOP_LATCHED;
@@ -832,7 +839,11 @@ void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
             pending_safety_ = {};
         }
     }
-    if (IsRepeatedControllerEvent(APP_EVENT_SAFETY, kind, cause, result)) {
+    // A duplicate controller event may still be the confirmation for a newly
+    // issued safety command (the first copy could have arrived unsolicited).
+    // Consume that response, but do not repeat the durable status/error side
+    // effects below.
+    if (repeated) {
         return;
     }
     if (kind == SAFETY_EVENT_ESTOP_LATCHED) {

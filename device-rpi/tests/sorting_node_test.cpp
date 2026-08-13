@@ -472,6 +472,34 @@ void TestEmergencyStopPreemptsPendingCommandAndIsNotRetried() {
     assert(fixture.backend->writes.size() == 2U);
 }
 
+void TestEmergencyStopReportsActiveCycleFailureBeforeRecoveryClearsIt() {
+    Fixture fixture;
+    ActivateCycle(fixture);
+
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).status == SortingCommandStatus::kSentNoReply);
+    fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_ESTOP_LATCHED, 1U);
+
+    const auto error_it = std::find_if(fixture.reports.begin(), fixture.reports.end(), [](const SortingReport& report) {
+        return report.message_type == mqtt::MessageType::kErrorOccurred;
+    });
+    assert(error_it != fixture.reports.end());
+    const auto response_it = std::find_if(
+        fixture.reports.begin(), fixture.reports.end(),
+        [](const SortingReport& report) { return report.message_type == mqtt::MessageType::kCommandResponse; });
+    assert(response_it != fixture.reports.end());
+    assert(error_it < response_it);
+    const auto& error = ReportPayload<mqtt::ErrorOccurredPayload>(*error_it);
+    assert(error.job_id == std::optional<std::string>(kWorkId));
+    assert(error.error_code == "ERR-SORTING-CYCLE-ABORTED");
+    assert(fixture.node->ActiveWorkId() == kWorkId);
+
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery)).status ==
+           SortingCommandStatus::kSentNoReply);
+    fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_RESET_COMPLETE, 1U);
+    assert(!fixture.node->HasActiveCycle());
+    assert(fixture.node->ActiveWorkId().empty());
+}
+
 void TestSafetyRecoveryUsesOneWayDeviceReset() {
     Fixture fixture;
 
@@ -527,6 +555,30 @@ void TestSafetyCommandsCompleteWithOriginalRequestId() {
 
     recoveryFixture.PushHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE);
     assert(recoveryFixture.reports.size() == 2U);
+}
+
+void TestRepeatedSafetyEventStillConfirmsNewPendingCommand() {
+    Fixture fixture;
+    ActivateCycle(fixture);
+    fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_ESTOP_LATCHED, 1U);
+
+    const auto result = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+    assert(result.status == SortingCommandStatus::kSentNoReply);
+    fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_ESTOP_LATCHED, 1U);
+
+    assert(!fixture.node->HasPendingSafetyCommand());
+    const auto error_count = std::count_if(
+        fixture.reports.begin(), fixture.reports.end(),
+        [](const SortingReport& report) { return report.message_type == mqtt::MessageType::kErrorOccurred; });
+    assert(error_count == 1U);
+    assert(fixture.reports.size() == 3U);
+    const auto response_it = std::find_if(
+        fixture.reports.begin(), fixture.reports.end(),
+        [](const SortingReport& report) { return report.message_type == mqtt::MessageType::kCommandResponse; });
+    assert(response_it != fixture.reports.end());
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(*response_it);
+    assert(response.request_id == "REQ-ESTOP-01");
+    assert(response.result == mqtt::CommandResult::kSuccess);
 }
 
 void TestSafetyAndHeartbeatTimeoutsAreReported() {
@@ -739,10 +791,12 @@ int main() {
     TestStartResendsCachedSpeedAfterControllerRestart();
     TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload();
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
+    TestEmergencyStopReportsActiveCycleFailureBeforeRecoveryClearsIt();
     TestSafetyRecoveryUsesOneWayDeviceReset();
     TestPendingSafetyCommandCannotBeOverwritten();
     TestSystemTargetUsesSafetyRecovery();
     TestSafetyCommandsCompleteWithOriginalRequestId();
+    TestRepeatedSafetyEventStillConfirmsNewPendingCommand();
     TestSafetyAndHeartbeatTimeoutsAreReported();
     TestEmergencyHeartbeatIsSafetyStateNotError();
     TestReturnHomeAndCycleCompletePublishCompletion();

@@ -233,25 +233,27 @@ DatabaseStatus ImageStore::Remove(const std::filesystem::path& relative_path) co
 }
 
 DatabaseStatus EventRepository::RecordReceived(const contracts::mqtt::EnvelopeView& envelope,
-                                               const TransportMetadata& metadata, bool& duplicate) {
+                                               const TransportMetadata& metadata, std::string& existing_state) {
     Statement lookup;
-    auto status = database_.Prepare("SELECT id FROM mqtt_event_log WHERE message_id=?", lookup);
+    auto status = database_.Prepare("SELECT processing_state FROM mqtt_event_log WHERE message_id=?", lookup);
     if (!status.ok() || !(status = lookup.Bind(1, envelope.message_id)).ok())
         return status;
     bool row = false;
     if (!(status = lookup.Step(row)).ok())
         return status;
-    duplicate = row;
-    if (duplicate) {
+    if (row) {
+        existing_state = lookup.ColumnText(0);
         Statement update;
         status = database_.Prepare(
-            "UPDATE mqtt_event_log SET duplicate_count=duplicate_count+1,last_received_at_ms=? WHERE message_id=?",
+            "UPDATE mqtt_event_log SET duplicate_count=duplicate_count+1,"
+            "last_received_at_ms=MAX(last_received_at_ms,?) WHERE message_id=?",
             update);
         if (!status.ok() || !(status = update.Bind(1, metadata.received_at_ms)).ok() ||
             !(status = update.Bind(2, envelope.message_id)).ok())
             return status;
         return update.Step(row);
     }
+    existing_state.clear();
     Statement insert;
     status = database_.Prepare(
         "INSERT INTO mqtt_event_log(message_id,topic,protocol_version,message_type,source_id,payload_json,qos,"
@@ -517,11 +519,11 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
     if (!transaction.status().ok())
         return Failure(transaction.status());
     EventRepository events(database_);
-    bool duplicate = false;
-    auto status = events.RecordReceived(envelope, metadata, duplicate);
+    std::string existing_state;
+    auto status = events.RecordReceived(envelope, metadata, existing_state);
     if (!status.ok())
         return Failure(status);
-    if (duplicate) {
+    if (!existing_state.empty()) {
         std::optional<std::string> duplicate_work_id = payload.work_id;
         if (envelope.message_type == contracts::mqtt::MessageType::kBoxDetected) {
             Statement existing_work;
@@ -539,7 +541,10 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
         status = transaction.Commit();
         if (!status.ok())
             return Failure(status);
-        return { PersistenceStatus::kDuplicate, "message was already stored", duplicate_work_id };
+        const bool requires_side_effects = existing_state == "RECEIVED";
+        return { PersistenceStatus::kDuplicate,
+                 requires_side_effects ? "message is awaiting side effects" : "message was already completed",
+                 duplicate_work_id, requires_side_effects };
     }
 
     ProductRepository products(database_);
@@ -628,13 +633,45 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
     }
     if (!(status = database_.Execute("RELEASE derived_event")).ok())
         return Failure(status);
-    if (!(status = events.MarkStored(envelope.message_id, CurrentUnixTimeMilliseconds())).ok() ||
-        !(status = transaction.Commit()).ok()) {
+    if (!(status = transaction.Commit()).ok()) {
         if (remove_image_on_failure)
             static_cast<void>(image_store_.Remove(stored_image.relative_path));
         return Failure(status);
     }
-    return { PersistenceStatus::kStored, "message stored", work_id };
+    return { PersistenceStatus::kStored, "message received", work_id, true };
+}
+
+DatabaseStatus PersistenceService::MarkEventStored(std::string_view message_id) {
+    if (message_id.empty()) {
+        return { DatabaseStatusCode::kInvalidArgument, "message_id is required" };
+    }
+    return EventRepository(database_).MarkStored(message_id, CurrentUnixTimeMilliseconds());
+}
+
+DatabaseStatus PersistenceService::PendingReceivedEvents(std::vector<PendingReceivedEvent>& output, std::size_t limit) {
+    output.clear();
+    if (limit == 0 || limit > 1000) {
+        return { DatabaseStatusCode::kInvalidArgument, "pending event limit must be between 1 and 1000" };
+    }
+    Statement statement;
+    auto status = database_.Prepare(
+        "SELECT topic,payload_json,qos,retained,received_at_ms FROM mqtt_event_log "
+        "WHERE processing_state='RECEIVED' ORDER BY received_at_ms,id LIMIT ?",
+        statement);
+    if (!status.ok() || !(status = statement.Bind(1, static_cast<std::int64_t>(limit))).ok()) {
+        return status;
+    }
+    bool row = false;
+    while ((status = statement.Step(row)).ok() && row) {
+        output.push_back(PendingReceivedEvent{
+            .topic = statement.ColumnText(0),
+            .raw_payload = statement.ColumnText(1),
+            .qos = statement.ColumnInt(2),
+            .retained = statement.ColumnInt(3) != 0,
+            .received_at_ms = statement.ColumnInt64(4),
+        });
+    }
+    return status;
 }
 
 DatabaseStatus PersistenceService::RecordWorkInvalidation(const WorkInvalidation& invalidation) {

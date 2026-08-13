@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -69,10 +70,19 @@ struct PersistenceResult {
     PersistenceStatus status{ PersistenceStatus::kPermanentError };
     std::string message;
     std::optional<std::string> work_id;
+    bool requires_side_effects{ false };
 
     [[nodiscard]] bool ok() const noexcept {
         return status == PersistenceStatus::kStored || status == PersistenceStatus::kDuplicate;
     }
+};
+
+struct PendingReceivedEvent {
+    std::string topic;
+    std::string raw_payload;
+    int qos{};
+    bool retained{};
+    std::int64_t received_at_ms{};
 };
 
 struct StoredImage {
@@ -98,7 +108,7 @@ class EventRepository final {
 public:
     explicit EventRepository(Database& database) : database_(database) {}
     [[nodiscard]] DatabaseStatus RecordReceived(const contracts::mqtt::EnvelopeView& envelope,
-                                                const TransportMetadata& metadata, bool& duplicate);
+                                                const TransportMetadata& metadata, std::string& existing_state);
     [[nodiscard]] DatabaseStatus MarkStored(std::string_view message_id, std::int64_t processed_at_ms);
     [[nodiscard]] DatabaseStatus MarkRejected(std::string_view message_id, std::string_view reason,
                                               std::int64_t processed_at_ms);
@@ -151,6 +161,9 @@ public:
     [[nodiscard]] PersistenceResult PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                           const EventPayload& payload,
                                                           const TransportMetadata& metadata);
+    [[nodiscard]] DatabaseStatus MarkEventStored(std::string_view message_id);
+    [[nodiscard]] DatabaseStatus PendingReceivedEvents(std::vector<PendingReceivedEvent>& output,
+                                                       std::size_t limit = 100);
     [[nodiscard]] DatabaseStatus RecordWorkInvalidation(const WorkInvalidation& invalidation);
     [[nodiscard]] DatabaseStatus FindActiveProductByBarcode(std::string_view barcode,
                                                             std::optional<CatalogProduct>& output);

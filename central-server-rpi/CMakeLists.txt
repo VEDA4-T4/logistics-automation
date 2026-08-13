@@ -417,6 +417,7 @@ if(BUILD_TESTING)
         central_server_process_state_store_test
         PRIVATE
             logistics::central_storage
+            logistics::central_server_command_manager
             logistics::central_server_process_state_machine
     )
     target_compile_definitions(

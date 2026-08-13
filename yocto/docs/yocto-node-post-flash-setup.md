@@ -589,7 +589,7 @@ ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
-clean_session=true
+clean_session=false
 ```
 
 노드별 나머지 설정은 예제 파일 값을 유지하거나 실제 장치 환경에 맞게 수정한다.

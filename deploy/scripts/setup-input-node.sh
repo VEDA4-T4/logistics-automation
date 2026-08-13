@@ -15,6 +15,7 @@ mqtt_username="${LOGISTICS_MQTT_USERNAME:-${device_id}}"
 mqtt_password="${LOGISTICS_MQTT_PASSWORD:-}"
 mqtt_tls_enabled="${LOGISTICS_MQTT_TLS_ENABLED:-true}"
 mqtt_ca_certificate="${LOGISTICS_MQTT_CA_CERTIFICATE:-/etc/logistics/tls/ca.crt}"
+mqtt_spool_root="${LOGISTICS_MQTT_SPOOL_DIRECTORY:-/var/lib/logistics/mqtt-spool}"
 node_name="${LOGISTICS_NODE_NAME:-input-node-01}"
 device_ip="${LOGISTICS_DEVICE_IP:-}"
 uart_device="${LOGISTICS_UART_DEVICE:-/dev/vedauart}"
@@ -101,6 +102,7 @@ if [[ "${install_dependencies}" == "1" ]]; then
 fi
 
 install -d -m 0750 "${runtime_dir}" "$(dirname -- "${config_path}")"
+"${sudo_command[@]}" install -d -m 0750 -o logistics -g logistics "${mqtt_spool_root}"
 if [[ -e "${config_path}" && "${force_config}" != "1" ]]; then
     echo "Keeping existing config: ${config_path}"
 else
@@ -123,7 +125,9 @@ ca_certificate=${mqtt_ca_certificate}
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
-clean_session=true
+clean_session=false
+publish_spool_directory=${mqtt_spool_root}
+publish_spool_maximum_bytes=52428800
 
 [log_upload]
 enabled=false

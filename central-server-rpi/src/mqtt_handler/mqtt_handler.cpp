@@ -179,7 +179,13 @@ void MqttHandler::SetProcessMessageHandler(ProcessMessageHandler handler) {
     process_message_handler_ = std::move(handler);
 }
 
-bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::string_view received_at) {
+bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::string_view received_at, int qos,
+                         bool retained) {
+    return HandleMessage(topic, payload, received_at, qos, retained, false);
+}
+
+bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload, std::string_view received_at, int qos,
+                                bool retained, bool replaying) {
     auto decoded = mqtt::DeserializeMessage(payload);
     if (!decoded.IsSuccess()) {
         Log(MqttHandlerLogLevel::kError,
@@ -202,7 +208,9 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
     // downstream consumer agree on one value - and so retuning detection is a
     // server.ini edit rather than an STM32 reflash.
     bool detection_stamped = false;
-    if (auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(decoded.value); sensor != nullptr) {
+    std::string replay_payload(payload);
+    if (auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(decoded.value);
+        sensor != nullptr && (!replaying || !sensor->detection_status.has_value())) {
         auto detection = sensor_detector_.Evaluate(decoded.value.source_id, sensor->sensor_id,
                                                    sensor->measurement_status, sensor->distance_cm);
         if (detection.has_value()) {
@@ -229,6 +237,7 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
                 Log(MqttHandlerLogLevel::kError, "SENSOR_STATUS re-serialization failed after detection stamping");
                 return false;
             }
+            replay_payload = restamped.payload;
             details_json = mqtt::Json::parse(restamped.payload).at(std::string(mqtt::kDataField)).dump();
         }
         const mqtt::EnvelopeView envelope{
@@ -241,11 +250,11 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
         };
         const TransportMetadata transport{
             .topic = std::string(topic),
-            .qos = 1,
-            .retained = false,
+            .qos = qos,
+            .retained = retained,
             .received_at_ms = CurrentUnixTimeMilliseconds(),
             .source_address = {},
-            .raw_payload = std::string(payload),
+            .raw_payload = std::move(replay_payload),
         };
         PersistenceResult result;
         for (int attempt = 0; attempt < 3; ++attempt) {
@@ -260,6 +269,24 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             Log(MqttHandlerLogLevel::kError, "MQTT persistence failed: " + result.message);
             return false;
         }
+        if (!result.requires_side_effects) {
+            Log(MqttHandlerLogLevel::kInfo, "MQTT message already completed: " + decoded.value.message_id);
+            return true;
+        }
+        const auto mark_stored = [this](std::string_view message_id) {
+            DatabaseStatus status;
+            for (int attempt = 0; attempt < 3; ++attempt) {
+                status = persistence_service_->MarkEventStored(message_id);
+                if (status.ok() || !status.retryable()) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(25 * (attempt + 1)));
+            }
+            if (!status.ok()) {
+                Log(MqttHandlerLogLevel::kError, "MQTT completion persistence failed: " + status.message);
+            }
+            return status.ok();
+        };
         if (process_message_handler_ && !process_message_handler_(decoded.value)) {
             Log(MqttHandlerLogLevel::kError, "MQTT process transition commit failed");
             return false;
@@ -348,9 +375,13 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
                         "catalog PRODUCT_INFO persistence failed: " + product_result.message);
                     return false;
                 }
-                if (process_message_handler_ && !process_message_handler_(*catalog_product_message)) {
-                    Log(MqttHandlerLogLevel::kError, "catalog PRODUCT_INFO process transition commit failed");
-                    return false;
+                if (!product_result.requires_side_effects) {
+                    catalog_product_message.reset();
+                } else {
+                    if (process_message_handler_ && !process_message_handler_(*catalog_product_message)) {
+                        Log(MqttHandlerLogLevel::kError, "catalog PRODUCT_INFO process transition commit failed");
+                        return false;
+                    }
                 }
             } else {
                 Log(MqttHandlerLogLevel::kInfo, "product catalog miss for barcode=" + barcode->barcode);
@@ -367,6 +398,9 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
         }
         if (catalog_product_message && qt_event_handler_ && !qt_event_handler_(*catalog_product_message)) {
             Log(MqttHandlerLogLevel::kError, "catalog PRODUCT_INFO publish failed");
+            return false;
+        }
+        if (catalog_product_message && !mark_stored(catalog_product_message->message_id)) {
             return false;
         }
         bool route_succeeded = true;
@@ -398,6 +432,9 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             Log(MqttHandlerLogLevel::kError, "MQTT message routing failed");
             return false;
         }
+        if (!mark_stored(decoded.value.message_id)) {
+            return false;
+        }
     } else if (process_message_handler_ && !process_message_handler_(decoded.value)) {
         Log(MqttHandlerLogLevel::kError, "MQTT process transition commit failed");
         return false;
@@ -416,6 +453,27 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
         Log(MqttHandlerLogLevel::kInfo,
             "device registered: " + std::string(parsed_topic.endpoint_id) +
                 "; registered devices=" + std::to_string(device_manager_.RegisteredDeviceCount()));
+    }
+    return true;
+}
+
+bool MqttHandler::ReplayPendingReceivedEvents(std::size_t limit) {
+    if (persistence_service_ == nullptr) {
+        return false;
+    }
+    std::vector<PendingReceivedEvent> events;
+    const auto status = persistence_service_->PendingReceivedEvents(events, limit);
+    if (!status.ok()) {
+        Log(MqttHandlerLogLevel::kError, "MQTT pending event load failed: " + status.message);
+        return false;
+    }
+    for (const auto& event : events) {
+        if (!HandleMessage(event.topic, event.raw_payload, {}, event.qos, event.retained, true)) {
+            // A malformed/terminally rejected historical row must not starve newer
+            // independent events.  Transient failures remain RECEIVED and are retried
+            // next pump; continue scanning this batch either way.
+            Log(MqttHandlerLogLevel::kError, "MQTT pending event replay failed; continuing with later events");
+        }
     }
     return true;
 }

@@ -62,6 +62,16 @@ void TestCommandDecoding() {
     assert(!malformed.IsSuccess());
 }
 
+void TestForgetCommandAllowsRetry() {
+    device::MqttMessageProcessor processor("PI-01");
+    const auto first = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
+    assert(first.IsSuccess());
+    processor.ForgetCommand(first.message.message_id);
+    const auto retried = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
+    assert(retried.IsSuccess());
+    assert(!retried.duplicate);
+}
+
 void TestDuplicateCommandFindsCachedResponse() {
     device::MqttMessageProcessor processor("PI-01");
     const auto first = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
@@ -212,6 +222,7 @@ void TestDeviceEventAndErrorEncoding() {
 
 int main() {
     TestCommandDecoding();
+    TestForgetCommandAllowsRetry();
     TestDuplicateCommandFindsCachedResponse();
     TestHeartbeatEncoding();
     TestWorkCreatedCommandDecoding();

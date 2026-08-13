@@ -234,7 +234,8 @@ ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
 }
 
 bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                    std::vector<WorkProcessSnapshot> works) {
+                                                    std::vector<WorkProcessSnapshot> works,
+                                                    std::vector<std::string> processed_message_ids) {
     std::unordered_map<std::string, WorkProcessSnapshot> restored;
     for (auto& work : works) {
         if (!contracts::IsValidUuid(work.work_id) || IsTerminal(work.stage) || restored.contains(work.work_id)) {
@@ -268,6 +269,12 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
     resume_transport_after_recovery_ = false;
     processed_message_ids_.clear();
     processed_message_order_.clear();
+    for (auto& message_id : processed_message_ids) {
+        if (message_id.empty()) {
+            return false;
+        }
+        RememberMessage(std::move(message_id));
+    }
     if (stored_state == ProcessSystemState::kEmergencyStop) {
         system_state_ = ProcessSystemState::kEmergencyStop;
     } else if (stored_state == ProcessSystemState::kError || stored_state == ProcessSystemState::kRecovery) {
@@ -295,6 +302,10 @@ std::vector<WorkProcessSnapshot> ProcessStateMachine::ActiveWorks() const {
     }
     std::ranges::sort(result, {}, &WorkProcessSnapshot::work_id);
     return result;
+}
+
+std::vector<std::string> ProcessStateMachine::ProcessedMessageIds() const {
+    return { processed_message_order_.begin(), processed_message_order_.end() };
 }
 
 ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event, WorkProcessSnapshot& work) {

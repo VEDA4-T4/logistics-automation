@@ -5,10 +5,27 @@
 #include <unordered_set>
 #include <utility>
 
+#include "logistics/contracts/mqtt_validation.hpp"
+
 namespace logistics::central_server {
 namespace {
 
 namespace mqtt = contracts::mqtt;
+
+[[nodiscard]] std::string EncodeStringList(const std::vector<std::string>& values) {
+    return mqtt::Json(values).dump();
+}
+
+[[nodiscard]] std::optional<std::vector<std::string>> DecodeStringList(std::string_view encoded) {
+    try {
+        const auto json = mqtt::Json::parse(encoded);
+        if (!json.is_array())
+            return std::nullopt;
+        return json.get<std::vector<std::string>>();
+    } catch (const mqtt::Json::exception&) {
+        return std::nullopt;
+    }
+}
 
 [[nodiscard]] std::optional<std::string> CommandRequestId(const mqtt::MqttMessage& message) {
     if (const auto* control = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
@@ -79,6 +96,25 @@ namespace mqtt = contracts::mqtt;
 
 }  // namespace
 
+bool IsVisionWorkCreatedDelivery(const PendingMqttDelivery& delivery, std::string_view vision_device_id) {
+    return delivery.topic == mqtt::DeviceCommandTopic(vision_device_id) &&
+           delivery.message.message_type == mqtt::MessageType::kWorkCreated &&
+           mqtt::GetPayload<mqtt::WorkCreatedPayload>(delivery.message) != nullptr;
+}
+
+std::optional<std::string> AcknowledgedVisionWorkId(const mqtt::MqttMessage& message,
+                                                    std::string_view vision_device_id) {
+    if (message.source_id != vision_device_id || message.message_type != mqtt::MessageType::kDeviceStatus) {
+        return std::nullopt;
+    }
+    const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(message);
+    if (status == nullptr || status->current_state != "WORK_ASSIGNED" || !status->job_id.has_value() ||
+        status->job_id->empty()) {
+        return std::nullopt;
+    }
+    return status->job_id;
+}
+
 DatabaseStatus ProcessStateStore::Load(std::optional<StoredProcessState>& output) {
     output.reset();
     Statement runtime;
@@ -103,6 +139,9 @@ DatabaseStatus ProcessStateStore::Load(std::optional<StoredProcessState>& output
         .works = {},
         .gripper_targets = {},
         .pending_commands = {},
+        .processed_message_ids = {},
+        .command_manager = {},
+        .pending_system_commands = {},
     };
     Statement works;
     status = database_.Prepare(
@@ -185,15 +224,102 @@ DatabaseStatus ProcessStateStore::Load(std::optional<StoredProcessState>& output
     if (!status.ok()) {
         return status;
     }
+    Statement command_runtime;
+    status = database_.Prepare("SELECT message_sequence FROM command_manager_runtime WHERE id=1", command_runtime);
+    if (!status.ok())
+        return status;
+    if ((status = command_runtime.Step(row)).ok() && row) {
+        const auto sequence_value = command_runtime.ColumnInt64(0);
+        if (sequence_value < 0)
+            return { DatabaseStatusCode::kSqlError, "stored command manager sequence is invalid" };
+        restored.command_manager.message_sequence = static_cast<std::uint64_t>(sequence_value);
+    } else if (!status.ok())
+        return status;
+    Statement pending_command_manager;
+    status = database_.Prepare(
+        "SELECT request_id,message_json,expected_devices_json,completed_devices_json,"
+        "response_message_ids_json,failure_json,deadline_at_ms FROM command_manager_pending",
+        pending_command_manager);
+    if (!status.ok())
+        return status;
+    while ((status = pending_command_manager.Step(row)).ok() && row) {
+        const auto message = mqtt::DeserializeMessage(pending_command_manager.ColumnText(1));
+        const auto expected = DecodeStringList(pending_command_manager.ColumnText(2));
+        const auto completed = DecodeStringList(pending_command_manager.ColumnText(3));
+        const auto response_ids = DecodeStringList(pending_command_manager.ColumnText(4));
+        std::optional<mqtt::CommandResponsePayload> failure;
+        const std::string failure_text = pending_command_manager.ColumnText(5);
+        if (!failure_text.empty()) {
+            const auto failure_message = mqtt::DeserializeMessage(failure_text);
+            const auto* payload = failure_message.IsSuccess()
+                                      ? mqtt::GetPayload<mqtt::CommandResponsePayload>(failure_message.value)
+                                      : nullptr;
+            if (payload == nullptr)
+                return { DatabaseStatusCode::kSqlError, "stored command failure is invalid" };
+            failure = *payload;
+        }
+        if (!message.IsSuccess() || !expected || !completed || !response_ids ||
+            pending_command_manager.ColumnInt64(6) < 0) {
+            return { DatabaseStatusCode::kSqlError, "stored command manager pending row is invalid" };
+        }
+        restored.command_manager.pending.push_back({ .request_id = pending_command_manager.ColumnText(0),
+                                                     .original_message = message.value,
+                                                     .expected_devices = *expected,
+                                                     .completed_devices = *completed,
+                                                     .response_message_ids = *response_ids,
+                                                     .failure = failure,
+                                                     .deadline_at_ms = pending_command_manager.ColumnInt64(6) });
+    }
+    if (!status.ok())
+        return status;
+    Statement completed_command_manager;
+    status = database_.Prepare("SELECT request_id FROM command_manager_completed ORDER BY sequence",
+                               completed_command_manager);
+    if (!status.ok())
+        return status;
+    while ((status = completed_command_manager.Step(row)).ok() && row)
+        restored.command_manager.completed_requests.push_back(completed_command_manager.ColumnText(0));
+    if (!status.ok())
+        return status;
+    Statement system_commands;
+    status = database_.Prepare("SELECT request_id,command FROM pending_system_command", system_commands);
+    if (!status.ok())
+        return status;
+    while ((status = system_commands.Step(row)).ok() && row) {
+        const auto command = mqtt::ControlCommandFromString(system_commands.ColumnText(1));
+        if (command == mqtt::ControlCommand::kUnknown)
+            return { DatabaseStatusCode::kSqlError, "stored system command is invalid" };
+        restored.pending_system_commands.emplace(system_commands.ColumnText(0), command);
+    }
+    if (!status.ok())
+        return status;
+    Statement processed_messages;
+    status =
+        database_.Prepare("SELECT message_id FROM process_processed_message ORDER BY sequence", processed_messages);
+    if (!status.ok()) {
+        return status;
+    }
+    while ((status = processed_messages.Step(row)).ok() && row) {
+        const std::string message_id = processed_messages.ColumnText(0);
+        if (message_id.empty()) {
+            return { DatabaseStatusCode::kSqlError, "stored processed message ID is invalid" };
+        }
+        restored.processed_message_ids.push_back(message_id);
+    }
+    if (!status.ok()) {
+        return status;
+    }
     output = std::move(restored);
     return DatabaseStatus::Ok();
 }
 
-DatabaseStatus ProcessStateStore::Save(ProcessSystemState system_state, std::uint64_t message_sequence,
-                                       const std::vector<WorkProcessSnapshot>& works,
-                                       const std::unordered_map<std::string, GripperTarget>& gripper_targets,
-                                       const std::vector<ProcessCommandIntent>& pending_commands,
-                                       std::int64_t updated_at_ms) {
+DatabaseStatus ProcessStateStore::Save(
+    ProcessSystemState system_state, std::uint64_t message_sequence, const std::vector<WorkProcessSnapshot>& works,
+    const std::unordered_map<std::string, GripperTarget>& gripper_targets,
+    const std::vector<ProcessCommandIntent>& pending_commands, std::int64_t updated_at_ms,
+    const std::vector<PendingMqttDelivery>& deliveries, const std::vector<std::string>& processed_message_ids,
+    const CommandManagerSnapshot& command_manager,
+    const std::unordered_map<std::string, mqtt::ControlCommand>& pending_system_commands) {
     if (updated_at_ms < 0 || message_sequence > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         return { DatabaseStatusCode::kInvalidArgument, "invalid process runtime snapshot" };
     }
@@ -276,7 +402,199 @@ DatabaseStatus ProcessStateStore::Save(ProcessSystemState system_state, std::uin
             return status;
         }
     }
+    if (!(status = database_.Execute("DELETE FROM process_processed_message")).ok()) {
+        return status;
+    }
+    Statement insert_processed_message;
+    status = database_.Prepare("INSERT INTO process_processed_message(message_id,sequence) VALUES(?,?)",
+                               insert_processed_message);
+    if (!status.ok()) {
+        return status;
+    }
+    std::unordered_set<std::string_view> unique_processed_message_ids;
+    for (std::size_t sequence = 0; sequence < processed_message_ids.size(); ++sequence) {
+        const auto& message_id = processed_message_ids[sequence];
+        if (message_id.empty() || !unique_processed_message_ids.emplace(message_id).second) {
+            return { DatabaseStatusCode::kInvalidArgument, "invalid processed message IDs" };
+        }
+        if (!(status = insert_processed_message.Bind(1, message_id)).ok() ||
+            !(status = insert_processed_message.Bind(2, static_cast<std::int64_t>(sequence))).ok() ||
+            !(status = insert_processed_message.Step(row)).ok() || !(status = insert_processed_message.Reset()).ok()) {
+            return status;
+        }
+    }
+    if (!(status = database_.Execute("DELETE FROM command_manager_pending")).ok() ||
+        !(status = database_.Execute("DELETE FROM command_manager_completed")).ok() ||
+        !(status = database_.Execute("DELETE FROM pending_system_command")).ok())
+        return status;
+    Statement command_runtime;
+    status = database_.Prepare(
+        "INSERT INTO command_manager_runtime(id,message_sequence) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET "
+        "message_sequence=excluded.message_sequence",
+        command_runtime);
+    if (!status.ok() ||
+        !(status = command_runtime.Bind(1, static_cast<std::int64_t>(command_manager.message_sequence))).ok() ||
+        !(status = command_runtime.Step(row)).ok())
+        return status;
+    Statement insert_pending_manager;
+    status = database_.Prepare(
+        "INSERT INTO "
+        "command_manager_pending(request_id,message_json,expected_devices_json,completed_devices_json,response_message_"
+        "ids_json,failure_json,deadline_at_ms) VALUES(?,?,?,?,?,?,?)",
+        insert_pending_manager);
+    if (!status.ok())
+        return status;
+    for (const auto& pending : command_manager.pending) {
+        const auto encoded = mqtt::SerializeMessage(pending.original_message);
+        std::string failure;
+        if (pending.failure) {
+            mqtt::MqttMessage failure_message{ .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+                                               .message_id = "STORED-" + pending.request_id,
+                                               .message_type = mqtt::MessageType::kCommandResponse,
+                                               .source_id = "central-server",
+                                               .timestamp = "1970-01-01T00:00:00Z",
+                                               .data = *pending.failure };
+            const auto encoded_failure = mqtt::SerializeMessage(failure_message);
+            if (!encoded_failure.IsSuccess())
+                return { DatabaseStatusCode::kInvalidArgument, "invalid command failure" };
+            failure = encoded_failure.payload;
+        }
+        if (pending.request_id.empty() || !encoded.IsSuccess() || pending.deadline_at_ms < 0) {
+            return { DatabaseStatusCode::kInvalidArgument,
+                     "invalid command manager pending snapshot: " + encoded.status.message };
+        }
+        if (!(status = insert_pending_manager.Bind(1, pending.request_id)).ok() ||
+            !(status = insert_pending_manager.Bind(2, encoded.payload)).ok() ||
+            !(status = insert_pending_manager.Bind(3, EncodeStringList(pending.expected_devices))).ok() ||
+            !(status = insert_pending_manager.Bind(4, EncodeStringList(pending.completed_devices))).ok() ||
+            !(status = insert_pending_manager.Bind(5, EncodeStringList(pending.response_message_ids))).ok() ||
+            !(status = insert_pending_manager.Bind(6, failure)).ok() ||
+            !(status = insert_pending_manager.Bind(7, pending.deadline_at_ms)).ok() ||
+            !(status = insert_pending_manager.Step(row)).ok() || !(status = insert_pending_manager.Reset()).ok())
+            return status;
+    }
+    Statement insert_completed_manager;
+    status = database_.Prepare("INSERT INTO command_manager_completed(request_id,sequence) VALUES(?,?)",
+                               insert_completed_manager);
+    if (!status.ok())
+        return status;
+    for (std::size_t sequence = 0; sequence < command_manager.completed_requests.size(); ++sequence) {
+        if (command_manager.completed_requests[sequence].empty()) {
+            return { DatabaseStatusCode::kInvalidArgument, "invalid completed command request ID" };
+        }
+        if (!(status = insert_completed_manager.Bind(1, command_manager.completed_requests[sequence])).ok() ||
+            !(status = insert_completed_manager.Bind(2, static_cast<std::int64_t>(sequence))).ok() ||
+            !(status = insert_completed_manager.Step(row)).ok() || !(status = insert_completed_manager.Reset()).ok())
+            return status;
+    }
+    Statement insert_system;
+    status = database_.Prepare("INSERT INTO pending_system_command(request_id,command) VALUES(?,?)", insert_system);
+    if (!status.ok())
+        return status;
+    for (const auto& [request_id, command] : pending_system_commands) {
+        if (request_id.empty() || command == mqtt::ControlCommand::kUnknown) {
+            return { DatabaseStatusCode::kInvalidArgument, "invalid pending system command" };
+        }
+        if (!(status = insert_system.Bind(1, request_id)).ok() ||
+            !(status = insert_system.Bind(2, mqtt::ToString(command))).ok() ||
+            !(status = insert_system.Step(row)).ok() || !(status = insert_system.Reset()).ok())
+            return status;
+    }
+    Statement insert_delivery;
+    if (!deliveries.empty()) {
+        status = database_.Prepare(
+            "INSERT INTO process_mqtt_outbox(topic,message_id,message_json,created_at_ms) VALUES(?,?,?,?) "
+            "ON CONFLICT(topic,message_id) DO NOTHING",
+            insert_delivery);
+        if (!status.ok()) {
+            return status;
+        }
+    }
+    for (const auto& delivery : deliveries) {
+        const auto encoded = mqtt::SerializeMessage(delivery.message);
+        if (delivery.topic.empty() || !encoded.IsSuccess() ||
+            !mqtt::ValidateTopicMessage(delivery.topic, delivery.message).IsSuccess()) {
+            return { DatabaseStatusCode::kInvalidArgument, "invalid MQTT delivery" };
+        }
+        if (!(status = insert_delivery.Bind(1, delivery.topic)).ok() ||
+            !(status = insert_delivery.Bind(2, delivery.message.message_id)).ok() ||
+            !(status = insert_delivery.Bind(3, encoded.payload)).ok() ||
+            !(status = insert_delivery.Bind(4, updated_at_ms)).ok() || !(status = insert_delivery.Step(row)).ok() ||
+            !(status = insert_delivery.Reset()).ok()) {
+            return status;
+        }
+    }
     return transaction.Commit();
+}
+
+DatabaseStatus ProcessStateStore::LoadPendingMqttDeliveries(std::vector<PendingMqttDelivery>& output) {
+    output.clear();
+    Statement deliveries;
+    auto status = database_.Prepare("SELECT topic,message_json FROM process_mqtt_outbox ORDER BY created_at_ms,rowid",
+                                    deliveries);
+    if (!status.ok()) {
+        return status;
+    }
+    bool row = false;
+    while ((status = deliveries.Step(row)).ok() && row) {
+        const auto decoded = mqtt::DeserializeMessage(deliveries.ColumnText(1));
+        if (!decoded.IsSuccess() ||
+            !contracts::mqtt::ValidateTopicMessage(deliveries.ColumnText(0), decoded.value).IsSuccess()) {
+            return { DatabaseStatusCode::kSqlError, "stored MQTT delivery is invalid" };
+        }
+        output.push_back({ .topic = deliveries.ColumnText(0), .message = decoded.value });
+    }
+    return status;
+}
+
+DatabaseStatus ProcessStateStore::EnqueueMqttDelivery(std::string_view topic, const mqtt::MqttMessage& message,
+                                                      std::int64_t created_at_ms) {
+    return EnqueueMqttDeliveries({ PendingMqttDelivery{ .topic = std::string(topic), .message = message } },
+                                 created_at_ms);
+}
+
+DatabaseStatus ProcessStateStore::EnqueueMqttDeliveries(const std::vector<PendingMqttDelivery>& deliveries,
+                                                        std::int64_t created_at_ms) {
+    if (deliveries.empty() || created_at_ms < 0) {
+        return { DatabaseStatusCode::kInvalidArgument, "invalid MQTT deliveries" };
+    }
+    Transaction transaction(database_);
+    if (!transaction.status().ok()) {
+        return transaction.status();
+    }
+    Statement insert;
+    auto status = database_.Prepare(
+        "INSERT INTO process_mqtt_outbox(topic,message_id,message_json,created_at_ms) VALUES(?,?,?,?) "
+        "ON CONFLICT(topic,message_id) DO NOTHING",
+        insert);
+    if (!status.ok()) {
+        return status;
+    }
+    bool row = false;
+    for (const auto& delivery : deliveries) {
+        const auto encoded = mqtt::SerializeMessage(delivery.message);
+        if (delivery.topic.empty() || !encoded.IsSuccess() ||
+            !mqtt::ValidateTopicMessage(delivery.topic, delivery.message).IsSuccess()) {
+            return { DatabaseStatusCode::kInvalidArgument, "invalid MQTT delivery" };
+        }
+        if (!(status = insert.Bind(1, delivery.topic)).ok() ||
+            !(status = insert.Bind(2, delivery.message.message_id)).ok() ||
+            !(status = insert.Bind(3, encoded.payload)).ok() || !(status = insert.Bind(4, created_at_ms)).ok() ||
+            !(status = insert.Step(row)).ok() || !(status = insert.Reset()).ok()) {
+            return status;
+        }
+    }
+    return transaction.Commit();
+}
+
+DatabaseStatus ProcessStateStore::RemoveMqttDelivery(std::string_view topic, std::string_view message_id) {
+    Statement remove;
+    auto status = database_.Prepare("DELETE FROM process_mqtt_outbox WHERE topic=? AND message_id=?", remove);
+    if (!status.ok() || !(status = remove.Bind(1, topic)).ok() || !(status = remove.Bind(2, message_id)).ok()) {
+        return status;
+    }
+    bool row = false;
+    return remove.Step(row);
 }
 
 }  // namespace logistics::central_server

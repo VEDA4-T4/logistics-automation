@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -41,11 +42,15 @@ public:
     void SetProcessMessageGuard(ProcessMessageHandler handler);
     void SetProcessMessageHandler(ProcessMessageHandler handler);
 
-    [[nodiscard]] bool Handle(std::string_view topic, std::string_view payload, std::string_view received_at = {});
+    [[nodiscard]] bool Handle(std::string_view topic, std::string_view payload, std::string_view received_at = {},
+                              int qos = 1, bool retained = false);
+    [[nodiscard]] bool ReplayPendingReceivedEvents(std::size_t limit = 100);
     [[nodiscard]] bool CheckHeartbeatTimeouts(std::string_view checked_at = {});
     [[nodiscard]] bool ReplayDeviceStatuses(std::string_view target_device_id, std::string_view replayed_at = {});
 
 private:
+    [[nodiscard]] bool HandleMessage(std::string_view topic, std::string_view payload, std::string_view received_at,
+                                     int qos, bool retained, bool replaying);
     void Log(MqttHandlerLogLevel level, std::string_view message) const;
 
     DeviceManager& device_manager_;

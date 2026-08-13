@@ -95,8 +95,14 @@ std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<Visio
 bool VisionMqttWorkflow::AssignWork(const mqtt::MqttMessage& message) {
     const auto* work = mqtt::GetPayload<mqtt::WorkCreatedPayload>(message);
     std::lock_guard lock(mutex_);
-    if ((phase_ != Phase::kIdle && phase_ != Phase::kAwaitingWork) || work_id_.has_value() || work == nullptr ||
-        !work->IsValid() || (last_completed_work_id_.has_value() && work->work_id == *last_completed_work_id_)) {
+    if (work == nullptr || !work->IsValid() ||
+        (last_completed_work_id_.has_value() && work->work_id == *last_completed_work_id_)) {
+        return false;
+    }
+    if (work_id_.has_value() && *work_id_ == work->work_id) {
+        return phase_ != Phase::kIdle && phase_ != Phase::kAwaitingClear;
+    }
+    if ((phase_ != Phase::kIdle && phase_ != Phase::kAwaitingWork) || work_id_.has_value()) {
         return false;
     }
     work_id_ = work->work_id;

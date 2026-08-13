@@ -107,6 +107,8 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(!workflow.HasPendingBarcode());
     assert(workflow.NeedsBarcodeFallback());
     assert(workflow.AssignWork(WorkCreated()));
+    // Re-delivery after a transient WORK_ASSIGNED status publish failure is idempotent.
+    assert(workflow.AssignWork(WorkCreated()));
     assert(!workflow.HasPendingBarcode());
     assert(workflow.NeedsBarcodeFallback());
     assert(!workflow.Observe(Observation(std::string("8801234567893")), "IGNORED", "2026-07-21T11:00:01Z").has_value());
@@ -349,13 +351,13 @@ void TestVisionControlLifecycle() {
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 7);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
-    assert(decision.clear_work);
+    assert(!decision.clear_work);
     assert(control.State() == device::DeviceOperatingState::kStopped);
 
     static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 8));
     decision = Handle(control, EmergencyStop(), 9);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
-    assert(decision.clear_work);
+    assert(!decision.clear_work);
     assert(control.State() == device::DeviceOperatingState::kEmergencyStop);
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 10);
@@ -363,8 +365,11 @@ void TestVisionControlLifecycle() {
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 11);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kProcessing);
+    assert(decision.preserve_work);
     assert(control.State() == device::DeviceOperatingState::kRecovering);
-    assert(control.ConsumeResetRequest());
+    bool preserve_work = false;
+    assert(control.ConsumeResetRequest(&preserve_work));
+    assert(preserve_work);
     assert(!control.ConsumeResetRequest());
 
     control.SetReady(false);
@@ -393,7 +398,7 @@ void TestVisionControlLifecycle() {
     assert(!control.IsOperational());
 }
 
-void TestStopClearsPendingVisionWork() {
+void TestStopPreservesPendingVisionWork() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
     device::DeviceControlState control({
         .device_id = "PI-VISION-01",
@@ -406,9 +411,8 @@ void TestStopClearsPendingVisionWork() {
     assert(workflow.Observe(Observation("8801234567893"), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
     assert(workflow.AssignWork(WorkCreated()));
     const auto decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 2);
-    assert(decision.clear_work);
-    workflow.Reset();
-    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!decision.clear_work);
+    assert(workflow.TakeAssignedWork().has_value());
     assert(!control.IsOperational());
 }
 
@@ -424,6 +428,6 @@ int main() {
     TestPreassignmentTimeoutDiscardsUnconfirmedObservation();
     TestResultOutboxRetriesFromFirstUnsentPublication();
     TestVisionControlLifecycle();
-    TestStopClearsPendingVisionWork();
+    TestStopPreservesPendingVisionWork();
     return 0;
 }

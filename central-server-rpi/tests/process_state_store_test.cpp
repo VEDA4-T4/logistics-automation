@@ -17,9 +17,265 @@ namespace mqtt = logistics::contracts::mqtt;
 
 constexpr auto kWorkId = "d8e9b2be-bfc0-471c-9000-590123412345";
 
+[[nodiscard]] mqtt::MqttMessage FailedCompletion() {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "RECOVERY-FAILED-" + std::string(kWorkId),
+        .message_type = mqtt::MessageType::kWorkCompleted,
+        .source_id = "central-server",
+        .timestamp = "2026-08-13T01:00:00Z",
+        .data = mqtt::WorkCompletedPayload{ .work_id = kWorkId, .result = "FAILED", .message = "gripper offline" },
+    };
+}
+
+[[nodiscard]] mqtt::MqttMessage WorkCreated() {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "WORK-" + std::string(kWorkId),
+        .message_type = mqtt::MessageType::kWorkCreated,
+        .source_id = "central-server",
+        .timestamp = "2026-08-13T01:00:00Z",
+        .data = mqtt::WorkCreatedPayload{ .work_id = kWorkId },
+    };
+}
+
+[[nodiscard]] mqtt::MqttMessage ControlCommand(std::string request_id, mqtt::ControlCommand command) {
+    return { .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+             .message_id = request_id,
+             .message_type = mqtt::MessageType::kControlCommand,
+             .source_id = "control-center",
+             .timestamp = "2026-08-13T01:00:00Z",
+             .data = mqtt::ControlCommandPayload{ .request_id = std::move(request_id),
+                                                  .command = command,
+                                                  .target_device_id = "SYSTEM",
+                                                  .component_id = {},
+                                                  .params = mqtt::Json::object() } };
+}
+
+[[nodiscard]] mqtt::MqttMessage CommandResponse(std::string source, std::string message_id, std::string request_id,
+                                                mqtt::ControlCommand command, mqtt::CommandResult result) {
+    return { .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+             .message_id = std::move(message_id),
+             .message_type = mqtt::MessageType::kCommandResponse,
+             .source_id = std::move(source),
+             .timestamp = "2026-08-13T01:00:01Z",
+             .data = mqtt::CommandResponsePayload{ .request_id = std::move(request_id),
+                                                   .command = command,
+                                                   .result = result,
+                                                   .error_code = std::string("ERR-DEVICE"),
+                                                   .message = "device failed" } };
+}
+
 [[nodiscard]] std::filesystem::path TemporaryDatabasePath() {
     const auto value = std::chrono::steady_clock::now().time_since_epoch().count();
     return std::filesystem::temp_directory_path() / ("logistics-process-state-" + std::to_string(value) + ".db");
+}
+
+void TestMqttDeliveryOutboxSurvivesRestartAndDeduplicates() {
+    const auto path = TemporaryDatabasePath();
+    const auto topic = mqtt::QtEventTopic("control-center");
+    const auto message = FailedCompletion();
+    {
+        central_server::Database database;
+        assert(database.Open({ .path = path, .migration_dir = LOGISTICS_TEST_MIGRATION_DIR }).ok());
+        assert(central_server::MigrationRunner::Apply(database, LOGISTICS_TEST_MIGRATION_DIR).ok());
+        central_server::ProcessStateStore store(database);
+        assert(store.EnqueueMqttDelivery(topic, message, 1000).ok());
+        assert(store.EnqueueMqttDelivery(topic, message, 1001).ok());
+    }
+    {
+        central_server::Database database;
+        assert(database.Open({ .path = path, .migration_dir = LOGISTICS_TEST_MIGRATION_DIR }).ok());
+        assert(central_server::MigrationRunner::Apply(database, LOGISTICS_TEST_MIGRATION_DIR).ok());
+        central_server::ProcessStateStore store(database);
+        std::vector<central_server::PendingMqttDelivery> pending;
+        assert(store.LoadPendingMqttDeliveries(pending).ok());
+        assert(pending.size() == 1);
+        assert(pending.front().topic == topic);
+        assert(pending.front().message.message_id == message.message_id);
+        assert(store.RemoveMqttDelivery(topic, message.message_id).ok());
+        assert(store.LoadPendingMqttDeliveries(pending).ok());
+        assert(pending.empty());
+    }
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(path.string() + "-wal", error);
+    std::filesystem::remove(path.string() + "-shm", error);
+}
+
+void TestVisionWorkCreatedDeliveryClassification() {
+    const auto message = WorkCreated();
+    assert(central_server::IsVisionWorkCreatedDelivery(
+        { .topic = mqtt::DeviceCommandTopic("PI-VISION-01"), .message = message }, "PI-VISION-01"));
+    assert(!central_server::IsVisionWorkCreatedDelivery(
+        { .topic = mqtt::QtEventTopic("control-center"), .message = message }, "PI-VISION-01"));
+    assert(!central_server::IsVisionWorkCreatedDelivery(
+        { .topic = mqtt::DeviceCommandTopic("PI-INPUT-01"), .message = message }, "PI-VISION-01"));
+}
+
+std::int64_t Scalar(central_server::Database& database, std::string_view sql) {
+    central_server::Statement statement;
+    assert(database.Prepare(sql, statement).ok());
+    bool row = false;
+    assert(statement.Step(row).ok() && row);
+    return statement.ColumnInt64(0);
+}
+
+void TestCommandManagerAndSystemCommandSnapshotRoundTrip() {
+    const auto path = TemporaryDatabasePath();
+    central_server::CommandManager manager;
+    constexpr auto request_id = "c8e9b2be-bfc0-471c-9000-590123412345";
+    const auto command = ControlCommand(request_id, mqtt::ControlCommand::kRecovery);
+    assert(manager.TrackCommand(command, { "PI-01", "PI-02" }));
+    assert(manager
+               .HandleResponse(CommandResponse("PI-01", "RESP-1", request_id, mqtt::ControlCommand::kRecovery,
+                                               mqtt::CommandResult::kFailed))
+               .message.has_value());
+    const auto snapshot = manager.Snapshot();
+    {
+        central_server::Database database;
+        assert(database.Open({ .path = path, .migration_dir = LOGISTICS_TEST_MIGRATION_DIR }).ok());
+        assert(central_server::MigrationRunner::Apply(database, LOGISTICS_TEST_MIGRATION_DIR).ok());
+        central_server::ProcessStateStore store(database);
+        const std::vector works{ central_server::WorkProcessSnapshot{ .work_id = kWorkId,
+                                                                      .stage =
+                                                                          central_server::WorkStage::kInputDetected,
+                                                                      .suspended_stage = std::nullopt,
+                                                                      .destination = {},
+                                                                      .last_source_id = "PI-INPUT-01",
+                                                                      .failure_reason = {} } };
+        const auto save_status = store.Save(central_server::ProcessSystemState::kRecovery, 0, works, {}, {}, 1000, {},
+                                            {}, snapshot, { { request_id, mqtt::ControlCommand::kRecovery } });
+        assert(save_status.ok());
+        assert(Scalar(database, "SELECT count(*) FROM process_runtime_state") == 1);
+        assert(database.Checkpoint().ok());
+        assert(database.Close().ok());
+    }
+    {
+        central_server::Database database;
+        assert(database.Open({ .path = path, .migration_dir = LOGISTICS_TEST_MIGRATION_DIR }).ok());
+        assert(central_server::MigrationRunner::Apply(database, LOGISTICS_TEST_MIGRATION_DIR).ok());
+        central_server::ProcessStateStore store(database);
+        assert(Scalar(database, "SELECT count(*) FROM process_runtime_state") == 1);
+        std::optional<central_server::StoredProcessState> stored;
+        const auto load_status = store.Load(stored);
+        assert(load_status.ok() && stored.has_value());
+        assert(stored->command_manager.pending.size() == 1);
+        assert(stored->command_manager.pending.front().failure.has_value());
+        assert(stored->pending_system_commands.at(request_id) == mqtt::ControlCommand::kRecovery);
+        central_server::CommandManager restored;
+        assert(restored.Restore(stored->command_manager));
+        const auto final = restored.HandleResponse(CommandResponse(
+            "PI-02", "RESP-2", request_id, mqtt::ControlCommand::kRecovery, mqtt::CommandResult::kSuccess));
+        assert(final.message.has_value());
+        assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*final.message)->result == mqtt::CommandResult::kFailed);
+    }
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(path.string() + "-wal", error);
+    std::filesystem::remove(path.string() + "-shm", error);
+}
+
+void TestMqttDeliveryOutboxPreservesInsertionOrderForEqualTimestamps() {
+    const auto path = TemporaryDatabasePath();
+    central_server::Database database;
+    assert(database.Open({ .path = path, .migration_dir = LOGISTICS_TEST_MIGRATION_DIR }).ok());
+    assert(central_server::MigrationRunner::Apply(database, LOGISTICS_TEST_MIGRATION_DIR).ok());
+    central_server::ProcessStateStore store(database);
+    std::vector<central_server::PendingMqttDelivery> deliveries;
+    for (int sequence = 0; sequence < 12; ++sequence) {
+        auto message = FailedCompletion();
+        message.message_id = "FIFO-" + std::to_string(sequence);
+        deliveries.push_back({ .topic = mqtt::QtEventTopic("control-center"), .message = std::move(message) });
+    }
+    assert(store.EnqueueMqttDeliveries(deliveries, 1000).ok());
+
+    std::vector<central_server::PendingMqttDelivery> pending;
+    assert(store.LoadPendingMqttDeliveries(pending).ok());
+    assert(pending.size() == deliveries.size());
+    for (std::size_t index = 0; index < pending.size(); ++index) {
+        assert(pending[index].message.message_id == "FIFO-" + std::to_string(index));
+    }
+
+    assert(database.Close().ok());
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(path.string() + "-wal", error);
+    std::filesystem::remove(path.string() + "-shm", error);
+}
+
+void TestVisionAssignmentAcknowledgementClassification() {
+    const mqtt::MqttMessage acknowledged{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "STATUS-WORK-ASSIGNED-01",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "PI-VISION-01",
+        .timestamp = "2026-08-13T01:00:00Z",
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = mqtt::ConnectionState::kOnline,
+                .current_state = "WORK_ASSIGNED",
+                .job_id = std::string(kWorkId),
+            },
+    };
+    assert(central_server::AcknowledgedVisionWorkId(acknowledged, "PI-VISION-01") == kWorkId);
+    assert(!central_server::AcknowledgedVisionWorkId(acknowledged, "PI-VISION-02").has_value());
+    auto not_assigned = acknowledged;
+    mqtt::GetPayload<mqtt::DeviceStatusPayload>(not_assigned)->current_state = "ONLINE";
+    assert(!central_server::AcknowledgedVisionWorkId(not_assigned, "PI-VISION-01").has_value());
+}
+
+void TestSnapshotAndDeliveryBatchRollbackTogether() {
+    const auto path = TemporaryDatabasePath();
+    central_server::Database database;
+    assert(database.Open({ .path = path, .migration_dir = LOGISTICS_TEST_MIGRATION_DIR }).ok());
+    assert(central_server::MigrationRunner::Apply(database, LOGISTICS_TEST_MIGRATION_DIR).ok());
+    central_server::ProcessStateStore store(database);
+    const auto input_detected = central_server::WorkProcessSnapshot{
+        .work_id = kWorkId,
+        .stage = central_server::WorkStage::kInputDetected,
+        .last_source_id = "PI-INPUT-01",
+    };
+    assert(store.Save(central_server::ProcessSystemState::kRunning, 1, { input_detected }, {}, {}, 1000).ok());
+
+    auto vision_assigned = input_detected;
+    vision_assigned.stage = central_server::WorkStage::kVisionAssigned;
+    const auto created = WorkCreated();
+    const std::vector invalid_batch{
+        central_server::PendingMqttDelivery{
+            .topic = mqtt::DeviceCommandTopic("PI-VISION-01"),
+            .message = created,
+        },
+        central_server::PendingMqttDelivery{ .topic = {}, .message = created },
+    };
+    assert(
+        !store.Save(central_server::ProcessSystemState::kRunning, 2, { vision_assigned }, {}, {}, 1001, invalid_batch)
+             .ok());
+
+    std::optional<central_server::StoredProcessState> restored;
+    assert(store.Load(restored).ok());
+    assert(restored.has_value());
+    assert(restored->message_sequence == 1);
+    assert(restored->works.size() == 1);
+    assert(restored->works.front().stage == central_server::WorkStage::kInputDetected);
+    std::vector<central_server::PendingMqttDelivery> pending;
+    assert(store.LoadPendingMqttDeliveries(pending).ok());
+    assert(pending.empty());
+
+    const std::vector valid_batch{ invalid_batch.front() };
+    assert(store.Save(central_server::ProcessSystemState::kRunning, 2, { vision_assigned }, {}, {}, 1002, valid_batch)
+               .ok());
+    assert(store.Load(restored).ok());
+    assert(restored->message_sequence == 2);
+    assert(restored->works.front().stage == central_server::WorkStage::kVisionAssigned);
+    assert(store.LoadPendingMqttDeliveries(pending).ok());
+    assert(pending.size() == 1);
+
+    assert(database.Close().ok());
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(path.string() + "-wal", error);
+    std::filesystem::remove(path.string() + "-shm", error);
 }
 
 void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
@@ -76,8 +332,10 @@ void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
                 .dispatch_confirmed = true,
             },
         };
-        assert(
-            store.Save(central_server::ProcessSystemState::kRunning, 42, works, targets, pending_commands, 1000).ok());
+        assert(store
+                   .Save(central_server::ProcessSystemState::kRunning, 42, works, targets, pending_commands, 1000, {},
+                         { "EVENT-1", "EVENT-2" })
+                   .ok());
     }
 
     {
@@ -94,6 +352,7 @@ void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
         assert(stored->pending_commands.size() == 1);
         assert(stored->pending_commands.front().work_id == kWorkId);
         assert(stored->pending_commands.front().dispatch_confirmed);
+        assert((stored->processed_message_ids == std::vector<std::string>{ "EVENT-1", "EVENT-2" }));
         const auto* pending = mqtt::GetPayload<mqtt::ControlCommandPayload>(stored->pending_commands.front().message);
         assert(pending != nullptr);
         assert(pending->request_id == "PROCESS-central-server-43");
@@ -127,5 +386,11 @@ void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
 
 int main() {
     TestSnapshotSurvivesRestartAndIsSafelySuspended();
+    TestMqttDeliveryOutboxSurvivesRestartAndDeduplicates();
+    TestMqttDeliveryOutboxPreservesInsertionOrderForEqualTimestamps();
+    TestVisionWorkCreatedDeliveryClassification();
+    TestVisionAssignmentAcknowledgementClassification();
+    TestCommandManagerAndSystemCommandSnapshotRoundTrip();
+    TestSnapshotAndDeliveryBatchRollbackTogether();
     return 0;
 }
