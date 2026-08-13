@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
@@ -74,7 +75,7 @@ constexpr int kOperationalLogBatchIntervalMs = 100;
 constexpr qsizetype kOperationalLogBatchSize = 200;
 constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kPageSize);
 constexpr qsizetype kMinimumOperationalLogEntries = OperationalLogState::kPageSize;
-constexpr qsizetype kMaximumOperationalLogEntries = 5000;
+constexpr qsizetype kMaximumOperationalLogEntries = 500;
 constexpr double kMinimumDangerZoneSize = 0.02;
 
 struct ControlCenterConfig {
@@ -379,7 +380,7 @@ ControlCenterConfig loadControlCenterConfig() {
         config.operational_log_maximum_entries = static_cast<qsizetype>(operational_log_maximum_entries);
     } else {
         config.warnings.append(
-            QStringLiteral("logs/max_buffer_entries는 100~5000이어야 하므로 기본값 500을 사용합니다."));
+            QStringLiteral("logs/max_buffer_entries는 100~500이어야 하므로 기본값 500을 사용합니다."));
     }
 
     bool reconnect_interval_is_valid = false;
@@ -580,35 +581,73 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     operations_workspace->setChildrenCollapsible(false);
     operations_workspace->setHandleWidth(7);
     auto* video_container = new QWidget(operations_workspace);
+    video_workspace_ = video_container;
     video_container->setObjectName(QStringLiteral("videoWorkspace"));
     auto* video_grid = new QGridLayout(video_container);
     video_grid->setContentsMargins(10, 0, 0, 0);
     video_grid->setHorizontalSpacing(8);
     video_grid->setVerticalSpacing(6);
     auto* danger_zone_toolbar = new QWidget(video_container);
+    danger_zone_toolbar_ = danger_zone_toolbar;
     danger_zone_toolbar->setObjectName(QStringLiteral("dangerZoneToolbar"));
-    auto* danger_zone_toolbar_layout = new QHBoxLayout(danger_zone_toolbar);
-    danger_zone_toolbar_layout->setContentsMargins(0, 0, 0, 0);
-    danger_zone_settings_button_ = new QPushButton(QStringLiteral("위험 영역 설정"), danger_zone_toolbar);
+    danger_zone_toolbar->setStyleSheet(QStringLiteral(
+        "QWidget#dangerZoneToolbar { background:transparent; }"
+        "QPushButton#dangerZoneToggleButton { background:rgba(24,24,24,220);color:#d7d7d7;"
+        "border:1px solid #454545;border-radius:5px;padding:0;font-weight:700; }"
+        "QPushButton#dangerZoneToggleButton:hover { border-color:#75beff;color:#ffffff; }"
+        "QWidget#dangerZoneActions { background:rgba(24,24,24,232);border:1px solid #3a3a3a;border-radius:6px; }"
+        "QWidget#dangerZoneActions QPushButton { padding:5px 9px; }"));
+    auto* danger_zone_toolbar_layout = new QVBoxLayout(danger_zone_toolbar);
+    danger_zone_toolbar_layout->setContentsMargins(10, 10, 0, 0);
+    danger_zone_toolbar_layout->setSpacing(4);
+    auto* danger_zone_header_layout = new QHBoxLayout();
+    danger_zone_header_layout->setContentsMargins(0, 0, 0, 0);
+    danger_zone_header_layout->setSpacing(0);
+    danger_zone_channel_badge_spacer_ = new QWidget(danger_zone_toolbar);
+    danger_zone_channel_badge_spacer_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    danger_zone_header_layout->addWidget(danger_zone_channel_badge_spacer_);
+    danger_zone_toggle_button_ = new QPushButton(QStringLiteral("위험 영역 ▾"), danger_zone_toolbar);
+    danger_zone_toggle_button_->setObjectName(QStringLiteral("dangerZoneToggleButton"));
+    danger_zone_toggle_button_->setCheckable(true);
+    danger_zone_toggle_button_->setAccessibleName(QStringLiteral("위험 영역 도구 펼치기"));
+    danger_zone_header_layout->addWidget(danger_zone_toggle_button_);
+    danger_zone_header_layout->addStretch();
+    danger_zone_toolbar_layout->addLayout(danger_zone_header_layout);
+    danger_zone_actions_ = new QWidget(danger_zone_toolbar);
+    danger_zone_actions_->setObjectName(QStringLiteral("dangerZoneActions"));
+    auto* danger_zone_actions_layout = new QHBoxLayout(danger_zone_actions_);
+    danger_zone_actions_layout->setContentsMargins(6, 5, 6, 5);
+    danger_zone_actions_layout->setSpacing(5);
+    danger_zone_settings_button_ = new QPushButton(QStringLiteral("위험 영역 설정"), danger_zone_actions_);
     danger_zone_settings_button_->setObjectName(QStringLiteral("dangerZoneSettingsButton"));
-    danger_zone_visibility_button_ = new QPushButton(danger_zone_toolbar);
+    danger_zone_visibility_button_ = new QPushButton(danger_zone_actions_);
     danger_zone_visibility_button_->setObjectName(QStringLiteral("dangerZoneVisibilityButton"));
-    danger_zone_add_button_ = new QPushButton(QStringLiteral("영역 추가"), danger_zone_toolbar);
+    danger_zone_add_button_ = new QPushButton(QStringLiteral("영역 추가"), danger_zone_actions_);
     danger_zone_add_button_->setObjectName(QStringLiteral("dangerZoneAddButton"));
-    danger_zone_delete_button_ = new QPushButton(QStringLiteral("선택 삭제"), danger_zone_toolbar);
+    danger_zone_delete_button_ = new QPushButton(QStringLiteral("선택 삭제"), danger_zone_actions_);
     danger_zone_delete_button_->setObjectName(QStringLiteral("dangerZoneDeleteButton"));
-    danger_zone_save_button_ = new QPushButton(QStringLiteral("저장"), danger_zone_toolbar);
+    danger_zone_save_button_ = new QPushButton(QStringLiteral("저장"), danger_zone_actions_);
     danger_zone_save_button_->setObjectName(QStringLiteral("dangerZoneSaveButton"));
-    danger_zone_cancel_button_ = new QPushButton(QStringLiteral("취소"), danger_zone_toolbar);
+    danger_zone_cancel_button_ = new QPushButton(QStringLiteral("취소"), danger_zone_actions_);
     danger_zone_cancel_button_->setObjectName(QStringLiteral("dangerZoneCancelButton"));
-    danger_zone_toolbar_layout->addWidget(danger_zone_settings_button_);
-    danger_zone_toolbar_layout->addWidget(danger_zone_visibility_button_);
-    danger_zone_toolbar_layout->addStretch();
-    danger_zone_toolbar_layout->addWidget(danger_zone_add_button_);
-    danger_zone_toolbar_layout->addWidget(danger_zone_delete_button_);
-    danger_zone_toolbar_layout->addWidget(danger_zone_save_button_);
-    danger_zone_toolbar_layout->addWidget(danger_zone_cancel_button_);
+    danger_zone_actions_layout->addWidget(danger_zone_settings_button_);
+    danger_zone_actions_layout->addWidget(danger_zone_visibility_button_);
+    danger_zone_actions_layout->addWidget(danger_zone_add_button_);
+    danger_zone_actions_layout->addWidget(danger_zone_delete_button_);
+    danger_zone_actions_layout->addWidget(danger_zone_save_button_);
+    danger_zone_actions_layout->addWidget(danger_zone_cancel_button_);
+    danger_zone_toolbar_layout->addWidget(danger_zone_actions_, 0, Qt::AlignLeft);
     video_grid->addWidget(danger_zone_toolbar, 0, 0, Qt::AlignTop);
+    video_workspace_->installEventFilter(this);
+    connect(danger_zone_toggle_button_, &QPushButton::toggled, this, [this](const bool expanded) {
+        danger_zone_controls_expanded_ = expanded;
+        if (!expanded && !detection_overlays_.empty() && detection_overlays_.front() != nullptr &&
+            detection_overlays_.front()->isDangerZoneEditing()) {
+            setDangerZoneEditing(false);
+            return;
+        }
+        updateDangerZoneControls();
+    });
     connect(danger_zone_settings_button_, &QPushButton::clicked, this, [this]() { setDangerZoneEditing(true); });
     connect(danger_zone_visibility_button_, &QPushButton::clicked, this, [this]() {
         danger_zone_overlay_visible_ = !danger_zone_overlay_visible_;
@@ -624,8 +663,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             [this]() { detection_overlays_.front()->addDangerZone(); });
     connect(danger_zone_delete_button_, &QPushButton::clicked, this,
             [this]() { detection_overlays_.front()->deleteSelectedDangerZone(); });
-    connect(danger_zone_save_button_, &QPushButton::clicked, this, [this]() { setDangerZoneEditing(false, true); });
+    connect(danger_zone_save_button_, &QPushButton::clicked, this, [this]() {
+        danger_zone_controls_expanded_ = false;
+        setDangerZoneEditing(false, true);
+    });
     connect(danger_zone_cancel_button_, &QPushButton::clicked, this, [this]() { setDangerZoneEditing(false); });
+    updateDangerZoneControlSizing();
     updateDangerZoneControls();
     factory_top_view_ = new FactoryTopViewWidget(operations_workspace);
     factory_top_view_->setObjectName(QStringLiteral("factoryTopView"));
@@ -642,9 +685,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_splitter->setHandleWidth(7);
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_splitter);
     operational_log_panel_ = new OperationalLogPanel(detail_splitter);
-    operational_log_panel_->setMaximumEntries(kMaximumOperationalLogEntries);
+    operational_log_panel_->setMaximumEntries(config.operational_log_maximum_entries);
     operational_log_panel_->setEntryPageProvider(
         [this](qsizetype offset, qsizetype limit) { return operational_log_state_.entries().mid(offset, limit); });
+    operational_log_panel_->setEntryCountProvider([this]() { return operational_log_state_.entries().size(); });
     history_network_manager_ = new QNetworkAccessManager(this);
     if (!history_bearer_token_.isEmpty()) {
         operational_log_panel_->setOlderEntriesRequestHandler([this]() { requestOlderOperationalLogs(); });
@@ -1371,6 +1415,16 @@ void MainWindow::setChannelState(std::size_t channel, ChannelState state, const 
             }
             break;
     }
+
+    if (channel == 0) {
+        const bool editing = !detection_overlays_.empty() && detection_overlays_.front() != nullptr &&
+                             detection_overlays_.front()->isDangerZoneEditing();
+        if (state != ChannelState::Playing && editing) {
+            setDangerZoneEditing(false);
+        } else {
+            updateDangerZoneControls();
+        }
+    }
 }
 
 void MainWindow::reconnectChannel(std::size_t channel) {
@@ -1556,6 +1610,11 @@ void MainWindow::setDangerZoneEditing(const bool editing, const bool save_change
     if (detection_overlays_.empty() || detection_overlays_.front() == nullptr) {
         return;
     }
+    if (editing && (channel_states_.empty() || channel_states_.front() != ChannelState::Playing)) {
+        statusBar()->showMessage(QStringLiteral("영상 연결 후 위험 영역을 설정할 수 있습니다."), 3000);
+        updateDangerZoneControls();
+        return;
+    }
     if (editing) {
         detection_overlays_.front()->beginDangerZoneEditing();
     } else if (save_changes) {
@@ -1566,22 +1625,88 @@ void MainWindow::setDangerZoneEditing(const bool editing, const bool save_change
         detection_overlays_.front()->cancelDangerZoneEditing();
     }
     updateDangerZoneControls();
+    if (editing && danger_zone_add_button_ != nullptr) {
+        danger_zone_add_button_->setFocus(Qt::OtherFocusReason);
+    } else if (danger_zone_controls_expanded_ && danger_zone_settings_button_ != nullptr &&
+               danger_zone_settings_button_->isEnabled()) {
+        danger_zone_settings_button_->setFocus(Qt::OtherFocusReason);
+    } else if (danger_zone_toggle_button_ != nullptr) {
+        danger_zone_toggle_button_->setFocus(Qt::OtherFocusReason);
+    }
 }
 
 void MainWindow::updateDangerZoneControls() {
     const bool editing = !detection_overlays_.empty() && detection_overlays_.front() != nullptr &&
                          detection_overlays_.front()->isDangerZoneEditing();
-    if (danger_zone_settings_button_ == nullptr) {
+    if (danger_zone_toggle_button_ == nullptr || danger_zone_actions_ == nullptr ||
+        danger_zone_settings_button_ == nullptr) {
         return;
     }
-    danger_zone_settings_button_->setVisible(!editing);
-    danger_zone_visibility_button_->setVisible(!editing);
+    danger_zone_toggle_button_->setChecked(danger_zone_controls_expanded_);
+    danger_zone_toggle_button_->setAccessibleName(danger_zone_controls_expanded_
+                                                      ? QStringLiteral("위험 영역 도구 접기")
+                                                      : QStringLiteral("위험 영역 도구 펼치기"));
+    danger_zone_actions_->setVisible(danger_zone_controls_expanded_);
+    danger_zone_settings_button_->setVisible(danger_zone_controls_expanded_ && !editing);
+    const bool video_ready = !channel_states_.empty() && channel_states_.front() == ChannelState::Playing;
+    danger_zone_settings_button_->setEnabled(video_ready);
+    danger_zone_settings_button_->setToolTip(video_ready ? QString{}
+                                                         : QStringLiteral("영상 연결 후 설정할 수 있습니다."));
+    danger_zone_visibility_button_->setVisible(danger_zone_controls_expanded_ && !editing);
     danger_zone_visibility_button_->setText(danger_zone_overlay_visible_ ? QStringLiteral("위험 영역 숨기기")
                                                                          : QStringLiteral("위험 영역 보이기"));
-    danger_zone_add_button_->setVisible(editing);
-    danger_zone_delete_button_->setVisible(editing);
-    danger_zone_save_button_->setVisible(editing);
-    danger_zone_cancel_button_->setVisible(editing);
+    danger_zone_add_button_->setVisible(danger_zone_controls_expanded_ && editing);
+    danger_zone_delete_button_->setVisible(danger_zone_controls_expanded_ && editing);
+    danger_zone_save_button_->setVisible(danger_zone_controls_expanded_ && editing);
+    danger_zone_cancel_button_->setVisible(danger_zone_controls_expanded_ && editing);
+    updateDangerZoneControlSizing();
+}
+
+void MainWindow::updateDangerZoneControlSizing() {
+    if (video_workspace_ == nullptr || danger_zone_toolbar_ == nullptr ||
+        danger_zone_channel_badge_spacer_ == nullptr || danger_zone_toggle_button_ == nullptr ||
+        danger_zone_actions_ == nullptr) {
+        return;
+    }
+
+    constexpr double kReferenceVideoWidth = 704.0;
+    const auto scale = std::clamp(video_workspace_->width() / kReferenceVideoWidth, 0.86, 1.12);
+    const auto scaled = [scale](const int value) { return qRound(value * scale); };
+    QFont badge_font = font();
+    badge_font.setBold(true);
+    if (badge_font.pointSizeF() > 0.0) {
+        badge_font.setPointSizeF(badge_font.pointSizeF() * scale);
+    } else if (badge_font.pixelSize() > 0) {
+        badge_font.setPixelSize(scaled(badge_font.pixelSize()));
+    }
+
+    const QFontMetrics metrics(badge_font);
+    const int badge_width = metrics.horizontalAdvance(QStringLiteral("CH 1 · 재생 중")) + scaled(20);
+    const int badge_height = scaled(26);
+    const auto toggle_text =
+        danger_zone_controls_expanded_ ? QStringLiteral("위험 영역 ▴") : QStringLiteral("위험 영역 ▾");
+    const int toggle_width = std::max(badge_width, metrics.horizontalAdvance(toggle_text) + scaled(16));
+
+    danger_zone_toolbar_->layout()->setContentsMargins(scaled(10), scaled(10), 0, 0);
+    danger_zone_channel_badge_spacer_->setFixedWidth(badge_width + scaled(6));
+    danger_zone_toggle_button_->setFont(badge_font);
+    danger_zone_toggle_button_->setText(toggle_text);
+    danger_zone_toggle_button_->setFixedSize(toggle_width, badge_height);
+
+    QFont action_font = font();
+    if (action_font.pointSizeF() > 0.0) {
+        action_font.setPointSizeF(action_font.pointSizeF() * scale);
+    } else if (action_font.pixelSize() > 0) {
+        action_font.setPixelSize(scaled(action_font.pixelSize()));
+    }
+    danger_zone_actions_->setFont(action_font);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == video_workspace_ && event->type() == QEvent::Resize) {
+        updateDangerZoneControlSizing();
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::handleDangerZoneOccupancy(const bool occupied, const int zone_index, const QString& class_name,

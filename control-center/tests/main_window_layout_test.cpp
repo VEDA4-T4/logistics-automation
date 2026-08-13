@@ -30,6 +30,7 @@
 #include <QWidget>
 #include <cstdio>
 
+#include "logistics/control_center/detection_overlay.hpp"
 #include "logistics/control_center/factory_top_view.hpp"
 #include "logistics/control_center/main_window.hpp"
 #include "logistics/control_center/mqtt_client.hpp"
@@ -335,22 +336,42 @@ int main(int argc, char* argv[]) {
     qputenv("LOGISTICS_CONTROL_CENTER_DANGER_ZONE_CONFIG", danger_zone_config_path.toUtf8());
     logistics::control_center::MainWindow window;
 
+    auto* danger_toggle = window.findChild<QPushButton*>(QStringLiteral("dangerZoneToggleButton"));
+    auto* danger_actions = window.findChild<QWidget*>(QStringLiteral("dangerZoneActions"));
     auto* danger_settings = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSettingsButton"));
     auto* danger_visibility = window.findChild<QPushButton*>(QStringLiteral("dangerZoneVisibilityButton"));
     auto* danger_add = window.findChild<QPushButton*>(QStringLiteral("dangerZoneAddButton"));
     auto* danger_save = window.findChild<QPushButton*>(QStringLiteral("dangerZoneSaveButton"));
-    if (!check(danger_settings != nullptr && danger_visibility != nullptr && danger_add != nullptr &&
-                   danger_save != nullptr,
+    auto* danger_cancel = window.findChild<QPushButton*>(QStringLiteral("dangerZoneCancelButton"));
+    auto* detection_overlay = window.findChild<logistics::control_center::DetectionOverlay*>();
+    if (!check(danger_toggle != nullptr && danger_actions != nullptr && danger_settings != nullptr &&
+                   danger_visibility != nullptr && danger_add != nullptr && danger_save != nullptr &&
+                   danger_cancel != nullptr && detection_overlay != nullptr,
                "danger-zone controls are missing") ||
-        !check(danger_add->isHidden() && danger_save->isHidden(), "danger-zone edit controls start visible")) {
+        !check(danger_actions->isHidden(), "danger-zone controls start expanded")) {
         return 1;
     }
-    danger_settings->click();
+    danger_toggle->click();
+    if (!check(!danger_actions->isHidden() && !danger_settings->isHidden() && !danger_visibility->isHidden(),
+               "danger-zone controls did not expand") ||
+        !check(!danger_settings->isEnabled() &&
+                   danger_settings->toolTip() == QStringLiteral("영상 연결 후 설정할 수 있습니다."),
+               "danger-zone settings are enabled while video is offline") ||
+        !check(danger_visibility->isEnabled(), "existing danger-zone visibility cannot be changed offline")) {
+        return 1;
+    }
+    detection_overlay->beginDangerZoneEditing();
+    danger_visibility->click();
+    danger_visibility->click();
     if (!check(!danger_add->isHidden() && !danger_save->isHidden(), "danger-zone edit controls did not open")) {
         return 1;
     }
     danger_add->click();
     danger_save->click();
+    if (!check(danger_actions->isHidden() && !danger_toggle->isChecked(),
+               "danger-zone controls did not collapse after saving")) {
+        return 1;
+    }
     {
         QSettings saved_settings(danger_zone_config_path, QSettings::IniFormat);
         if (!check(!saved_settings.value(QStringLiteral("danger_zone/regions")).toString().isEmpty(),
@@ -358,6 +379,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
+    danger_toggle->click();
     danger_visibility->click();
     {
         QSettings saved_settings(danger_zone_config_path, QSettings::IniFormat);
@@ -365,6 +387,20 @@ int main(int argc, char* argv[]) {
                    "danger-zone visibility was not persisted")) {
             return 1;
         }
+    }
+    detection_overlay->beginDangerZoneEditing();
+    danger_visibility->click();
+    danger_visibility->click();
+    danger_cancel->click();
+    if (!check(!danger_actions->isHidden() && danger_toggle->isChecked() && !danger_settings->isHidden() &&
+                   !danger_visibility->isHidden() && danger_add->isHidden() && danger_save->isHidden(),
+               "danger-zone cancel did not return to the expanded default controls")) {
+        return 1;
+    }
+    danger_toggle->click();
+    if (!check(danger_actions->isHidden() && !danger_toggle->isChecked(),
+               "danger-zone controls did not collapse from the default controls")) {
+        return 1;
     }
 
     auto* operations_workspace = window.findChild<QSplitter*>(QStringLiteral("operationsWorkspaceSplitter"));
@@ -409,6 +445,21 @@ int main(int argc, char* argv[]) {
 
     window.resize(1280, 720);
     window.show();
+    application.processEvents();
+    const auto compact_danger_toggle_size = danger_toggle->size();
+    if (!check(danger_toggle->text() == QStringLiteral("위험 영역 ▾"),
+               "danger-zone toggle label was shortened at 1280x720")) {
+        return 2;
+    }
+    window.resize(1600, 900);
+    application.processEvents();
+    const auto expanded_danger_toggle_size = danger_toggle->size();
+    if (!check(expanded_danger_toggle_size.width() > compact_danger_toggle_size.width() &&
+                   expanded_danger_toggle_size.height() > compact_danger_toggle_size.height(),
+               "danger-zone toggle does not adapt to the video workspace size")) {
+        return 2;
+    }
+    window.resize(1280, 720);
     application.processEvents();
 
     auto* severity_filter = window.findChild<QComboBox*>(QStringLiteral("logSeverityFilter"));
@@ -463,6 +514,14 @@ int main(int argc, char* argv[]) {
     const auto header_labels = app_header == nullptr ? QList<QLabel*>{} : app_header->findChildren<QLabel*>();
     const bool has_channel_badge = std::ranges::any_of(
         header_labels, [](const QLabel* label) { return label->text() == QStringLiteral("1 CHANNEL"); });
+    danger_toggle->click();
+    danger_settings->click();
+    application.processEvents();
+    if (!check(!danger_settings->isEnabled() && danger_add->isHidden() && !factory->hasFocus(),
+               "offline danger-zone settings entered editing or moved focus to the factory top-view")) {
+        return 2;
+    }
+    danger_toggle->click();
     if (!check(window.size() == QSize(1280, 720), "offscreen window did not keep 1280x720") ||
         !check(factory != nullptr && factory->isVisible(), "factoryTopView is not visible") ||
         !check(video != nullptr && video->isVisible(), "videoWorkspace is not visible") ||
@@ -527,6 +586,61 @@ int main(int argc, char* argv[]) {
                              { QStringLiteral("currentState"), current_state },
                              { QStringLiteral("jobId"), QStringLiteral("WORK-LAYOUT-LIVE") } } } });
     };
+    QFrame* transition_vision_card = nullptr;
+    for (auto* card : window.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
+        if (card->property("controlTargetDeviceId").toString() == QStringLiteral("PI-VISION-01")) {
+            transition_vision_card = card;
+            break;
+        }
+    }
+    auto* transition_vision_status =
+        transition_vision_card == nullptr
+            ? nullptr
+            : transition_vision_card->findChild<QLabel*>(QStringLiteral("processVisualStatus"));
+    if (!check(transition_vision_status != nullptr, "vision transition status is missing")) {
+        return 2;
+    }
+    const auto check_vision_transition = [&](const QString& message_id, const QString& current_state,
+                                             int timestamp_offset_ms, const QString& expected_text,
+                                             const QColor& expected_color) {
+        emit_device_status(message_id, QStringLiteral("PI-VISION-01"), current_state, timestamp_offset_ms);
+        application.processEvents();
+        return check(factory->nodeColor(QStringLiteral("vision")) == expected_color,
+                     "vision transition color did not reach factoryTopView") &&
+               check(transition_vision_status->text() == expected_text,
+                     "vision transition text did not reach process card");
+    };
+    if (!check_vision_transition(QStringLiteral("LAYOUT-VISION-ONLINE"), QStringLiteral("WAITING_FOR_PRODUCT"), 20,
+                                 QStringLiteral("가동 중"), QColor(QStringLiteral("#89d185"))) ||
+        !check_vision_transition(QStringLiteral("LAYOUT-VISION-RUNNING"), QStringLiteral("VISION_PROCESSING"), 21,
+                                 QStringLiteral("작업 중"), QColor(QStringLiteral("#75beff"))) ||
+        !check_vision_transition(QStringLiteral("LAYOUT-VISION-STOPPED"), QStringLiteral("STOPPED"), 22,
+                                 QStringLiteral("정지"), QColor(QStringLiteral("#cca700"))) ||
+        !check_vision_transition(QStringLiteral("LAYOUT-VISION-RECOVERY"), QStringLiteral("RECOVERY"), 23,
+                                 QStringLiteral("복구 중"), QColor(QStringLiteral("#c586c0")))) {
+        return 2;
+    }
+    mqtt_client->messageReceived(
+        QStringLiteral("device/PI-VISION-01/status"),
+        { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+          { QStringLiteral("messageId"), QStringLiteral("LAYOUT-VISION-ERROR") },
+          { QStringLiteral("messageType"), QStringLiteral("DEVICE_STATUS") },
+          { QStringLiteral("sourceId"), QStringLiteral("PI-VISION-01") },
+          { QStringLiteral("timestamp"), now.addMSecs(24).toString(Qt::ISODateWithMs) },
+          { QStringLiteral("data"),
+            QJsonObject{ { QStringLiteral("status"), QStringLiteral("ONLINE") },
+                         { QStringLiteral("currentState"), QStringLiteral("ERROR") },
+                         { QStringLiteral("jobId"), QStringLiteral("WORK-LAYOUT-LIVE") },
+                         { QStringLiteral("errorCode"), QStringLiteral("ERR-LAYOUT-TEST") } } } });
+    application.processEvents();
+    if (!check(factory->nodeColor(QStringLiteral("vision")) == QColor(QStringLiteral("#f14c4c")),
+               "vision error color did not reach factoryTopView") ||
+        !check(transition_vision_status->text() == QStringLiteral("오류"),
+               "vision error text did not reach process card")) {
+        return 2;
+    }
+    emit_device_status(QStringLiteral("LAYOUT-VISION-RESTORED"), QStringLiteral("PI-VISION-01"),
+                       QStringLiteral("VISION_PROCESSING"), 25);
     emit_device_status(QStringLiteral("LAYOUT-INPUT-LIVE"), QStringLiteral("PI-INPUT-01"), QStringLiteral("RUNNING"),
                        1);
     emit_device_status(QStringLiteral("LAYOUT-GRIPPER-LIVE"), QStringLiteral("PI-GRIPPER-01"),
@@ -553,7 +667,8 @@ int main(int argc, char* argv[]) {
           { QStringLiteral("timestamp"), now.addMSecs(6).toString(Qt::ISODateWithMs) },
           { QStringLiteral("data"), QJsonObject{ { QStringLiteral("sensorId"), 1 },
                                                  { QStringLiteral("sensorName"), QStringLiteral("FRONT") },
-                                                 { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                                                 { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                 { QStringLiteral("detectionStatus"), QStringLiteral("DETECTED") },
                                                  { QStringLiteral("distanceCm"), 12 } } } });
     application.processEvents();
 
@@ -594,6 +709,13 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    for (int batch = 0; log_flush_timer->isActive() && batch < 100; ++batch) {
+        QMetaObject::invokeMethod(log_flush_timer, "timeout", Qt::DirectConnection);
+    }
+    application.processEvents();
+    if (!check(!log_flush_timer->isActive(), "operational log batch queue did not drain before the timer test")) {
+        return 2;
+    }
     const auto log_count_before_emergency = log_table->model()->rowCount();
     mqtt_client->messageReceived(QStringLiteral("logistics/emergency-stop"),
                                  { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
@@ -705,6 +827,39 @@ int main(int argc, char* argv[]) {
         !check(!overlaps_horizontally(product_rect, log_rect), "product and log panels overlap horizontally")) {
         return 5;
     }
+
+    window.resize(1600, 900);
+    application.processEvents();
+    const auto expanded_factory_rect = central_rect(factory);
+    const auto expanded_video_rect = central_rect(video);
+    const auto expanded_process_status_rect = central_rect(process_status);
+    const auto expanded_product_rect = central_rect(product);
+    const auto expanded_log_rect = central_rect(log);
+    const auto expanded_process_control_rect = central_rect(process_control);
+    for (const auto& rect : { expanded_factory_rect, expanded_video_rect, expanded_process_status_rect,
+                              expanded_product_rect, expanded_log_rect, expanded_process_control_rect }) {
+        if (!check(!rect.isEmpty() && central->rect().contains(rect), "major workspace is clipped at 1600x900")) {
+            return 5;
+        }
+    }
+    if (!check(!overlaps_horizontally(expanded_factory_rect, expanded_video_rect),
+               "factory and video workspaces overlap at 1600x900") ||
+        !check(!overlaps_horizontally(expanded_product_rect, expanded_log_rect),
+               "product and log panels overlap at 1600x900") ||
+        !check(expanded_process_control_rect.top() > qMax(expanded_factory_rect.bottom(), expanded_video_rect.bottom()),
+               "process controls overlap the primary workspace at 1600x900") ||
+        !check(expanded_process_control_rect.bottom() <= expanded_process_status_rect.top(),
+               "process controls overlap process status at 1600x900")) {
+        return 5;
+    }
+    for (const auto* cell : video_cells) {
+        const QRect rect(cell->mapTo(video, QPoint{}), cell->size());
+        if (!check(video->rect().contains(rect), "video cell is clipped at 1600x900")) {
+            return 5;
+        }
+    }
+    window.resize(1280, 720);
+    application.processEvents();
 
     QFrame* vision_card = nullptr;
     QFrame* input_card = nullptr;

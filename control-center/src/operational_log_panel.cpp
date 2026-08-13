@@ -27,7 +27,7 @@
 namespace logistics::control_center {
 namespace {
 
-constexpr qsizetype kPageSize = OperationalLogState::kDefaultMaximumEntries;
+constexpr qsizetype kPageSize = OperationalLogState::kPageSize;
 
 enum OperationalLogDataRole {
     kEntryIdRole = Qt::UserRole + 1,
@@ -183,10 +183,7 @@ public:
     }
 
     [[nodiscard]] bool canLoadOlderEntries() const {
-        if (entries_.size() >= maximum_entries_) {
-            return false;
-        }
-        const bool can_load_local_page = static_cast<bool>(page_provider_);
+        const bool can_load_local_page = page_provider_ && !page_provider_(next_offset_, 1).isEmpty();
         const bool can_request_server_page = older_entries_available_ && older_entries_request_handler_;
         return has_more_ && !older_entries_loading_ && (can_load_local_page || can_request_server_page);
     }
@@ -221,34 +218,41 @@ public:
         loaded_capacity_ = std::min(maximum_entries_, loaded_capacity_ + kPageSize);
 
         QList<OperationalLogEntry> unique_entries;
+        QSet<QString> new_ids;
         unique_entries.reserve(page.size());
         for (auto& entry : page) {
-            if (!entry.id.isEmpty() && loaded_ids_.contains(entry.id)) {
+            if (!entry.id.isEmpty() && (loaded_ids_.contains(entry.id) || new_ids.contains(entry.id))) {
                 continue;
             }
-            loaded_ids_.insert(entry.id);
+            new_ids.insert(entry.id);
             unique_entries.append(std::move(entry));
         }
-        const auto remaining_capacity = maximum_entries_ - entries_.size();
-        if (unique_entries.size() > remaining_capacity) {
-            for (auto row = remaining_capacity; row < unique_entries.size(); ++row) {
-                loaded_ids_.remove(unique_entries[row].id);
-            }
-            unique_entries.resize(remaining_capacity);
+        if (unique_entries.size() > maximum_entries_) {
+            unique_entries.resize(maximum_entries_);
         }
         if (unique_entries.isEmpty()) {
             next_offset_ += page.size();
-            has_more_ = entries_.size() < maximum_entries_ &&
-                        (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+            has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
             return;
+        }
+        const auto overflow = entries_.size() + unique_entries.size() - maximum_entries_;
+        if (overflow > 0) {
+            beginRemoveRows({}, 0, static_cast<int>(overflow - 1));
+            for (qsizetype row = 0; row < overflow; ++row) {
+                loaded_ids_.remove(entries_[row].id);
+            }
+            entries_.remove(0, overflow);
+            endRemoveRows();
+        }
+        for (const auto& entry : unique_entries) {
+            loaded_ids_.insert(entry.id);
         }
         const auto first_row = entries_.size();
         beginInsertRows({}, static_cast<int>(first_row), static_cast<int>(first_row + unique_entries.size() - 1));
         entries_.append(std::move(unique_entries));
         endInsertRows();
-        next_offset_ = entries_.size();
-        has_more_ = entries_.size() < maximum_entries_ &&
-                    (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+        next_offset_ += page.size();
+        has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
     }
 
     qsizetype appendOlderEntries(QList<OperationalLogEntry> entries, bool has_more) {
@@ -263,19 +267,26 @@ public:
             new_ids.insert(entry.id);
             unique_entries.append(std::move(entry));
         }
-        const auto remaining_capacity = maximum_entries_ - entries_.size();
-        if (unique_entries.size() > remaining_capacity) {
-            unique_entries.resize(remaining_capacity);
+        if (unique_entries.size() > maximum_entries_) {
+            unique_entries.resize(maximum_entries_);
         }
-        const auto required_capacity = entries_.size() + unique_entries.size();
+        const auto required_capacity = std::min(maximum_entries_, entries_.size() + unique_entries.size());
         while (loaded_capacity_ < required_capacity && loaded_capacity_ < maximum_entries_) {
             loaded_capacity_ = std::min(maximum_entries_, loaded_capacity_ + kPageSize);
         }
         older_entries_available_ = has_more;
         if (unique_entries.isEmpty()) {
-            has_more_ = entries_.size() < maximum_entries_ &&
-                        (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+            has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
             return 0;
+        }
+        const auto overflow = entries_.size() + unique_entries.size() - maximum_entries_;
+        if (overflow > 0) {
+            beginRemoveRows({}, 0, static_cast<int>(overflow - 1));
+            for (qsizetype row = 0; row < overflow; ++row) {
+                loaded_ids_.remove(entries_[row].id);
+            }
+            entries_.remove(0, overflow);
+            endRemoveRows();
         }
         for (const auto& entry : unique_entries) {
             loaded_ids_.insert(entry.id);
@@ -284,9 +295,7 @@ public:
         beginInsertRows({}, static_cast<int>(first_row), static_cast<int>(first_row + unique_entries.size() - 1));
         entries_.append(std::move(unique_entries));
         endInsertRows();
-        next_offset_ = entries_.size();
-        has_more_ = entries_.size() < maximum_entries_ &&
-                    (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+        has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
         return entries_.size() - first_row;
     }
 
@@ -327,7 +336,11 @@ public:
             entries_.remove(first_row, overflow);
             endRemoveRows();
         }
-        next_offset_ = entries_.size();
+        if (overflow > 0) {
+            next_offset_ = entries_.size();
+        } else {
+            next_offset_ += unique_entries.size();
+        }
         has_more_ = has_more_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
         return unique_entries.size();
     }
@@ -571,6 +584,11 @@ void OperationalLogPanel::setEntryPageProvider(EntryPageProvider provider) {
     updateSummary();
 }
 
+void OperationalLogPanel::setEntryCountProvider(EntryCountProvider provider) {
+    entry_count_provider_ = std::move(provider);
+    updateSummary();
+}
+
 void OperationalLogPanel::setMaximumEntries(qsizetype maximum_entries) {
     table_model_->setMaximumEntries(maximum_entries);
     pending_new_entry_count_ = 0;
@@ -711,6 +729,12 @@ void OperationalLogPanel::updateSummary() {
     const auto filtered_count = filter_model_->rowCount();
     const auto displayed_alert_count = std::max(active_alert_count_, table_model_->activeAlertCount());
     QString summary = QStringLiteral("%1건 표시").arg(filtered_count);
+    if (entry_count_provider_) {
+        const auto buffered_count = entry_count_provider_();
+        if (buffered_count > filtered_count) {
+            summary += QStringLiteral(" · 전체 %1건").arg(buffered_count);
+        }
+    }
     if (table_model_->isLoadingOlderEntries()) {
         summary += QStringLiteral(" · 이전 로그 불러오는 중…");
     } else if (table_model_->hasMore()) {

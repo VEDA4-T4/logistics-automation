@@ -16,6 +16,7 @@
 #include "logistics/control_center/operations_dashboard_state.hpp"
 
 class QJsonObject;
+class QEvent;
 class QLabel;
 class QMediaPlayer;
 class QNetworkAccessManager;
@@ -68,6 +69,7 @@ private:
     void setDangerZoneEditing(bool editing, bool save_changes = false);
     void handleDangerZoneOccupancy(bool occupied, int zone_index, const QString& class_name, double confidence);
     void updateDangerZoneControls();
+    void updateDangerZoneControlSizing();
     void refreshOperationsPresentation();
     void selectControlTarget(const QString& device_id, const QString& display_name);
     std::vector<QMediaPlayer*> players_{};
@@ -94,6 +96,11 @@ private:
     QTimer* command_response_timer_{ nullptr };
     QTimer* node_status_timer_{ nullptr };
     QTimer* operational_log_flush_timer_{ nullptr };
+    QWidget* video_workspace_{ nullptr };
+    QWidget* danger_zone_toolbar_{ nullptr };
+    QWidget* danger_zone_channel_badge_spacer_{ nullptr };
+    QWidget* danger_zone_actions_{ nullptr };
+    QPushButton* danger_zone_toggle_button_{ nullptr };
     QPushButton* danger_zone_settings_button_{ nullptr };
     QPushButton* danger_zone_visibility_button_{ nullptr };
     QPushButton* danger_zone_add_button_{ nullptr };
@@ -127,10 +134,13 @@ private:
     bool history_request_in_flight_{ false };
     bool history_page_loaded_{ false };
     bool mqtt_connected_{ false };
+    bool danger_zone_controls_expanded_{ false };
     bool danger_zone_overlay_visible_{ true };
     bool danger_zone_incident_logged_{ false };
     bool danger_zone_estop_pending_{ false };
     quint64 history_request_generation_{ 0 };
+
+    bool eventFilter(QObject* watched, QEvent* event) override;
 };
 
 }  // namespace logistics::control_center

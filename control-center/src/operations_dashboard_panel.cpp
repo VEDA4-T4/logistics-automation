@@ -55,8 +55,8 @@ StatusPresentation OverallPresentation(OverallProcessState state) {
             return { QStringLiteral("비상정지"), QStringLiteral("#521b20"), QStringLiteral("#ff7b72"),
                      QStringLiteral("#a1262f") };
         case OverallProcessState::Recovery:
-            return { QStringLiteral("복구 중"), QStringLiteral("#17324a"), QStringLiteral("#75beff"),
-                     QStringLiteral("#285a7e") };
+            return { QStringLiteral("복구 중"), QStringLiteral("#34243a"), QStringLiteral("#c586c0"),
+                     QStringLiteral("#76527d") };
     }
     return {};
 }
@@ -72,7 +72,7 @@ StatusPresentation ProcessPresentation(const ProcessUnitStatus& process) {
         case FactoryNodeVisualState::Error:
             return { QStringLiteral("오류"), QStringLiteral("#3b1f22"), foreground, QStringLiteral("#6e2b2f") };
         case FactoryNodeVisualState::Recovery:
-            return { QStringLiteral("복구 중"), QStringLiteral("#17324a"), foreground, QStringLiteral("#285a7e") };
+            return { QStringLiteral("복구 중"), QStringLiteral("#34243a"), foreground, QStringLiteral("#76527d") };
         case FactoryNodeVisualState::Stopped:
             return { QStringLiteral("정지"), QStringLiteral("#3a3000"), foreground, QStringLiteral("#6b5d00") };
         case FactoryNodeVisualState::Working:

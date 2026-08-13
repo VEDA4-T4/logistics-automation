@@ -402,15 +402,23 @@ void DetectionOverlay::paintEvent(QPaintEvent* event) {
 
     if (!channel_label_.isEmpty()) {
         painter.save();
+        constexpr double kReferenceVideoWidth = 704.0;
+        const auto badge_scale = std::clamp(width() / kReferenceVideoWidth, 0.86, 1.12);
+        const auto scaled = [badge_scale](const int value) { return qRound(value * badge_scale); };
         QFont badge_font = painter.font();
         badge_font.setBold(true);
+        if (badge_font.pointSizeF() > 0.0) {
+            badge_font.setPointSizeF(badge_font.pointSizeF() * badge_scale);
+        } else if (badge_font.pixelSize() > 0) {
+            badge_font.setPixelSize(scaled(badge_font.pixelSize()));
+        }
         painter.setFont(badge_font);
         const QFontMetrics metrics(badge_font);
-        const auto badge_width = metrics.horizontalAdvance(channel_label_) + 20;
-        const QRect badge_rect(10, 10, badge_width, 26);
+        const auto badge_width = metrics.horizontalAdvance(channel_label_) + scaled(20);
+        const QRect badge_rect(scaled(10), scaled(10), badge_width, scaled(26));
         painter.setPen(QPen(QColor(60, 60, 60), 1));
         painter.setBrush(QColor(24, 24, 24, 220));
-        painter.drawRoundedRect(badge_rect, 5, 5);
+        painter.drawRoundedRect(badge_rect, scaled(5), scaled(5));
         painter.setPen(QColor(181, 206, 168));
         painter.drawText(badge_rect, Qt::AlignCenter, channel_label_);
         painter.restore();

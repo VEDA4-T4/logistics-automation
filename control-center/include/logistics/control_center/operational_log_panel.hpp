@@ -23,11 +23,13 @@ public:
     using AcknowledgeHandler = std::function<void(const QString& id)>;
     using AcknowledgeAllHandler = std::function<void()>;
     using EntryPageProvider = std::function<QList<OperationalLogEntry>(qsizetype offset, qsizetype limit)>;
+    using EntryCountProvider = std::function<qsizetype()>;
     using OlderEntriesRequestHandler = std::function<void()>;
 
     explicit OperationalLogPanel(QWidget* parent = nullptr);
 
     void setEntryPageProvider(EntryPageProvider provider);
+    void setEntryCountProvider(EntryCountProvider provider);
     void setMaximumEntries(qsizetype maximum_entries);
     void reloadEntries(int active_alert_count);
     void prependEntries(const QList<OperationalLogEntry>& entries, int active_alert_count);
@@ -63,6 +65,7 @@ private:
     OperationalLogFilterProxyModel* filter_model_{ nullptr };
     int active_alert_count_{ 0 };
     int pending_new_entry_count_{ 0 };
+    EntryCountProvider entry_count_provider_;
     AcknowledgeHandler acknowledge_handler_;
     AcknowledgeAllHandler acknowledge_all_handler_;
 };
