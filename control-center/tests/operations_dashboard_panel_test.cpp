@@ -250,7 +250,7 @@ int main(int argc, char* argv[]) {
     panel.setState(state);
     application.processEvents();
     assert(vision_status->text() == QStringLiteral("복구 중"));
-    assert(vision_status->styleSheet().contains(QStringLiteral("#75beff")));
+    assert(vision_status->styleSheet().contains(QStringLiteral("#c586c0")));
 
     QString selected_target;
     QObject::connect(

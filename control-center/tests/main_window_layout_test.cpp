@@ -586,6 +586,61 @@ int main(int argc, char* argv[]) {
                              { QStringLiteral("currentState"), current_state },
                              { QStringLiteral("jobId"), QStringLiteral("WORK-LAYOUT-LIVE") } } } });
     };
+    QFrame* transition_vision_card = nullptr;
+    for (auto* card : window.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
+        if (card->property("controlTargetDeviceId").toString() == QStringLiteral("PI-VISION-01")) {
+            transition_vision_card = card;
+            break;
+        }
+    }
+    auto* transition_vision_status =
+        transition_vision_card == nullptr
+            ? nullptr
+            : transition_vision_card->findChild<QLabel*>(QStringLiteral("processVisualStatus"));
+    if (!check(transition_vision_status != nullptr, "vision transition status is missing")) {
+        return 2;
+    }
+    const auto check_vision_transition = [&](const QString& message_id, const QString& current_state,
+                                             int timestamp_offset_ms, const QString& expected_text,
+                                             const QColor& expected_color) {
+        emit_device_status(message_id, QStringLiteral("PI-VISION-01"), current_state, timestamp_offset_ms);
+        application.processEvents();
+        return check(factory->nodeColor(QStringLiteral("vision")) == expected_color,
+                     "vision transition color did not reach factoryTopView") &&
+               check(transition_vision_status->text() == expected_text,
+                     "vision transition text did not reach process card");
+    };
+    if (!check_vision_transition(QStringLiteral("LAYOUT-VISION-ONLINE"), QStringLiteral("WAITING_FOR_PRODUCT"), 20,
+                                 QStringLiteral("가동 중"), QColor(QStringLiteral("#89d185"))) ||
+        !check_vision_transition(QStringLiteral("LAYOUT-VISION-RUNNING"), QStringLiteral("VISION_PROCESSING"), 21,
+                                 QStringLiteral("작업 중"), QColor(QStringLiteral("#75beff"))) ||
+        !check_vision_transition(QStringLiteral("LAYOUT-VISION-STOPPED"), QStringLiteral("STOPPED"), 22,
+                                 QStringLiteral("정지"), QColor(QStringLiteral("#cca700"))) ||
+        !check_vision_transition(QStringLiteral("LAYOUT-VISION-RECOVERY"), QStringLiteral("RECOVERY"), 23,
+                                 QStringLiteral("복구 중"), QColor(QStringLiteral("#c586c0")))) {
+        return 2;
+    }
+    mqtt_client->messageReceived(
+        QStringLiteral("device/PI-VISION-01/status"),
+        { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+          { QStringLiteral("messageId"), QStringLiteral("LAYOUT-VISION-ERROR") },
+          { QStringLiteral("messageType"), QStringLiteral("DEVICE_STATUS") },
+          { QStringLiteral("sourceId"), QStringLiteral("PI-VISION-01") },
+          { QStringLiteral("timestamp"), now.addMSecs(24).toString(Qt::ISODateWithMs) },
+          { QStringLiteral("data"),
+            QJsonObject{ { QStringLiteral("status"), QStringLiteral("ONLINE") },
+                         { QStringLiteral("currentState"), QStringLiteral("ERROR") },
+                         { QStringLiteral("jobId"), QStringLiteral("WORK-LAYOUT-LIVE") },
+                         { QStringLiteral("errorCode"), QStringLiteral("ERR-LAYOUT-TEST") } } } });
+    application.processEvents();
+    if (!check(factory->nodeColor(QStringLiteral("vision")) == QColor(QStringLiteral("#f14c4c")),
+               "vision error color did not reach factoryTopView") ||
+        !check(transition_vision_status->text() == QStringLiteral("오류"),
+               "vision error text did not reach process card")) {
+        return 2;
+    }
+    emit_device_status(QStringLiteral("LAYOUT-VISION-RESTORED"), QStringLiteral("PI-VISION-01"),
+                       QStringLiteral("VISION_PROCESSING"), 25);
     emit_device_status(QStringLiteral("LAYOUT-INPUT-LIVE"), QStringLiteral("PI-INPUT-01"), QStringLiteral("RUNNING"),
                        1);
     emit_device_status(QStringLiteral("LAYOUT-GRIPPER-LIVE"), QStringLiteral("PI-GRIPPER-01"),
@@ -653,6 +708,13 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    for (int batch = 0; log_flush_timer->isActive() && batch < 100; ++batch) {
+        QMetaObject::invokeMethod(log_flush_timer, "timeout", Qt::DirectConnection);
+    }
+    application.processEvents();
+    if (!check(!log_flush_timer->isActive(), "operational log batch queue did not drain before the timer test")) {
+        return 2;
+    }
     const auto log_count_before_emergency = log_table->model()->rowCount();
     mqtt_client->messageReceived(QStringLiteral("logistics/emergency-stop"),
                                  { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
@@ -764,6 +826,39 @@ int main(int argc, char* argv[]) {
         !check(!overlaps_horizontally(product_rect, log_rect), "product and log panels overlap horizontally")) {
         return 5;
     }
+
+    window.resize(1600, 900);
+    application.processEvents();
+    const auto expanded_factory_rect = central_rect(factory);
+    const auto expanded_video_rect = central_rect(video);
+    const auto expanded_process_status_rect = central_rect(process_status);
+    const auto expanded_product_rect = central_rect(product);
+    const auto expanded_log_rect = central_rect(log);
+    const auto expanded_process_control_rect = central_rect(process_control);
+    for (const auto& rect : { expanded_factory_rect, expanded_video_rect, expanded_process_status_rect,
+                              expanded_product_rect, expanded_log_rect, expanded_process_control_rect }) {
+        if (!check(!rect.isEmpty() && central->rect().contains(rect), "major workspace is clipped at 1600x900")) {
+            return 5;
+        }
+    }
+    if (!check(!overlaps_horizontally(expanded_factory_rect, expanded_video_rect),
+               "factory and video workspaces overlap at 1600x900") ||
+        !check(!overlaps_horizontally(expanded_product_rect, expanded_log_rect),
+               "product and log panels overlap at 1600x900") ||
+        !check(expanded_process_control_rect.top() > qMax(expanded_factory_rect.bottom(), expanded_video_rect.bottom()),
+               "process controls overlap the primary workspace at 1600x900") ||
+        !check(expanded_process_control_rect.bottom() <= expanded_process_status_rect.top(),
+               "process controls overlap process status at 1600x900")) {
+        return 5;
+    }
+    for (const auto* cell : video_cells) {
+        const QRect rect(cell->mapTo(video, QPoint{}), cell->size());
+        if (!check(video->rect().contains(rect), "video cell is clipped at 1600x900")) {
+            return 5;
+        }
+    }
+    window.resize(1280, 720);
+    application.processEvents();
 
     QFrame* vision_card = nullptr;
     QFrame* input_card = nullptr;

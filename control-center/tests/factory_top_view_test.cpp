@@ -66,6 +66,16 @@ int main(int argc, char* argv[]) {
     assert(BuildFactoryNodeVisual(emergency_with_error).state == FactoryNodeVisualState::EmergencyStop);
     assert(FactoryNodeColor(FactoryNodeVisualState::EmergencyStop) != FactoryNodeColor(FactoryNodeVisualState::Error));
 
+    auto disconnected_emergency = emergency;
+    disconnected_emergency.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
+    assert(BuildFactoryNodeVisual(disconnected_emergency).state == FactoryNodeVisualState::EmergencyStop);
+
+    auto disconnected_error = emergency;
+    disconnected_error.connection_state = logistics::contracts::mqtt::ConnectionState::kOffline;
+    disconnected_error.current_state = QStringLiteral("ERROR");
+    disconnected_error.has_error = true;
+    assert(BuildFactoryNodeVisual(disconnected_error).state == FactoryNodeVisualState::Error);
+
     ProcessUnitStatus active = emergency;
     active.key = QStringLiteral("gripper");
     active.current_state = QStringLiteral("  transferring  ");
@@ -113,7 +123,7 @@ int main(int argc, char* argv[]) {
     recovery.has_error = false;
     visual = BuildFactoryNodeVisual(recovery);
     assert(visual.state == FactoryNodeVisualState::Recovery);
-    assert(FactoryNodeColor(visual.state) == QColor(QStringLiteral("#75beff")));
+    assert(FactoryNodeColor(visual.state) == QColor(QStringLiteral("#c586c0")));
 
     ProcessUnitStatus stopped = active;
     stopped.current_state = QStringLiteral("STOPPED");

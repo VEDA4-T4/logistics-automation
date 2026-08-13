@@ -75,7 +75,7 @@ constexpr int kOperationalLogBatchIntervalMs = 100;
 constexpr qsizetype kOperationalLogBatchSize = 200;
 constexpr int kOperationalLogHistoryPageSize = static_cast<int>(OperationalLogState::kPageSize);
 constexpr qsizetype kMinimumOperationalLogEntries = OperationalLogState::kPageSize;
-constexpr qsizetype kMaximumOperationalLogEntries = 5000;
+constexpr qsizetype kMaximumOperationalLogEntries = 500;
 constexpr double kMinimumDangerZoneSize = 0.02;
 
 struct ControlCenterConfig {
@@ -380,7 +380,7 @@ ControlCenterConfig loadControlCenterConfig() {
         config.operational_log_maximum_entries = static_cast<qsizetype>(operational_log_maximum_entries);
     } else {
         config.warnings.append(
-            QStringLiteral("logs/max_buffer_entries는 100~5000이어야 하므로 기본값 500을 사용합니다."));
+            QStringLiteral("logs/max_buffer_entries는 100~500이어야 하므로 기본값 500을 사용합니다."));
     }
 
     bool reconnect_interval_is_valid = false;
@@ -685,9 +685,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detail_splitter->setHandleWidth(7);
     product_result_panel_ = new ProductResultPanel(config.image_base_url, detail_splitter);
     operational_log_panel_ = new OperationalLogPanel(detail_splitter);
-    operational_log_panel_->setMaximumEntries(kMaximumOperationalLogEntries);
+    operational_log_panel_->setMaximumEntries(config.operational_log_maximum_entries);
     operational_log_panel_->setEntryPageProvider(
         [this](qsizetype offset, qsizetype limit) { return operational_log_state_.entries().mid(offset, limit); });
+    operational_log_panel_->setEntryCountProvider([this]() { return operational_log_state_.entries().size(); });
     history_network_manager_ = new QNetworkAccessManager(this);
     if (!history_bearer_token_.isEmpty()) {
         operational_log_panel_->setOlderEntriesRequestHandler([this]() { requestOlderOperationalLogs(); });

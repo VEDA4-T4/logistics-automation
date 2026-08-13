@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
                         "s=Worker player test\r\n"
                         "m=video 0 RTP/AVP 96\r\n"
                         "a=rtpmap:96 H264/90000\r\n"
-                        "a=fmtp:96 packetization-mode=1;sprop-parameter-sets=Z2QAH6zZQFAFuwEBAaQeJEV,aO48gA==\r\n"
+                        "a=fmtp:96 packetization-mode=1;sprop-parameter-sets=Z2QAH6zZQFAFuwEBAaQeJEU=,aO48gA==\r\n"
                         "a=control:trackID=1\r\n";
                     stream_socket->write(rtspResponse(
                         request_count, "Content-Type: application/sdp\r\nContent-Base: " + base + "\r\n", sdp));
@@ -186,7 +186,7 @@ int main(int argc, char* argv[]) {
             return 44;
         }
         if (log_state.entries().size() != logistics::control_center::OperationalLogState::kDefaultMaximumEntries ||
-            log_table->model()->rowCount() != logistics::control_center::OperationalLogState::kDefaultMaximumEntries) {
+            log_table->model()->rowCount() != logistics::control_center::OperationalLogState::kPageSize) {
             return 45;
         }
         if (frame_tick_count < 5) {
@@ -207,7 +207,7 @@ int main(int argc, char* argv[]) {
         return 8;
     }
     if (log_state.entries().size() != logistics::control_center::OperationalLogState::kDefaultMaximumEntries ||
-        log_table->model()->rowCount() != logistics::control_center::OperationalLogState::kDefaultMaximumEntries) {
+        log_table->model()->rowCount() != logistics::control_center::OperationalLogState::kPageSize) {
         return 9;
     }
     return frame_tick_count >= 5 ? 0 : 10;

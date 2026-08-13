@@ -181,15 +181,16 @@ std::optional<int> FactoryRouteIndex(const QString& current_state) {
 FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
     const auto state = NormalizedState(process.current_state);
     const auto meaning = StateMeaning(process, state);
-    if (process.connection_state != logistics::contracts::mqtt::ConnectionState::kOnline ||
-        state == QStringLiteral("DISCONNECTED")) {
-        return DisconnectedVisual(process);
-    }
     if (meaning == contracts::DeviceStateMeaning::kEmergencyStop) {
         return EmergencyVisual(process);
     }
-    if (process.has_error || meaning == contracts::DeviceStateMeaning::kError) {
+    if (process.has_error ||
+        (meaning == contracts::DeviceStateMeaning::kError && state != QStringLiteral("DISCONNECTED"))) {
         return ErrorVisual(process);
+    }
+    if (process.connection_state != logistics::contracts::mqtt::ConnectionState::kOnline ||
+        state == QStringLiteral("DISCONNECTED")) {
+        return DisconnectedVisual(process);
     }
     if (meaning == contracts::DeviceStateMeaning::kRecovery) {
         return RecoveryVisual(process);
@@ -218,7 +219,7 @@ QColor FactoryNodeColor(FactoryNodeVisualState state) {
         case FactoryNodeVisualState::Error:
             return QColor(QStringLiteral("#f14c4c"));
         case FactoryNodeVisualState::Recovery:
-            return QColor(QStringLiteral("#75beff"));
+            return QColor(QStringLiteral("#c586c0"));
         case FactoryNodeVisualState::Stopped:
             return QColor(QStringLiteral("#cca700"));
         case FactoryNodeVisualState::Working:
