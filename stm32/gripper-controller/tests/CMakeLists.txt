@@ -70,7 +70,19 @@ target_include_directories(
 )
 target_compile_features(gripper_control_task_test PRIVATE c_std_11)
 
-foreach(target gripper_uart_rx_test gripper_servo_test gripper_app_comm_tx_test gripper_control_task_test)
+add_executable(gripper_safety_task_test safety_task_test.c)
+target_include_directories(
+    gripper_safety_task_test
+    PRIVATE
+        fakes
+        ../Application/Inc
+        ../Core/Inc
+        ${PROJECT_SOURCE_DIR}/shared/include
+)
+target_compile_features(gripper_safety_task_test PRIVATE c_std_11)
+
+foreach(target gripper_uart_rx_test gripper_servo_test gripper_app_comm_tx_test gripper_control_task_test
+               gripper_safety_task_test)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /WX)
     else()
@@ -82,3 +94,4 @@ add_test(NAME gripper_uart_rx_test COMMAND gripper_uart_rx_test)
 add_test(NAME gripper_servo_test COMMAND gripper_servo_test)
 add_test(NAME gripper_app_comm_tx_test COMMAND gripper_app_comm_tx_test)
 add_test(NAME gripper_control_task_test COMMAND gripper_control_task_test)
+add_test(NAME gripper_safety_task_test COMMAND gripper_safety_task_test)

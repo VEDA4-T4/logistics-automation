@@ -146,6 +146,17 @@ static void test_stop_and_release_requests_are_both_applied(void) {
     assert(atomic_load_explicit(&gripperSafetyPendingFlags, memory_order_acquire) == 0U);
 }
 
+static void test_new_stop_preempts_pending_release(void) {
+    reset_task_state();
+
+    assert(gripper_control_task_notify_safety_release() == 1U);
+    assert(gripper_control_task_notify_safety_stop() == 1U);
+    gripper_control_task_apply_pending_safety();
+
+    assert(gripperController.state == UART_GRIPPER_STATE_EMERGENCY_STOP);
+    assert(gripperController.safety_latched != 0U);
+}
+
 static void test_completion_event_is_retried_after_queue_failure(void) {
     reset_task_state();
     eventSendAttempts = 0U;
@@ -169,6 +180,7 @@ static void test_completion_event_is_retried_after_queue_failure(void) {
 
 int main(void) {
     test_stop_and_release_requests_are_both_applied();
+    test_new_stop_preempts_pending_release();
     test_completion_event_is_retried_after_queue_failure();
     puts("gripper_control_task_test: PASS");
     return 0;

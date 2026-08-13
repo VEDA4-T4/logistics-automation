@@ -4,11 +4,11 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "FreeRTOS.h"
 #include "app_comm_tx.h"
 #include "app_messages.h"
 #include "app_queues.h"
 #include "cmsis_os2.h"
-#include "FreeRTOS.h"
 #include "gripper_calibration.h"
 #include "logistics/contracts/uart/gripper_commands.h"
 #include "safety_task.h"
@@ -76,8 +76,9 @@ static uint8_t gripper_control_task_enqueue_safety(app_control_message_kind_t ki
 }
 
 uint8_t gripper_control_task_notify_safety_stop(void) {
-    (void)atomic_fetch_or_explicit(&gripperSafetyPendingFlags, GRIPPER_TASK_SAFETY_STOP_PENDING,
-                                   memory_order_release);
+    (void)atomic_fetch_and_explicit(&gripperSafetyPendingFlags, (uint_fast8_t)(~GRIPPER_TASK_SAFETY_RELEASE_PENDING),
+                                    memory_order_acq_rel);
+    (void)atomic_fetch_or_explicit(&gripperSafetyPendingFlags, GRIPPER_TASK_SAFETY_STOP_PENDING, memory_order_release);
     return gripper_control_task_enqueue_safety(APP_CONTROL_MESSAGE_SAFETY_STOP, UART_CMD_EMERGENCY_STOP);
 }
 
@@ -209,8 +210,7 @@ static void gripper_control_task_cache(const control_command_t* message, gripper
 }
 
 static void gripper_control_task_apply_pending_safety(void) {
-    const uint_fast8_t pending =
-        atomic_exchange_explicit(&gripperSafetyPendingFlags, 0U, memory_order_acq_rel);
+    const uint_fast8_t pending = atomic_exchange_explicit(&gripperSafetyPendingFlags, 0U, memory_order_acq_rel);
 
     if ((pending & GRIPPER_TASK_SAFETY_STOP_PENDING) != 0U) {
         gripper_control_apply_safety_stop(&gripperController);
@@ -220,6 +220,10 @@ static void gripper_control_task_apply_pending_safety(void) {
     if ((pending & GRIPPER_TASK_SAFETY_RELEASE_PENDING) != 0U) {
         gripper_control_release_safety(&gripperController);
         gripperCache.valid = 0U;
+    }
+
+    if (pending != 0U) {
+        gripper_control_task_publish_snapshot();
     }
 }
 
@@ -286,8 +290,8 @@ static void gripper_control_task_emit_completion(void) {
         return;
     }
 
-    payload[UART_EVENT_ID_INDEX] = (completion.fault != 0U) ? UART_GRIPPER_EVENT_FAULT
-                                                            : UART_GRIPPER_EVENT_MOTION_COMPLETE;
+    payload[UART_EVENT_ID_INDEX] =
+        (completion.fault != 0U) ? UART_GRIPPER_EVENT_FAULT : UART_GRIPPER_EVENT_MOTION_COMPLETE;
     payload[UART_GRIPPER_EVENT_MOTION_ID_LOW_INDEX] = (uint8_t)(completion.motion_id & 0xFFU);
     payload[UART_GRIPPER_EVENT_MOTION_ID_HIGH_INDEX] = (uint8_t)(completion.motion_id >> 8U);
     payload[UART_GRIPPER_EVENT_MOTION_TYPE_INDEX] = (uint8_t)completion.motion_type;
