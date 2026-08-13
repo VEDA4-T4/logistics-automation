@@ -315,8 +315,9 @@ void TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess() {
             assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
         }
         assert(orchestrator.CompleteSystemRecovery().Applied());
+        assert(!orchestrator.StateMachine().FindWork(kWorkId).has_value());
         assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
-        assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
+        assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
     }
 }
 
@@ -518,21 +519,6 @@ void TestRestoredHomographyTargetCreatesGripperCommand() {
     assert(restore.invalidated_works.empty());
     assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
 
-    const auto failure = Message("MSG-RECOVERABLE-FAILURE", mqtt::MessageType::kErrorOccurred, "PI-VISION-01",
-                                 mqtt::ErrorOccurredPayload{
-                                     .job_id = std::string(kWorkId),
-                                     .error_code = "BARCODE_RETRY",
-                                     .error_level = "ERROR",
-                                     .current_state = "FAULT",
-                                     .message = "barcode processing will be retried",
-                                     .distance = std::nullopt,
-                                 });
-    assert(orchestrator.Handle(failure).transition.Applied());
-    assert(orchestrator.GripperTargets().contains(kWorkId));
-    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
-    assert(orchestrator.CompleteSystemRecovery().Applied());
-    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
-
     const auto product = Message("MSG-PRODUCT-RESTORED", mqtt::MessageType::kProductInfo, "central-server",
                                  mqtt::ProductInfoPayload{
                                      .work_id = kWorkId,
@@ -552,6 +538,13 @@ void TestRestoredHomographyTargetCreatesGripperCommand() {
     assert(command != nullptr);
     assert(command->params.at("targetPose").at("x") == 150.0);
     assert(command->params.at("targetPose").at("yawDeg") == 10.0);
+
+    assert(orchestrator.FailDispatch(result.commands.back(), "gripper is offline").Applied());
+    assert(orchestrator.GripperTargets().contains(kWorkId));
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+    assert(orchestrator.CompleteSystemRecovery().Applied());
+    assert(!orchestrator.StateMachine().FindWork(kWorkId).has_value());
+    assert(!orchestrator.GripperTargets().contains(kWorkId));
 }
 
 void TestDisabledHomographyDiscardsRestoredTarget() {

@@ -558,7 +558,10 @@ int Application::Run(int argc, char* argv[]) {
             }
             const auto failed =
                 command_manager.HandleDispatchFailures(request_id, route.target_device_ids, CurrentIso8601Timestamp());
-            return failed.has_value() && finish_system_command(*failed) && publish_qt_response(*failed);
+            if (failed.has_value()) {
+                static_cast<void>(finish_system_command(*failed) && publish_qt_response(*failed));
+            }
+            return false;
         }
 
         const auto publish_to_device = [&mqtt_client, &message, &server_config](std::string_view device_id) {
@@ -580,7 +583,10 @@ int Application::Run(int argc, char* argv[]) {
         }
         const auto failure =
             command_manager.HandleDispatchFailures(request_id, failed_devices, CurrentIso8601Timestamp());
-        return failure.has_value() && finish_system_command(*failure) && publish_qt_response(*failure);
+        if (failure.has_value()) {
+            static_cast<void>(finish_system_command(*failure) && publish_qt_response(*failure));
+        }
+        return false;
     };
     dispatch_process_commands = [&device_manager, &dispatch_command, &process_orchestrator, &process_command_tracker,
                                  &persist_process_state](const std::vector<ProcessCommandIntent>& commands) {
