@@ -233,7 +233,8 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
     }
 
     pending.completed_devices.insert(message.source_id);
-    if (response->result != mqtt::CommandResult::kSuccess && !pending.failure.has_value()) {
+    if (response->result != mqtt::CommandResult::kSuccess && response->result != mqtt::CommandResult::kDuplicated &&
+        !pending.failure.has_value()) {
         pending.failure = *response;
     }
 

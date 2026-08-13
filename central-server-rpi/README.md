@@ -52,6 +52,11 @@ STM32는 거리(cm)와 측정 건전성(`OK`/`FAULT`)만 보고하고, **상자�
 Control Center에 전달됩니다. 장치가 보내는 `measurementStatus`와는 별개 필드이며,
 센서가 `FAULT`이면 판정은 `UNKNOWN`이 됩니다.
 
+설정된 input 장치의 센서 1이 `DETECTED`로 진입하면 서버가 `BOX_DETECTED`를 파생해
+투입 컨베이어를 정지시키고 vision work를 배정합니다. Line-tracer의 로컬 장애물 안전
+정지는 STM32의 150/220mm 판정과 safety event가 계속 담당하며, 이 서버 판정은 이를
+대체하지 않습니다.
+
 ## 실행
 
 ```sh

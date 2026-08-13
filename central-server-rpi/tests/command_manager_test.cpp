@@ -172,6 +172,20 @@ void TestResponsesAreAggregatedAndDuplicatesIgnored() {
     assert(manager.LastError() == "requestId was already received");
 }
 
+void TestDeviceDuplicatedResultIsAggregatedAsSuccess() {
+    central_server::CommandManager manager;
+    assert(manager.TrackCommand(MakeCommand("REQ-DEVICE-DUPLICATE", "SYSTEM"), { "PI-01", "PI-02" }));
+
+    const auto first = manager.HandleResponse(
+        MakeResponse("PI-01", "RESP-DUPLICATE", "REQ-DEVICE-DUPLICATE", mqtt::CommandResult::kDuplicated));
+    assert(first.message.has_value());
+    assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*first.message)->result == mqtt::CommandResult::kProcessing);
+
+    const auto second = manager.HandleResponse(MakeResponse("PI-02", "RESP-SUCCESS", "REQ-DEVICE-DUPLICATE"));
+    assert(second.message.has_value());
+    assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*second.message)->result == mqtt::CommandResult::kSuccess);
+}
+
 void TestPartialDispatchFailureIsIncludedInFinalResult() {
     central_server::CommandManager manager;
     assert(manager.TrackCommand(MakeCommand("REQ-PARTIAL", "SYSTEM"), { "PI-01", "PI-02" }));
@@ -268,6 +282,7 @@ int main() {
     TestCommandTargetsAreResolvedByDeviceAndRole();
     TestLineTracerInitializeIncludesConfiguredPosition();
     TestResponsesAreAggregatedAndDuplicatesIgnored();
+    TestDeviceDuplicatedResultIsAggregatedAsSuccess();
     TestPartialDispatchFailureIsIncludedInFinalResult();
     TestNoTargetProducesImmediateRejection();
     TestWrongDeviceIsRejectedAndTimeoutIsGenerated();

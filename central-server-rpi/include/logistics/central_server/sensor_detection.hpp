@@ -6,6 +6,10 @@
 #include <string>
 #include <string_view>
 
+namespace logistics::contracts::mqtt {
+struct MqttMessage;
+}
+
 namespace logistics::central_server {
 
 // ---------------------------------------------------------------------------
@@ -80,6 +84,23 @@ private:
 
     SensorDetectionConfig config_;
     std::map<std::string, ChannelState> channels_;
+};
+
+class InputDetectionGate final {
+public:
+    explicit InputDetectionGate(std::string input_device_id, std::int32_t sensor_id = 1);
+
+    // Consumes one physical DETECTED interval. A stopped process defers the
+    // interval so the next reading after START can create the work; an already
+    // occupied input station consumes it because vision won the same-box race.
+    [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
+                                        bool input_station_occupied);
+    void Retry() noexcept;
+
+private:
+    std::string input_device_id_;
+    std::int32_t sensor_id_;
+    bool consumed_{ false };
 };
 
 }  // namespace logistics::central_server

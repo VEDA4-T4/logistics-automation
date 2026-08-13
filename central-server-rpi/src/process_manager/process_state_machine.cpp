@@ -601,4 +601,28 @@ std::optional<WorkStage> ParseWorkStage(std::string_view value) noexcept {
     return std::nullopt;
 }
 
+std::optional<ProcessEventType> ParseProcessEventType(std::string_view value) noexcept {
+    constexpr std::array values{
+        ProcessEventType::kWorkCreated,
+        ProcessEventType::kVisionCommandDispatched,
+        ProcessEventType::kPositionDetected,
+        ProcessEventType::kBarcodeSucceeded,
+        ProcessEventType::kBarcodeFailed,
+        ProcessEventType::kProductInfoReady,
+        ProcessEventType::kProductInfoFailed,
+        ProcessEventType::kGripperCommandDispatched,
+        ProcessEventType::kGripperStarted,
+        ProcessEventType::kGripperCompleted,
+        ProcessEventType::kSortingCommandDispatched,
+        ProcessEventType::kSortingStarted,
+        ProcessEventType::kSortingCompleted,
+        ProcessEventType::kTransportCommandDispatched,
+        ProcessEventType::kTransportStarted,
+        ProcessEventType::kWorkCompleted,
+        ProcessEventType::kWorkFailed,
+    };
+    const auto found = std::ranges::find(values, value, [](ProcessEventType type) { return ToString(type); });
+    return found == values.end() ? std::nullopt : std::optional<ProcessEventType>{ *found };
+}
+
 }  // namespace logistics::central_server

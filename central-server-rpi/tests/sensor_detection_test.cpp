@@ -8,10 +8,13 @@
 #include <iostream>
 #include <string>
 
+#include "logistics/contracts/mqtt_codec.hpp"
+
 namespace {
 
 using logistics::central_server::SensorDetectionConfig;
 using logistics::central_server::SensorDetector;
+namespace mqtt = logistics::contracts::mqtt;
 
 constexpr const char* kDevice = "PI-SORTING-01";
 
@@ -136,6 +139,44 @@ void TestConfigValidation() {
     assert((SensorDetectionConfig{ .enabled = true, .enter_threshold_cm = 10, .exit_threshold_cm = 10 }).IsValid());
 }
 
+mqtt::MqttMessage SensorMessage(std::string_view source_id, std::string detection_status) {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-INPUT-SENSOR-GATE",
+        .message_type = mqtt::MessageType::kSensorStatus,
+        .source_id = std::string(source_id),
+        .timestamp = "2026-08-13T03:00:00Z",
+        .data =
+            mqtt::SensorStatusPayload{
+                .sensor_id = 1,
+                .measurement_status = "OK",
+                .distance_cm = detection_status == "DETECTED" ? 5 : 40,
+                .detection_status = std::move(detection_status),
+            },
+    };
+}
+
+void TestInputDetectionGateHandlesVisionRaceAndStoppedSystem() {
+    logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
+    const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
+
+    assert(!gate.ShouldCreateWork(detected, false, false));
+    assert(gate.ShouldCreateWork(detected, true, false));
+    assert(!gate.ShouldCreateWork(detected, true, false));
+
+    const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
+    assert(!gate.ShouldCreateWork(clear, true, false));
+    assert(!gate.ShouldCreateWork(detected, true, true));
+    assert(!gate.ShouldCreateWork(detected, true, false));
+
+    assert(!gate.ShouldCreateWork(clear, true, false));
+    assert(gate.ShouldCreateWork(detected, true, false));
+    gate.Retry();
+    assert(gate.ShouldCreateWork(detected, true, false));
+
+    assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));
+}
+
 }  // namespace
 
 int main() {
@@ -148,6 +189,7 @@ int main() {
     TestChannelsAreIndependentPerDeviceAndSensor();
     TestThresholdsComeFromConfig();
     TestConfigValidation();
+    TestInputDetectionGateHandlesVisionRaceAndStoppedSystem();
     std::cout << "sensor_detection_test passed\n";
     return 0;
 }
