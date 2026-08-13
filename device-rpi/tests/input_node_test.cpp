@@ -98,7 +98,7 @@ void TestStartSuccess() {
     Fixture fixture;
     fixture.backend->responder = [](const uart_frame_t& request) {
         if (request.command == UART_CMD_INPUT_CONVEYOR_SET_SPEED) {
-            assert(request.payload[UART_INPUT_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
+            assert(request.payload[UART_INPUT_CONVEYOR_SPEED_VALUE_INDEX] == 25U);
         }
         return std::vector<uart_frame_t>{ MakeOperationResult(request.sequence, UART_STATUS_SUCCESS, UART_ERROR_NONE) };
     };

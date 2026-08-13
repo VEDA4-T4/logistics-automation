@@ -416,6 +416,8 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
     }
     auto transition = state_machine_.CompleteSystemRecovery();
     if (transition.Applied()) {
+        std::erase_if(gripper_targets_,
+                      [this](const auto& entry) { return !state_machine_.FindWork(entry.first).has_value(); });
         ++revision_;
     }
     return transition;

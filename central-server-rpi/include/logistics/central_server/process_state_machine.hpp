@@ -125,6 +125,7 @@ private:
     std::unordered_map<std::string, WorkProcessSnapshot> works_;
     std::unordered_set<std::string> processed_message_ids_;
     std::deque<std::string> processed_message_order_;
+    bool resume_transport_after_recovery_{};
 };
 
 [[nodiscard]] std::string_view ToString(ProcessSystemState state) noexcept;

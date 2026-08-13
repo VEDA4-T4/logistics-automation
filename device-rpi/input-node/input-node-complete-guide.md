@@ -131,7 +131,7 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 
 | MQTT `ControlCommand` | UART 명령 | 비고 |
 |---|---|---|
-| `kStart` | `SET_SPEED` 후 `CONVEYOR_START` | `params.speed`(1~100), 생략 시 기본값 50. MCU 재부팅 복구를 위해 START마다 속도를 재전송 |
+| `kStart` | `SET_SPEED` 후 `CONVEYOR_START` | `params.speed`(1~100), 생략 시 기본값 25. MCU 재부팅 복구를 위해 START마다 속도를 재전송 |
 | `kStop` | `CONVEYOR_STOP` | |
 | `kStatusRequest` | `CONVEYOR_GET_STATUS` | 응답의 컨베이어 상태를 별도 status로도 발행 |
 | `kInitialize` | `INPUT_CONTROL_RESET` | 소프트 리셋(제어 오류 초기화). 동기 응답. 비상정지 latch 걸려있으면 STM32가 `ERR-EMERGENCY-STOP`으로 거부 |

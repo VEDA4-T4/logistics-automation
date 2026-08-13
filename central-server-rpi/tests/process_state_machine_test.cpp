@@ -147,21 +147,46 @@ void TestErrorEmergencyStopAndRecovery() {
            central_server::TransitionDisposition::kDuplicate);
     assert(machine.CompleteSystemRecovery().Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
-    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
+    assert(!machine.FindWork(kWorkOne).has_value());
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kInitialize).disposition ==
            central_server::TransitionDisposition::kDuplicate);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
-    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kInputDetected);
+    assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
 
-    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
-    assert(machine.SystemState() == central_server::ProcessSystemState::kEmergencyStop);
-    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kEmergencyStopped);
-    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
-    assert(machine.SystemState() == central_server::ProcessSystemState::kRecovery);
-    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kRecovering);
-    assert(machine.CompleteSystemRecovery().Applied());
-    assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
-    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
+    central_server::ProcessStateMachine emergency_machine;
+    std::vector active_transport{
+        central_server::WorkProcessSnapshot{
+            .work_id = kWorkOne,
+            .stage = central_server::WorkStage::kTransporting,
+            .suspended_stage = std::nullopt,
+            .destination = "1",
+            .last_source_id = "PI-LT-01",
+            .failure_reason = {},
+        },
+        central_server::WorkProcessSnapshot{
+            .work_id = kWorkTwo,
+            .stage = central_server::WorkStage::kVisionProcessing,
+            .suspended_stage = std::nullopt,
+            .destination = {},
+            .last_source_id = "PI-VISION-01",
+            .failure_reason = {},
+        },
+    };
+    assert(emergency_machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning,
+                                                       std::move(active_transport)));
+    assert(emergency_machine.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
+    assert(emergency_machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
+    assert(emergency_machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kEmergencyStopped);
+    assert(emergency_machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+    assert(emergency_machine.CompleteSystemRecovery().Applied());
+    assert(emergency_machine.SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(emergency_machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kTransporting);
+    assert(emergency_machine.FindWork(kWorkTwo)->stage == central_server::WorkStage::kStopped);
+    assert(
+        emergency_machine
+            .Apply(Event(central_server::ProcessEventType::kWorkCompleted, "MSG-RECOVERED-DONE", kWorkOne, "PI-LT-01"))
+            .Applied());
+    assert(emergency_machine.SystemState() == central_server::ProcessSystemState::kStopped);
 }
 
 void TestParallelWorksRemainIndependent() {

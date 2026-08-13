@@ -77,6 +77,7 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
 }
 
 ProcessTransition ProcessStateMachine::ApplySystemFailure(std::string reason) {
+    resume_transport_after_recovery_ = false;
     SuspendActiveWorks(WorkStage::kFailed);
     for (auto& [work_id, work] : works_) {
         static_cast<void>(work_id);
@@ -172,6 +173,7 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
             if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop) {
                 return Reject("RECOVERY is only allowed from ERROR or EMERGENCY_STOP");
             }
+            resume_transport_after_recovery_ = system_state_ == ProcessSystemState::kEmergencyStop;
             SuspendActiveWorks(WorkStage::kRecovering);
             system_state_ = ProcessSystemState::kRecovery;
             return { .disposition = TransitionDisposition::kApplied,
@@ -207,12 +209,21 @@ ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
     if (system_state_ != ProcessSystemState::kRecovery) {
         return Reject("system recovery is not in progress");
     }
+    std::erase_if(works_, [](const auto& entry) { return !entry.second.failure_reason.empty(); });
     for (auto& [work_id, work] : works_) {
         static_cast<void>(work_id);
         if (work.stage == WorkStage::kRecovering) {
-            work.stage = WorkStage::kStopped;
+            const bool transport_was_active = work.suspended_stage == WorkStage::kTransportRequested ||
+                                              work.suspended_stage == WorkStage::kTransporting;
+            if (resume_transport_after_recovery_ && transport_was_active) {
+                work.stage = *work.suspended_stage;
+                work.suspended_stage.reset();
+            } else {
+                work.stage = WorkStage::kStopped;
+            }
         }
     }
+    resume_transport_after_recovery_ = false;
     system_state_ = ProcessSystemState::kStopped;
     return {
         .disposition = TransitionDisposition::kApplied,
@@ -249,6 +260,7 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
     }
 
     works_ = std::move(restored);
+    resume_transport_after_recovery_ = false;
     processed_message_ids_.clear();
     processed_message_order_.clear();
     if (stored_state == ProcessSystemState::kEmergencyStop) {
@@ -403,7 +415,7 @@ ProcessTransition ProcessStateMachine::Move(WorkProcessSnapshot& work, WorkStage
     if (!source_id.empty()) {
         work.last_source_id = source_id;
     }
-    if (next_stage == WorkStage::kCompleted && ActiveWorks().empty()) {
+    if (next_stage == WorkStage::kCompleted && system_state_ == ProcessSystemState::kRunning && ActiveWorks().empty()) {
         system_state_ = ProcessSystemState::kIdle;
     }
     return {
