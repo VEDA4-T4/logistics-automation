@@ -732,7 +732,7 @@ void OperationalLogPanel::updateSummary() {
     if (entry_count_provider_) {
         const auto buffered_count = entry_count_provider_();
         if (buffered_count > filtered_count) {
-            summary += QStringLiteral(" · 버퍼 %1건").arg(buffered_count);
+            summary += QStringLiteral(" · 전체 %1건").arg(buffered_count);
         }
     }
     if (table_model_->isLoadingOlderEntries()) {

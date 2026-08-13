@@ -137,7 +137,7 @@ int main(int argc, char* argv[]) {
     application.processEvents();
     assert(table->model()->rowCount() == OperationalLogState::kPageSize);
     assert(result_count->text().contains(QStringLiteral("100건 표시")));
-    assert(result_count->text().contains(QStringLiteral("버퍼 104건")));
+    assert(result_count->text().contains(QStringLiteral("전체 104건")));
     assert(panel.canLoadOlderEntries());
     panel.requestOlderEntries();
     application.processEvents();
@@ -365,7 +365,7 @@ int main(int argc, char* argv[]) {
     }
     assert(table->model()->rowCount() == kPagedLiveLogCount);
     assert(result_count->text().contains(QStringLiteral("1200건 표시")));
-    assert(!result_count->text().contains(QStringLiteral("버퍼 1200건")));
+    assert(!result_count->text().contains(QStringLiteral("전체 1200건")));
     assert(!panel.canLoadOlderEntries());
     for (qsizetype row = 0; row < kPagedLiveLogCount; ++row) {
         const auto expected_index = kPagedLiveLogCount - row - 1;
