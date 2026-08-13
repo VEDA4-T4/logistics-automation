@@ -143,12 +143,18 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 
 | UART 프레임 | MQTT 채널 / 타입 | 내용 |
 |---|---|---|
-| `SENSOR_STATUS` (모든 측정) | event / `SENSOR_STATUS` | `{sensorId, measurementStatus, distanceCm}`. `measurementStatus`는 계약상 `CLEAR`/`DETECTED`/`FAULT`만 허용. 거리값이 매번 바뀌므로 **측정마다 발행** |
+| `SENSOR_STATUS` (모든 측정) | event / `SENSOR_STATUS` | `{sensorId, measurementStatus, distanceCm}`. `measurementStatus`는 계약상 `OK`/`FAULT`만 허용 — **측정이 믿을 만한지**만 담는다. 거리값이 매번 바뀌므로 **측정마다 발행** |
 | `SENSOR_STATUS` (FAULT로 전환 시) | error / `ERROR_OCCURRED` | 위 telemetry에 더해 `error_code=ERR-SENSOR` 알림도 발행. `current_state="SENSOR_{id}_FAULT"`로 sensorId를 실어 보냄(투입 쪽은 센서가 1개뿐이라 항상 id=1) |
 
 > 센서 값은 telemetry라 `DEVICE_STATUS`가 아니라 **`SENSOR_STATUS` 이벤트**로 나간다(`device/{id}/event`,
 > `mqtt_validation.hpp`가 SENSOR_STATUS를 device event로 분류). 덕분에 센서 활동이 장치 운영 상태
 > (`current_state` = READY/EMERGENCY_STOP/RUNNING/STOPPED)를 덮어쓰지 않는다.
+
+> **상자가 로봇팔 앞에 있는지는 이 노드도, STM32도 판단하지 않는다.** 거리값만 올리고
+> 중앙 서버가 `server.ini`의 `[sensor_detection]` 임계값으로 판정해, 결과를
+> `detectionStatus`(`DETECTED`/`CLEAR`/`UNKNOWN`) 필드로 붙여 Qt에 전달한다. 임계값
+> 튜닝에 펌웨어 재플래시가 필요 없게 하려는 구조다. 이 노드가 보내는 메시지에는
+> `detectionStatus`가 아예 없다.
 | `DEVICE_STATUS` | status / `DEVICE_STATUS` | 장치 상태명 + 오류코드 |
 | `EVENT` (heartbeat, id=1) | status / `DEVICE_STATUS` | 9바이트 payload 디코딩: `device_state`/`error_code`/uptime/투입·분류 센서 상태. 상태 변화 시에만 보고(uptime만 바뀌면 무시) |
 | `EVENT` (safety, id=3, kind=1/3) | error / `ERROR_OCCURRED` | `ERR-SAFETY-ESTOP-LATCHED`(비상정지 latch) / `ERR-SAFETY-RESET-REJECTED`(해제 거부) |

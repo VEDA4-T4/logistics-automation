@@ -360,13 +360,23 @@ void TestSensorStatusIsAcceptedAndForwardedToQt() {
         storage.image_root = root / "images";
         central_server::PersistenceService persistence(database, storage);
         central_server::DeviceManager device_manager;
-        central_server::MqttHandler handler(device_manager, {}, &persistence);
+        // debounce_count=1 keeps this test about routing; the debounce itself is
+        // covered by sensor_detection_test.
+        const central_server::SensorDetectionConfig detection{
+            .enabled = true,
+            .enter_threshold_cm = 10,
+            .exit_threshold_cm = 12,
+            .debounce_count = 1,
+        };
+        central_server::MqttHandler handler(device_manager, {}, &persistence, {}, detection);
         std::vector<mqtt::MqttMessage> qt_events;
         handler.SetQtEventHandler([&qt_events](const mqtt::MqttMessage& message) {
             qt_events.push_back(message);
             return true;
         });
 
+        // The device reports measurement health and a distance; it never sets
+        // detectionStatus. The handler must stamp that in on the way through.
         const mqtt::MqttMessage sensor_status{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
             .message_id = "MSG-SENSOR-STATUS-01",
@@ -376,8 +386,9 @@ void TestSensorStatusIsAcceptedAndForwardedToQt() {
             .data =
                 mqtt::SensorStatusPayload{
                     .sensor_id = 4,
-                    .measurement_status = "DETECTED",
-                    .distance_cm = 14,
+                    .measurement_status = "OK",
+                    .distance_cm = 8,
+                    .detection_status = std::nullopt,
                 },
         };
         assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_status)));
@@ -385,23 +396,39 @@ void TestSensorStatusIsAcceptedAndForwardedToQt() {
         const auto* forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.front());
         assert(forwarded != nullptr);
         assert(forwarded->sensor_id == 4);
-        assert(forwarded->measurement_status == "DETECTED");
-        assert(forwarded->distance_cm == 14);
+        assert(forwarded->measurement_status == "OK");
+        assert(forwarded->distance_cm == 8);
+        assert(forwarded->detection_status.has_value() && *forwarded->detection_status == "DETECTED");
 
         auto sensor_clear = sensor_status;
         sensor_clear.message_id = "MSG-SENSOR-STATUS-02";
         sensor_clear.timestamp = "2026-07-27T02:00:01Z";
         auto* clear_payload = mqtt::GetPayload<mqtt::SensorStatusPayload>(sensor_clear);
         assert(clear_payload != nullptr);
-        clear_payload->measurement_status = "CLEAR";
         clear_payload->distance_cm = 20;
         assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_clear)));
         assert(qt_events.size() == 2);
         forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.back());
         assert(forwarded != nullptr);
         assert(forwarded->sensor_id == 4);
-        assert(forwarded->measurement_status == "CLEAR");
+        assert(forwarded->measurement_status == "OK");
         assert(forwarded->distance_cm == 20);
+        assert(forwarded->detection_status.has_value() && *forwarded->detection_status == "CLEAR");
+
+        // A faulty sensor cannot be reasoned about, so detection reports UNKNOWN
+        // rather than leaving the last CLEAR/DETECTED standing.
+        auto sensor_fault = sensor_status;
+        sensor_fault.message_id = "MSG-SENSOR-STATUS-03";
+        sensor_fault.timestamp = "2026-07-27T02:00:02Z";
+        auto* fault_payload = mqtt::GetPayload<mqtt::SensorStatusPayload>(sensor_fault);
+        assert(fault_payload != nullptr);
+        fault_payload->measurement_status = "FAULT";
+        fault_payload->distance_cm = 0xFFFF;
+        assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_fault)));
+        assert(qt_events.size() == 3);
+        forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.back());
+        assert(forwarded != nullptr);
+        assert(forwarded->detection_status.has_value() && *forwarded->detection_status == "UNKNOWN");
     }
     std::filesystem::remove_all(root);
 }

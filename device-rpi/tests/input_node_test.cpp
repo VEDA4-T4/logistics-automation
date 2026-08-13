@@ -428,7 +428,7 @@ void TestSafetyAndHeartbeatTimeoutsAreReported() {
     fixture.node->Tick(std::chrono::seconds{ 3 });
     assert(fixture.reports.size() == 2U);
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_OK));
     const auto* recovered = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
     assert(recovered != nullptr && recovered->current_state == "RUNNING");
 }
@@ -458,9 +458,9 @@ void TestControllerTimeout() {
     assert(response->error_code.has_value() && *response->error_code == "ERR-UART-ACK-TIMEOUT");
 }
 
-void TestSensorDetectedReport() {
+void TestSensorMeasurementReport() {
     Fixture fixture;
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 15U));
 
     assert(fixture.reports.size() == 1);
     // Sensor readings are telemetry: SENSOR_STATUS on the event channel, carrying
@@ -470,21 +470,31 @@ void TestSensorDetectedReport() {
     const auto* sensor = std::get_if<mqtt::SensorStatusPayload>(&fixture.reports.front().data);
     assert(sensor != nullptr);
     assert(sensor->sensor_id == UART_INPUT_SENSOR_ID_1);
-    assert(sensor->measurement_status == "DETECTED");
+    assert(sensor->measurement_status == "OK");
     assert(sensor->distance_cm == 15);
+    // The node relays the reading; it never decides whether a box is there.
+    assert(!sensor->detection_status.has_value());
     assert(sensor->IsValid());
 }
 
-void TestSensorClearReportsMeasurementStatusClear() {
-    Fixture fixture;
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_CLEAR, 40U));
+void TestCloseAndFarReadingsAreBothReportedAsOk() {
+    // 15cm and 40cm sit on opposite sides of the old firmware threshold. Both
+    // now report the same measurement status - only the distance differs, which
+    // is the whole point of moving the judgement to the server.
+    Fixture near_fixture;
+    near_fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 5U));
+    const auto* near_sensor = std::get_if<mqtt::SensorStatusPayload>(&near_fixture.reports.front().data);
+    assert(near_sensor != nullptr);
+    assert(near_sensor->measurement_status == "OK");
+    assert(near_sensor->distance_cm == 5);
 
-    assert(fixture.reports.size() == 1);
-    const auto* sensor = std::get_if<mqtt::SensorStatusPayload>(&fixture.reports.front().data);
-    assert(sensor != nullptr);
-    assert(sensor->measurement_status == "CLEAR");
-    assert(sensor->distance_cm == 40);
-    assert(sensor->IsValid());
+    Fixture far_fixture;
+    far_fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 40U));
+    const auto* far_sensor = std::get_if<mqtt::SensorStatusPayload>(&far_fixture.reports.front().data);
+    assert(far_sensor != nullptr);
+    assert(far_sensor->measurement_status == "OK");
+    assert(far_sensor->distance_cm == 40);
+    assert(far_sensor->IsValid());
 }
 
 void TestSensorFaultReport() {
@@ -507,9 +517,9 @@ void TestSensorFaultReport() {
 void TestEverySensorMeasurementIsPublished() {
     Fixture fixture;
     // Distance changes even while the state does not, so every measurement is sent.
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 14U));
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_CLEAR, 40U));
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 15U));
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 14U));
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 40U));
 
     assert(fixture.reports.size() == 3);
     for (const auto& report : fixture.reports) {
@@ -522,14 +532,14 @@ void TestSensorActivityDoesNotOverwriteDeviceState() {
     Fixture fixture;
     // The controller heartbeat establishes the operational state...
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_OK));
     assert(fixture.reports.size() == 1);
     const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
     assert(status != nullptr && status->current_state == "READY");
 
     // ...and sensor traffic must not replace it with a sensor state.
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_CLEAR, 40U));
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 15U));
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 40U));
     for (std::size_t index = 1; index < fixture.reports.size(); ++index) {
         assert(!std::holds_alternative<mqtt::DeviceStatusPayload>(fixture.reports[index].data));
     }
@@ -557,7 +567,7 @@ void TestMalformedHeartbeatIsIgnored() {
 void TestHeartbeatIsDecodedToDeviceStatus() {
     Fixture fixture;
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR, 42U));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_OK, 42U));
 
     assert(fixture.reports.size() == 1);
     assert(fixture.reports.front().channel == InputReportChannel::kStatus);
@@ -571,7 +581,7 @@ void TestHeartbeatIsDecodedToDeviceStatus() {
 void TestHeartbeatErrorIsSurfaced() {
     Fixture fixture;
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_ERROR, UART_ERROR_MOTOR, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_ERROR, UART_ERROR_MOTOR, UART_SENSOR_OK));
 
     assert(fixture.reports.size() == 1);
     const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
@@ -584,23 +594,23 @@ void TestHeartbeatReportsOnlyOnChange() {
     Fixture fixture;
     // The controller emits this roughly once a second; only changes should be reported.
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR, 1U));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_OK, 1U));
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR, 2U));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_OK, 2U));
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_CLEAR, 3U));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE, UART_SENSOR_OK, 3U));
     assert(fixture.reports.size() == 1);  // uptime alone is not a state change
 
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR, 4U));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_OK, 4U));
     assert(fixture.reports.size() == 2);
 
     // A sensor-only change must NOT trigger a heartbeat report: HandleSensorStatus
-    // (a separate UART_CMD_SENSOR_STATUS frame) already reports sensor transitions
-    // with the correct SENSOR_CLEAR/OBJECT_DETECTED naming, so re-reporting the
-    // unchanged device_state here would just be a misleading duplicate.
+    // (a separate UART_CMD_SENSOR_STATUS frame) already reports every measurement,
+    // so re-reporting the unchanged device_state here would just be a misleading
+    // duplicate.
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_DETECTED, 5U));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_OK, 5U));
     assert(fixture.reports.size() == 2);
 }
 
@@ -610,14 +620,14 @@ void TestHeartbeatDoesNotDuplicateSensorTransition() {
     // reading. The heartbeat must not add a redundant device-status report.
     Fixture fixture;
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_OK));
     assert(fixture.reports.size() == 1);
 
-    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_DETECTED, 15U));
+    fixture.node->HandleUartFrame(MakeSensorStatus(UART_SENSOR_OK, 15U));
     assert(fixture.reports.size() == 2);  // the SENSOR_STATUS telemetry event
 
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_DETECTED));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_READY, UART_ERROR_NONE, UART_SENSOR_OK));
     assert(fixture.reports.size() == 2);  // no extra "READY" report from the heartbeat
 }
 
@@ -679,7 +689,7 @@ void TestSafetyEventIsDecoded() {
     assert(!status->error_code.has_value());
 
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_NONE, UART_SENSOR_OK));
     assert(fixture.reports.size() == 1);
 }
 
@@ -714,7 +724,7 @@ void TestSafetyResetCompleteSuppressesFollowingHeartbeatDuplicate() {
     Fixture fixture;
     // A heartbeat already established EMERGENCY_STOP before recovery.
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_EMERGENCY_STOP, UART_ERROR_EMERGENCY_STOP, UART_SENSOR_OK));
     assert(fixture.reports.size() == 1);
     const auto* emergency = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.front().data);
     assert(emergency != nullptr);
@@ -728,7 +738,7 @@ void TestSafetyResetCompleteSuppressesFollowingHeartbeatDuplicate() {
 
     // The next heartbeat carries the same STOPPED/NONE state; it must not re-report.
     fixture.node->HandleUartFrame(
-        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_CLEAR));
+        input_test::MakeControllerHeartbeat(UART_DEVICE_STOPPED, UART_ERROR_NONE, UART_SENSOR_OK));
     assert(fixture.reports.size() == 2);
 }
 
@@ -771,8 +781,8 @@ int main() {
     TestSafetyAndHeartbeatTimeoutsAreReported();
     TestInvalidTarget();
     TestControllerTimeout();
-    TestSensorDetectedReport();
-    TestSensorClearReportsMeasurementStatusClear();
+    TestSensorMeasurementReport();
+    TestCloseAndFarReadingsAreBothReportedAsOk();
     TestSensorFaultReport();
     TestEverySensorMeasurementIsPublished();
     TestSensorActivityDoesNotOverwriteDeviceState();

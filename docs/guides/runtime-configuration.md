@@ -67,9 +67,22 @@ gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
 default_destination=3
+
+[sensor_detection]
+enabled=true
+enter_threshold_cm=10
+exit_threshold_cm=12
+debounce_count=3
 ```
 
 현재 Gripper 전용 Raspberry Pi 실행 파일이 없으므로 전체 실제 공정이 준비되기 전에는 `enabled=false`가 안전합니다.
+
+`[sensor_detection]`은 초음파 상자 존재 판정 임계값입니다. STM32는 거리(cm)와 측정
+건전성(`OK`/`FAULT`)만 보고하고 판정은 서버가 하므로, **임계값을 바꿀 때 펌웨어를 다시
+구울 필요가 없습니다** — 값을 고치고 서버만 재시작하면 4개 센서에 즉시 반영됩니다.
+`exit_threshold_cm`은 `enter_threshold_cm` 이상이어야 하고, 두 값의 간격이 히스테리시스
+폭입니다(같게 두면 상자가 문턱에 걸쳐 있을 때 판정이 깜빡입니다). `debounce_count`를
+늘리면 오탐은 줄지만 반응이 그만큼 늦어집니다(센서 재방문 주기 240ms × 횟수).
 
 ## Vision 노드
 

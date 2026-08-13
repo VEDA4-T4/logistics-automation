@@ -266,6 +266,20 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
         }
         return;
     }
+    if (section == "sensor_detection") {
+        if (key == "enabled") {
+            config.sensor_detection.enabled = ParseBoolean(path, line_number, key, value);
+        } else if (key == "enter_threshold_cm") {
+            config.sensor_detection.enter_threshold_cm = ParseInteger(path, line_number, key, value, 1, 65'534);
+        } else if (key == "exit_threshold_cm") {
+            config.sensor_detection.exit_threshold_cm = ParseInteger(path, line_number, key, value, 1, 65'534);
+        } else if (key == "debounce_count") {
+            config.sensor_detection.debounce_count = ParseInteger(path, line_number, key, value, 1, 100);
+        } else {
+            ThrowLineError(path, line_number, "unknown [sensor_detection] setting: " + std::string(key));
+        }
+        return;
+    }
     if (section == "homography") {
         AssignHomographyValue(config, path, line_number, key, value);
         return;
@@ -296,6 +310,11 @@ void ValidateConfig(const std::filesystem::path& path, const ServerConfig& confi
     }
     if (!config.process.IsValid()) {
         throw ConfigError(path.string() + ": [process] contains an invalid device identifier");
+    }
+    if (!config.sensor_detection.IsValid()) {
+        throw ConfigError(path.string() +
+                          ": [sensor_detection] requires positive thresholds with "
+                          "exit_threshold_cm >= enter_threshold_cm and debounce_count >= 1");
     }
     if (config.process.homography.enabled && !config.process.homography.IsValid()) {
         throw ConfigError(path.string() +
@@ -331,7 +350,8 @@ ServerConfig LoadServerConfig(const std::filesystem::path& path) {
         if (text.front() == '[' && text.back() == ']') {
             section = std::string(Trim(text.substr(1, text.size() - 2)));
             if (section != "mqtt" && section != "device_registry" && section != "database" && section != "storage" &&
-                section != "http" && section != "routing" && section != "process" && section != "homography") {
+                section != "http" && section != "routing" && section != "process" && section != "homography" &&
+                section != "sensor_detection") {
                 ThrowLineError(path, line_number, "unknown configuration section: " + section);
             }
             continue;

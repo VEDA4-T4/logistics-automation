@@ -104,16 +104,16 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
     }
 }
 
+// Measurement health only (IsValidMeasurementStatus in mqtt_codec.hpp). Box
+// arrival is decided by the central server from distanceCm, so this node just
+// relays the reading it was handed.
 [[nodiscard]] std::string SensorStateName(std::uint8_t state) {
     switch (state) {
-        case UART_SENSOR_CLEAR:
-            return "CLEAR";
-        case UART_SENSOR_DETECTED:
-            return "DETECTED";
         case UART_SENSOR_FAULT:
             return "FAULT";
+        case UART_SENSOR_OK:
         default:
-            return "UNKNOWN";
+            return "OK";
     }
 }
 

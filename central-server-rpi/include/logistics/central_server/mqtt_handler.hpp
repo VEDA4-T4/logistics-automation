@@ -5,6 +5,8 @@
 #include <string>
 #include <string_view>
 
+#include "logistics/central_server/sensor_detection.hpp"
+
 namespace logistics::contracts::mqtt {
 struct MqttMessage;
 }
@@ -28,7 +30,8 @@ public:
     using ProcessMessageHandler = std::function<bool(const contracts::mqtt::MqttMessage& message)>;
 
     explicit MqttHandler(DeviceManager& device_manager, Logger logger = {},
-                         PersistenceService* persistence_service = nullptr, std::string default_destination = {});
+                         PersistenceService* persistence_service = nullptr, std::string default_destination = {},
+                         SensorDetectionConfig sensor_detection = {});
     void SetWorkCreatedHandler(WorkCreatedHandler handler);
     void SetQtEventHandler(QtEventHandler handler);
     void SetCommandRouteHandler(MessageRouteHandler handler);
@@ -49,6 +52,7 @@ private:
     Logger logger_;
     PersistenceService* persistence_service_;
     std::string default_destination_;
+    SensorDetector sensor_detector_;
     WorkCreatedHandler work_created_handler_;
     QtEventHandler qt_event_handler_;
     MessageRouteHandler command_route_handler_;

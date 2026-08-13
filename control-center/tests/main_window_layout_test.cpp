@@ -667,7 +667,8 @@ int main(int argc, char* argv[]) {
           { QStringLiteral("timestamp"), now.addMSecs(6).toString(Qt::ISODateWithMs) },
           { QStringLiteral("data"), QJsonObject{ { QStringLiteral("sensorId"), 1 },
                                                  { QStringLiteral("sensorName"), QStringLiteral("FRONT") },
-                                                 { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                                                 { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                 { QStringLiteral("detectionStatus"), QStringLiteral("DETECTED") },
                                                  { QStringLiteral("distanceCm"), 12 } } } });
     application.processEvents();
 

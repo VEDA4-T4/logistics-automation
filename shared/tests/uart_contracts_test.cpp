@@ -36,9 +36,11 @@ void TestInputPayloadValidation() {
     constexpr std::array<std::uint8_t, 1> kUnexpectedPayload{ 1U };
     constexpr std::array<std::uint8_t, 1> kSpeed100{ 100U };
     constexpr std::array<std::uint8_t, 1> kSpeed101{ 101U };
-    constexpr std::array<std::uint8_t, 4> kInputSensorDetected{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_DETECTED, 0x34U,
-                                                                0x12U };
-    constexpr std::array<std::uint8_t, 4> kInvalidInputSensor{ 2U, UART_SENSOR_DETECTED, 10U, 0U };
+    constexpr std::array<std::uint8_t, 4> kInputSensorReading{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_OK, 0x34U, 0x12U };
+    constexpr std::array<std::uint8_t, 4> kInvalidInputSensor{ 2U, UART_SENSOR_OK, 10U, 0U };
+    /* 0x01 is the retired UART_SENSOR_DETECTED slot: the controller no longer
+     * judges box presence, so that value must now be rejected outright. */
+    constexpr std::array<std::uint8_t, 4> kRetiredDetectedState{ UART_INPUT_SENSOR_ID_1, 0x01U, 10U, 0U };
     constexpr std::array<std::uint8_t, 4> kInvalidInputSensorState{ UART_INPUT_SENSOR_ID_1, UART_SENSOR_FAULT + 1U, 10U,
                                                                     0U };
 
@@ -52,14 +54,18 @@ void TestInputPayloadValidation() {
     assert(UART_IS_VALID_INPUT_PAYLOAD(UART_CMD_INPUT_CONTROL_RESET, nullptr, 0U) != 0U);
     assert(uart_input_sensor_id_is_valid(UART_INPUT_SENSOR_ID_1) != 0U);
     assert(uart_input_sensor_id_is_valid(2U) == 0U);
-    assert(uart_input_sensor_status_is_valid(kInputSensorDetected.data(), kInputSensorDetected.size()) != 0U);
+    assert(uart_input_sensor_status_is_valid(kInputSensorReading.data(), kInputSensorReading.size()) != 0U);
     assert(uart_input_sensor_status_is_valid(kInvalidInputSensor.data(), kInvalidInputSensor.size()) == 0U);
+    assert(uart_input_sensor_status_is_valid(kRetiredDetectedState.data(), kRetiredDetectedState.size()) == 0U);
     assert(uart_input_sensor_status_is_valid(kInvalidInputSensorState.data(), kInvalidInputSensorState.size()) == 0U);
     assert(uart_input_sensor_status_is_valid(nullptr, UART_SENSOR_STATUS_PAYLOAD_SIZE) == 0U);
-    assert(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_LOW_INDEX] == 0x34U);
-    assert(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_HIGH_INDEX] == 0x12U);
-    assert((static_cast<std::uint16_t>(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_LOW_INDEX]) |
-            (static_cast<std::uint16_t>(kInputSensorDetected[UART_SENSOR_DISTANCE_CM_HIGH_INDEX]) << 8U)) == 0x1234U);
+    assert(uart_sensor_state_is_valid(UART_SENSOR_OK) != 0U);
+    assert(uart_sensor_state_is_valid(UART_SENSOR_FAULT) != 0U);
+    assert(uart_sensor_state_is_valid(0x01U) == 0U);
+    assert(kInputSensorReading[UART_SENSOR_DISTANCE_CM_LOW_INDEX] == 0x34U);
+    assert(kInputSensorReading[UART_SENSOR_DISTANCE_CM_HIGH_INDEX] == 0x12U);
+    assert((static_cast<std::uint16_t>(kInputSensorReading[UART_SENSOR_DISTANCE_CM_LOW_INDEX]) |
+            (static_cast<std::uint16_t>(kInputSensorReading[UART_SENSOR_DISTANCE_CM_HIGH_INDEX]) << 8U)) == 0x1234U);
     assert(UART_INPUT_CONVEYOR_STATUS_PAYLOAD_SIZE == 5U);
 }
 
@@ -125,7 +131,7 @@ void TestSortingPayloadValidation() {
     constexpr std::array<std::uint8_t, 1> kShortReturnHomeCycle{ 0x34U };
     constexpr std::array<std::uint8_t, 1> kSortingSpeed100{ 100U };
     constexpr std::array<std::uint8_t, 1> kSortingSpeed101{ 101U };
-    constexpr std::array<std::uint8_t, 4> kSensorDetected{ UART_SORTING_SENSOR_ID_2, UART_SENSOR_DETECTED, 10U, 0U };
+    constexpr std::array<std::uint8_t, 4> kSensorReading{ UART_SORTING_SENSOR_ID_2, UART_SENSOR_OK, 10U, 0U };
     constexpr std::array<std::uint8_t, 4> kCompleteEvent{ UART_SORTING_EVENT_CYCLE_COMPLETE, 0x34U, 0x12U,
                                                           UART_SORTING_DESTINATION_2 };
 
@@ -168,7 +174,7 @@ void TestSortingPayloadValidation() {
     assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_2) != 0U);
     assert(uart_sorting_sensor_id_is_valid(UART_SORTING_SENSOR_ID_3) != 0U);
     assert(uart_sorting_sensor_id_is_valid(4U) == 0U);
-    assert(uart_sorting_sensor_status_is_valid(kSensorDetected.data(), kSensorDetected.size()) != 0U);
+    assert(uart_sorting_sensor_status_is_valid(kSensorReading.data(), kSensorReading.size()) != 0U);
     assert(UART_IS_VALID_SORTING_EVENT_PAYLOAD(kCompleteEvent.data(), kCompleteEvent.size()) != 0U);
     assert(uart_sorting_event_is_valid(0x01U) == 0U);
     assert(uart_sorting_event_is_valid(0x03U) == 0U);
@@ -183,8 +189,8 @@ void TestConveyorEventContracts() {
     heartbeat[UART_EVENT_ID_INDEX] = APP_EVENT_HEARTBEAT;
     heartbeat[APP_HEARTBEAT_STATE_INDEX] = UART_DEVICE_READY;
     heartbeat[APP_HEARTBEAT_ERROR_INDEX] = UART_ERROR_NONE;
-    heartbeat[APP_HEARTBEAT_INPUT_SENSOR_INDEX] = UART_SENSOR_CLEAR;
-    heartbeat[APP_HEARTBEAT_SORTING_SENSOR_INDEX] = UART_SENSOR_DETECTED;
+    heartbeat[APP_HEARTBEAT_INPUT_SENSOR_INDEX] = UART_SENSOR_OK;
+    heartbeat[APP_HEARTBEAT_SORTING_SENSOR_INDEX] = UART_SENSOR_FAULT;
     assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(heartbeat.data(), heartbeat.size()) != 0U);
     assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(heartbeat.data(), heartbeat.size() - 1U) == 0U);
     heartbeat[APP_HEARTBEAT_STATE_INDEX] = UART_DEVICE_EMERGENCY_STOP + 1U;

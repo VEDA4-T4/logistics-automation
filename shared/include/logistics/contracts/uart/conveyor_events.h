@@ -76,8 +76,8 @@ static inline uint8_t uart_app_heartbeat_payload_is_valid(const uint8_t* payload
 
     return (payload[APP_HEARTBEAT_STATE_INDEX] <= UART_DEVICE_EMERGENCY_STOP &&
             uart_app_error_is_valid(payload[APP_HEARTBEAT_ERROR_INDEX]) != 0U &&
-            payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX] <= UART_SENSOR_FAULT &&
-            payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] <= UART_SENSOR_FAULT)
+            uart_sensor_state_is_valid(payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX]) != 0U &&
+            uart_sensor_state_is_valid(payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX]) != 0U)
                ? 1U
                : 0U;
 }

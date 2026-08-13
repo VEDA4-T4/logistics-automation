@@ -464,20 +464,35 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         }
         const auto sensor_id_value = data.value(QStringLiteral("sensorId"));
         const auto distance_value = data.value(QStringLiteral("distanceCm"));
+        // measurementStatus is the device's own view of whether the reading can
+        // be trusted; detectionStatus is what the central server derived from
+        // distanceCm using its configured thresholds. The controller stopped
+        // deciding box presence, so DETECTED/CLEAR now only ever arrives in the
+        // latter - and it is absent entirely when server-side detection is off.
         const auto measurement_status = StringValue(data, "measurementStatus").toUpper();
+        const auto detection_status = StringValue(data, "detectionStatus").toUpper();
         const auto sensor_id = sensor_id_value.toInt();
         const auto distance_cm = distance_value.toInt();
+        const bool detection_is_valid = detection_status.isEmpty() || detection_status == QStringLiteral("CLEAR") ||
+                                        detection_status == QStringLiteral("DETECTED") ||
+                                        detection_status == QStringLiteral("UNKNOWN");
         if (!sensor_id_value.isDouble() || sensor_id_value.toDouble() != sensor_id || sensor_id <= 0 ||
             !distance_value.isDouble() || distance_value.toDouble() != distance_cm || distance_cm < 0 ||
-            (measurement_status != QStringLiteral("CLEAR") && measurement_status != QStringLiteral("DETECTED") &&
-             measurement_status != QStringLiteral("FAULT"))) {
-            result.error =
-                QStringLiteral("센서 상태 메시지의 sensorId, measurementStatus 또는 distanceCm이 올바르지 않습니다.");
+            (measurement_status != QStringLiteral("OK") && measurement_status != QStringLiteral("FAULT")) ||
+            !detection_is_valid) {
+            result.error = QStringLiteral(
+                "센서 상태 메시지의 sensorId, measurementStatus, detectionStatus 또는 distanceCm이 올바르지 않습니다.");
             return result;
         }
 
+        // A faulty sensor outranks whatever detection said: the distance behind
+        // that judgement is not trustworthy.
+        const auto display_status = measurement_status == QStringLiteral("FAULT")
+                                        ? QStringLiteral("FAULT")
+                                        : (detection_status.isEmpty() ? QStringLiteral("UNKNOWN") : detection_status);
+
         auto& process = process_runtime_[process_index];
-        UpdateSensor(process.status, sensor_id, measurement_status, distance_cm, timestamp);
+        UpdateSensor(process.status, sensor_id, display_status, distance_cm, timestamp);
         process.last_received_at = effective_received_at;
         if (measurement_status == QStringLiteral("FAULT")) {
             process.status.error_code = QStringLiteral("ERR-SENSOR");

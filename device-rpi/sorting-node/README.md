@@ -48,7 +48,7 @@ nano device-rpi/config/sorting-node.ini
 | `OPERATION_RESULT`, `RESPONSE` | `device/{id}/response`의 `COMMAND_RESPONSE` |
 | 분류·컨베이어 상태 응답 | `device/{id}/status`의 `DEVICE_STATUS` |
 | `CYCLE_COMPLETE` | `device/{id}/event`의 `WORK_COMPLETED` |
-| `SENSOR_STATUS` | `device/{id}/event`의 `SENSOR_STATUS(sensorId, measurementStatus, distanceCm)` |
+| `SENSOR_STATUS` | `device/{id}/event`의 `SENSOR_STATUS(sensorId, measurementStatus, distanceCm)`. `measurementStatus`는 `OK`/`FAULT`(측정 건전성)뿐이며, 상자 도착 판정은 중앙 서버가 거리값으로 내려 `detectionStatus`를 덧붙인다 |
 | `DEVICE_STATUS`, heartbeat, Safety·Health 이벤트 | 상태 갱신 및 필요 시 `ERROR_OCCURRED` |
 | CRC·Parser 오류, 응답 타임아웃, UART 단절 | `device/{id}/error` 및 UART 오류 상태 |
 

@@ -34,7 +34,8 @@ QJsonObject DeviceEnvelope(const QString& message_id, const QString& source_id, 
 }
 
 QJsonObject SensorEnvelope(const QString& message_id, const QString& source_id, int sensor_id,
-                           const QString& measurement_status, int distance_cm, int second) {
+                           const QString& measurement_status, const QString& detection_status, int distance_cm,
+                           int second) {
     return {
         { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
         { QStringLiteral("messageId"), message_id },
@@ -46,6 +47,7 @@ QJsonObject SensorEnvelope(const QString& message_id, const QString& source_id, 
           QJsonObject{
               { QStringLiteral("sensorId"), sensor_id },
               { QStringLiteral("measurementStatus"), measurement_status },
+              { QStringLiteral("detectionStatus"), detection_status },
               { QStringLiteral("distanceCm"), distance_cm },
           } },
     };
@@ -144,10 +146,10 @@ int main(int argc, char* argv[]) {
     assert(has_gripper_title);
     assert(has_transfer_state);
 
-    assert(
-        state
-            .applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-CLEAR", "PI-SORTING-01", 2, QStringLiteral("CLEAR"), 42, 4))
-            .applied);
+    assert(state
+               .applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-CLEAR", "PI-SORTING-01", 2, QStringLiteral("OK"),
+                                             QStringLiteral("CLEAR"), 42, 4))
+               .applied);
     panel.setState(state);
     application.processEvents();
     assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("CLEAR"));
@@ -186,9 +188,10 @@ int main(int argc, char* argv[]) {
     assert(sorting_sensor_2->text() == QStringLiteral("● S2 대기"));
     assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#6e6e6e")));
 
-    assert(
-        state.applyEnvelope(SensorEnvelope("SORTING-SENSOR-2", "PI-SORTING-01", 2, QStringLiteral("DETECTED"), 11, 5))
-            .applied);
+    assert(state
+               .applyEnvelope(SensorEnvelope("SORTING-SENSOR-2", "PI-SORTING-01", 2, QStringLiteral("OK"),
+                                             QStringLiteral("DETECTED"), 11, 5))
+               .applied);
     panel.setState(state);
     application.processEvents();
     bool has_detected_sensor = false;
@@ -203,9 +206,10 @@ int main(int argc, char* argv[]) {
     assert(has_detected_sensor);
     assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#75beff")));
 
-    assert(
-        state.applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-FAULT", "PI-SORTING-01", 2, QStringLiteral("FAULT"), 0, 6))
-            .applied);
+    assert(state
+               .applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-FAULT", "PI-SORTING-01", 2, QStringLiteral("FAULT"),
+                                             QStringLiteral("UNKNOWN"), 0, 6))
+               .applied);
     panel.setState(state);
     application.processEvents();
     assert(sorting_sensor_2->property("measurementStatus").toString() == QStringLiteral("FAULT"));
@@ -213,8 +217,8 @@ int main(int argc, char* argv[]) {
     assert(sorting_sensor_2->styleSheet().contains(QStringLiteral("#f14c4c")));
 
     assert(state
-               .applyEnvelope(
-                   SensorEnvelope("SORTING-SENSOR-2-RECOVERED", "PI-SORTING-01", 2, QStringLiteral("CLEAR"), 40, 7))
+               .applyEnvelope(SensorEnvelope("SORTING-SENSOR-2-RECOVERED", "PI-SORTING-01", 2, QStringLiteral("OK"),
+                                             QStringLiteral("CLEAR"), 40, 7))
                .applied);
     panel.setState(state);
     application.processEvents();
