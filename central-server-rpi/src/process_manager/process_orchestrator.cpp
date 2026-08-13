@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <stdexcept>
 #include <utility>
 
@@ -102,6 +103,28 @@ namespace mqtt = contracts::mqtt;
     return state == ProcessSystemState::kError || state == ProcessSystemState::kEmergencyStop;
 }
 
+[[nodiscard]] std::optional<std::string> ProcessCommandRequestId(const mqtt::MqttMessage& message) {
+    if (const auto* control = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
+        return control->request_id;
+    }
+    if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(message)) {
+        return destination->request_id;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::uint64_t> ProcessMessageSequence(std::string_view message_id) noexcept {
+    constexpr std::string_view prefix = "PROCESS-";
+    if (!message_id.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    std::uint64_t sequence{};
+    const auto first = message_id.data() + prefix.size();
+    const auto last = message_id.data() + message_id.size();
+    const auto parsed = std::from_chars(first, last, sequence);
+    return parsed.ec == std::errc{} && parsed.ptr == last ? std::optional{ sequence } : std::nullopt;
+}
+
 }  // namespace
 
 bool ProcessOrchestratorConfig::IsValid() const noexcept {
@@ -116,16 +139,37 @@ bool ProcessOrchestratorConfig::IsValid() const noexcept {
 }
 
 bool ProcessCommandTracker::Track(const ProcessCommandIntent& intent) {
-    std::string request_id;
-    if (const auto* control = mqtt::GetPayload<mqtt::ControlCommandPayload>(intent.message)) {
-        request_id = control->request_id;
-    } else if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(intent.message)) {
-        request_id = destination->request_id;
-    }
-    if (request_id.empty() || pending_.contains(request_id)) {
+    const auto request_id = ProcessCommandRequestId(intent.message);
+    if (!request_id.has_value() || request_id->empty() || pending_.contains(*request_id)) {
         return false;
     }
-    pending_.emplace(std::move(request_id), intent);
+    pending_.emplace(*request_id, intent);
+    return true;
+}
+
+bool ProcessCommandTracker::Restore(std::vector<ProcessCommandIntent> intents) {
+    std::unordered_map<std::string, ProcessCommandIntent> restored;
+    for (auto& intent : intents) {
+        const auto request_id = ProcessCommandRequestId(intent.message);
+        if (!request_id.has_value() || request_id->empty() ||
+            !restored.emplace(*request_id, std::move(intent)).second) {
+            return false;
+        }
+    }
+    pending_ = std::move(restored);
+    return true;
+}
+
+bool ProcessCommandTracker::Remove(std::string_view request_id) {
+    return pending_.erase(std::string(request_id)) != 0;
+}
+
+bool ProcessCommandTracker::MarkDispatched(std::string_view request_id) {
+    const auto pending = pending_.find(std::string(request_id));
+    if (pending == pending_.end()) {
+        return false;
+    }
+    pending->second.dispatch_confirmed = true;
     return true;
 }
 
@@ -191,14 +235,20 @@ ProcessOrchestrationResult ProcessOrchestrator::Handle(const mqtt::MqttMessage& 
     return result;
 }
 
-ProcessTransition ProcessOrchestrator::BeginWork(std::string_view message_id, std::string_view work_id,
-                                                 std::string_view input_device_id) {
+ProcessOrchestrationResult ProcessOrchestrator::BeginWork(std::string_view message_id, std::string_view work_id,
+                                                          std::string_view input_device_id,
+                                                          std::string_view timestamp) {
     if (!config_.enabled) {
         return {
-            .disposition = TransitionDisposition::kApplied,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = {},
+            .handled = false,
+            .transition =
+                {
+                    .disposition = TransitionDisposition::kApplied,
+                    .previous_stage = std::nullopt,
+                    .current_stage = std::nullopt,
+                    .reason = {},
+                },
+            .commands = {},
         };
     }
     auto transition = state_machine_.Apply({
@@ -212,7 +262,15 @@ ProcessTransition ProcessOrchestrator::BeginWork(std::string_view message_id, st
     if (transition.Applied()) {
         ++revision_;
     }
-    return transition;
+    ProcessOrchestrationResult result{
+        .handled = true,
+        .transition = std::move(transition),
+        .commands = {},
+    };
+    if (result.transition.Applied()) {
+        result.commands.push_back(MakeInputConveyorCommand(work_id, mqtt::ControlCommand::kStop, timestamp));
+    }
+    return result;
 }
 
 ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id) {
@@ -291,6 +349,56 @@ ProcessTransition ProcessOrchestrator::ApplySystemCommand(mqtt::ControlCommand c
         };
     }
     auto transition = state_machine_.ApplySystemCommand(command);
+    if (transition.Applied()) {
+        ++revision_;
+    }
+    return transition;
+}
+
+std::vector<ProcessCommandIntent> ProcessCommandTracker::PendingCommands() const {
+    std::vector<ProcessCommandIntent> commands;
+    commands.reserve(pending_.size());
+    for (const auto& [request_id, intent] : pending_) {
+        static_cast<void>(request_id);
+        commands.push_back(intent);
+    }
+    std::ranges::sort(commands, [](const ProcessCommandIntent& left, const ProcessCommandIntent& right) {
+        const auto left_sequence = ProcessMessageSequence(left.message.message_id);
+        const auto right_sequence = ProcessMessageSequence(right.message.message_id);
+        if (left_sequence.has_value() && right_sequence.has_value() && left_sequence != right_sequence) {
+            return *left_sequence < *right_sequence;
+        }
+        return left.message.message_id < right.message.message_id;
+    });
+    return commands;
+}
+
+ProcessTransition ProcessOrchestrator::FailSystemCommand(mqtt::ControlCommand command, std::string reason) {
+    if (!config_.enabled) {
+        return {
+            .disposition = TransitionDisposition::kApplied,
+            .previous_stage = std::nullopt,
+            .current_stage = std::nullopt,
+            .reason = {},
+        };
+    }
+    if (command == mqtt::ControlCommand::kEmergencyStop) {
+        auto transition = state_machine_.ApplySystemCommand(command);
+        if (transition.Applied()) {
+            ++revision_;
+        }
+        return transition;
+    }
+    if (command != mqtt::ControlCommand::kStart && command != mqtt::ControlCommand::kRestart &&
+        command != mqtt::ControlCommand::kStop && command != mqtt::ControlCommand::kRecovery) {
+        return {
+            .disposition = TransitionDisposition::kDuplicate,
+            .previous_stage = std::nullopt,
+            .current_stage = std::nullopt,
+            .reason = "command failure does not change the process state",
+        };
+    }
+    auto transition = state_machine_.ApplySystemFailure(std::move(reason));
     if (transition.Applied()) {
         ++revision_;
     }
@@ -520,10 +628,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
     if (!work.has_value()) {
         return result;
     }
-    if (event.type == ProcessEventType::kPositionDetected) {
-        result.commands.push_back(
-            MakeInputConveyorCommand(work->work_id, mqtt::ControlCommand::kStop, message.timestamp));
-    } else if (event.type == ProcessEventType::kProductInfoReady && !DownstreamDevicesBusy(machine, work->work_id)) {
+    if (event.type == ProcessEventType::kProductInfoReady && !DownstreamDevicesBusy(machine, work->work_id)) {
         AppendDownstreamCommands(result, *work, message.timestamp);
     } else if (event.type == ProcessEventType::kGripperCompleted) {
         result.commands.push_back(MakeDestinationCommand(work->work_id, work->destination, config_.sorting_device_id,

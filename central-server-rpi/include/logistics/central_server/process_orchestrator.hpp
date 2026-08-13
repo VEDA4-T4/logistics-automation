@@ -32,12 +32,17 @@ struct ProcessCommandIntent final {
     contracts::mqtt::MqttMessage message;
     std::optional<ProcessEventType> dispatched_event;
     std::string work_id;
+    bool dispatch_confirmed{ false };
 };
 
 class ProcessCommandTracker final {
 public:
     [[nodiscard]] bool Track(const ProcessCommandIntent& intent);
+    [[nodiscard]] bool Restore(std::vector<ProcessCommandIntent> intents);
+    [[nodiscard]] bool Remove(std::string_view request_id);
+    [[nodiscard]] bool MarkDispatched(std::string_view request_id);
     [[nodiscard]] std::optional<ProcessCommandIntent> HandleResponse(const contracts::mqtt::MqttMessage& message);
+    [[nodiscard]] std::vector<ProcessCommandIntent> PendingCommands() const;
     [[nodiscard]] std::size_t PendingCount() const noexcept;
 
 private:
@@ -69,13 +74,14 @@ public:
     [[nodiscard]] const ProcessStateMachine& StateMachine() const noexcept;
     [[nodiscard]] ProcessOrchestrationResult Preview(const contracts::mqtt::MqttMessage& message) const;
     [[nodiscard]] ProcessOrchestrationResult Handle(const contracts::mqtt::MqttMessage& message);
-    [[nodiscard]] ProcessTransition BeginWork(std::string_view message_id, std::string_view work_id,
-                                              std::string_view input_device_id);
+    [[nodiscard]] ProcessOrchestrationResult BeginWork(std::string_view message_id, std::string_view work_id,
+                                                       std::string_view input_device_id, std::string_view timestamp);
     [[nodiscard]] ProcessTransition ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id);
     [[nodiscard]] ProcessTransition ConfirmDispatch(const ProcessCommandIntent& intent);
     [[nodiscard]] ProcessTransition FailDispatch(const ProcessCommandIntent& intent, std::string reason);
     [[nodiscard]] ProcessTransition PreviewSystemCommand(contracts::mqtt::ControlCommand command) const;
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
+    [[nodiscard]] ProcessTransition FailSystemCommand(contracts::mqtt::ControlCommand command, std::string reason);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
     [[nodiscard]] ProcessRestoreResult RestoreAfterServerRestart(
         ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,

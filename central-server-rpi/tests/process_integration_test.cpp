@@ -286,7 +286,11 @@ private:
         if (result.transition.disposition == central_server::TransitionDisposition::kRejected) {
             return false;
         }
-        for (const auto& intent : result.commands) {
+        return DispatchProcessCommands(result.commands);
+    }
+
+    [[nodiscard]] bool DispatchProcessCommands(const std::vector<central_server::ProcessCommandIntent>& commands) {
+        for (const auto& intent : commands) {
             if (!central_server::ResolveCommandTargets(intent.message, device_manager_.RegisteredDevices()).IsValid()) {
                 static_cast<void>(orchestrator_.FailDispatch(intent, "target process node is unavailable"));
                 return false;
@@ -323,7 +327,8 @@ private:
                 .timestamp = std::string(kTimestamp),
                 .data = mqtt::WorkCreatedPayload{ .work_id = work_id_ },
             };
-            if (!orchestrator_.BeginWork(created.message_id, work_id_, device_id).Applied()) {
+            const auto begin = orchestrator_.BeginWork(created.message_id, work_id_, device_id, created.timestamp);
+            if (!begin.transition.Applied() || !DispatchProcessCommands(begin.commands)) {
                 return false;
             }
             const bool sent_to_vision = Publish(mqtt::DeviceCommandTopic(kVisionId), created);
@@ -401,7 +406,7 @@ void TestAutomaticProcessCompletesThroughAllNodes() {
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStop) == 1);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
     assert((harness.DeviceCommandTargets() ==
-            std::vector<std::string>{ std::string(kVisionId), std::string(kInputId), std::string(kLineTracerId),
+            std::vector<std::string>{ std::string(kInputId), std::string(kVisionId), std::string(kLineTracerId),
                                       std::string(kGripperId), std::string(kSortingId), std::string(kInputId) }));
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());

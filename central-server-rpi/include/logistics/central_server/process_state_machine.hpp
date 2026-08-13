@@ -132,5 +132,6 @@ private:
 [[nodiscard]] std::string_view ToString(ProcessEventType type) noexcept;
 [[nodiscard]] std::optional<ProcessSystemState> ParseProcessSystemState(std::string_view value) noexcept;
 [[nodiscard]] std::optional<WorkStage> ParseWorkStage(std::string_view value) noexcept;
+[[nodiscard]] std::optional<ProcessEventType> ParseProcessEventType(std::string_view value) noexcept;
 
 }  // namespace logistics::central_server

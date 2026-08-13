@@ -13,6 +13,7 @@
 namespace {
 
 namespace central_server = logistics::central_server;
+namespace mqtt = logistics::contracts::mqtt;
 
 constexpr auto kWorkId = "d8e9b2be-bfc0-471c-9000-590123412345";
 
@@ -52,7 +53,31 @@ void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
                   .calibration_version = 3,
               } },
         };
-        assert(store.Save(central_server::ProcessSystemState::kRunning, 42, works, targets, 1000).ok());
+        const std::vector pending_commands{
+            central_server::ProcessCommandIntent{
+                .message =
+                    {
+                        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+                        .message_id = "PROCESS-central-server-43",
+                        .message_type = mqtt::MessageType::kControlCommand,
+                        .source_id = "central-server",
+                        .timestamp = "2026-08-13T01:00:00Z",
+                        .data =
+                            mqtt::ControlCommandPayload{
+                                .request_id = "PROCESS-central-server-43",
+                                .command = mqtt::ControlCommand::kStop,
+                                .target_device_id = "PI-INPUT-01",
+                                .component_id = "input_conveyor",
+                                .params = mqtt::Json{ { "workId", kWorkId } },
+                            },
+                    },
+                .dispatched_event = std::nullopt,
+                .work_id = kWorkId,
+                .dispatch_confirmed = true,
+            },
+        };
+        assert(
+            store.Save(central_server::ProcessSystemState::kRunning, 42, works, targets, pending_commands, 1000).ok());
     }
 
     {
@@ -66,6 +91,13 @@ void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
         assert(stored->message_sequence == 42);
         assert(stored->works.size() == 1);
         assert(stored->gripper_targets.size() == 1);
+        assert(stored->pending_commands.size() == 1);
+        assert(stored->pending_commands.front().work_id == kWorkId);
+        assert(stored->pending_commands.front().dispatch_confirmed);
+        const auto* pending = mqtt::GetPayload<mqtt::ControlCommandPayload>(stored->pending_commands.front().message);
+        assert(pending != nullptr);
+        assert(pending->request_id == "PROCESS-central-server-43");
+        assert(pending->command == mqtt::ControlCommand::kStop);
         const auto& target = stored->gripper_targets.at(kWorkId);
         assert(target.x_mm == 125.5);
         assert(target.y_mm == -42.25);

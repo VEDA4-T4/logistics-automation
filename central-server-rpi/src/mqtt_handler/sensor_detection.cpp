@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "logistics/contracts/mqtt_codec.hpp"
+
 namespace logistics::central_server {
 
 SensorDetector::SensorDetector(SensorDetectionConfig config) noexcept : config_(std::move(config)) {}
@@ -43,6 +45,38 @@ std::optional<std::string> SensorDetector::Evaluate(std::string_view device_id, 
     }
 
     return std::string(channel.detected ? kDetectionDetected : kDetectionClear);
+}
+
+InputDetectionGate::InputDetectionGate(std::string input_device_id, const std::int32_t sensor_id)
+    : input_device_id_(std::move(input_device_id)), sensor_id_(sensor_id) {}
+
+bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& message, const bool process_accepts_work,
+                                          const bool input_station_occupied) {
+    const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
+    if (sensor == nullptr || message.source_id != input_device_id_ || sensor->sensor_id != sensor_id_ ||
+        !sensor->detection_status.has_value()) {
+        return false;
+    }
+    if (*sensor->detection_status != kDetectionDetected) {
+        consumed_ = false;
+        return false;
+    }
+    if (consumed_) {
+        return false;
+    }
+    if (input_station_occupied) {
+        consumed_ = true;
+        return false;
+    }
+    if (!process_accepts_work) {
+        return false;
+    }
+    consumed_ = true;
+    return true;
+}
+
+void InputDetectionGate::Retry() noexcept {
+    consumed_ = false;
 }
 
 }  // namespace logistics::central_server

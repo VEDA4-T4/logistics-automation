@@ -92,13 +92,13 @@
 #table(
   columns: (1.1fr, 1.25fr, 1.65fr),
   table.header([*입력/상태*], [*상태 전이*], [*서버 동작*]),
-  [BOX_DETECTED], [새 workId 생성, INPUT_DETECTED], [product를 DETECTED로 생성하고 WORK_CREATED를 vision 장치 및 Qt event에 QoS 1 발행한다.],
+  [BOX_DETECTED], [새 workId 생성, INPUT_DETECTED], [product를 DETECTED로 생성하고 input conveyor STOP을 먼저 보낸 뒤 WORK_CREATED를 vision 장치 및 Qt event에 QoS 1 발행한다.],
   [WORK_CREATED 발행 성공], [VISION_ASSIGNED], [vision 배정을 확정한다.],
   [POSITION_DETECTED], [VISION_PROCESSING], [homography 활성 시 box corner로 gripper target pose를 계산한다.],
   [BARCODE_DETECTED SUCCESS], [BARCODE_RECOGNIZED], [product_catalog를 조회한다.],
-  [PRODUCT_INFO SUCCESS], [PRODUCT_IDENTIFIED], [destination을 기록하고 gripper START/PICK 명령을 생성한다.],
-  [gripper 완료 상태], [SORTING_REQUESTED], [sorting 장치에 DESTINATION_SET을 생성한다.],
-  [sorting 완료 상태], [TRANSPORT_REQUESTED], [line-tracer 장치에 DESTINATION_SET을 생성한다.],
+  [PRODUCT_INFO SUCCESS], [PRODUCT_IDENTIFIED], [destination을 기록하고 line-tracer pickup 경로 DESTINATION_SET과 gripper START/PICK 명령을 생성한다.],
+  [gripper 완료 상태], [SORTING_REQUESTED], [sorting 장치에 DESTINATION_SET을 생성하고 input conveyor START를 보낸다.],
+  [sorting 완료 상태], [TRANSPORT_REQUESTED], [PRODUCT_INFO 직후 할당한 line-tracer가 운송을 시작할 수 있는 상태로 전이한다.],
   [line-tracer working], [TRANSPORTING], [운송 진행 상태로 유지한다.],
   [WORK_COMPLETED SUCCESS], [COMPLETED], [활성 업무가 없으면 시스템 상태는 IDLE이 된다.],
 )
@@ -166,10 +166,13 @@ Control Center의 RTSP/ONVIF receiver는 RTSP/TCP만 지원한다. ONVIF metadat
   table.header([*ID*], [*요구사항*], [*상태*]),
   [SRS-PR-001], [BOX_DETECTED가 유효하게 저장되면 Central Server는 UUID workId를 생성하고 product lifecycle을 DETECTED로 생성해야 한다. 동일 messageId 재수신은 기존 workId를 반환하는 중복 처리여야 한다.], [구현],
   [SRS-PR-002], [BARCODE_DETECTED SUCCESS는 활성 product_catalog를 조회하여 PRODUCT_INFO를 생성해야 한다. catalog miss이고 default_destination이 설정되면 ``UNREGISTERED`` 상품과 기본 목적지로 계속 처리해야 한다.], [구현],
-  [SRS-PR-003], [자동 공정은 feature flag가 활성일 때만 PRODUCT_INFO 성공 후 gripper START/PICK, gripper 완료 후 sorting DESTINATION_SET, sorting 완료 후 line-tracer DESTINATION_SET을 생성해야 한다.], [설정 필요],
+  [SRS-PR-003], [자동 공정은 feature flag가 활성일 때만 BOX_DETECTED 후 input conveyor STOP, PRODUCT_INFO 성공 후 line-tracer pickup 경로 DESTINATION_SET과 gripper START/PICK, gripper 완료 후 sorting DESTINATION_SET과 input conveyor START를 생성해야 한다.], [구현],
   [SRS-PR-004], [PRODUCT_INFO 성공에는 non-empty destination이 필요하다. 실패한 barcode/product info 또는 명령 dispatch 실패는 해당 work를 FAILED로 만들고 시스템을 ERROR로 전이해야 한다.], [구현],
   [SRS-PR-005], [homography 활성 시 gripper 명령은 coordinateFrame, mm targetPose, box dimensions, calibrationVersion을 포함해야 한다.], [설정 필요],
   [SRS-PR-006], [line-tracer initialize 위치는 A, B, C만 허용하며 설정된 초기 위치를 명령에 포함해야 한다.], [구현],
+  [SRS-PR-007], [input 초음파 장치는 측정 건전성(OK/FAULT)과 raw 거리를 전송하고 Central Server가 설정된 진입·이탈 임계값, 히스테리시스와 디바운스로 박스 진입을 판정해야 한다. input 센서 1의 DETECTED 진입은 BOX_DETECTED를 생성하며, line-tracer의 로컬 장애물 안전 정지는 별도 STM32 safety 로직을 유지한다.], [구현],
+  [SRS-PR-008], [vision은 설정된 프레임 수 안에 바코드를 읽지 못하면 실패 BARCODE_DETECTED를 발행하여 해당 work가 무한 대기하지 않게 해야 한다.], [구현],
+  [SRS-PR-009], [자동 공정 명령은 MQTT 발행 전에 영속 outbox에 저장해야 한다. 서버 재시작 후 안전 STOP은 연결 즉시 같은 requestId로 재발행하고 나머지 명령은 START/RESTART 성공 뒤 재발행해야 한다.], [구현],
 )
 
 == HTTP upload 및 조회 요구사항
@@ -270,7 +273,7 @@ CONTROL_COMMAND는 START, STOP, RESTART, INITIALIZE, STATUS_REQUEST, EMERGENCY_S
 #table(
   columns: (1fr, 1.4fr, 1.6fr),
   table.header([*명령*], [*허용 상태*], [*결과*]),
-  [START / RESTART], [IDLE 또는 STOPPED], [suspended work를 복원하고 RUNNING으로 전이한다. RUNNING이면 duplicate 결과다.],
+  [START / RESTART], [IDLE 또는 STOPPED], [suspended work를 복원하고 RUNNING으로 전이하며 input·sorting conveyor가 운전하도록 전체 장치에 시작 명령을 보낸다. RUNNING이면 duplicate 결과다.],
   [STOP], [IDLE 또는 RUNNING], [active work를 suspend하고 STOPPED로 전이한다.],
   [EMERGENCY_STOP], [ESTOP 이외], [active work를 emergency suspend하고 ESTOP로 전이한다.],
   [RECOVERY], [ERROR 또는 ESTOP], [active work를 RECOVERING으로 두고 RECOVERY로 전이한다.],
@@ -280,11 +283,14 @@ CONTROL_COMMAND는 START, STOP, RESTART, INITIALIZE, STATUS_REQUEST, EMERGENCY_S
 
 RECOVERY request의 성공 COMMAND_RESPONSE가 Central Server에 수신되어야 복구 완료가 확정된다. 복구 성공 뒤 업무는 자동 RUNNING으로 재개되지 않으며 STOPPED 상태로 남는다. 운영자 또는 상위 제어가 START/RESTART를 별도로 발행해야 한다.
 
+전체 장치 응답 중 실패가 하나라도 있으면 START/RESTART/STOP/RECOVERY는 시스템 ERROR로 전이한다. EMERGENCY_STOP 실패는 중앙의 ESTOP을 해제하지 않는다. ``DUPLICATED`` 응답은 이미 같은 명령이 적용된 성공으로 집계한다.
+
 == 서버 재시작 복구
 
-- 서버는 system state, active work, suspended stage, destination, failure reason, gripper target, 내부 message sequence를 DB에 저장한다.
+- 서버는 system state, active work, suspended stage, destination, failure reason, gripper target, 내부 message sequence와 미완료 자동 명령 outbox를 DB에 저장한다.
 - 재시작 시 저장된 RUNNING은 안전하게 STOPPED로, ERROR와 RECOVERY는 ERROR로, ESTOP는 ESTOP로 복원한다.
 - RECOVERY 중 서버가 재시작되면 work는 FAILED가 되고 ``server restarted while recovery was in progress`` 사유를 남긴다.
+- 재시작 복원 시 terminal FAILED work와 이에 속한 미완료 명령은 제거하여 정상 업무가 실패 업무를 기다리지 않게 한다.
 - homography calibration version 또는 coordinate frame이 달라진 저장 gripper target은 무효화하며 해당 work에는 재검출이 필요하다는 오류 알림을 생성한다.
 - 공정 상태기계의 메모리 processed messageId 집합은 재시작 시 비워진다. 저장 계층의 messageId 중복 방지가 재시작 후의 영속 중복 방지 기준이다.
 
