@@ -42,10 +42,27 @@ void TestAllDirectionSafetyPolicy() {
     constexpr auto kAllUltrasonicErrors =
         static_cast<std::uint32_t>(SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_REAR |
                                    SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
+    constexpr auto kEnabledObstacles = static_cast<std::uint8_t>(
+        SENSOR_LOGIC_DIRECTION_FRONT | SENSOR_LOGIC_DIRECTION_LEFT | SENSOR_LOGIC_DIRECTION_RIGHT);
 
-    assert(SensorLogic_GetEffectiveSafetyObstacleMask(kAllObstacles) == kAllObstacles);
-    assert(SensorLogic_GetEffectiveSafetyObstacleMask(SENSOR_LOGIC_DIRECTION_REAR) == SENSOR_LOGIC_DIRECTION_REAR);
+    assert(SensorLogic_GetEffectiveSafetyObstacleMask(kAllObstacles) == kEnabledObstacles);
+    assert(SensorLogic_GetEffectiveSafetyObstacleMask(SENSOR_LOGIC_DIRECTION_REAR) == 0U);
     assert((SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors) & kAllUltrasonicErrors) == 0U);
+}
+
+void TestDisabledRearSensorIsIgnored() {
+    sensor_logic_context_t context{};
+    sensor_logic_update_t update{};
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_MarkUltrasonicStarted(&context, 1U, 0U);
+    for (std::uint32_t sample = 1U; sample <= SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES; ++sample) {
+        SensorLogic_UpdateUltrasonic(&context, 1U, 0U, 0U, sample * 60U, &update);
+    }
+
+    assert((context.diagnostics.error_flags & SENSOR_LOGIC_ERROR_ULTRASONIC_REAR) == 0U);
+    assert((context.diagnostics.obstacle_mask & SENSOR_LOGIC_DIRECTION_REAR) == 0U);
+    assert(context.ultrasonic_started_mask == 0U);
 }
 
 void TestUltrasonicFailureDebounce() {
@@ -68,6 +85,7 @@ void TestUltrasonicFailureDebounce() {
 int main() {
     TestObstacleHysteresis();
     TestAllDirectionSafetyPolicy();
+    TestDisabledRearSensorIsIgnored();
     TestUltrasonicFailureDebounce();
     return 0;
 }

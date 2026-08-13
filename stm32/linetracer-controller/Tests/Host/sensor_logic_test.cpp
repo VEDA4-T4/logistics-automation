@@ -608,7 +608,11 @@ void TestRouteTestSafetyFiltering() {
     for (std::uint32_t sample = 1U; sample <= SENSOR_ULTRASONIC_MAX_CONSECUTIVE_FAILURES; ++sample) {
         SensorLogic_UpdateUltrasonic(&context, 1U, 0U, 0U, sample * 10U, &update);
     }
+#if SENSOR_ULTRASONIC_REAR_ENABLED
     CHECK_TRUE((context.diagnostics.error_flags & kRearError) != 0U);
+#else
+    CHECK_TRUE((context.diagnostics.error_flags & kRearError) == 0U);
+#endif
 
     SensorLogic_Init(&context, 0U);
     update = {};
@@ -623,13 +627,20 @@ void TestRouteTestSafetyFiltering() {
                ((kAllUltrasonicErrors | kFsrError) & ~SENSOR_ROUTE_TEST_IGNORED_ERROR_FLAGS));
     CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kAllUltrasonicObstacles) == 0U);
 #else
-    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors) == kAllUltrasonicErrors);
+    constexpr auto kEnabledUltrasonicObstacles =
+        static_cast<std::uint8_t>(kFrontObstacle | kLeftObstacle | kRightObstacle);
+#if SENSOR_ULTRASONIC_TIMEOUT_SAFETY_FAULT
+    constexpr auto kEnabledSafetyErrors = kFrontError | kLeftError | kRightError;
+#else
+    constexpr std::uint32_t kEnabledSafetyErrors = 0U;
+#endif
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors) == kEnabledSafetyErrors);
     CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kAllUltrasonicErrors | kFsrError) ==
-               (kAllUltrasonicErrors | kFsrError));
-    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kAllUltrasonicObstacles) == kAllUltrasonicObstacles);
+               (kEnabledSafetyErrors | kFsrError));
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kAllUltrasonicObstacles) == kEnabledUltrasonicObstacles);
     CHECK_TRUE(SensorLogic_GetEffectiveSafetyErrorFlags(kRearError | kLeftError | kRightError) ==
-               (kRearError | kLeftError | kRightError));
-    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kRearObstacle) == kRearObstacle);
+               (kEnabledSafetyErrors & (kLeftError | kRightError)));
+    CHECK_TRUE(SensorLogic_GetEffectiveSafetyObstacleMask(kRearObstacle) == 0U);
 #endif
 }
 

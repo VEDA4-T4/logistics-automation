@@ -72,7 +72,9 @@ enum {
 static const uint8_t s_ultrasonic_measurement_schedule[] = {
     SENSOR_ULTRASONIC_FRONT_INDEX,
     SENSOR_ULTRASONIC_RIGHT_INDEX,
+#if SENSOR_ULTRASONIC_REAR_ENABLED
     SENSOR_ULTRASONIC_REAR_INDEX,
+#endif
     SENSOR_ULTRASONIC_LEFT_INDEX,
 };
 

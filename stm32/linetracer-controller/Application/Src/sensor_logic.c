@@ -24,6 +24,30 @@ static const uint8_t s_ultrasonic_direction_flags[SENSOR_LOGIC_ULTRASONIC_COUNT]
     SENSOR_LOGIC_DIRECTION_RIGHT,
 };
 
+#define SENSOR_LOGIC_ALL_ULTRASONIC_VALID_FLAGS                                                                      \
+    (SENSOR_LOGIC_VALID_ULTRASONIC_FRONT | SENSOR_LOGIC_VALID_ULTRASONIC_REAR | SENSOR_LOGIC_VALID_ULTRASONIC_LEFT | \
+     SENSOR_LOGIC_VALID_ULTRASONIC_RIGHT)
+#define SENSOR_LOGIC_ALL_ULTRASONIC_ERROR_FLAGS                                                                      \
+    (SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_REAR | SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | \
+     SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT)
+#define SENSOR_LOGIC_ENABLED_ULTRASONIC_ERROR_FLAGS                                                                   \
+    (SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT | \
+     (SENSOR_ULTRASONIC_REAR_ENABLED ? SENSOR_LOGIC_ERROR_ULTRASONIC_REAR : 0U))
+
+static uint8_t SensorLogic_UltrasonicIsEnabled(uint8_t sensor_index) {
+    if (sensor_index >= SENSOR_LOGIC_ULTRASONIC_COUNT) {
+        return 0U;
+    }
+
+#if !SENSOR_ULTRASONIC_REAR_ENABLED
+    if (sensor_index == 1U) {
+        return 0U;
+    }
+#endif
+
+    return 1U;
+}
+
 static uint8_t SensorLogic_TimeElapsed(uint32_t now_ms, uint32_t since_ms, uint32_t duration_ms) {
     return ((uint32_t)(now_ms - since_ms) >= duration_ms) ? 1U : 0U;
 }
@@ -576,25 +600,24 @@ void SensorLogic_MarkFsrError(sensor_logic_context_t* context, uint32_t error_fl
 }
 
 void SensorLogic_MarkAllUltrasonicUnavailable(sensor_logic_context_t* context, uint32_t now_ms) {
-    uint32_t all_valid;
-    uint32_t all_errors;
-
     if (context == NULL) {
         return;
     }
 
-    all_valid = SENSOR_LOGIC_VALID_ULTRASONIC_FRONT | SENSOR_LOGIC_VALID_ULTRASONIC_REAR |
-                SENSOR_LOGIC_VALID_ULTRASONIC_LEFT | SENSOR_LOGIC_VALID_ULTRASONIC_RIGHT;
-    all_errors = SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_REAR |
-                 SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT;
-    context->diagnostics.valid_flags &= ~all_valid;
-    SensorLogic_SetErrorFlags(context, context->diagnostics.error_flags | all_errors, now_ms);
+    context->diagnostics.valid_flags &= ~SENSOR_LOGIC_ALL_ULTRASONIC_VALID_FLAGS;
+    SensorLogic_SetErrorFlags(context,
+                              (context->diagnostics.error_flags & ~SENSOR_LOGIC_ALL_ULTRASONIC_ERROR_FLAGS) |
+                                  SENSOR_LOGIC_ENABLED_ULTRASONIC_ERROR_FLAGS,
+                              now_ms);
+#if !SENSOR_ULTRASONIC_REAR_ENABLED
+    context->diagnostics.obstacle_mask &= (uint8_t)~SENSOR_LOGIC_DIRECTION_REAR;
+#endif
 }
 
 void SensorLogic_MarkUltrasonicStarted(sensor_logic_context_t* context, uint8_t sensor_index, uint32_t now_ms) {
     uint8_t direction_flag;
 
-    if ((context == NULL) || (sensor_index >= SENSOR_LOGIC_ULTRASONIC_COUNT)) {
+    if ((context == NULL) || (SensorLogic_UltrasonicIsEnabled(sensor_index) == 0U)) {
         return;
     }
 
@@ -644,7 +667,7 @@ void SensorLogic_UpdateUltrasonic(sensor_logic_context_t* context, uint8_t senso
     uint8_t direction_flag;
     uint32_t error_flags;
 
-    if ((context == NULL) || (update == NULL) || (sensor_index >= SENSOR_LOGIC_ULTRASONIC_COUNT)) {
+    if ((context == NULL) || (update == NULL) || (SensorLogic_UltrasonicIsEnabled(sensor_index) == 0U)) {
         return;
     }
 
@@ -760,6 +783,10 @@ void SensorLogic_CheckStaleness(sensor_logic_context_t* context, uint32_t now_ms
 uint32_t SensorLogic_GetEffectiveSafetyErrorFlags(uint32_t raw_error_flags) {
     uint32_t effective_flags = raw_error_flags & ~((uint32_t)SENSOR_ROUTE_TEST_IGNORED_ERROR_FLAGS);
 
+#if !SENSOR_ULTRASONIC_REAR_ENABLED
+    effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_REAR);
+#endif
+
 #if !SENSOR_ULTRASONIC_TIMEOUT_SAFETY_FAULT
     effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_REAR |
                          (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
@@ -775,6 +802,10 @@ uint32_t SensorLogic_GetEffectiveSafetyErrorFlags(uint32_t raw_error_flags) {
 
 uint8_t SensorLogic_GetEffectiveSafetyObstacleMask(uint8_t raw_obstacle_mask) {
     uint8_t effective_mask = raw_obstacle_mask & (uint8_t)~((uint8_t)SENSOR_ROUTE_TEST_IGNORED_OBSTACLE_MASK);
+
+#if !SENSOR_ULTRASONIC_REAR_ENABLED
+    effective_mask &= (uint8_t)~SENSOR_LOGIC_DIRECTION_REAR;
+#endif
 
 #if SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY
     effective_mask &= (uint8_t)SENSOR_LOGIC_DIRECTION_FRONT;

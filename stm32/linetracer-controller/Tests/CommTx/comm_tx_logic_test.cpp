@@ -7,6 +7,7 @@ extern "C" {
 #include "comm_tx_logic.h"
 #include "logistics/contracts/uart/linetracer_commands.h"
 #include "logistics/contracts/uart_codec.h"
+#include "sensor_config.h"
 }
 
 namespace {
@@ -253,8 +254,8 @@ void TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags() {
     CommTxLogic_InitObservedState(&state);
     snapshot.line_state = LINETRACER_LINE_CENTERED;
     snapshot.load_state = UART_LINETRACER_LOAD_PRESENT;
-    snapshot.ultrasonic_front_mm = 40U;
-    snapshot.ultrasonic_rear_mm = 500U;
+    snapshot.ultrasonic_front_mm = SENSOR_OBSTACLE_ON_MM;
+    snapshot.ultrasonic_rear_mm = 0U;
     snapshot.ultrasonic_left_mm = 500U;
     snapshot.ultrasonic_right_mm = 500U;
     snapshot.event_flags = APP_SENSOR_EVENT_OBSTACLE;
@@ -266,6 +267,26 @@ void TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags() {
     assert((heartbeat.sensor_flags & UART_LINETRACER_FLAG_LOAD_PRESENT) != 0U);
     assert(heartbeat.load_state == UART_LINETRACER_LOAD_PRESENT);
     assert(heartbeat.error_code == UART_ERROR_SENSOR);
+}
+
+void TestDisabledRearSensorDoesNotBlockObstacleClear() {
+    comm_tx_observed_state_t state{};
+    app_sensor_snapshot_t snapshot{};
+    comm_tx_heartbeat_t heartbeat{};
+
+    CommTxLogic_InitObservedState(&state);
+    snapshot.ultrasonic_front_mm = SENSOR_OBSTACLE_ON_MM;
+    snapshot.ultrasonic_rear_mm = 0U;
+    snapshot.ultrasonic_left_mm = 500U;
+    snapshot.ultrasonic_right_mm = 500U;
+    CommTxLogic_ObserveSensor(&state, &snapshot);
+    assert((state.sensor_flags & UART_LINETRACER_FLAG_OBSTACLE_DETECTED) != 0U);
+
+    snapshot.ultrasonic_front_mm = 500U;
+    CommTxLogic_ObserveSensor(&state, &snapshot);
+    CommTxLogic_MakeHeartbeat(&state, 6000U, UART_ERROR_NONE, &heartbeat);
+    assert((heartbeat.sensor_flags & UART_LINETRACER_FLAG_OBSTACLE_DETECTED) == 0U);
+    assert(heartbeat.error_code == UART_ERROR_NONE);
 }
 
 void TestObservedFaultPersistsUntilSuccessfulReset() {
@@ -328,6 +349,7 @@ int main() {
     TestEmergencyEventPriorityPrecedesRegularEvents();
     TestControlSnapshotOverridesBestEffortObservedState();
     TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags();
+    TestDisabledRearSensorDoesNotBlockObstacleClear();
     TestObservedFaultPersistsUntilSuccessfulReset();
     TestUnloadCompletionClearsObservedActiveRoute();
     return 0;
