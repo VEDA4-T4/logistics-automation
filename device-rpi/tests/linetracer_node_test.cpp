@@ -742,21 +742,34 @@ void TestFaultReportsMappedError() {
 void TestObstacleTransitionsPublishSensorStatusOnlyWhenReceived() {
     Fixture fixture;
 
-    fixture.PushSensorStatus(1U, UART_SENSOR_DETECTED, 4U);
+    // 4cm and 8cm straddle a typical obstacle threshold, but the node reports
+    // both the same way: the reading is valid, and whether that counts as an
+    // obstacle is the central server's call.
+    fixture.PushSensorStatus(1U, UART_SENSOR_OK, 4U);
     assert(fixture.reports.size() == 1U);
     assert(fixture.reports.front().channel == LineTracerReportChannel::kEvent);
     assert(fixture.reports.front().message_type == mqtt::MessageType::kSensorStatus);
-    const auto& detected = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.front());
-    assert(detected.sensor_id == 1);
-    assert(detected.measurement_status == "DETECTED");
-    assert(detected.distance_cm == 4);
+    const auto& near_reading = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.front());
+    assert(near_reading.sensor_id == 1);
+    assert(near_reading.measurement_status == "OK");
+    assert(near_reading.distance_cm == 4);
+    assert(!near_reading.detection_status.has_value());
 
-    fixture.PushSensorStatus(1U, UART_SENSOR_CLEAR, 8U);
+    fixture.PushSensorStatus(1U, UART_SENSOR_OK, 8U);
     assert(fixture.reports.size() == 2U);
-    const auto& cleared = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.back());
-    assert(cleared.sensor_id == 1);
-    assert(cleared.measurement_status == "CLEAR");
-    assert(cleared.distance_cm == 8);
+    const auto& far_reading = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.back());
+    assert(far_reading.sensor_id == 1);
+    assert(far_reading.measurement_status == "OK");
+    assert(far_reading.distance_cm == 8);
+
+    fixture.PushSensorStatus(1U, UART_SENSOR_FAULT, 0xFFFFU);
+    assert(fixture.reports.size() == 3U);
+    const auto& faulted = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.back());
+    assert(faulted.measurement_status == "FAULT");
+
+    // 0x01 is the retired DETECTED encoding and must now be dropped outright.
+    fixture.PushSensorStatus(1U, 0x01U, 4U);
+    assert(fixture.reports.size() == 3U);
 }
 
 void TestStaleJobEventIsIgnored() {

@@ -114,8 +114,11 @@ namespace mqtt = contracts::mqtt;
     }
 }
 
+// Measurement health only (IsValidMeasurementStatus in mqtt_codec.hpp). Whether
+// an obstacle is actually there is derived by the central server from
+// distanceCm, the same as for the input and sorting ultrasonic sensors.
 [[nodiscard]] std::string SensorMeasurementStatus(std::uint8_t state) {
-    return state == UART_SENSOR_DETECTED ? "DETECTED" : "CLEAR";
+    return state == UART_SENSOR_FAULT ? "FAULT" : "OK";
 }
 
 [[nodiscard]] mqtt::ConnectionState StateConnection(std::uint8_t state) noexcept {
@@ -673,8 +676,7 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
 
         const std::uint8_t sensor_id = frame.payload[UART_SENSOR_ID_INDEX];
         const std::uint8_t sensor_state = frame.payload[UART_SENSOR_STATE_INDEX];
-        if (sensor_id == 0U || sensor_id > 4U ||
-            (sensor_state != UART_SENSOR_CLEAR && sensor_state != UART_SENSOR_DETECTED)) {
+        if (sensor_id == 0U || sensor_id > 4U || uart_sensor_state_is_valid(sensor_state) == 0U) {
             return;
         }
 
