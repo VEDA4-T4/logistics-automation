@@ -5,21 +5,18 @@
 
 static const uint32_t s_ultrasonic_valid_flags[SENSOR_LOGIC_ULTRASONIC_COUNT] = {
     SENSOR_LOGIC_VALID_ULTRASONIC_FRONT,
-    SENSOR_LOGIC_VALID_ULTRASONIC_REAR,
     SENSOR_LOGIC_VALID_ULTRASONIC_LEFT,
     SENSOR_LOGIC_VALID_ULTRASONIC_RIGHT,
 };
 
 static const uint32_t s_ultrasonic_error_flags[SENSOR_LOGIC_ULTRASONIC_COUNT] = {
     SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT,
-    SENSOR_LOGIC_ERROR_ULTRASONIC_REAR,
     SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT,
     SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT,
 };
 
 static const uint8_t s_ultrasonic_direction_flags[SENSOR_LOGIC_ULTRASONIC_COUNT] = {
     SENSOR_LOGIC_DIRECTION_FRONT,
-    SENSOR_LOGIC_DIRECTION_REAR,
     SENSOR_LOGIC_DIRECTION_LEFT,
     SENSOR_LOGIC_DIRECTION_RIGHT,
 };
@@ -159,10 +156,8 @@ static uint16_t *SensorLogic_UltrasonicDistanceField(app_sensor_snapshot_t *snap
         case 0U:
             return &snapshot->ultrasonic_front_mm;
         case 1U:
-            return &snapshot->ultrasonic_rear_mm;
-        case 2U:
             return &snapshot->ultrasonic_left_mm;
-        case 3U:
+        case 2U:
             return &snapshot->ultrasonic_right_mm;
         default:
             return NULL;
@@ -182,7 +177,6 @@ void SensorLogic_Init(sensor_logic_context_t *context, uint32_t now_ms)
     context->snapshot.line_state = LINETRACER_LINE_UNKNOWN;
     context->snapshot.load_state = UART_LINETRACER_LOAD_EMPTY;
     context->snapshot.ultrasonic_front_mm = UINT16_MAX;
-    context->snapshot.ultrasonic_rear_mm = UINT16_MAX;
     context->snapshot.ultrasonic_left_mm = UINT16_MAX;
     context->snapshot.ultrasonic_right_mm = UINT16_MAX;
     context->marker_entry_state = LINETRACER_LINE_UNKNOWN;
@@ -406,11 +400,9 @@ void SensorLogic_MarkAllUltrasonicUnavailable(sensor_logic_context_t *context,
     }
 
     all_valid = SENSOR_LOGIC_VALID_ULTRASONIC_FRONT |
-                SENSOR_LOGIC_VALID_ULTRASONIC_REAR |
                 SENSOR_LOGIC_VALID_ULTRASONIC_LEFT |
                 SENSOR_LOGIC_VALID_ULTRASONIC_RIGHT;
     all_errors = SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT |
-                 SENSOR_LOGIC_ERROR_ULTRASONIC_REAR |
                  SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT |
                  SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT;
     context->diagnostics.valid_flags &= ~all_valid;

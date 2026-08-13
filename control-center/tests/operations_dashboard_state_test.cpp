@@ -70,6 +70,14 @@ const logistics::control_center::SensorUnitStatus& SensorById(
     std::abort();
 }
 
+bool HasSensor(const logistics::control_center::ProcessUnitStatus& process, int sensor_id) {
+    for (const auto& sensor : process.sensors) {
+        if (sensor.sensor_id == sensor_id)
+            return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 int main() {
@@ -83,8 +91,35 @@ int main() {
     assert(ProcessByKey(state, QStringLiteral("input")).sensors.size() == 1);
     assert(ProcessByKey(state, QStringLiteral("sorting")).sensors.size() == 3);
 
+    OperationsDashboardState line_sensor_state;
+    auto result = line_sensor_state.applyEnvelope(
+        Envelope("PI-LT-SENSOR-REAR", "SENSOR_STATUS",
+                 { { QStringLiteral("sensorId"), 2 },
+                   { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                   { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
+                   { QStringLiteral("distanceCm"), 18 } },
+                 QStringLiteral("PI-LT-01")));
+    assert(result.handled && !result.applied && result.error.isEmpty());
+    assert(!HasSensor(ProcessByKey(line_sensor_state, QStringLiteral("linetracer")), 2));
+
+    for (const int sensor_id : { 1, 3, 4 }) {
+        result = line_sensor_state.applyEnvelope(
+            Envelope(QStringLiteral("PI-LT-SENSOR-%1").arg(sensor_id), "SENSOR_STATUS",
+                     { { QStringLiteral("sensorId"), sensor_id },
+                       { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                       { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
+                       { QStringLiteral("distanceCm"), 20 + sensor_id } },
+                     QStringLiteral("PI-LT-01")));
+        assert(result.applied);
+    }
+    const auto line_sensors = ProcessByKey(line_sensor_state, QStringLiteral("linetracer"));
+    assert(line_sensors.sensors.size() == 3);
+    assert(HasSensor(line_sensors, 1));
+    assert(HasSensor(line_sensors, 3));
+    assert(HasSensor(line_sensors, 4));
+
     OperationsDashboardState position_state;
-    auto result = position_state.applyEnvelope(
+    result = position_state.applyEnvelope(
         Envelope("SNAPSHOT-PI-LT-01-1", "DEVICE_STATUS",
                  PositionStatus(QStringLiteral("MOVING"), Position(QStringLiteral("DEPARTURE"), QStringLiteral("A")),
                                 Position(QStringLiteral("DESTINATION"), QStringLiteral("C")),

@@ -13,9 +13,11 @@
 
 #include "logistics/central_server/device_manager.hpp"
 #include "logistics/central_server/persistence.hpp"
+#include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/contracts/mqtt_validation.hpp"
+#include "logistics/contracts/uart/linetracer_commands.h"
 
 namespace logistics::central_server {
 namespace {
@@ -193,6 +195,17 @@ bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::
             "MQTT topic/message mismatch; error=" + std::string(mqtt::ToString(validation.error)) +
                 "; message=" + validation.message);
         return false;
+    }
+
+    if (const auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(decoded.value);
+        sensor != nullptr && sensor->sensor_id == UART_LINETRACER_RETIRED_REAR_SENSOR_ID) {
+        const auto device = device_manager_.FindDevice(decoded.value.source_id);
+        const auto role = device.has_value() ? contracts::DeviceRoleFromString(device->device_type) : std::nullopt;
+        if (role == contracts::DeviceRole::kLineTracer) {
+            Log(MqttHandlerLogLevel::kInfo,
+                "ignored retired rear ultrasonic sensor data from line tracer; source=" + decoded.value.source_id);
+            return true;
+        }
     }
 
     // The controller reports a distance and whether that reading is trustworthy;

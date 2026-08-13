@@ -772,6 +772,21 @@ void TestObstacleTransitionsPublishSensorStatusOnlyWhenReceived() {
     assert(fixture.reports.size() == 3U);
 }
 
+void TestRemovedRearSensorStatusIsIgnored() {
+    Fixture fixture;
+
+    fixture.PushSensorStatus(UART_LINETRACER_RETIRED_REAR_SENSOR_ID, UART_SENSOR_OK, 18U);
+    assert(fixture.reports.empty());
+
+    fixture.PushSensorStatus(UART_LINETRACER_SENSOR_LEFT, UART_SENSOR_OK, 27U);
+    fixture.PushSensorStatus(UART_LINETRACER_SENSOR_RIGHT, UART_SENSOR_OK, 31U);
+    assert(fixture.reports.size() == 2U);
+    assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[0]).sensor_id ==
+           UART_LINETRACER_SENSOR_LEFT);
+    assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[1]).sensor_id ==
+           UART_LINETRACER_SENSOR_RIGHT);
+}
+
 void TestStaleJobEventIsIgnored() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
@@ -914,6 +929,7 @@ int main() {
     TestUnloadCompleteReportsCompletionAndClearsMapping();
     TestFaultReportsMappedError();
     TestObstacleTransitionsPublishSensorStatusOnlyWhenReceived();
+    TestRemovedRearSensorStatusIsIgnored();
     TestStaleJobEventIsIgnored();
     TestKeepaliveRunsWithoutActiveJob();
     TestKeepaliveWaitsForOneSecondAndSendsStatusRequest();

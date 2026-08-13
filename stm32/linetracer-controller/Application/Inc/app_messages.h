@@ -72,7 +72,6 @@ typedef struct {
     uint32_t event_flags;
     uint16_t fsr_raw;
     uint16_t ultrasonic_front_mm;
-    uint16_t ultrasonic_rear_mm;
     uint16_t ultrasonic_left_mm;
     uint16_t ultrasonic_right_mm;
     linetracer_line_state_t line_state;

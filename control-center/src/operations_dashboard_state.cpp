@@ -6,6 +6,7 @@
 
 #include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/contracts/uart/linetracer_commands.h"
 
 namespace logistics::control_center {
 namespace {
@@ -263,6 +264,11 @@ void ResetSensors(ProcessUnitStatus& process) {
     }
 }
 
+bool SensorIsAllowedForProcess(const ProcessUnitStatus& process, int sensor_id) {
+    return process.key != QString::fromLatin1(kLineTracerProcessKey) ||
+           uart_linetracer_sensor_id_is_valid(static_cast<uint32_t>(sensor_id)) != 0U;
+}
+
 void UpdateSensor(ProcessUnitStatus& process, int sensor_id, const QString& measurement_status, int distance_cm,
                   const QDateTime& timestamp) {
     auto sensor = std::find_if(process.sensors.begin(), process.sensors.end(),
@@ -485,13 +491,18 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             return result;
         }
 
+        auto& process = process_runtime_[process_index];
+        if (!SensorIsAllowedForProcess(process.status, sensor_id)) {
+            rememberMessage(message_id);
+            return result;
+        }
+
         // A faulty sensor outranks whatever detection said: the distance behind
         // that judgement is not trustworthy.
         const auto display_status = measurement_status == QStringLiteral("FAULT")
                                         ? QStringLiteral("FAULT")
                                         : (detection_status.isEmpty() ? QStringLiteral("UNKNOWN") : detection_status);
 
-        auto& process = process_runtime_[process_index];
         UpdateSensor(process.status, sensor_id, display_status, distance_cm, timestamp);
         process.last_received_at = effective_received_at;
         if (measurement_status == QStringLiteral("FAULT")) {
@@ -593,7 +604,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             const auto sensor_measurement = SensorMeasurementForCurrentState(current_state);
             const auto sensor_id = SensorIdForCurrentState(current_state);
             const bool sensor_telemetry = !sensor_measurement.isEmpty();
-            if (sensor_telemetry && sensor_id.has_value()) {
+            if (sensor_telemetry && sensor_id.has_value() && SensorIsAllowedForProcess(process.status, *sensor_id)) {
                 UpdateSensor(process.status, *sensor_id, sensor_measurement, -1, timestamp);
             }
             if (sensor_stale) {
