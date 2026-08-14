@@ -44,6 +44,7 @@ struct DatabaseConfig {
     std::filesystem::path path{ "/var/lib/logistics/logistics.db" };
     std::filesystem::path migration_dir{ LOGISTICS_DEFAULT_MIGRATION_DIR };
     int busy_timeout_ms{ 5000 };
+    bool reset_on_start{};
 };
 
 class Statement final {
@@ -120,5 +121,7 @@ class MigrationRunner final {
 public:
     [[nodiscard]] static DatabaseStatus Apply(Database& database, const std::filesystem::path& migration_dir);
 };
+
+[[nodiscard]] DatabaseStatus ResetDatabasePreservingProductCatalog(Database& database, const DatabaseConfig& config);
 
 }  // namespace logistics::central_server

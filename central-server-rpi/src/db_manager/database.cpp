@@ -329,4 +329,77 @@ DatabaseStatus MigrationRunner::Apply(Database& database, const std::filesystem:
     return DatabaseStatus::Ok();
 }
 
+DatabaseStatus ResetDatabasePreservingProductCatalog(Database& database, const DatabaseConfig& config) {
+    if (!database.IsOpen() || config.path.empty()) {
+        return { DatabaseStatusCode::kInvalidArgument, "database reset requires an open database" };
+    }
+
+    const std::filesystem::path source_path = config.path.string() + ".reset-source";
+    std::error_code error;
+    if (std::filesystem::exists(source_path, error) || error) {
+        return { DatabaseStatusCode::kIoError, error
+                                                   ? "cannot inspect database reset source: " + error.message()
+                                                   : "database reset source already exists: " + source_path.string() };
+    }
+
+    auto status = database.Checkpoint();
+    if (!status.ok() || !(status = database.Close()).ok()) {
+        return status;
+    }
+
+    std::filesystem::rename(config.path, source_path, error);
+    if (error) {
+        return { DatabaseStatusCode::kIoError, "cannot rotate database for reset: " + error.message() };
+    }
+    for (const std::string_view suffix : { "-wal", "-shm" }) {
+        error.clear();
+        std::filesystem::remove(config.path.string() + std::string(suffix), error);
+        if (error) {
+            return { DatabaseStatusCode::kIoError, "cannot remove stale database sidecar: " + error.message() +
+                                                       "; original database retained at " + source_path.string() };
+        }
+    }
+
+    status = database.Open(config);
+    if (!status.ok() || !(status = MigrationRunner::Apply(database, config.migration_dir)).ok()) {
+        status.message += "; original database retained at " + source_path.string();
+        return status;
+    }
+
+    {
+        Statement attach;
+        status = database.Prepare("ATTACH DATABASE ? AS reset_source", attach);
+        if (!status.ok() || !(status = attach.Bind(1, source_path.string())).ok()) {
+            status.message += "; original database retained at " + source_path.string();
+            return status;
+        }
+        bool ignored = false;
+        if (!(status = attach.Step(ignored)).ok()) {
+            status.message += "; original database retained at " + source_path.string();
+            return status;
+        }
+    }
+
+    Transaction transaction(database);
+    if (!transaction.status().ok()) {
+        return transaction.status();
+    }
+    status = database.Execute(
+        "DELETE FROM product_catalog;"
+        "INSERT INTO product_catalog(barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms) "
+        "SELECT barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms "
+        "FROM reset_source.product_catalog;");
+    if (!status.ok() || !(status = transaction.Commit()).ok() ||
+        !(status = database.Execute("DETACH DATABASE reset_source")).ok()) {
+        status.message += "; original database retained at " + source_path.string();
+        return status;
+    }
+
+    std::filesystem::remove(source_path, error);
+    if (error) {
+        return { DatabaseStatusCode::kIoError, "cannot remove database reset source: " + error.message() };
+    }
+    return DatabaseStatus::Ok();
+}
+
 }  // namespace logistics::central_server

@@ -199,6 +199,10 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
         config.database.busy_timeout_ms = ParseInteger(path, line_number, key, value, 0, 600'000);
         return;
     }
+    if (section == "database" && key == "reset_on_start") {
+        config.database.reset_on_start = ParseBoolean(path, line_number, key, value);
+        return;
+    }
     if (section == "storage" && key == "log_root") {
         // Kept for compatibility with configurations generated before log_root
         // was removed from StorageConfig.

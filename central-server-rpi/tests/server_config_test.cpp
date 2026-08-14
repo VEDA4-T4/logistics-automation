@@ -38,6 +38,7 @@ void TestValidConfigAndRelativePaths() {
 path=data/server.db
 migration_dir=migrations
 busy_timeout_ms=1000
+reset_on_start=true
 [storage]
 image_root=images
 log_root=logs
@@ -87,6 +88,7 @@ calibration_version=4
     const auto config = central_server::LoadServerConfig(path);
     assert(config.database.path == path.parent_path() / "data/server.db");
     assert(config.database.migration_dir == path.parent_path() / "migrations");
+    assert(config.database.reset_on_start);
     assert(config.storage.image_root == path.parent_path() / "images");
     assert(config.storage.upload_retention_days == 15);
     assert(config.http.upload_root == path.parent_path() / "uploads");

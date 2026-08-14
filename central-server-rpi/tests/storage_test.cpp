@@ -414,6 +414,30 @@ int main() {
     assert(gap_database.Open({ .path = root / "gap.db", .migration_dir = gap_dir }).ok());
     assert(server::MigrationRunner::Apply(gap_database, gap_dir).code == server::DatabaseStatusCode::kMigrationError);
 
+    server::Database reset_database;
+    server::DatabaseConfig reset_config{ .path = root / "reset.db",
+                                         .migration_dir = database_config.migration_dir,
+                                         .busy_timeout_ms = 100,
+                                         .reset_on_start = true };
+    assert(reset_database.Open(reset_config).ok());
+    assert(server::MigrationRunner::Apply(reset_database, reset_config.migration_dir).ok());
+    assert(reset_database
+               .Execute("DELETE FROM product_catalog;"
+                        "INSERT INTO product_catalog VALUES('8801234567890','CUSTOM-1','Custom product','2',1,1,2);"
+                        "INSERT INTO security_log(event_type,outcome,details_json,occurred_at_ms) "
+                        "VALUES('RESET-ME','ALLOWED','{}',1);"
+                        "INSERT INTO schema_migrations(version,name,checksum,applied_at_ms) "
+                        "VALUES(999,'old-history.sql','old',1);")
+               .ok());
+    assert(server::ResetDatabasePreservingProductCatalog(reset_database, reset_config).ok());
+    assert(Scalar(reset_database,
+                  "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_id='CUSTOM-1'") == 1);
+    assert(Scalar(reset_database, "SELECT count(*) FROM security_log") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM schema_migrations") == 10);
+    assert(Scalar(reset_database, "SELECT count(*) FROM schema_migrations WHERE version=999") == 0);
+    assert(!std::filesystem::exists(reset_config.path.string() + ".reset-source"));
+    assert(reset_database.IntegrityCheck().ok());
+
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);
     return 0;
