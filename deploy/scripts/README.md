@@ -1,7 +1,8 @@
-# 중앙서버와 Vision 설치 스크립트
+# 배포 설치 스크립트
 
-스크립트는 저장소 루트의 `runtime/` 아래에 설정과 생성 데이터를 만들고 필요한 타깃을 빌드합니다. 기존 INI는
-`LOGISTICS_FORCE_CONFIG=1`을 지정하지 않는 한 보존합니다.
+중앙 서버 setup 스크립트는 실행 파일과 migration, 설정, systemd unit을 고정 운영 경로에 설치합니다. 기존 INI는
+`LOGISTICS_FORCE_CONFIG=1`을 지정하지 않는 한 보존합니다. 장치 노드의 제품 배포는 `yocto/`의 노드별 이미지와 그 이미지에
+포함된 systemd unit을 사용하며, 아래 장치 setup 스크립트는 개발·통합 환경에서만 사용합니다.
 
 ## 중앙서버
 
@@ -19,15 +20,19 @@ export LOGISTICS_INSTALL_DEPENDENCIES=1
 )
 ```
 
-생성 파일:
+주요 설치 파일:
 
 ```text
-runtime/central-server/server.ini
-runtime/central-server/logistics.db
-runtime/central-server/uploads/
+/opt/logistics-automation/bin/logistics_central_server
+/opt/logistics-automation/share/logistics/migrations/
+/etc/logistics/server.ini
+/etc/systemd/system/logistics-central-server.service
+/var/lib/logistics/logistics.db
+/var/lib/logistics/uploads/
 ```
 
-이 스크립트는 Mosquitto 설정을 수정하거나 서비스를 재시작하지 않습니다.
+스크립트는 `logistics-central-server.service`를 활성화하고 재시작하지만 Mosquitto 설정을 수정하거나 Mosquitto 서비스를
+재시작하지 않습니다. Mosquitto가 먼저 설치되어 정상 실행 중이어야 합니다.
 
 ## Vision Raspberry Pi
 
@@ -85,10 +90,11 @@ export LOGISTICS_UART_DEVICE='/dev/vedauart'
 )
 ```
 
-The generated runtime configuration is `runtime/input-node/input-node.ini`. The daemon is started manually (or by a
-future systemd unit) with the UART device supplied through `LOGISTICS_UART_DEVICE` or as the second argument. The
-script configures with `LOGISTICS_BUILD_VISION_NODE=OFF`, `LOGISTICS_BUILD_SORTING_NODE=OFF`, and
-`LOGISTICS_BUILD_LINETRACER_NODE=OFF`, so OpenCV is not required to build the input node.
+The generated development configuration is `runtime/input-node/input-node.ini`. The daemon is started manually with
+the UART device supplied through `LOGISTICS_UART_DEVICE` or as the second argument. Production deployment uses the
+Input Node Yocto image and its packaged systemd unit. The script configures with `LOGISTICS_BUILD_VISION_NODE=OFF`,
+`LOGISTICS_BUILD_SORTING_NODE=OFF`, and `LOGISTICS_BUILD_LINETRACER_NODE=OFF`, so OpenCV is not required to build the
+input node.
 
 ## 연결 검사
 
@@ -106,9 +112,9 @@ export LOGISTICS_CENTRAL_HOST='192.168.0.10'
 
 | 변수 | 용도 |
 | --- | --- |
-| `LOGISTICS_CONFIG_PATH` | 생성·사용할 INI 경로 |
+| `LOGISTICS_CONFIG_PATH` | 장치 개발용 setup 스크립트가 생성·사용할 INI 경로. 중앙 서버는 `/etc/logistics/server.ini` 고정 |
 | `LOGISTICS_BUILD_DIR` | CMake 빌드 경로 |
-| `LOGISTICS_RUNTIME_DIR` | 런타임 데이터 경로 |
+| `LOGISTICS_RUNTIME_DIR` | 장치 개발용 setup 스크립트의 런타임 데이터 경로. 중앙 서버는 `/var/lib/logistics` 고정 |
 | `LOGISTICS_NODE_NAME` | 장치 등록 이름 |
 | `LOGISTICS_MQTT_HOST` | 서버 인증서 SAN과 일치하는 broker DNS 이름 또는 IP |
 | `LOGISTICS_MQTT_PORT` | MQTT listener, 기본값 `8883` |
