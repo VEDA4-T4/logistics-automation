@@ -305,7 +305,23 @@ public:
     }
 
     [[nodiscard]] bool PublishEvent(const mqtt::MqttMessage& message) {
-        return PublishMessage(mqtt::DeviceEventTopic(config_.device_id), message, 1, false, "device event");
+        const std::string topic = mqtt::DeviceEventTopic(config_.device_id);
+        if (!mqtt::IsTransientTelemetry(message.message_type)) {
+            return PublishMessage(topic, message, 1, false, "device event");
+        }
+        if (!ready_ || client_ == nullptr) {
+            return false;
+        }
+        const auto validation = mqtt::ValidateTopicMessage(topic, message);
+        if (!validation.IsSuccess()) {
+            std::cerr << "[device][mqtt][ERROR] invalid sensor telemetry: " << validation.message << '\n';
+            return false;
+        }
+        const bool published = PublishVolatile(topic, mqtt::SerializeMessage(message), 1, false, "sensor telemetry");
+        if (published) {
+            device_status_->MarkCommunication(message.timestamp);
+        }
+        return published;
     }
 
     [[nodiscard]] bool PublishError(const mqtt::MqttMessage& message) {

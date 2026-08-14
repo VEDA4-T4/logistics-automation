@@ -817,6 +817,9 @@ int main() {
     static_assert(mqtt::kHeartbeatDelayedAfter.count() == 10);
     static_assert(mqtt::kHeartbeatOfflineAfter.count() == 15);
     static_assert(mqtt::kMqttMaximumRetries == 3);
+    static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kHeartbeat));
+    static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kSensorStatus));
+    static_assert(!mqtt::IsTransientTelemetry(mqtt::MessageType::kWorkCompleted));
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 9 }) == mqtt::ConnectionState::kOnline);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 10 }) == mqtt::ConnectionState::kDelayed);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 15 }) == mqtt::ConnectionState::kOffline);

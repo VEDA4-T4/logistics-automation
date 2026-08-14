@@ -316,6 +316,10 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
            state == ConnectionState::kTlsError || state == ConnectionState::kUartError;
 }
 
+[[nodiscard]] constexpr bool IsTransientTelemetry(MessageType type) noexcept {
+    return type == MessageType::kHeartbeat || type == MessageType::kSensorStatus;
+}
+
 [[nodiscard]] constexpr DeliveryPolicy PolicyFor(MessageType type) noexcept {
     switch (type) {
         case MessageType::kHeartbeat:

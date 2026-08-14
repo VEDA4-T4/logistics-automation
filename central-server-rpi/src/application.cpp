@@ -492,10 +492,16 @@ int Application::Run(int argc, char* argv[]) {
         }
         return publish_enqueued(deliveries[0]) && publish_enqueued(deliveries[1]);
     });
-    mqtt_handler.SetQtEventHandler(
-        [&publish_durable, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
-            return publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), message);
-        });
+    mqtt_handler.SetQtEventHandler([&mqtt_client, &publish_durable, qt_client_id = server_config.qt_client_id](
+                                       const contracts::mqtt::MqttMessage& message) {
+        if (contracts::mqtt::IsTransientTelemetry(message.message_type)) {
+            static_cast<void>(mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
+                                                         contracts::mqtt::Qos::kAtLeastOnce));
+            // A newer sample supersedes this one; a disconnected UI must not create a replay backlog.
+            return true;
+        }
+        return publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), message);
+    });
     const auto publish_qt_response =
         [&publish_durable, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
             return publish_durable(contracts::mqtt::QtResponseTopic(qt_client_id), message);
