@@ -781,10 +781,8 @@ void TestRemovedRearSensorStatusIsIgnored() {
     fixture.PushSensorStatus(UART_LINETRACER_SENSOR_LEFT, UART_SENSOR_OK, 27U);
     fixture.PushSensorStatus(UART_LINETRACER_SENSOR_RIGHT, UART_SENSOR_OK, 31U);
     assert(fixture.reports.size() == 2U);
-    assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[0]).sensor_id ==
-           UART_LINETRACER_SENSOR_LEFT);
-    assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[1]).sensor_id ==
-           UART_LINETRACER_SENSOR_RIGHT);
+    assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[0]).sensor_id == UART_LINETRACER_SENSOR_LEFT);
+    assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[1]).sensor_id == UART_LINETRACER_SENSOR_RIGHT);
 }
 
 void TestStaleJobEventIsIgnored() {

@@ -92,24 +92,24 @@ int main() {
     assert(ProcessByKey(state, QStringLiteral("sorting")).sensors.size() == 3);
 
     OperationsDashboardState line_sensor_state;
-    auto result = line_sensor_state.applyEnvelope(
-        Envelope("PI-LT-SENSOR-REAR", "SENSOR_STATUS",
-                 { { QStringLiteral("sensorId"), 2 },
-                   { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
-                   { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
-                   { QStringLiteral("distanceCm"), 18 } },
-                 QStringLiteral("PI-LT-01")));
+    auto result =
+        line_sensor_state.applyEnvelope(Envelope("PI-LT-SENSOR-REAR", "SENSOR_STATUS",
+                                                 { { QStringLiteral("sensorId"), 2 },
+                                                   { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                   { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
+                                                   { QStringLiteral("distanceCm"), 18 } },
+                                                 QStringLiteral("PI-LT-01")));
     assert(result.handled && !result.applied && result.error.isEmpty());
     assert(!HasSensor(ProcessByKey(line_sensor_state, QStringLiteral("linetracer")), 2));
 
     for (const int sensor_id : { 1, 3, 4 }) {
-        result = line_sensor_state.applyEnvelope(
-            Envelope(QStringLiteral("PI-LT-SENSOR-%1").arg(sensor_id), "SENSOR_STATUS",
-                     { { QStringLiteral("sensorId"), sensor_id },
-                       { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
-                       { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
-                       { QStringLiteral("distanceCm"), 20 + sensor_id } },
-                     QStringLiteral("PI-LT-01")));
+        result =
+            line_sensor_state.applyEnvelope(Envelope(QStringLiteral("PI-LT-SENSOR-%1").arg(sensor_id), "SENSOR_STATUS",
+                                                     { { QStringLiteral("sensorId"), sensor_id },
+                                                       { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                       { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
+                                                       { QStringLiteral("distanceCm"), 20 + sensor_id } },
+                                                     QStringLiteral("PI-LT-01")));
         assert(result.applied);
     }
     const auto line_sensors = ProcessByKey(line_sensor_state, QStringLiteral("linetracer"));
