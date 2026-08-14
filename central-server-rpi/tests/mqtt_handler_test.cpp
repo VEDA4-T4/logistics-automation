@@ -13,6 +13,7 @@
 #include "logistics/central_server/persistence.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_validation.hpp"
+#include "logistics/contracts/uart/linetracer_commands.h"
 
 #ifndef LOGISTICS_TEST_MIGRATION_DIR
 #define LOGISTICS_TEST_MIGRATION_DIR "central-server-rpi/db/migrations"
@@ -375,6 +376,13 @@ void TestSensorStatusIsAcceptedAndForwardedToQt() {
             return true;
         });
 
+        auto registration = MakeRegistration("PI-LINETRACER-01");
+        auto* registration_payload = mqtt::GetPayload<mqtt::DeviceRegisterPayload>(registration);
+        assert(registration_payload != nullptr);
+        registration_payload->device_type = "linetracer";
+        registration_payload->node_name = "linetracer-node-01";
+        assert(handler.Handle(mqtt::DeviceRegisterTopic("PI-LINETRACER-01"), Encode(registration)));
+
         // The device reports measurement health and a distance; it never sets
         // detectionStatus. The handler must stamp that in on the way through.
         const mqtt::MqttMessage sensor_status{
@@ -391,6 +399,15 @@ void TestSensorStatusIsAcceptedAndForwardedToQt() {
                     .detection_status = std::nullopt,
                 },
         };
+
+        auto retired_rear = sensor_status;
+        retired_rear.message_id = "MSG-SENSOR-STATUS-RETIRED-REAR";
+        auto* retired_rear_payload = mqtt::GetPayload<mqtt::SensorStatusPayload>(retired_rear);
+        assert(retired_rear_payload != nullptr);
+        retired_rear_payload->sensor_id = UART_LINETRACER_RETIRED_REAR_SENSOR_ID;
+        assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(retired_rear)));
+        assert(qt_events.empty());
+
         assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_status)));
         assert(qt_events.size() == 1);
         const auto* forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.front());

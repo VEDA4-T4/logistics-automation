@@ -57,12 +57,6 @@ static const ultrasonic_sensor_descriptor_t s_ultrasonic_sensors[SENSOR_LOGIC_UL
     },
     {
         .trigger_port = GPIOB,
-        .trigger_pin = GPIO_PIN_1,
-        .timer_channel = TIM_CHANNEL_2,
-        .active_channel = HAL_TIM_ACTIVE_CHANNEL_2,
-    },
-    {
-        .trigger_port = GPIOB,
         .trigger_pin = GPIO_PIN_2,
         .timer_channel = TIM_CHANNEL_3,
         .active_channel = HAL_TIM_ACTIVE_CHANNEL_3,
@@ -401,7 +395,6 @@ static uint8_t ConfigureUltrasonicTimer(void)
     prescaler = (timer_clock_hz / SENSOR_ULTRASONIC_TIMER_HZ) - 1U;
 
     (void)HAL_TIM_IC_Stop_IT(&htim1, TIM_CHANNEL_1);
-    (void)HAL_TIM_IC_Stop_IT(&htim1, TIM_CHANNEL_2);
     (void)HAL_TIM_IC_Stop_IT(&htim1, TIM_CHANNEL_3);
     (void)HAL_TIM_IC_Stop_IT(&htim1, TIM_CHANNEL_4);
 
@@ -559,7 +552,7 @@ static void UpdateCommonSensorError(sensor_task_context_t *context,
 static uint8_t InitializeSensorHardware(void)
 {
     HAL_GPIO_WritePin(GPIOB,
-                      GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_10,
+                      GPIO_PIN_0 | GPIO_PIN_2 | GPIO_PIN_10,
                       GPIO_PIN_RESET);
 
     HAL_NVIC_SetPriority(ADC_IRQn, 6U, 0U);

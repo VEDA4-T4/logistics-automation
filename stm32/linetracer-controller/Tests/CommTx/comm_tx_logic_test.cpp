@@ -228,7 +228,6 @@ void TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags() {
     snapshot.line_state = LINETRACER_LINE_CENTERED;
     snapshot.load_state = UART_LINETRACER_LOAD_PRESENT;
     snapshot.ultrasonic_front_mm = 100U;
-    snapshot.ultrasonic_rear_mm = 500U;
     snapshot.ultrasonic_left_mm = 500U;
     snapshot.ultrasonic_right_mm = 500U;
     snapshot.event_flags = APP_SENSOR_EVENT_OBSTACLE;

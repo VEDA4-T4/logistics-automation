@@ -362,7 +362,7 @@ int main(int argc, char* argv[]) {
           .distance_cm = 4,
           .updated_at = {} },
         { .sensor_id = 2,
-          .display_name = QStringLiteral("REAR"),
+          .display_name = QStringLiteral("RETIRED_REAR"),
           .measurement_status = QStringLiteral("CLEAR"),
           .distance_cm = 18,
           .updated_at = {} },
@@ -403,7 +403,7 @@ int main(int argc, char* argv[]) {
     assert(concurrent_view.sensorText(QStringLiteral("sorting"), 2) == QStringLiteral("11 cm"));
     assert(concurrent_view.sensorText(QStringLiteral("sorting"), 3) == QStringLiteral("29 cm"));
     assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 1) == QStringLiteral("4 cm"));
-    assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 2) == QStringLiteral("18 cm"));
+    assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 2).isEmpty());
     assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 3) == QStringLiteral("27 cm"));
     assert(concurrent_view.sensorText(QStringLiteral("linetracer"), 4) == QStringLiteral("31 cm"));
 
@@ -411,8 +411,8 @@ int main(int argc, char* argv[]) {
     for (auto* item : concurrent_view.scene()->items()) {
         const auto* label = dynamic_cast<QGraphicsSimpleTextItem*>(item);
         if (label != nullptr &&
-            (label->text().startsWith(QStringLiteral("전 ")) || label->text().startsWith(QStringLiteral("후 ")) ||
-             label->text().startsWith(QStringLiteral("좌 ")) || label->text().startsWith(QStringLiteral("우 ")))) {
+            (label->text().startsWith(QStringLiteral("전 ")) || label->text().startsWith(QStringLiteral("좌 ")) ||
+             label->text().startsWith(QStringLiteral("우 ")))) {
             line_tracer_sensor_labels.append(label->text());
             const auto bounds = label->mapRectToScene(label->boundingRect());
             assert(bounds.left() >= 80.0);
@@ -421,9 +421,9 @@ int main(int argc, char* argv[]) {
         }
     }
     assert(line_tracer_sensor_labels.contains(QStringLiteral("전 4 cm")));
-    assert(line_tracer_sensor_labels.contains(QStringLiteral("후 18 cm")));
     assert(line_tracer_sensor_labels.contains(QStringLiteral("좌 27 cm")));
     assert(line_tracer_sensor_labels.contains(QStringLiteral("우 31 cm")));
+    assert(line_tracer_sensor_labels.size() == 3);
 
     concurrent_view.advanceAnimationsForTest();
     assert(concurrent_view.nodeOpacity(QStringLiteral("input")) == 1.0);

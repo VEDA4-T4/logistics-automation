@@ -50,6 +50,15 @@ typedef enum {
     UART_LINETRACER_POSITION_DEST_C = 0x03U
 } uart_linetracer_position_t;
 
+/* Sensor ID 2 was the rear ultrasonic sensor and is intentionally retired. */
+#define UART_LINETRACER_RETIRED_REAR_SENSOR_ID 0x02U
+
+typedef enum {
+    UART_LINETRACER_SENSOR_FRONT = 0x01U,
+    UART_LINETRACER_SENSOR_LEFT = 0x03U,
+    UART_LINETRACER_SENSOR_RIGHT = 0x04U
+} uart_linetracer_sensor_id_t;
+
 #define UART_LINETRACER_POSITION_MIN UART_LINETRACER_POSITION_DEST_A
 #define UART_LINETRACER_POSITION_MAX UART_LINETRACER_POSITION_DEST_C
 
@@ -184,6 +193,13 @@ static inline uint8_t uart_linetracer_position_is_valid(uint32_t position) {
 
 static inline uint8_t uart_linetracer_status_position_is_valid(uint32_t position) {
     return (position == UART_LINETRACER_POSITION_NONE) ? 1U : uart_linetracer_position_is_valid(position);
+}
+
+static inline uint8_t uart_linetracer_sensor_id_is_valid(uint32_t sensor_id) {
+    return (sensor_id == UART_LINETRACER_SENSOR_FRONT || sensor_id == UART_LINETRACER_SENSOR_LEFT ||
+            sensor_id == UART_LINETRACER_SENSOR_RIGHT)
+               ? 1U
+               : 0U;
 }
 
 static inline uint8_t uart_linetracer_job_id_is_valid(uint32_t job_id) {

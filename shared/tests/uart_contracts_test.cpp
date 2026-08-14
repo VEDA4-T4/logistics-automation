@@ -289,6 +289,10 @@ void TestLineTracerPayloadValidation() {
     assert(uart_linetracer_position_is_valid(UART_LINETRACER_POSITION_DEST_A) != 0U);
     assert(uart_linetracer_position_is_valid(UART_LINETRACER_POSITION_NONE) == 0U);
     assert(uart_linetracer_status_position_is_valid(UART_LINETRACER_POSITION_NONE) != 0U);
+    assert(uart_linetracer_sensor_id_is_valid(UART_LINETRACER_SENSOR_FRONT) != 0U);
+    assert(uart_linetracer_sensor_id_is_valid(UART_LINETRACER_RETIRED_REAR_SENSOR_ID) == 0U);
+    assert(uart_linetracer_sensor_id_is_valid(UART_LINETRACER_SENSOR_LEFT) != 0U);
+    assert(uart_linetracer_sensor_id_is_valid(UART_LINETRACER_SENSOR_RIGHT) != 0U);
     assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(kArrivedEvent.data(), kArrivedEvent.size()) != 0U);
     assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(kStateEvent.data(), kStateEvent.size()) != 0U);
     assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(kFaultEvent.data(), kFaultEvent.size()) != 0U);
