@@ -164,6 +164,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     switch (status) {
         case SortingCommandStatus::kDuplicate:
             return mqtt::CommandResult::kDuplicated;
+        case SortingCommandStatus::kAcknowledged:
+            return mqtt::CommandResult::kSuccess;
         case SortingCommandStatus::kInvalidTarget:
         case SortingCommandStatus::kInvalidDestination:
         case SortingCommandStatus::kInvalidSpeed:
@@ -190,6 +192,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     switch (status) {
         case SortingCommandStatus::kSent:
         case SortingCommandStatus::kSentNoReply:
+        case SortingCommandStatus::kAcknowledged:
         case SortingCommandStatus::kDuplicate:
             return std::nullopt;
         case SortingCommandStatus::kInvalidMessage:
@@ -223,6 +226,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     switch (status) {
         case SortingCommandStatus::kDuplicate:
             return "sorting command already applied; motor action was not repeated";
+        case SortingCommandStatus::kAcknowledged:
+            return "sorting node is ready; conveyor remains stopped until product transfer completes";
         case SortingCommandStatus::kSentNoReply:
             return "sorting safety command was sent once; controller state follows asynchronously";
         case SortingCommandStatus::kInvalidTarget:

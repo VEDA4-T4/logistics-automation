@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -15,6 +16,7 @@
 #include "logistics/central_server/mqtt_handler.hpp"
 #include "logistics/central_server/persistence.hpp"
 #include "logistics/central_server/process_orchestrator.hpp"
+#include "logistics/central_server/sensor_detection.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/contracts/mqtt_validation.hpp"
@@ -159,6 +161,21 @@ public:
                                                                   }));
     }
 
+    [[nodiscard]] bool DetectSortedProduct(std::int32_t sensor_id = 3) {
+        for (int reading = 0; reading < 3; ++reading) {
+            if (!Handle(mqtt::DeviceEventTopic(kSortingId), Message(mqtt::MessageType::kSensorStatus, kSortingId,
+                                                                    mqtt::SensorStatusPayload{
+                                                                        .sensor_id = sensor_id,
+                                                                        .measurement_status = "OK",
+                                                                        .distance_cm = 5,
+                                                                        .detection_status = std::nullopt,
+                                                                    }))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     [[nodiscard]] bool CompleteWork() {
         return Handle(mqtt::DeviceEventTopic(kLineTracerId), Message(mqtt::MessageType::kWorkCompleted, kLineTracerId,
                                                                      mqtt::WorkCompletedPayload{
@@ -279,6 +296,15 @@ private:
     }
 
     [[nodiscard]] bool HandleProcessMessage(const mqtt::MqttMessage& message) {
+        if (const auto work_id = sorting_detection_gate_.ShouldStop(
+                message, orchestrator_.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning,
+                orchestrator_.StateMachine().ActiveWorks())) {
+            const auto commands = orchestrator_.SortingDetectionCommands(*work_id, message.timestamp);
+            if (commands.empty() || !DispatchProcessCommands(commands)) {
+                sorting_detection_gate_.Retry();
+                return false;
+            }
+        }
         const auto result = orchestrator_.Handle(message);
         if (!result.handled) {
             return true;
@@ -378,6 +404,7 @@ private:
     central_server::DeviceManager device_manager_;
     central_server::CommandManager command_manager_;
     central_server::ProcessOrchestrator orchestrator_;
+    central_server::SortingDetectionGate sorting_detection_gate_{ std::string(kSortingId) };
     central_server::ProcessCommandTracker process_command_tracker_;
     std::unique_ptr<central_server::MqttHandler> handler_;
     std::vector<PublishedMessage> published_;
@@ -399,15 +426,20 @@ void TestAutomaticProcessCompletesThroughAllNodes() {
     AdvanceToGripperTransfer(harness);
     assert(harness.ReportStatus(kGripperId, "COMPLETED"));
     assert(harness.ReportStatus(kSortingId, "ROUTING"));
+    assert(harness.DetectSortedProduct());
     assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
     assert(harness.ReportStatus(kLineTracerId, "FOLLOWING_LINE"));
     assert(harness.CompleteWork());
 
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStop) == 1);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 1);
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 1);
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
     assert((harness.DeviceCommandTargets() ==
             std::vector<std::string>{ std::string(kInputId), std::string(kVisionId), std::string(kLineTracerId),
-                                      std::string(kGripperId), std::string(kSortingId), std::string(kInputId) }));
+                                      std::string(kGripperId), std::string(kSortingId), std::string(kInputId),
+                                      std::string(kSortingId), std::string(kSortingId), std::string(kSortingId) }));
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
     assert(work.has_value());

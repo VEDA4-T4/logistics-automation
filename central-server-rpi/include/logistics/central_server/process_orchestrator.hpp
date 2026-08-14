@@ -76,6 +76,8 @@ public:
     [[nodiscard]] ProcessOrchestrationResult Handle(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] ProcessOrchestrationResult BeginWork(std::string_view message_id, std::string_view work_id,
                                                        std::string_view input_device_id, std::string_view timestamp);
+    [[nodiscard]] std::vector<ProcessCommandIntent> SortingDetectionCommands(std::string_view work_id,
+                                                                             std::string_view timestamp);
     [[nodiscard]] ProcessTransition ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id);
     [[nodiscard]] ProcessTransition ConfirmDispatch(const ProcessCommandIntent& intent);
     [[nodiscard]] ProcessTransition FailDispatch(const ProcessCommandIntent& intent, std::string reason);
@@ -98,6 +100,10 @@ private:
     [[nodiscard]] ProcessCommandIntent MakeInputConveyorCommand(std::string_view work_id,
                                                                 contracts::mqtt::ControlCommand command,
                                                                 std::string_view timestamp);
+    [[nodiscard]] ProcessCommandIntent MakeSortingControlCommand(std::string_view work_id,
+                                                                 contracts::mqtt::ControlCommand command,
+                                                                 std::string_view component_id,
+                                                                 std::string_view timestamp);
     [[nodiscard]] ProcessCommandIntent MakeGripperCommand(std::string_view work_id, std::string_view destination,
                                                           const GripperTarget* target, std::string_view timestamp);
     [[nodiscard]] ProcessCommandIntent MakeDestinationCommand(std::string_view work_id, std::string_view destination,

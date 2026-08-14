@@ -390,9 +390,21 @@ void TestControllerErrorsDistinguishRejectionFromFailure() {
     assert(failed.error_code == "ERR-MOTOR");
 }
 
+void TestSystemStartKeepsConveyorStopped() {
+    Fixture fixture;
+
+    const auto start = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart));
+    const auto restart = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRestart));
+
+    assert(start.status == SortingCommandStatus::kAcknowledged);
+    assert(restart.status == SortingCommandStatus::kAcknowledged);
+    assert(fixture.backend->writes.empty());
+}
+
 void TestStartConfiguresSpeedBeforeStartingConveyor() {
     Fixture fixture;
-    const auto default_speed_result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart));
+    const auto default_speed_result =
+        fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor"));
     assert(default_speed_result.Succeeded());
     assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
     assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
@@ -403,7 +415,8 @@ void TestStartConfiguresSpeedBeforeStartingConveyor() {
 
     mqtt::Json params = mqtt::Json::object();
     params["speed"] = 50;
-    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, {}, params));
+    const auto result =
+        fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor", params));
     assert(result.Succeeded());
     assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
     assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
@@ -426,12 +439,13 @@ void TestStartResendsCachedSpeedAfterControllerRestart() {
     Fixture fixture;
     mqtt::Json params = mqtt::Json::object();
     params["speed"] = 70;
-    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, {}, params)).Succeeded());
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor", params))
+               .Succeeded());
     fixture.PushOperationResult();
     fixture.PushOperationResult();
 
     fixture.node->ResetControllerHeartbeatMonitor();
-    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart)).Succeeded());
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor")).Succeeded());
 
     const auto command = fixture.LastCommand();
     assert(command.command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
@@ -802,6 +816,7 @@ int main() {
     TestBusyPreservesCommandOrderAtNodeBoundary();
     TestNackDoesNotActivateCycleAndReportsFailure();
     TestControllerErrorsDistinguishRejectionFromFailure();
+    TestSystemStartKeepsConveyorStopped();
     TestStartConfiguresSpeedBeforeStartingConveyor();
     TestStartResendsCachedSpeedAfterControllerRestart();
     TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload();

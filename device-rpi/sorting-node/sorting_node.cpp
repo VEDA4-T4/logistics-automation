@@ -190,7 +190,8 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
 }  // namespace
 
 bool SortingCommandResult::Succeeded() const noexcept {
-    return status == SortingCommandStatus::kSent || status == SortingCommandStatus::kSentNoReply;
+    return status == SortingCommandStatus::kSent || status == SortingCommandStatus::kSentNoReply ||
+           status == SortingCommandStatus::kAcknowledged;
 }
 
 SortingNode::SortingNode(std::string device_id, UartSession& uart_session, const std::uint8_t default_speed)
@@ -368,6 +369,17 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
     if (pending_safety_.active && action != DeviceControlAction::kStatusRequest) {
         result.status = SortingCommandStatus::kSafetyCommandPending;
         return result;
+    }
+    if (action == DeviceControlAction::kStart) {
+        const std::string component = NormalizeControlComponent(command.component_id);
+        if (component.empty()) {
+            result.status = SortingCommandStatus::kAcknowledged;
+            return result;
+        }
+        if (component != "CONVEYOR" && component != "SORTINGCONVEYOR") {
+            result.status = SortingCommandStatus::kUnsupportedCommand;
+            return result;
+        }
     }
 
     std::uint8_t uart_command = UART_CMD_NONE;

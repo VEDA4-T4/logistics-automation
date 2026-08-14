@@ -14,6 +14,9 @@ namespace {
 
 using logistics::central_server::SensorDetectionConfig;
 using logistics::central_server::SensorDetector;
+using logistics::central_server::SortingDetectionGate;
+using logistics::central_server::WorkProcessSnapshot;
+using logistics::central_server::WorkStage;
 namespace mqtt = logistics::contracts::mqtt;
 
 constexpr const char* kDevice = "PI-SORTING-01";
@@ -156,6 +159,12 @@ mqtt::MqttMessage SensorMessage(std::string_view source_id, std::string detectio
     };
 }
 
+mqtt::MqttMessage SortingSensorMessage(std::int32_t sensor_id, std::string detection_status) {
+    auto message = SensorMessage(kDevice, std::move(detection_status));
+    mqtt::GetPayload<mqtt::SensorStatusPayload>(message)->sensor_id = sensor_id;
+    return message;
+}
+
 void TestInputDetectionGateHandlesVisionRaceAndStoppedSystem() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
@@ -177,6 +186,36 @@ void TestInputDetectionGateHandlesVisionRaceAndStoppedSystem() {
     assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));
 }
 
+void TestSortingDetectionGateMatchesDestinationAndConsumesOneInterval() {
+    SortingDetectionGate gate(kDevice);
+    const std::vector works{
+        WorkProcessSnapshot{
+            .work_id = "WORK-DESTINATION-2",
+            .stage = WorkStage::kSorting,
+            .suspended_stage = std::nullopt,
+            .destination = "2",
+            .last_source_id = "PI-SORTING-01",
+            .failure_reason = {},
+        },
+    };
+
+    assert(!gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), false, works).has_value());
+    assert(!gate.ShouldStop(SortingSensorMessage(1, "DETECTED"), true, works).has_value());
+
+    const auto matched = gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works);
+    assert(matched == "WORK-DESTINATION-2");
+    assert(!gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works).has_value());
+
+    // Another channel's continuous CLEAR telemetry must not re-arm sensor 2.
+    assert(!gate.ShouldStop(SortingSensorMessage(1, "CLEAR"), true, works).has_value());
+    assert(!gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works).has_value());
+    assert(!gate.ShouldStop(SortingSensorMessage(2, "CLEAR"), true, works).has_value());
+    assert(gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works) == "WORK-DESTINATION-2");
+
+    gate.Retry();
+    assert(gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works) == "WORK-DESTINATION-2");
+}
+
 }  // namespace
 
 int main() {
@@ -190,6 +229,7 @@ int main() {
     TestThresholdsComeFromConfig();
     TestConfigValidation();
     TestInputDetectionGateHandlesVisionRaceAndStoppedSystem();
+    TestSortingDetectionGateMatchesDestinationAndConsumesOneInterval();
     std::cout << "sensor_detection_test passed\n";
     return 0;
 }

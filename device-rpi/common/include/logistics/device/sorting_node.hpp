@@ -18,6 +18,7 @@ namespace logistics::device {
 enum class SortingCommandStatus {
     kSent,
     kSentNoReply,
+    kAcknowledged,
     kDuplicate,
     kInvalidMessage,
     kInvalidTarget,

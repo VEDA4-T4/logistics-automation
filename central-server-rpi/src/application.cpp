@@ -202,6 +202,7 @@ int Application::Run(int argc, char* argv[]) {
     std::unordered_set<std::string> restored_pending_process_commands;
     bool safe_restored_replay_pending = false;
     InputDetectionGate input_detection_gate(server_config.process.input_device_id);
+    SortingDetectionGate sorting_detection_gate(server_config.process.sorting_device_id);
     ProcessStateStore process_state_store(database);
     // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
     std::mutex process_mutex;
@@ -964,12 +965,22 @@ int Application::Run(int argc, char* argv[]) {
     };
     mqtt_handler.SetCommandRouteHandler(dispatch_command);
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_process_commands,
-                                           &input_detection_gate, &process_state_persistence_healthy,
+                                           &input_detection_gate, &sorting_detection_gate,
+                                           &process_state_persistence_healthy,
                                            &persist_process_state](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
             return false;
         }
         const auto system_state = process_orchestrator.StateMachine().SystemState();
+        if (const auto work_id =
+                sorting_detection_gate.ShouldStop(message, system_state == ProcessSystemState::kRunning,
+                                                  process_orchestrator.StateMachine().ActiveWorks())) {
+            const auto commands = process_orchestrator.SortingDetectionCommands(*work_id, message.timestamp);
+            if (commands.empty() || !dispatch_process_commands(commands)) {
+                sorting_detection_gate.Retry();
+                return false;
+            }
+        }
         const bool process_accepts_work =
             process_orchestrator.Enabled() &&
             (system_state == ProcessSystemState::kIdle || system_state == ProcessSystemState::kRunning);
