@@ -787,7 +787,7 @@ void TestPendingInboxReplaysSideEffectsOnceAfterReopen() {
     std::filesystem::remove_all(root);
 }
 
-void TestSensorInboxReplayPreservesStampedDetection() {
+void TestSensorTelemetryBypassesInboxAndRoutesImmediately() {
     const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path() / ("logistics-sensor-inbox-test-" + unique);
     std::filesystem::create_directories(root);
@@ -836,12 +836,7 @@ void TestSensorInboxReplayPreservesStampedDetection() {
         assert(handler.Handle(topic, Encode(sensor)));
         assert((routed_detections == std::vector<std::string>{ "CLEAR", "DETECTED" }));
 
-        routed_detections.clear();
-        assert(handler.ReplayPendingReceivedEvents());
-        assert((routed_detections == std::vector<std::string>{ "CLEAR" }));
-        assert(Scalar(database,
-                      "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-SENSOR-INBOX-1' AND "
-                      "processing_state='STORED' AND payload_json LIKE '%\"detectionStatus\":\"CLEAR\"%'") == 1);
+        assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_type='SENSOR_STATUS'") == 0);
     }
     std::filesystem::remove_all(root);
 }
@@ -909,7 +904,7 @@ int main() {
     TestRetainedPositionSnapshotReplay();
     TestMessageTypesUseDedicatedRouteHandlers();
     TestPendingInboxReplaysSideEffectsOnceAfterReopen();
-    TestSensorInboxReplayPreservesStampedDetection();
+    TestSensorTelemetryBypassesInboxAndRoutesImmediately();
     TestPoisonInboxRowDoesNotStarveLaterReplay();
     return 0;
 }

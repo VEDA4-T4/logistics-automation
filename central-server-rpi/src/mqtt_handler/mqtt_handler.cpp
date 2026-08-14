@@ -238,6 +238,17 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
         Log(MqttHandlerLogLevel::kError, "MQTT process transition rejected before persistence");
         return false;
     }
+    if (!replaying && decoded.value.message_type == mqtt::MessageType::kSensorStatus) {
+        if (process_message_handler_ && !process_message_handler_(decoded.value)) {
+            Log(MqttHandlerLogLevel::kError, "sensor telemetry process handling failed");
+            return false;
+        }
+        if (qt_event_handler_ && !qt_event_handler_(decoded.value)) {
+            Log(MqttHandlerLogLevel::kError, "sensor telemetry Qt routing failed");
+            return false;
+        }
+        return true;
+    }
     if (persistence_service_ != nullptr) {
         const auto root = mqtt::Json::parse(payload.begin(), payload.end());
         std::string details_json = root.at(std::string(mqtt::kDataField)).dump();
