@@ -310,18 +310,20 @@ void TestInputFailureWithoutWorkIdStopsTheProcess() {
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kFailed);
 }
 
-void TestInputOfflineStatusStopsTheProcess() {
+void TestOfflineStatusPreservesTheProcess() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-BOX-4", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
     const auto offline = Message("MSG-INPUT-OFFLINE", mqtt::MessageType::kDeviceStatus, "PI-INPUT-01",
                                  mqtt::DeviceStatusPayload{
                                      .status = mqtt::ConnectionState::kOffline,
-                                     .current_state = "FAULT",
+                                     .current_state = "DISCONNECTED",
                                      .job_id = std::nullopt,
-                                     .error_code = std::string("INPUT_OFFLINE"),
+                                     .error_code = std::string("ERR-MQTT-DISCONNECTED"),
                                  });
-    assert(orchestrator.Handle(offline).transition.Applied());
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+    const auto result = orchestrator.Handle(offline);
+    assert(!result.handled);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
 }
 
 void TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess() {
@@ -330,11 +332,11 @@ void TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess() {
         mqtt::ConnectionState connection;
     };
     constexpr std::array failures{
-        FailureCase{ "PI-INPUT-01", mqtt::ConnectionState::kOffline },
+        FailureCase{ "PI-INPUT-01", mqtt::ConnectionState::kUartError },
         FailureCase{ "PI-VISION-01", mqtt::ConnectionState::kRtspError },
         FailureCase{ "PI-GRIPPER-01", mqtt::ConnectionState::kMqttError },
         FailureCase{ "PI-SORTING-01", mqtt::ConnectionState::kUartError },
-        FailureCase{ "PI-LT-01", mqtt::ConnectionState::kOffline },
+        FailureCase{ "PI-LT-01", mqtt::ConnectionState::kUartError },
     };
 
     for (std::size_t index = 0; index < failures.size(); ++index) {
@@ -383,7 +385,7 @@ void TestHealthyStoppedNodesDoNotFailTheProcess() {
 void TestIdleSystemRecoversAfterEveryNodeReportsHealthy() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     const auto failure = orchestrator.Handle(
-        Status("MSG-AUTO-RECOVERY-FAILURE", "PI-INPUT-01", "FAULT", mqtt::ConnectionState::kOffline, std::nullopt));
+        Status("MSG-AUTO-RECOVERY-FAILURE", "PI-INPUT-01", "FAULT", mqtt::ConnectionState::kUartError, std::nullopt));
     assert(failure.handled && failure.transition.Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
 
@@ -407,8 +409,8 @@ void TestActiveWorkPreventsAutomaticRecovery() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-ACTIVE-RECOVERY-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
     assert(orchestrator
-               .Handle(Status("MSG-ACTIVE-RECOVERY-FAILURE", "PI-GRIPPER-01", "FAULT", mqtt::ConnectionState::kOffline,
-                              std::nullopt))
+               .Handle(Status("MSG-ACTIVE-RECOVERY-FAILURE", "PI-GRIPPER-01", "FAULT",
+                              mqtt::ConnectionState::kUartError, std::nullopt))
                .transition.Applied());
 
     constexpr std::array healthy_nodes{
@@ -936,7 +938,7 @@ int main() {
     TestInputDetectionSafetyStopDoesNotCreateWork();
     TestInvalidOrderAndDispatchFailureEnterError();
     TestInputFailureWithoutWorkIdStopsTheProcess();
-    TestInputOfflineStatusStopsTheProcess();
+    TestOfflineStatusPreservesTheProcess();
     TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess();
     TestHealthyStoppedNodesDoNotFailTheProcess();
     TestIdleSystemRecoversAfterEveryNodeReportsHealthy();

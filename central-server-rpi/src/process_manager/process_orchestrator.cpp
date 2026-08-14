@@ -597,6 +597,9 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             machine.SystemState() == ProcessSystemState::kRecovery && role == contracts::DeviceRole::kLineTracer &&
             current_state == "POSITION_UNKNOWN" && status->status == mqtt::ConnectionState::kOnline &&
             !status->error_code.has_value() && status->position_reset;
+        if (role.has_value() && status->status == mqtt::ConnectionState::kOffline) {
+            return NotHandled();
+        }
         const bool connection_failure = mqtt::IsConnectionFailure(status->status);
         if (role.has_value() && !expected_position_reset && !connection_failure &&
             meaning == contracts::DeviceStateMeaning::kEmergencyStop) {
