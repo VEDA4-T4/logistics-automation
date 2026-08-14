@@ -199,6 +199,23 @@ void TestMissingBarcodeProducesFailedResult() {
     assert(payload->failure_stage == "BARCODE_DETECTION");
 }
 
+void TestDefaultBarcodeWaitRetriesBeyondLegacyLimit() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
+    assert(workflow.Observe(Observation(), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
+    assert(workflow.AssignWork(WorkCreated()));
+
+    for (int frame = 0; frame < 90; ++frame) {
+        assert(!workflow.Observe(Observation(), "IGNORED", "2026-07-21T11:00:01Z").has_value());
+    }
+    assert(!workflow.TakeAssignedWork().has_value());
+
+    assert(!workflow.Observe(Observation("8801234567893", true), "IGNORED", "2026-07-21T11:00:02Z").has_value());
+    const auto work = workflow.TakeAssignedWork();
+    assert(work.has_value());
+    assert(work->observation.has_value());
+    assert(work->observation->barcode == "8801234567893");
+}
+
 void TestBarcodeDecodeFailureIdentifiesStage() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1, 1);
     assert(workflow.Observe(Observation(std::nullopt, true), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
@@ -423,6 +440,7 @@ int main() {
     TestSensorWorkCanBeAssignedBeforeVisionDetection();
     TestBarcodeSurvivesDetectionConfirmation();
     TestMissingBarcodeProducesFailedResult();
+    TestDefaultBarcodeWaitRetriesBeyondLegacyLimit();
     TestBarcodeDecodeFailureIdentifiesStage();
     TestPreassignmentTimeoutProducesBoxDetectionFailure();
     TestPreassignmentTimeoutDiscardsUnconfirmedObservation();
