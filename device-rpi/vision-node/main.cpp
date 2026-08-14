@@ -386,6 +386,7 @@ int main(const int argc, char* argv[]) {
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
     logistics::vision::VisionMqttWorkflow mqtt_workflow(device_id);
     logistics::vision::VisionResultOutbox result_outbox;
+    logistics::vision::PendingWorkFrame pending_capture;
     logistics::device::DeviceControlState control_state({
         .device_id = device_id,
         .component_name = "vision",
@@ -491,7 +492,6 @@ int main(const int argc, char* argv[]) {
         return 1;
     }
     auto next_heartbeat = Clock::now();
-    logistics::vision::PendingWorkFrame pending_capture;
     bool camera_error_reported = false;
 #endif
 
@@ -855,6 +855,7 @@ int main(const int argc, char* argv[]) {
                                     .work = std::move(assigned_work),
                                     .publications = {},
                                     .captured_at = captured_at,
+                                    .result = {},
                                     .generation = generation,
                                 };
                                 try {
