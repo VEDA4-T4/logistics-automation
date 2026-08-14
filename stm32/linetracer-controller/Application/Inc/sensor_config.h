@@ -78,7 +78,7 @@
  * floor gives the PID at least the same
  * initial correction as the discrete 80 PWM recovery rule with Kp = 0.25.
  */
-#define SENSOR_LINE_DO_PID_MIN_ERROR 240U
+#define SENSOR_LINE_DO_PID_MIN_ERROR 400U
 
 /*
  * The 18 mm black guide tape normally runs between the two sensors. A
@@ -102,7 +102,7 @@
  */
 #define SENSOR_FSR_FILTER_SAMPLES 8U
 #define SENSOR_FSR_BASELINE_SAMPLES 24U
-#define SENSOR_FSR_LOAD_ON_DELTA 120U
+#define SENSOR_FSR_LOAD_ON_DELTA 60U
 #define SENSOR_FSR_LOAD_OFF_DELTA 250U
 #define SENSOR_FSR_OVERLOAD_THRESHOLD 3800U
 #define SENSOR_FSR_OVERLOAD_CLEAR_THRESHOLD 3400U

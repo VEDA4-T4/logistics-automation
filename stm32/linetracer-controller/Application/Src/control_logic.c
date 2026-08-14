@@ -39,6 +39,7 @@ static void ControlLogic_ResetJunctionManeuver(control_context_t* context) {
     context->junction_candidate_since_ms = 0U;
     context->junction_candidate_active = 0U;
     context->junction_target_edge_seen = 0U;
+    context->target_line_skip_phase = CONTROL_TARGET_LINE_SKIP_DISABLED;
 }
 
 static void ControlLogic_StartJunctionGuard(control_context_t* context, uint32_t now_ms) {
@@ -110,6 +111,12 @@ static uint8_t ControlLogic_StartJunctionManeuver(control_context_t* context, ro
 
     context->junction_action = action;
     context->junction_candidate_active = 0U;
+    context->target_line_skip_phase =
+        (action == ROUTE_ACTION_TURN_LEFT && context->state == LINETRACER_CONTROL_TURNING_TO_PICKUP &&
+         context->current_position == UART_LINETRACER_POSITION_DEST_A &&
+         context->active_route == UART_LINETRACER_ROUTE_B && context->route_plan.phase == ROUTE_PHASE_TO_PICKUP)
+            ? CONTROL_TARGET_LINE_SKIP_WAIT_FIRST
+            : CONTROL_TARGET_LINE_SKIP_DISABLED;
     return 1U;
 }
 
@@ -1408,6 +1415,24 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
             break;
 
         case CONTROL_JUNCTION_TURN_SEARCH_TARGET:
+            // The A -> B pickup left turn crosses one residual intersection stripe before the real B branch.
+            // Ignore that complete first black region, wait for 000, then enable normal line reacquisition.
+            if (context->target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_FIRST) {
+                if (ControlLogic_TargetEdgeDetected(context, line_left, line_center, line_right) != 0U) {
+                    context->target_line_skip_phase = CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR;
+                }
+                break;
+            }
+
+            if (context->target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR) {
+                if (all_white != 0U) {
+                    context->target_line_skip_phase = CONTROL_TARGET_LINE_SKIP_DISABLED;
+                    context->junction_target_edge_seen = 0U;
+                    context->junction_condition_active = 0U;
+                }
+                break;
+            }
+
             if (context->junction_target_edge_seen == 0U) {
                 if (ControlLogic_TargetEdgeDetected(context, line_left, line_center, line_right) != 0U) {
                     context->junction_target_edge_seen = 1U;

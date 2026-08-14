@@ -401,7 +401,7 @@ void TestFsrStabilityAndHysteresis() {
     CHECK_TRUE(context.diagnostics.fsr_empty_baseline == 1700U);
 
     for (std::uint32_t now = 160U; now <= 500U; now += 10U) {
-        auto update = UpdateFsr(context, ((now / 10U) % 2U == 0U) ? 1850U : 1900U, now);
+        auto update = UpdateFsr(context, ((now / 10U) % 2U == 0U) ? 1730U : 1750U, now);
         CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LOAD_ON) == 0U);
     }
     CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_EMPTY);
@@ -442,6 +442,30 @@ void TestFsrStabilityAndHysteresis() {
     }
     CHECK_TRUE(load_off_count == 1U);
     CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_EMPTY);
+}
+
+void TestLightFsrLoadTriggersAfterStableWindow() {
+    sensor_logic_context_t context{};
+    std::uint32_t load_on_count = 0U;
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_StartFsrBaselineCapture(&context, SENSOR_FSR_BASELINE_FOR_LOAD_ON);
+    for (std::uint32_t now = 0U; now < (SENSOR_FSR_BASELINE_SAMPLES * 10U); now += 10U) {
+        (void)UpdateFsr(context, 1000U, now);
+    }
+
+    CHECK_TRUE(context.fsr_baseline_valid != 0U);
+    CHECK_TRUE(context.diagnostics.fsr_empty_baseline == 1000U);
+
+    for (std::uint32_t now = SENSOR_FSR_BASELINE_SAMPLES * 10U; now <= 700U; now += 10U) {
+        const auto update = UpdateFsr(context, 1080U, now);
+        if ((update.event_flags & APP_SENSOR_EVENT_LOAD_ON) != 0U) {
+            ++load_on_count;
+        }
+    }
+
+    CHECK_TRUE(load_on_count == 1U);
+    CHECK_TRUE(context.snapshot.load_state == UART_LINETRACER_LOAD_PRESENT);
 }
 
 void TestOverloadAndObstacleHysteresis() {
@@ -659,6 +683,7 @@ int main() {
     TestMarkerGroupClassification();
     TestInvalidMarkerWidthAndNoise();
     TestFsrStabilityAndHysteresis();
+    TestLightFsrLoadTriggersAfterStableWindow();
     TestOverloadAndObstacleHysteresis();
     TestUltrasonicSuspendClearsObstacleAndStaleness();
     TestPendingEventLatch();

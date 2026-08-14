@@ -59,6 +59,12 @@ typedef enum {
     CONTROL_JUNCTION_TURN_SEARCH_TARGET
 } control_junction_phase_t;
 
+typedef enum {
+    CONTROL_TARGET_LINE_SKIP_DISABLED = 0,
+    CONTROL_TARGET_LINE_SKIP_WAIT_FIRST,
+    CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR
+} control_target_line_skip_phase_t;
+
 typedef struct {
     linetracer_control_state_t state;
     linetracer_control_state_t resume_state;
@@ -78,6 +84,7 @@ typedef struct {
     uint16_t active_job_id;
     app_marker_code_t last_marker_code;
     control_junction_phase_t junction_phase;
+    control_target_line_skip_phase_t target_line_skip_phase;
     route_action_t junction_action;
     uint8_t route_active;
     uint8_t resume_valid;

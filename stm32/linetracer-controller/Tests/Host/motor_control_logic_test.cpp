@@ -47,8 +47,7 @@ void TestLineFollow() {
 
     assert(MotorControlLogic_ComputeLineFollow(LINETRACER_LINE_LEFT_ONLY, &output) != 0U);
     AssertForward(output,
-                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_BASE_PWM - MOTOR_CONTROL_LINE_RECOVERY_CORRECTION_PWM +
-                                             MOTOR_CONTROL_LEFT_TRIM),
+                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_LEFT_TRIM),
                   MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM +
                                              MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 
@@ -63,15 +62,23 @@ void TestLineFollow() {
 void TestDifferentialForward() {
     motor_output_t output{};
 
-    assert(MotorControlLogic_ComputeDifferentialForward(600U, 605U, 100, &output) != 0U);
-    AssertForward(
-        output, MotorControlLogic_ClampPwm(500 + MOTOR_CONTROL_LEFT_TRIM),
-        MotorControlLogic_ClampPwm(605 + MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+    assert(MotorControlLogic_ComputeDifferentialForward(350U, 355U, 40, &output) != 0U);
+    AssertForward(output, MotorControlLogic_ClampPwm(310 + MOTOR_CONTROL_LEFT_TRIM),
+                  MotorControlLogic_ClampPwm(395 + MOTOR_CONTROL_RIGHT_TRIM));
 
-    assert(MotorControlLogic_ComputeDifferentialForward(600U, 605U, -100, &output) != 0U);
+    assert(MotorControlLogic_ComputeDifferentialForward(350U, 355U, -40, &output) != 0U);
+    AssertForward(output, MotorControlLogic_ClampPwm(390 + MOTOR_CONTROL_LEFT_TRIM),
+                  MotorControlLogic_ClampPwm(315 + MOTOR_CONTROL_RIGHT_TRIM));
+
+    assert(MotorControlLogic_ComputeDifferentialForward(350U, 355U, 100, &output) != 0U);
     AssertForward(
-        output, MotorControlLogic_ClampPwm(600 + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_LEFT_TRIM),
-        MotorControlLogic_ClampPwm(505 + MOTOR_CONTROL_RIGHT_TRIM));
+        output, MotorControlLogic_ClampPwm(250 + MOTOR_CONTROL_LEFT_TRIM),
+        MotorControlLogic_ClampPwm(355 + MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+
+    assert(MotorControlLogic_ComputeDifferentialForward(350U, 355U, -100, &output) != 0U);
+    AssertForward(
+        output, MotorControlLogic_ClampPwm(350 + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_LEFT_TRIM),
+        MotorControlLogic_ClampPwm(255 + MOTOR_CONTROL_RIGHT_TRIM));
 }
 
 void TestDifferentialForwardKeepsBothWheelsTurning() {

@@ -56,16 +56,31 @@ void MotorControlLogic_MakeSafeStop(motor_output_t* output) {
 
 uint8_t MotorControlLogic_ComputeDifferentialForward(uint16_t left_base_pwm, uint16_t right_base_pwm,
                                                      int16_t correction, motor_output_t* output) {
+    int32_t fast_boost;
+
     if (output == NULL) {
         return 0U;
     }
 
-    /* Slow the detected-line side and give the opposite wheel a small, bounded boost. */
+    /*
+     * Slow the detected-line side and boost the opposite wheel in proportion
+     * to the PID correction. Capping only the fast-wheel boost keeps small AO
+     * errors smooth while a confirmed outer DO hit receives full steering
+     * authority immediately.
+     */
     if (correction > 0) {
+        fast_boost = (int32_t)correction;
+        if (fast_boost > (int32_t)MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM) {
+            fast_boost = (int32_t)MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM;
+        }
         MotorControlLogic_MakeForward(MotorControlLogic_ClampTrackingPwm((int32_t)left_base_pwm - (int32_t)correction),
-                                      (int32_t)right_base_pwm + MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM, output);
+                                      (int32_t)right_base_pwm + fast_boost, output);
     } else if (correction < 0) {
-        MotorControlLogic_MakeForward((int32_t)left_base_pwm + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM,
+        fast_boost = -(int32_t)correction;
+        if (fast_boost > (int32_t)MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM) {
+            fast_boost = (int32_t)MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM;
+        }
+        MotorControlLogic_MakeForward((int32_t)left_base_pwm + fast_boost,
                                       MotorControlLogic_ClampTrackingPwm((int32_t)right_base_pwm + (int32_t)correction),
                                       output);
     } else {

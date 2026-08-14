@@ -556,7 +556,7 @@ void TestJunctionAcceptsOneDebouncedOuterBlackSample() {
     assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_GO_STRAIGHT);
 }
 
-void TestRouteBTargetJunctionStartsLeftTurnFromLineSample() {
+void TestRouteBLeftTurnSkipsFirstDetectedBlackLine() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_B, 417U, 0U);
 
@@ -567,12 +567,57 @@ void TestRouteBTargetJunctionStartsLeftTurnFromLineSample() {
     assert(context.route_plan.junctions_remaining == 1U);
 
     const auto after_guard = 40U + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U;
-    const auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, after_guard);
+    auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, after_guard);
     assert(result.action_valid != 0U);
     assert(result.action == ROUTE_ACTION_TURN_LEFT);
     assert(context.state == LINETRACER_CONTROL_TURNING_TO_PICKUP);
     assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
+    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_FIRST);
     assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_GO_STRAIGHT);
+
+    const auto pivot_started_at = after_guard + CONTROL_JUNCTION_CENTER_ADVANCE_MS;
+    (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, pivot_started_at);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+    (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, pivot_started_at + 1U);
+    (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U,
+                                                   pivot_started_at + 1U + CONTROL_TURN_SOURCE_CLEAR_MS);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
+
+    const auto first_black_at = pivot_started_at + CONTROL_TURN_SOURCE_CLEAR_MS + 20U;
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, first_black_at);
+    assert(result.maneuver_completed == 0U);
+    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR);
+    assert(context.junction_target_edge_seen == 0U);
+
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, first_black_at + 10U);
+    assert(result.maneuver_completed == 0U);
+    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR);
+
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, first_black_at + 20U);
+    assert(result.maneuver_completed == 0U);
+    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_DISABLED);
+
+    const auto target_black_at = first_black_at + 30U;
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, target_black_at);
+    assert(result.maneuver_completed == 0U);
+    assert(context.junction_target_edge_seen != 0U);
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, target_black_at + 10U);
+    assert(result.maneuver_completed == 0U);
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U,
+                                                      target_black_at + 10U + CONTROL_TURN_TARGET_CENTERED_MS);
+    assert(result.maneuver_completed != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+}
+
+void TestOtherLeftTurnsDoNotSkipFirstTargetLine() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_A, 418U, 0U);
+
+    const auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, 100U);
+    assert(result.action_valid != 0U);
+    assert(result.action == ROUTE_ACTION_TURN_LEFT);
+    assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
+    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_DISABLED);
 }
 
 void TestEndpointStopPrioritizesOuterDo() {
@@ -976,7 +1021,8 @@ int main() {
     TestTurningStateDetection();
     TestTurnAroundActivityDetection();
     TestJunctionAcceptsOneDebouncedOuterBlackSample();
-    TestRouteBTargetJunctionStartsLeftTurnFromLineSample();
+    TestRouteBLeftTurnSkipsFirstDetectedBlackLine();
+    TestOtherLeftTurnsDoNotSkipFirstTargetLine();
     TestEndpointStopPrioritizesOuterDo();
     TestRightTurnCompletesOnStableRightTargetSide();
     TestTurnCompletesWhenCenterIsStable();
