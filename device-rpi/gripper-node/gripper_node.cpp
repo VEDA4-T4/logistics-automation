@@ -721,8 +721,7 @@ GripperCycleStep GripperNode::FirstStepOf(GripperPhase phase, const bool from_ki
     return GripperCycleStep::kIdle;
 }
 
-GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step,
-                                      const bool from_kinematics) noexcept {
+GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step, const bool from_kinematics) noexcept {
     if (phase == GripperPhase::kFullCycle && !from_kinematics) {
         switch (step) {
             case GripperCycleStep::kPickApproach:

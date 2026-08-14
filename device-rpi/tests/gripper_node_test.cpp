@@ -985,8 +985,8 @@ void test_status_request_reanchors_the_motion_budget() {
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStatusRequest, "req-status")));
     fixture.reports.clear();
 
-    const GripperCommandResult result = fixture.node->HandleMqttCommand(
-        MakePoseExecuteCommand("req-1", kWorkId, kReachableX, 0.0, kReachableZ));
+    const GripperCommandResult result =
+        fixture.node->HandleMqttCommand(MakePoseExecuteCommand("req-1", kWorkId, kReachableX, 0.0, kReachableZ));
     assert(result.status == GripperCommandStatus::kAccepted);
 
     /*
