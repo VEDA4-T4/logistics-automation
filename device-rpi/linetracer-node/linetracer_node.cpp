@@ -491,6 +491,33 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
     std::string requested_area;
     std::array<std::uint8_t, UART_LINETRACER_STOP_PAYLOAD_SIZE> payload{};
     std::size_t payload_length = 0U;
+    const auto parse_requested_position = [&]() {
+        const auto position = command.params.find("currentPosition");
+        if (position == command.params.end()) {
+            return true;
+        }
+        std::string location;
+        requested_area = "DEPARTURE";
+        if (position->is_string()) {
+            location = position->get<std::string>();
+        } else if (position->is_object()) {
+            const auto area = position->find("area");
+            const auto nested_location = position->find("location");
+            if (area == position->end() || nested_location == position->end() || !area->is_string() ||
+                !nested_location->is_string()) {
+                return false;
+            }
+            requested_area = area->get<std::string>();
+            location = nested_location->get<std::string>();
+            if (!mqtt::LineTracerPositionPayload{ .area = requested_area, .location = location }.IsValid()) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        requested_position = PositionFromDestination(location);
+        return requested_position.has_value();
+    };
 
     switch (action) {
         case DeviceControlAction::kStop:
@@ -513,47 +540,25 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
         case DeviceControlAction::kInitialize:
             uart_command = UART_CMD_LINETRACER_RESET_SYSTEM;
             effect = PendingEffect::kClearJob;
-            if (const auto position = command.params.find("currentPosition"); position != command.params.end()) {
-                std::string location;
-                requested_area = "DEPARTURE";
-                if (position->is_string()) {
-                    location = position->get<std::string>();
-                } else if (position->is_object()) {
-                    const auto area = position->find("area");
-                    const auto nested_location = position->find("location");
-                    if (area == position->end() || nested_location == position->end() || !area->is_string() ||
-                        !nested_location->is_string()) {
-                        result.status = LineTracerCommandStatus::kInvalidPosition;
-                        return result;
-                    }
-                    requested_area = area->get<std::string>();
-                    location = nested_location->get<std::string>();
-                    const mqtt::LineTracerPositionPayload requested{
-                        .area = requested_area,
-                        .location = location,
-                    };
-                    if (!requested.IsValid()) {
-                        result.status = LineTracerCommandStatus::kInvalidPosition;
-                        return result;
-                    }
-                } else {
-                    result.status = LineTracerCommandStatus::kInvalidPosition;
-                    return result;
-                }
-                requested_position = PositionFromDestination(location);
-                if (!requested_position.has_value()) {
-                    result.status = LineTracerCommandStatus::kInvalidPosition;
-                    return result;
-                }
+            if (!parse_requested_position()) {
+                result.status = LineTracerCommandStatus::kInvalidPosition;
+                return result;
             }
             break;
         case DeviceControlAction::kSafetyRecovery:
             uart_command = UART_CMD_RESET_DEVICE;
-            /*
-             * A safety recovery clears the controller latch, but the controller
-             * resumes an active route. Preserve its MQTT work/job/position mapping.
-             */
-            effect = HasActiveJob() ? PendingEffect::kNone : PendingEffect::kClearJob;
+            if (HasActiveJob() && last_uart_state_ == UART_LINETRACER_STATE_EMERGENCY_STOP) {
+                // ESTOP reset resumes the controller route, so keep its MQTT mapping.
+                effect = PendingEffect::kNone;
+            } else {
+                // A normal fault invalidates the route. Reset it to the configured
+                // departure position before accepting another work assignment.
+                effect = PendingEffect::kClearJob;
+                if (!parse_requested_position()) {
+                    result.status = LineTracerCommandStatus::kInvalidPosition;
+                    return result;
+                }
+            }
             break;
         case DeviceControlAction::kStatusRequest:
         case DeviceControlAction::kComponentRecovery:
@@ -814,6 +819,8 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
 
     if (event_id == UART_LINETRACER_EVENT_FAULT) {
         const std::uint8_t error = frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX];
+        last_uart_state_ =
+            error == UART_ERROR_EMERGENCY_STOP ? UART_LINETRACER_STATE_EMERGENCY_STOP : UART_LINETRACER_STATE_FAULT;
         const std::string error_code = UartErrorCode(error);
         EmitReport({
             .channel = LineTracerReportChannel::kError,

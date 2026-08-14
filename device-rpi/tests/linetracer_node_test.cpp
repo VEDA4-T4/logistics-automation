@@ -449,7 +449,7 @@ void TestInitializeMapsToResetAndClearsActiveJob() {
     assert(status->position_reset);
 }
 
-void TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob() {
+void TestEmergencyStopRecoveryPreservesActiveJob() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
 
@@ -458,7 +458,12 @@ void TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob() {
     const std::uint8_t active_route_id = fixture.node->ActiveRouteId();
     const std::uint8_t current_position = fixture.node->CurrentPosition();
 
-    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_EMERGENCY_STOP);
+    fixture.reports.clear();
+
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kRecovery, "PI-LT-01", { { "currentPosition", "A" } }));
     const uart_frame_t frame = fixture.LastFrame();
 
     assert(result.Succeeded());
@@ -475,6 +480,35 @@ void TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob() {
         const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&report.data);
         return status != nullptr && status->current_state == "POSITION_UNKNOWN";
     }));
+}
+
+void TestFaultRecoveryClearsJobAndRestoresInitialPosition() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_SENSOR);
+    fixture.reports.clear();
+
+    const auto result = fixture.node->HandleMqttCommand(
+        MakeControl(mqtt::ControlCommand::kRecovery, "PI-LT-01", { { "currentPosition", "A" } }));
+
+    assert(result.Succeeded());
+    assert(fixture.LastFrame().command == UART_CMD_RESET_DEVICE);
+    assert(fixture.node->HasActiveJob());
+
+    fixture.AcknowledgeLastFrame(true);
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_SET_CURRENT_POSITION);
+    assert(!fixture.node->HasActiveJob());
+
+    fixture.AcknowledgeLastFrame();
+    assert(!fixture.node->HasActiveJob());
+    assert(fixture.node->ActiveWorkId().empty());
+    assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_A);
+    assert(!fixture.reports.empty());
+    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
+    assert(status != nullptr);
+    assert(status->current_state == "IDLE");
+    assert(!status->job_id.has_value());
+    assert(!status->position_reset);
 }
 
 void TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault() {
@@ -910,7 +944,8 @@ int main() {
     TestStartAndRestartWithoutActiveJobCompleteLocally();
     TestRestartMapsToResume();
     TestInitializeMapsToResetAndClearsActiveJob();
-    TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob();
+    TestEmergencyStopRecoveryPreservesActiveJob();
+    TestFaultRecoveryClearsJobAndRestoresInitialPosition();
     TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault();
     TestPendingSafetyCommandCannotBeOverwritten();
     TestEmergencyStopConfirmationTimesOut();

@@ -79,8 +79,9 @@ mqtt::MqttMessage PrepareCommandForDevice(const mqtt::MqttMessage& message, std:
 
     if (auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(forwarded)) {
         command->target_device_id = device_id;
-        if (command->command == mqtt::ControlCommand::kInitialize && device_id == line_tracer_device_id &&
-            !line_tracer_initial_position.empty()) {
+        if ((command->command == mqtt::ControlCommand::kInitialize ||
+             command->command == mqtt::ControlCommand::kRecovery) &&
+            device_id == line_tracer_device_id && !line_tracer_initial_position.empty()) {
             command->params["currentPosition"] = std::string(line_tracer_initial_position);
         }
     } else if (auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(forwarded)) {

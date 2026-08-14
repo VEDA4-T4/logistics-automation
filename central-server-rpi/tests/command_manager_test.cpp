@@ -140,6 +140,12 @@ void TestLineTracerInitializeIncludesConfiguredPosition() {
     assert(original_payload != nullptr);
     assert(original_payload->target_device_id == "SYSTEM");
     assert(!original_payload->params.contains("currentPosition"));
+
+    const auto recovery = MakeCommand("REQ-RECOVERY", "SYSTEM", mqtt::ControlCommand::kRecovery);
+    const auto line_tracer_recovery = central_server::PrepareCommandForDevice(recovery, "PI-LT-01", "PI-LT-01", "A");
+    const auto* recovery_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(line_tracer_recovery);
+    assert(recovery_payload != nullptr);
+    assert(recovery_payload->params.at("currentPosition") == "A");
 }
 
 void TestResponsesAreAggregatedAndDuplicatesIgnored() {
