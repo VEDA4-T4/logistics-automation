@@ -454,9 +454,6 @@ int main(const int argc, char* argv[]) {
             }
             return true;
         }
-        if (!control_state.IsOperational()) {
-            return false;
-        }
         if (mqtt_workflow.AssignWork(message)) {
             const auto* work =
                 logistics::contracts::mqtt::GetPayload<logistics::contracts::mqtt::WorkCreatedPayload>(message);
