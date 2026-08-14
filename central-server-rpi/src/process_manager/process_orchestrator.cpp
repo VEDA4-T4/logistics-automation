@@ -185,9 +185,6 @@ std::optional<ProcessCommandIntent> ProcessCommandTracker::HandleResponse(const 
 
     ProcessCommandIntent intent = std::move(pending->second);
     pending_.erase(pending);
-    if (response->result == mqtt::CommandResult::kSuccess || response->result == mqtt::CommandResult::kDuplicated) {
-        return std::nullopt;
-    }
     return intent;
 }
 
@@ -327,6 +324,36 @@ ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view 
         ++revision_;
     }
     return transition;
+}
+
+ProcessOrchestrationResult ProcessOrchestrator::HandleCommandCompletion(const ProcessCommandIntent& intent,
+                                                                        const mqtt::MqttMessage& response) {
+    const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(intent.message);
+    const auto* result = mqtt::GetPayload<mqtt::CommandResponsePayload>(response);
+    if (command == nullptr || result == nullptr || command->command != mqtt::ControlCommand::kExecute ||
+        command->target_device_id != config_.gripper_device_id || response.source_id != config_.gripper_device_id ||
+        result->request_id != command->request_id ||
+        (result->result != mqtt::CommandResult::kSuccess && result->result != mqtt::CommandResult::kDuplicated)) {
+        return NotHandled();
+    }
+    return Handle({
+        .protocol_version = response.protocol_version,
+        .message_id = response.message_id + "-PROCESS-COMPLETED",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = response.source_id,
+        .timestamp = response.timestamp,
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = mqtt::ConnectionState::kOnline,
+                .current_state = "COMPLETED",
+                .job_id = intent.work_id,
+                .error_code = std::nullopt,
+                .departure_position = std::nullopt,
+                .target_position = std::nullopt,
+                .confirmed_position = std::nullopt,
+                .movement_state = std::nullopt,
+            },
+    });
 }
 
 ProcessTransition ProcessOrchestrator::ConfirmDispatch(const ProcessCommandIntent& intent) {

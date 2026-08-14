@@ -663,8 +663,8 @@ int Application::Run(int argc, char* argv[]) {
                !replay_restored_process_commands || replay_restored_process_commands(false);
     };
     mqtt_handler.SetQtResponseHandler([&command_manager, &process_orchestrator, &finish_system_command,
-                                       &process_command_tracker, &persist_process_state,
-                                       &publish_qt_response](const contracts::mqtt::MqttMessage& message) {
+                                       &process_command_tracker, &persist_process_state, &publish_qt_response,
+                                       &dispatch_process_commands](const contracts::mqtt::MqttMessage& message) {
         const auto decision = command_manager.PreviewResponse(message);
         switch (decision.disposition) {
             case CommandResponseDisposition::kForward: {
@@ -682,17 +682,29 @@ int Application::Run(int argc, char* argv[]) {
                 }
                 const auto* response =
                     contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(*decision.message);
-                const auto pending_process_commands = process_command_tracker.PendingCount();
-                if (const auto failed_intent = process_command_tracker.HandleResponse(*decision.message)) {
-                    const auto transition = process_orchestrator.FailDispatch(
-                        *failed_intent, response == nullptr ? "process command failed" : response->message);
-                    if (!transition.Applied()) {
-                        std::cerr << "[server][ERROR] process command failure transition rejected: "
-                                  << transition.reason << '\n';
-                        return false;
+                if (const auto completed_intent = process_command_tracker.HandleResponse(message)) {
+                    const bool succeeded =
+                        response != nullptr && (response->result == contracts::mqtt::CommandResult::kSuccess ||
+                                                response->result == contracts::mqtt::CommandResult::kDuplicated);
+                    if (succeeded) {
+                        const auto completion =
+                            process_orchestrator.HandleCommandCompletion(*completed_intent, message);
+                        if (completion.handled &&
+                            (completion.transition.disposition == TransitionDisposition::kRejected ||
+                             !dispatch_process_commands(completion.commands))) {
+                            std::cerr << "[server][ERROR] process command completion could not be dispatched\n";
+                            return false;
+                        }
+                    } else {
+                        const auto transition = process_orchestrator.FailDispatch(
+                            *completed_intent, response == nullptr ? "process command failed" : response->message);
+                        if (!transition.Applied()) {
+                            std::cerr << "[server][ERROR] process command failure transition rejected: "
+                                      << transition.reason << '\n';
+                            return false;
+                        }
                     }
                 }
-                static_cast<void>(pending_process_commands);
                 if (!finish_system_command(*decision.message)) {
                     return false;
                 }

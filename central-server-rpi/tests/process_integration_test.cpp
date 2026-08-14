@@ -229,8 +229,11 @@ public:
                                   .request_id = std::move(request_id),
                                   .command = command,
                                   .result = result,
-                                  .error_code = std::string("ERR-INTEGRATION-COMMAND"),
-                                  .message = "integration command failure",
+                                  .error_code = result == mqtt::CommandResult::kSuccess
+                                                    ? std::nullopt
+                                                    : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
+                                  .message = result == mqtt::CommandResult::kSuccess ? "integration command completed"
+                                                                                     : "integration command failure",
                               }));
     }
 
@@ -366,13 +369,20 @@ private:
             return Publish(mqtt::QtEventTopic("control-center"), message);
         });
         handler_->SetQtResponseHandler([this](const mqtt::MqttMessage& message) {
-            const auto failed_intent = process_command_tracker_.HandleResponse(message);
-            if (!failed_intent.has_value()) {
+            const auto completed_intent = process_command_tracker_.HandleResponse(message);
+            if (!completed_intent.has_value()) {
                 return true;
             }
             const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(message);
+            if (response != nullptr && (response->result == mqtt::CommandResult::kSuccess ||
+                                        response->result == mqtt::CommandResult::kDuplicated)) {
+                const auto completion = orchestrator_.HandleCommandCompletion(*completed_intent, message);
+                return !completion.handled ||
+                       (completion.transition.disposition != central_server::TransitionDisposition::kRejected &&
+                        DispatchProcessCommands(completion.commands));
+            }
             return orchestrator_
-                .FailDispatch(*failed_intent, response == nullptr ? "process command failed" : response->message)
+                .FailDispatch(*completed_intent, response == nullptr ? "process command failed" : response->message)
                 .Applied();
         });
     }
@@ -424,7 +434,7 @@ void AdvanceToGripperTransfer(ProcessIntegrationHarness& harness) {
 void TestAutomaticProcessCompletesThroughAllNodes() {
     ProcessIntegrationHarness harness;
     AdvanceToGripperTransfer(harness);
-    assert(harness.ReportStatus(kGripperId, "COMPLETED"));
+    assert(harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kSuccess));
     assert(harness.ReportStatus(kSortingId, "ROUTING"));
     assert(harness.DetectSortedProduct());
     assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));

@@ -181,7 +181,15 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(!early_completion.transition.Applied() && early_completion.commands.empty());
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kGripperRequested);
     assert(orchestrator.Handle(Status("MSG-GRIPPER-START", "PI-GRIPPER-01", "TRANSFERRING")).transition.Applied());
-    const auto gripper_done = orchestrator.Handle(Status("MSG-GRIPPER-DONE", "PI-GRIPPER-01", "COMPLETED"));
+    const auto gripper_done = orchestrator.HandleCommandCompletion(
+        gripper, Message("MSG-GRIPPER-DONE", mqtt::MessageType::kCommandResponse, "PI-GRIPPER-01",
+                         mqtt::CommandResponsePayload{
+                             .request_id = gripper_payload->request_id,
+                             .command = mqtt::ControlCommand::kExecute,
+                             .result = mqtt::CommandResult::kSuccess,
+                             .error_code = std::nullopt,
+                             .message = "gripper transfer completed",
+                         }));
     assert(gripper_done.transition.Applied() && gripper_done.commands.size() == 3);
     const auto& sorting = gripper_done.commands.front();
     const auto* sorting_payload = mqtt::GetPayload<mqtt::DestinationSetPayload>(sorting.message);
@@ -865,7 +873,9 @@ void TestProcessCommandTrackerRestoresPendingCommand() {
                                       .error_code = std::nullopt,
                                       .message = "already stopped",
                                   });
-    assert(!restored.HandleResponse(response).has_value());
+    const auto completed = restored.HandleResponse(response);
+    assert(completed.has_value());
+    assert(completed->message.message_id == first.message.message_id);
     assert(restored.PendingCount() == 1);
 }
 

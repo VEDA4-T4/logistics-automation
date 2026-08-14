@@ -319,6 +319,36 @@ void TestRecoveryUsesExtendedCompletionTimeout() {
     assert(timeout->result == mqtt::CommandResult::kTimeout);
 }
 
+void TestExecuteProcessingExtendsCompletionTimeout() {
+    central_server::CommandManager::Clock::time_point silent_now{};
+    central_server::CommandManager silent_manager([&silent_now] { return silent_now; });
+    assert(silent_manager.TrackCommand(
+        MakeCommand("REQ-EXECUTE-SILENT", "PI-GRIPPER-01", mqtt::ControlCommand::kExecute), { "PI-GRIPPER-01" }));
+    silent_now += mqtt::kMqttResponseTimeout;
+    assert(silent_manager.CheckTimeouts("2026-07-25T01:00:03Z").size() == 1);
+
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    assert(manager.TrackCommand(MakeCommand("REQ-EXECUTE", "PI-GRIPPER-01", mqtt::ControlCommand::kExecute),
+                                { "PI-GRIPPER-01" }));
+
+    now += std::chrono::seconds(2);
+    const auto processing =
+        manager.HandleResponse(MakeResponse("PI-GRIPPER-01", "RESP-EXECUTE-PROCESSING", "REQ-EXECUTE",
+                                            mqtt::CommandResult::kProcessing, mqtt::ControlCommand::kExecute));
+    assert(processing.disposition == central_server::CommandResponseDisposition::kForward);
+
+    now += std::chrono::seconds(27);
+    assert(manager.CheckTimeouts("2026-07-25T01:00:29Z").empty());
+
+    const auto completed =
+        manager.HandleResponse(MakeResponse("PI-GRIPPER-01", "RESP-EXECUTE-SUCCESS", "REQ-EXECUTE",
+                                            mqtt::CommandResult::kSuccess, mqtt::ControlCommand::kExecute));
+    assert(completed.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*completed.message)->result == mqtt::CommandResult::kSuccess);
+    assert(manager.PendingCount() == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -334,5 +364,6 @@ int main() {
     TestWrongDeviceIsRejectedAndTimeoutIsGenerated();
     TestEmergencyStopUsesShortConfirmationTimeout();
     TestRecoveryUsesExtendedCompletionTimeout();
+    TestExecuteProcessingExtendsCompletionTimeout();
     return 0;
 }

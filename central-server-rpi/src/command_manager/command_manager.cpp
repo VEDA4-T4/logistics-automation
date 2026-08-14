@@ -9,6 +9,7 @@ namespace {
 
 namespace mqtt = contracts::mqtt;
 constexpr std::size_t kCompletedRequestLimit = 256;
+constexpr auto kExecuteCompletionTimeout = std::chrono::seconds{ 60 };
 
 [[nodiscard]] std::int64_t UnixMilliseconds() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
@@ -237,6 +238,13 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
     }
 
     if (!mqtt::IsTerminal(response->result)) {
+        if (pending.command == mqtt::ControlCommand::kExecute && response->result == mqtt::CommandResult::kProcessing) {
+            pending.started_at = now_provider_();
+            pending.timeout = kExecuteCompletionTimeout;
+            pending.deadline_at_ms =
+                UnixMilliseconds() +
+                std::chrono::duration_cast<std::chrono::milliseconds>(kExecuteCompletionTimeout).count();
+        }
         return {
             .disposition = CommandResponseDisposition::kForward,
             .message = message,
