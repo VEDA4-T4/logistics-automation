@@ -816,6 +816,9 @@ int main() {
     static_assert(mqtt::kHeartbeatInterval.count() == 5);
     static_assert(mqtt::kHeartbeatDelayedAfter.count() == 10);
     static_assert(mqtt::kHeartbeatOfflineAfter.count() == 15);
+    static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kStart).count() == 5);
+    static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kEmergencyStop).count() == 3);
+    static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kRecovery).count() == 32);
     static_assert(mqtt::kMqttMaximumRetries == 3);
     static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kHeartbeat));
     static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kSensorStatus));

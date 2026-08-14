@@ -139,6 +139,7 @@ inline constexpr auto kHeartbeatOfflineAfter = std::chrono::seconds{ 15 };
 inline constexpr auto kMqttResponseTimeout = std::chrono::seconds{ 3 };
 inline constexpr auto kEmergencyStopConfirmationTimeout = std::chrono::seconds{ 1 };
 inline constexpr auto kRecoveryCompletionTimeout = std::chrono::seconds{ 30 };
+inline constexpr auto kCommandResponseDeliveryGrace = std::chrono::seconds{ 2 };
 inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
 [[nodiscard]] constexpr std::chrono::seconds CommandResponseTimeout(const ControlCommand command) noexcept {
@@ -150,6 +151,10 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
         default:
             return kMqttResponseTimeout;
     }
+}
+
+[[nodiscard]] constexpr std::chrono::seconds CommandResponseWatchdogTimeout(const ControlCommand command) noexcept {
+    return CommandResponseTimeout(command) + kCommandResponseDeliveryGrace;
 }
 
 [[nodiscard]] constexpr std::string_view ToString(MessageType type) noexcept {
