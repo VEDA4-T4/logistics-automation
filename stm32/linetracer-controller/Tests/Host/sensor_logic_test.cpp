@@ -206,6 +206,24 @@ void TestOverloadAndObstacleHysteresis() {
     CHECK_TRUE((update.safety_cleared_flags & SENSOR_LOGIC_SAFETY_OBSTACLE) != 0U);
 }
 
+void TestThreeUltrasonicSensorMapping() {
+    sensor_logic_context_t context{};
+    sensor_logic_update_t update{};
+
+    SensorLogic_Init(&context, 0U);
+    CHECK_TRUE(SENSOR_LOGIC_ULTRASONIC_COUNT == 3U);
+
+    SensorLogic_UpdateUltrasonic(&context, 0U, 300U, 1U, 10U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 1U, 400U, 1U, 20U, &update);
+    SensorLogic_UpdateUltrasonic(&context, 2U, 500U, 1U, 30U, &update);
+    CHECK_TRUE(context.snapshot.ultrasonic_front_mm == 300U);
+    CHECK_TRUE(context.snapshot.ultrasonic_left_mm == 400U);
+    CHECK_TRUE(context.snapshot.ultrasonic_right_mm == 500U);
+
+    SensorLogic_UpdateUltrasonic(&context, 3U, 600U, 1U, 40U, &update);
+    CHECK_TRUE(context.snapshot.ultrasonic_right_mm == 500U);
+}
+
 void TestPendingEventLatch() {
     sensor_event_latch_t latch{};
 
@@ -256,6 +274,7 @@ int main() {
     TestInvalidMarkerEntryAndLineLost();
     TestFsrStabilityAndHysteresis();
     TestOverloadAndObstacleHysteresis();
+    TestThreeUltrasonicSensorMapping();
     TestPendingEventLatch();
     TestSensorErrorsAndStaleness();
 

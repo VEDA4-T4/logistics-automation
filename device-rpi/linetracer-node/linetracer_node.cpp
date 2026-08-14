@@ -676,7 +676,7 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
 
         const std::uint8_t sensor_id = frame.payload[UART_SENSOR_ID_INDEX];
         const std::uint8_t sensor_state = frame.payload[UART_SENSOR_STATE_INDEX];
-        if (sensor_id == 0U || sensor_id > 4U || uart_sensor_state_is_valid(sensor_state) == 0U) {
+        if (uart_linetracer_sensor_id_is_valid(sensor_id) == 0U || uart_sensor_state_is_valid(sensor_state) == 0U) {
             return;
         }
 

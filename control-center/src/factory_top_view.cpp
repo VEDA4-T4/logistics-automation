@@ -20,6 +20,7 @@
 #include <functional>
 
 #include "logistics/contracts/device.hpp"
+#include "logistics/contracts/uart/linetracer_commands.h"
 
 namespace logistics::control_center {
 namespace {
@@ -102,6 +103,10 @@ FactoryNodeVisual BaseVisual(const ProcessUnitStatus& process) {
     visual.state_text = process.current_state;
     visual.sensors.reserve(process.sensors.size());
     for (const auto& sensor : process.sensors) {
+        if (process.key == QString::fromLatin1(kLineTracerProcessKey) &&
+            uart_linetracer_sensor_id_is_valid(static_cast<uint32_t>(sensor.sensor_id)) == 0U) {
+            continue;
+        }
         const auto status = NormalizedState(sensor.measurement_status);
         visual.sensors.append({ .sensor_id = sensor.sensor_id,
                                 .detected = status == QStringLiteral("DETECTED"),
@@ -245,7 +250,8 @@ constexpr QPointF kSortingFeed{ 504, 137 };
 constexpr QPointF kSortingPositions[]{ { 504, 250 }, { 504, 345 }, { 504, 442 } };
 constexpr QPointF kLineIntersections[]{ { 292, 250 }, { 292, 345 }, { 292, 442 } };
 constexpr QPointF kLineDestinations[]{ { 80, 250 }, { 80, 345 }, { 80, 442 } };
-constexpr QPointF kLineTracerSensorPositions[]{ { 80, 165 }, { 195, 165 }, { 80, 183 }, { 195, 183 } };
+constexpr QPointF kLineTracerSensorPositions[]{ { 80, 165 }, { 80, 183 }, { 195, 183 } };
+constexpr qreal kLineTracerSensorFontIncreasePoints = 1.0;
 constexpr QRectF kLineTracerSelectionRect{ 70, 235, 445, 222 };
 
 std::optional<int> LineTracerPositionRoute(const LineTracerPositionStatus& position) {
@@ -408,6 +414,7 @@ struct FactoryTopViewWidget::Impl {
         QHash<int, QString> sensor_label_prefixes;
         QHash<int, QString> sensor_text;
         FactoryNodeVisual visual;
+        QString process_key;
         QString display_name;
         QColor color{ QStringLiteral("#9d9d9d") };
         bool motion_enabled{ false };
@@ -431,6 +438,7 @@ struct FactoryTopViewWidget::Impl {
 
     NodeItems& addNode(const QString& key, const QString& display_name, const QPointF& label_position) {
         NodeItems node;
+        node.process_key = key;
         node.group =
             new ProcessGraphicsGroup(key, [this](const QString& selected_key) { owner->selectProcess(selected_key); });
         node.display_name = display_name;
@@ -556,12 +564,15 @@ struct FactoryTopViewWidget::Impl {
 
         auto& line_tracer =
             addNode(QString::fromLatin1(kLineTracerProcessKey), QStringLiteral("Line tracer"), QPointF(80, 205));
-        const QString sensor_directions[]{ QStringLiteral("전"), QStringLiteral("후"), QStringLiteral("좌"),
-                                           QStringLiteral("우") };
-        for (int sensor_index = 0; sensor_index < 4; ++sensor_index) {
-            const auto sensor_id = sensor_index + 1;
+        constexpr int sensor_ids[]{ 1, 3, 4 };
+        const QString sensor_directions[]{ QStringLiteral("전"), QStringLiteral("좌"), QStringLiteral("우") };
+        for (int sensor_index = 0; sensor_index < 3; ++sensor_index) {
+            const auto sensor_id = sensor_ids[sensor_index];
             const auto& direction = sensor_directions[sensor_index];
             auto* sensor = new QGraphicsSimpleTextItem(QStringLiteral("%1 -- cm").arg(direction), line_tracer.group);
+            auto sensor_font = sensor->font();
+            sensor_font.setPointSizeF(sensor_font.pointSizeF() + kLineTracerSensorFontIncreasePoints);
+            sensor->setFont(sensor_font);
             sensor->setBrush(QColor(QStringLiteral("#cccccc")));
             sensor->setPos(kLineTracerSensorPositions[sensor_index]);
             line_tracer.sensor_labels.insert(sensor_id, sensor);
@@ -622,7 +633,7 @@ struct FactoryTopViewWidget::Impl {
             node.sensor_text.insert(iterator.key(), QStringLiteral("-- cm"));
             iterator.value()->setText(QStringLiteral("%1 -- cm").arg(prefix));
         }
-        if (node.sensor_labels.size() == 3) {
+        if (node.process_key == QString::fromLatin1(kSortingProcessKey)) {
             alignSortingLabels(node);
         }
         if (node.visual.state == FactoryNodeVisualState::Disconnected) {
@@ -637,7 +648,7 @@ struct FactoryTopViewWidget::Impl {
                 label->setText(QStringLiteral("%1 %2").arg(prefix, sensor.distance_text));
             }
         }
-        if (node.sensor_labels.size() == 3) {
+        if (node.process_key == QString::fromLatin1(kSortingProcessKey)) {
             alignSortingLabels(node);
         }
     }
