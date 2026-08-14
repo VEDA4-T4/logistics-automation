@@ -793,7 +793,10 @@ int Application::Run(int argc, char* argv[]) {
             return true;
         };
 
-        const auto route = ResolveCommandTargets(message, device_manager->RegisteredDevices());
+        auto route = ResolveCommandTargets(message, device_manager->RegisteredDevices());
+        if (!server_config.process.line_tracer_enabled) {
+            std::erase(route.target_device_ids, server_config.process.line_tracer_device_id);
+        }
         if (!route.IsValid()) {
             std::cerr << "[server][ERROR] command has no reachable target devices\n";
             const auto rejected = command_manager.MakeImmediateResult(

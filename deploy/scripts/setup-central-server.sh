@@ -206,6 +206,7 @@ vision_device_id=PI-VISION-01
 gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
+line_tracer_enabled=true
 line_tracer_initial_position=A
 default_destination=3
 EOF

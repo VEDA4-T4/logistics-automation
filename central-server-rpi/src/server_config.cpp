@@ -248,6 +248,8 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
     if (section == "process") {
         if (key == "enabled") {
             config.process.enabled = ParseBoolean(path, line_number, key, value);
+        } else if (key == "line_tracer_enabled") {
+            config.process.line_tracer_enabled = ParseBoolean(path, line_number, key, value);
         } else if (key == "line_tracer_initial_position") {
             if (value != "A" && value != "B" && value != "C") {
                 ThrowLineError(path, line_number, "line_tracer_initial_position must be A, B, or C");

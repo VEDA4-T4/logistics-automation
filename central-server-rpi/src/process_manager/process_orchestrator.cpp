@@ -39,7 +39,7 @@ namespace mqtt = contracts::mqtt;
     if (source_id == config.sorting_device_id) {
         return contracts::DeviceRole::kSorting;
     }
-    if (source_id == config.line_tracer_device_id) {
+    if (config.line_tracer_enabled && source_id == config.line_tracer_device_id) {
         return contracts::DeviceRole::kLineTracer;
     }
     return std::nullopt;
@@ -656,6 +656,17 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
     if (result.transition.Applied() && position_target.has_value()) {
         gripper_targets_.insert_or_assign(event.work_id, *position_target);
     }
+    if (!config_.line_tracer_enabled && event.type == ProcessEventType::kSortingCompleted &&
+        result.transition.Applied()) {
+        auto completion = event;
+        completion.type = ProcessEventType::kWorkCompleted;
+        completion.message_id += "-WITHOUT-LINETRACER";
+        completion.source_id = config_.server_id;
+        result.transition = machine.Apply(completion);
+        if (result.transition.Applied()) {
+            gripper_targets_.erase(event.work_id);
+        }
+    }
     if (!result.transition.Applied() || !create_commands) {
         return result;
     }
@@ -692,8 +703,10 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
 void ProcessOrchestrator::AppendDownstreamCommands(ProcessOrchestrationResult& result, const WorkProcessSnapshot& work,
                                                    std::string_view timestamp) {
     const auto target = homography_.Enabled() ? gripper_targets_.find(work.work_id) : gripper_targets_.end();
-    result.commands.push_back(
-        MakeDestinationCommand(work.work_id, work.destination, config_.line_tracer_device_id, std::nullopt, timestamp));
+    if (config_.line_tracer_enabled) {
+        result.commands.push_back(MakeDestinationCommand(work.work_id, work.destination, config_.line_tracer_device_id,
+                                                         std::nullopt, timestamp));
+    }
     result.commands.push_back(MakeGripperCommand(
         work.work_id, work.destination, target == gripper_targets_.end() ? nullptr : &target->second, timestamp));
 }
@@ -710,14 +723,17 @@ void ProcessOrchestrator::RememberDeviceHealth(std::string_view device_id, contr
 
 bool ProcessOrchestrator::AllProcessDevicesHealthy() const {
     const std::array required_devices{
-        std::string_view(config_.input_device_id),       std::string_view(config_.vision_device_id),
-        std::string_view(config_.gripper_device_id),     std::string_view(config_.sorting_device_id),
-        std::string_view(config_.line_tracer_device_id),
+        std::string_view(config_.input_device_id),
+        std::string_view(config_.vision_device_id),
+        std::string_view(config_.gripper_device_id),
+        std::string_view(config_.sorting_device_id),
     };
-    return std::ranges::all_of(required_devices, [this](std::string_view device_id) {
+    const auto healthy = [this](std::string_view device_id) {
         const auto health = device_health_.find(std::string(device_id));
         return health != device_health_.end() && health->second;
-    });
+    };
+    return std::ranges::all_of(required_devices, healthy) &&
+           (!config_.line_tracer_enabled || healthy(config_.line_tracer_device_id));
 }
 
 ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_view work_id,

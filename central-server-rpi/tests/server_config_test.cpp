@@ -66,6 +66,7 @@ vision_device_id=PI-VISION-01
 gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
+line_tracer_enabled=false
 line_tracer_initial_position=A
 default_destination=3
 [homography]
@@ -93,6 +94,7 @@ calibration_version=4
     assert(config.http.tls_private_key.empty());
     assert(config.http.port == 8081);
     assert(config.process.enabled);
+    assert(!config.process.line_tracer_enabled);
     assert(config.process.line_tracer_initial_position == "A");
     assert(config.process.default_destination == "3");
     assert(config.process.homography.enabled);

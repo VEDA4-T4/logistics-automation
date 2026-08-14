@@ -869,6 +869,56 @@ void TestProcessCommandTrackerRestoresPendingCommand() {
     assert(restored.PendingCount() == 1);
 }
 
+void TestLineTracerBypassRunsGripperAndSortingToCompletion() {
+    central_server::ProcessOrchestrator orchestrator({
+        .line_tracer_enabled = false,
+    });
+    const auto restored =
+        orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning,
+                                               { central_server::WorkProcessSnapshot{
+                                                   .work_id = kWorkId,
+                                                   .stage = central_server::WorkStage::kBarcodeRecognized,
+                                                   .last_source_id = "PI-VISION-01",
+                                               } },
+                                               {}, 0, {});
+    assert(restored.restored);
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
+    const auto stale_line_tracer = orchestrator.Handle(
+        Status("MSG-NO-LT-STALE", "PI-LT-01", "OFFLINE", mqtt::ConnectionState::kOffline, std::nullopt));
+    assert(!stale_line_tracer.handled);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+
+    const auto product =
+        orchestrator.Handle(Message("MSG-NO-LT-PRODUCT", mqtt::MessageType::kProductInfo, "central-server",
+                                    mqtt::ProductInfoPayload{
+                                        .work_id = kWorkId,
+                                        .recognition_status = "SUCCESS",
+                                        .barcode = "5901234123457",
+                                        .product_id = "VEDA107",
+                                        .product_name = "VEDA107",
+                                        .destination = "1",
+                                        .image = nullptr,
+                                        .confidence = 0.99,
+                                        .message = std::nullopt,
+                                    }));
+    assert(product.transition.Applied() && product.commands.size() == 1);
+    const auto* gripper = mqtt::GetPayload<mqtt::ControlCommandPayload>(product.commands.front().message);
+    assert(gripper != nullptr && gripper->target_device_id == "PI-GRIPPER-01");
+    assert(orchestrator.ConfirmDispatch(product.commands.front()).Applied());
+
+    assert(
+        orchestrator.Handle(Status("MSG-NO-LT-GRIPPER-START", "PI-GRIPPER-01", "TRANSFERRING")).transition.Applied());
+    const auto gripper_done = orchestrator.Handle(Status("MSG-NO-LT-GRIPPER-DONE", "PI-GRIPPER-01", "COMPLETED"));
+    assert(gripper_done.transition.Applied() && gripper_done.commands.size() == 3);
+    assert(orchestrator.ConfirmDispatch(gripper_done.commands.front()).Applied());
+    assert(orchestrator.Handle(Status("MSG-NO-LT-SORTING-START", "PI-SORTING-01", "ROUTING")).transition.Applied());
+
+    const auto sorting_done = orchestrator.Handle(Status("MSG-NO-LT-SORTING-DONE", "PI-SORTING-01", "CYCLE_COMPLETE"));
+    assert(sorting_done.transition.Applied());
+    assert(sorting_done.transition.current_stage == central_server::WorkStage::kCompleted);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kCompleted);
+}
+
 }  // namespace
 
 int main() {
@@ -890,5 +940,6 @@ int main() {
     TestChangedCalibrationDiscardsRestoredTarget();
     TestDownstreamDevicesServeOneWorkAtATime();
     TestProcessCommandTrackerRestoresPendingCommand();
+    TestLineTracerBypassRunsGripperAndSortingToCompletion();
     return 0;
 }
