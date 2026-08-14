@@ -457,11 +457,19 @@ int Application::Run(int argc, char* argv[]) {
             .data = contracts::mqtt::WorkCreatedPayload{ .work_id = std::string(work_id) },
         };
         const auto begin = process_orchestrator.BeginWork(message.message_id, work_id, device_id, message.timestamp);
+        const auto existing = process_orchestrator.StateMachine().FindWork(work_id);
+        if (begin.transition.disposition == TransitionDisposition::kDuplicate) {
+            // State and MQTT outbox are committed atomically.  A replay with no
+            // active work was already completed/removed; a later stage already
+            // has its WORK_CREATED delivery queued or acknowledged.
+            if (!existing.has_value() || existing->stage != WorkStage::kInputDetected) {
+                return true;
+            }
+        }
         if (begin.transition.disposition == TransitionDisposition::kRejected) {
             // The BOX event is durable and can be replayed after a dispatch-failure path
             // has already terminally reported this work.  Do not leave that inbox row
             // RECEIVED forever merely because BeginWork is no longer applicable.
-            const auto existing = process_orchestrator.StateMachine().FindWork(work_id);
             if (existing.has_value() &&
                 (existing->stage == WorkStage::kFailed || existing->stage == WorkStage::kStopped ||
                  existing->stage == WorkStage::kEmergencyStopped)) {
@@ -484,7 +492,7 @@ int Application::Run(int argc, char* argv[]) {
             PendingMqttDelivery{ .topic = qt_topic, .message = message },
         };
         const auto assigned = process_orchestrator.ConfirmVisionAssignment(message.message_id, work_id);
-        if (!assigned.Applied()) {
+        if (assigned.disposition == TransitionDisposition::kRejected) {
             return false;
         }
         if (!run_runtime_store(
