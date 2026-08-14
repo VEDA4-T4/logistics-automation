@@ -1,5 +1,6 @@
 find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MICROHTTPD REQUIRED IMPORTED_TARGET libmicrohttpd)
 
@@ -64,7 +65,9 @@ target_include_directories(
 )
 target_link_libraries(
     logistics_central_server_mqtt_core
-    PUBLIC logistics::contracts
+    PUBLIC
+        logistics::contracts
+        Threads::Threads
 )
 
 logistics_enable_warnings(logistics_central_server_mqtt_core)
@@ -212,7 +215,6 @@ logistics_enable_warnings(logistics_central_server_mqtt_handler)
 # ------------------------------------------------------------------------------
 
 if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
-    find_package(Threads REQUIRED)
     find_package(PkgConfig QUIET)
 
     if(PkgConfig_FOUND)
