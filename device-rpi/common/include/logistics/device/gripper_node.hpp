@@ -218,8 +218,9 @@ private:
     [[nodiscard]] PoseResolution ResolvePickPoses(const contracts::mqtt::Json& params) const;
 
     // Sequencer.
-    [[nodiscard]] static GripperCycleStep FirstStepOf(GripperPhase phase) noexcept;
-    [[nodiscard]] static GripperCycleStep NextStep(GripperPhase phase, GripperCycleStep step) noexcept;
+    [[nodiscard]] static GripperCycleStep FirstStepOf(GripperPhase phase, bool from_kinematics) noexcept;
+    [[nodiscard]] static GripperCycleStep NextStep(GripperPhase phase, GripperCycleStep step,
+                                                   bool from_kinematics) noexcept;
     [[nodiscard]] bool DispatchStep(GripperCommandResult& result);
     void AdvanceCycle();
     void AbortCycle(std::string error_code, std::string message);

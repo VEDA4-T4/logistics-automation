@@ -29,6 +29,7 @@ using logistics::device::GripperCommandResult;
 using logistics::device::GripperCommandStatus;
 using logistics::device::GripperCycleStep;
 using logistics::device::GripperNode;
+using logistics::device::GripperPose;
 using logistics::device::GripperPoseConfig;
 using logistics::device::GripperReport;
 using logistics::device::GripperReportChannel;
@@ -341,21 +342,16 @@ void test_full_cycle_walks_every_motion_and_reports_completion_once() {
                            mqtt::Json{ { "workId", kWorkId }, { "destination", "1" } }));
     assert(result.status == GripperCommandStatus::kAccepted);
     assert(fixture.node->HasActiveCycle());
-    assert(fixture.node->ActiveStep() == GripperCycleStep::kOpenClaw);
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kPickApproach);
 
     const std::vector<std::pair<GripperCycleStep, std::uint8_t>> expected{
-        { GripperCycleStep::kOpenClaw, UART_GRIPPER_MOTION_GRIPPER },
         { GripperCycleStep::kPickApproach, UART_GRIPPER_MOTION_ARM },
-        { GripperCycleStep::kPickDescend, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kCloseClaw, UART_GRIPPER_MOTION_GRIPPER },
         { GripperCycleStep::kPickRetreat, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kTransfer, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kPlaceApproach, UART_GRIPPER_MOTION_ARM },
-        { GripperCycleStep::kPlaceDescend, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kReleaseClaw, UART_GRIPPER_MOTION_GRIPPER },
-        { GripperCycleStep::kPlaceRetreat, UART_GRIPPER_MOTION_ARM },
-        { GripperCycleStep::kReturnTransfer, UART_GRIPPER_MOTION_ARM },
-        { GripperCycleStep::kReturnPickSide, UART_GRIPPER_MOTION_ARM },
+        { GripperCycleStep::kPlaceDescend, UART_GRIPPER_MOTION_ARM },
         { GripperCycleStep::kReturnHome, UART_GRIPPER_MOTION_HOME },
     };
 
@@ -390,7 +386,7 @@ void test_progress_states_carry_the_job_id_but_never_report_ready() {
     fixture.Home();
 
     const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeExecuteCommand("req-1", kWorkId));
-    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_GRIPPER);
+    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_ARM);
 
     // READY, COMPLETED and PLACED all mean "finished" to the orchestrator, so a
     // mid-cycle status must never use one of them.
@@ -453,7 +449,7 @@ void test_motion_fault_aborts_the_cycle_and_reports_an_error() {
     fixture.Home();
 
     const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeExecuteCommand("req-1", kWorkId));
-    fixture.node->HandleUartFrame(MakeMotionFault(result.motion_id, UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO));
+    fixture.node->HandleUartFrame(MakeMotionFault(result.motion_id, UART_GRIPPER_MOTION_ARM, UART_ERROR_SERVO));
 
     assert(!fixture.node->HasActiveCycle());
     const auto* error = fixture.LastError();
@@ -469,7 +465,7 @@ void test_a_stale_motion_completion_does_not_advance_the_cycle() {
     const GripperCycleStep step_before = fixture.node->ActiveStep();
 
     // A completion left over from a cancelled motion must not move the sequence on.
-    fixture.CompleteCurrentMotion(static_cast<std::uint16_t>(result.motion_id + 500U), UART_GRIPPER_MOTION_GRIPPER);
+    fixture.CompleteCurrentMotion(static_cast<std::uint16_t>(result.motion_id + 500U), UART_GRIPPER_MOTION_ARM);
 
     assert(fixture.node->ActiveStep() == step_before);
     assert(fixture.node->HasActiveCycle());
@@ -646,33 +642,63 @@ void test_pick_phase_stops_with_the_box_held() {
     assert(!fixture.AnyStatusEquals("PLACING"));
 }
 
-void test_full_cycle_uses_the_taught_clearance_poses_after_gripping() {
+void test_coordinate_free_full_cycle_uses_the_compact_taught_sequence() {
     GripperPoseConfig config;
-    config.pick_lift = { 1000U, 500U, 1500U };
-    config.transfer = { 1800U, 500U, 1500U };
+    config.pick_approach = { 1000U, 1300U, 1400U };
+    config.pick_lift = { 1000U, 600U, 1400U };
+    config.transfer = { 1800U, 600U, 1400U };
+    config.place_approach = { 1800U, 1100U, 1500U };
+    config.place = { 1800U, 700U, 1200U };
     Fixture fixture{ config };
     fixture.Home();
 
     const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeExecuteCommand("req-1", kWorkId));
     assert(result.status == GripperCommandStatus::kAccepted);
 
+    const auto assert_arm_pose = [&](const GripperPose& expected) {
+        assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
+        assert(uart_gripper_move_base_angle(fixture.backend->last_written.payload) == expected.base_deci_deg);
+        assert(uart_gripper_move_shoulder_angle(fixture.backend->last_written.payload) == expected.shoulder_deci_deg);
+        assert(uart_gripper_move_elbow_angle(fixture.backend->last_written.payload) == expected.elbow_deci_deg);
+    };
+
     std::uint16_t motion_id = result.motion_id;
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kPickApproach);
+    assert_arm_pose(config.pick_approach);
+
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kCloseClaw);
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_SET_GRIPPER);
+    assert(fixture.backend->last_written.payload[UART_GRIPPER_SET_POSITION_INDEX] == 30U);
+
     fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_GRIPPER);
-    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
-    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
-    fixture.CompleteCurrentMotion(motion_id, UART_GRIPPER_MOTION_GRIPPER);
-
     assert(fixture.node->ActiveStep() == GripperCycleStep::kPickRetreat);
-    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
-    assert(uart_gripper_move_base_angle(fixture.backend->last_written.payload) == 1000U);
-    assert(uart_gripper_move_shoulder_angle(fixture.backend->last_written.payload) == 500U);
-    assert(uart_gripper_move_elbow_angle(fixture.backend->last_written.payload) == 1500U);
+    assert_arm_pose(config.pick_lift);
 
-    fixture.CompleteCurrentMotion(++motion_id, UART_GRIPPER_MOTION_ARM);
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
     assert(fixture.node->ActiveStep() == GripperCycleStep::kTransfer);
-    assert(uart_gripper_move_base_angle(fixture.backend->last_written.payload) == 1800U);
-    assert(uart_gripper_move_shoulder_angle(fixture.backend->last_written.payload) == 500U);
-    assert(uart_gripper_move_elbow_angle(fixture.backend->last_written.payload) == 1500U);
+    assert_arm_pose(config.transfer);
+
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kPlaceApproach);
+    assert_arm_pose(config.place_approach);
+
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kReleaseClaw);
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_SET_GRIPPER);
+    assert(fixture.backend->last_written.payload[UART_GRIPPER_SET_POSITION_INDEX] == 60U);
+
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_GRIPPER);
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kPlaceDescend);
+    assert_arm_pose(config.place);
+
+    fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kReturnHome);
+    assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_HOME);
+
+    fixture.CompleteCurrentMotion(motion_id, UART_GRIPPER_MOTION_HOME);
+    assert(!fixture.node->HasActiveCycle());
+    assert(fixture.node->IsHomed());
 }
 
 void test_vision_offset_shifts_the_pick_pose_within_its_limit() {
@@ -832,8 +858,7 @@ void test_a_command_without_a_pick_pose_still_uses_the_taught_waypoints() {
 
     const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeExecuteCommand("req-1", kWorkId));
     assert(result.status == GripperCommandStatus::kAccepted);
-    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_GRIPPER);
-
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kPickApproach);
     assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
     const GripperPoseConfig defaults{};
     const logistics::device::JointAngles sent = ArmAnglesOf(fixture.backend->last_written);
@@ -905,8 +930,6 @@ void test_motion_duration_follows_the_controller_speed_limits() {
 
     const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeExecuteCommand("req-1", kWorkId));
     assert(result.status == GripperCommandStatus::kAccepted);
-    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_GRIPPER);
-
     assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_MOVE_ARM);
     // Homing leaves the shoulder at 700, so this move travels 800 deci-degrees.
     assert(uart_gripper_move_duration_ms(fixture.backend->last_written.payload) == 6667U);
@@ -934,7 +957,7 @@ void test_an_aborted_cycle_widens_the_next_motion_budget() {
 
     const GripperCommandResult first = fixture.node->HandleMqttCommand(MakeExecuteCommand("req-1", kWorkId));
     assert(first.status == GripperCommandStatus::kAccepted);
-    fixture.node->HandleUartFrame(MakeMotionFault(first.motion_id, UART_GRIPPER_MOTION_GRIPPER, UART_ERROR_SERVO));
+    fixture.node->HandleUartFrame(MakeMotionFault(first.motion_id, UART_GRIPPER_MOTION_ARM, UART_ERROR_SERVO));
     assert(!fixture.node->HasActiveCycle());
 
     // GET_STATUS is what re-anchors the pose, so without one the next cycle must
@@ -962,7 +985,8 @@ void test_status_request_reanchors_the_motion_budget() {
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStatusRequest, "req-status")));
     fixture.reports.clear();
 
-    const GripperCommandResult result = fixture.node->HandleMqttCommand(MakeExecuteCommand("req-1", kWorkId));
+    const GripperCommandResult result = fixture.node->HandleMqttCommand(
+        MakePoseExecuteCommand("req-1", kWorkId, kReachableX, 0.0, kReachableZ));
     assert(result.status == GripperCommandStatus::kAccepted);
 
     /*
@@ -1030,7 +1054,7 @@ int main() {
     test_status_request_reports_the_controller_state();
     test_commands_for_another_device_are_ignored();
     test_pick_phase_stops_with_the_box_held();
-    test_full_cycle_uses_the_taught_clearance_poses_after_gripping();
+    test_coordinate_free_full_cycle_uses_the_compact_taught_sequence();
     test_vision_offset_shifts_the_pick_pose_within_its_limit();
     test_pose_config_parses_and_rejects_impossible_claw_travel();
     test_cartesian_pick_pose_drives_the_arm_through_kinematics();

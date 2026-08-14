@@ -554,7 +554,7 @@ GripperCommandResult GripperNode::StartCycle(const mqtt::ControlCommandPayload& 
         .active = true,
         .mqtt_command = command.command,
         .phase = phase,
-        .step = FirstStepOf(phase),
+        .step = FirstStepOf(phase, resolved.from_kinematics),
         .work_id = result.work_id,
         .request_id = command.request_id,
         .destination = ReadStringParam(command.params, "destination").value_or(std::string{}),
@@ -699,7 +699,14 @@ GripperCommandResult GripperNode::RunStatusRequest(const mqtt::ControlCommandPay
 // Sequencer
 // ---------------------------------------------------------------------------
 
-GripperCycleStep GripperNode::FirstStepOf(GripperPhase phase) noexcept {
+GripperCycleStep GripperNode::FirstStepOf(GripperPhase phase, const bool from_kinematics) noexcept {
+    // A coordinate-free EXECUTE uses the compact, taught sequence. HOME already
+    // leaves the claw open, so the first useful action is the configured grasp
+    // waypoint. Coordinate-driven cycles keep the guarded open/approach/descend
+    // flow because their two pick poses are calculated independently.
+    if (phase == GripperPhase::kFullCycle && !from_kinematics) {
+        return GripperCycleStep::kPickApproach;
+    }
     switch (phase) {
         case GripperPhase::kFullCycle:
         case GripperPhase::kPick:
@@ -714,7 +721,30 @@ GripperCycleStep GripperNode::FirstStepOf(GripperPhase phase) noexcept {
     return GripperCycleStep::kIdle;
 }
 
-GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step) noexcept {
+GripperCycleStep GripperNode::NextStep(GripperPhase phase, GripperCycleStep step,
+                                      const bool from_kinematics) noexcept {
+    if (phase == GripperPhase::kFullCycle && !from_kinematics) {
+        switch (step) {
+            case GripperCycleStep::kPickApproach:
+                return GripperCycleStep::kCloseClaw;
+            case GripperCycleStep::kCloseClaw:
+                return GripperCycleStep::kPickRetreat;
+            case GripperCycleStep::kPickRetreat:
+                return GripperCycleStep::kTransfer;
+            case GripperCycleStep::kTransfer:
+                return GripperCycleStep::kPlaceApproach;
+            case GripperCycleStep::kPlaceApproach:
+                return GripperCycleStep::kReleaseClaw;
+            case GripperCycleStep::kReleaseClaw:
+                return GripperCycleStep::kPlaceDescend;
+            case GripperCycleStep::kPlaceDescend:
+                return GripperCycleStep::kReturnHome;
+            case GripperCycleStep::kReturnHome:
+                return GripperCycleStep::kCompleted;
+            default:
+                return GripperCycleStep::kCompleted;
+        }
+    }
     switch (step) {
         case GripperCycleStep::kOpenClaw:
             return GripperCycleStep::kPickApproach;
@@ -886,7 +916,7 @@ bool GripperNode::DispatchStep(GripperCommandResult& result) {
 
 void GripperNode::AdvanceCycle() {
     const GripperCycleStep previous = cycle_.step;
-    cycle_.step = NextStep(cycle_.phase, cycle_.step);
+    cycle_.step = NextStep(cycle_.phase, cycle_.step, cycle_.from_kinematics);
 
     if (cycle_.step == GripperCycleStep::kCompleted) {
         if (previous == GripperCycleStep::kReturnHome) {
