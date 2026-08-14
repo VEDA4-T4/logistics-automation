@@ -273,6 +273,26 @@ ProcessOrchestrationResult ProcessOrchestrator::BeginWork(std::string_view messa
     return result;
 }
 
+contracts::mqtt::MqttMessage ProcessOrchestrator::MakeInputConveyorSafetyStop(std::string_view trigger_message_id,
+                                                                              std::string_view timestamp) const {
+    const std::string request_id = "INPUT-DETECTION-STOP-" + std::string(trigger_message_id);
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = request_id,
+        .message_type = mqtt::MessageType::kControlCommand,
+        .source_id = config_.server_id,
+        .timestamp = std::string(timestamp),
+        .data =
+            mqtt::ControlCommandPayload{
+                .request_id = request_id,
+                .command = mqtt::ControlCommand::kStop,
+                .target_device_id = config_.input_device_id,
+                .component_id = "input_conveyor",
+                .params = mqtt::Json{ { "reason", "BOX_DETECTED" } },
+            },
+    };
+}
+
 std::vector<ProcessCommandIntent> ProcessOrchestrator::SortingDetectionCommands(std::string_view work_id,
                                                                                 std::string_view timestamp) {
     const auto work = state_machine_.FindWork(work_id);

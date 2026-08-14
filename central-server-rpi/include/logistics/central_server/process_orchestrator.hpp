@@ -76,6 +76,8 @@ public:
     [[nodiscard]] ProcessOrchestrationResult Handle(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] ProcessOrchestrationResult BeginWork(std::string_view message_id, std::string_view work_id,
                                                        std::string_view input_device_id, std::string_view timestamp);
+    [[nodiscard]] contracts::mqtt::MqttMessage MakeInputConveyorSafetyStop(std::string_view trigger_message_id,
+                                                                           std::string_view timestamp) const;
     [[nodiscard]] std::vector<ProcessCommandIntent> SortingDetectionCommands(std::string_view work_id,
                                                                              std::string_view timestamp);
     [[nodiscard]] ProcessTransition ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id);

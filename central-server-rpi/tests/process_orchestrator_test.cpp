@@ -233,6 +233,21 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kCompleted);
 }
 
+void TestInputDetectionSafetyStopDoesNotCreateWork() {
+    central_server::ProcessOrchestrator orchestrator;
+    const auto stop = orchestrator.MakeInputConveyorSafetyStop("MSG-SENSOR-DETECTED", kTimestamp);
+    const auto* payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(stop);
+    assert(payload != nullptr);
+    assert(stop.message_id == "INPUT-DETECTION-STOP-MSG-SENSOR-DETECTED");
+    assert(payload->request_id == stop.message_id);
+    assert(payload->command == mqtt::ControlCommand::kStop);
+    assert(payload->target_device_id == "PI-INPUT-01");
+    assert(payload->component_id == "input_conveyor");
+    assert(payload->params.at("reason") == "BOX_DETECTED");
+    assert(orchestrator.StateMachine().ActiveWorks().empty());
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-INPUT-01"), stop).IsSuccess());
+}
+
 void TestInvalidOrderAndDispatchFailureEnterError() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-BOX-2", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
@@ -858,6 +873,7 @@ void TestProcessCommandTrackerRestoresPendingCommand() {
 
 int main() {
     TestEventFlowCreatesCommandsForEachNode();
+    TestInputDetectionSafetyStopDoesNotCreateWork();
     TestInvalidOrderAndDispatchFailureEnterError();
     TestInputFailureWithoutWorkIdStopsTheProcess();
     TestInputOfflineStatusStopsTheProcess();

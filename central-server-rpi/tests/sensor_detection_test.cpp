@@ -169,11 +169,15 @@ void TestInputDetectionGateHandlesVisionRaceAndStoppedSystem() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
 
+    assert(gate.ShouldStopConveyor(detected));
+    assert(!gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldCreateWork(detected, false, false));
     assert(gate.ShouldCreateWork(detected, true, false));
     assert(!gate.ShouldCreateWork(detected, true, false));
 
     const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
+    assert(!gate.ShouldStopConveyor(clear));
+    assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldCreateWork(clear, true, false));
     assert(!gate.ShouldCreateWork(detected, true, true));
     assert(!gate.ShouldCreateWork(detected, true, false));
@@ -182,7 +186,10 @@ void TestInputDetectionGateHandlesVisionRaceAndStoppedSystem() {
     assert(gate.ShouldCreateWork(detected, true, false));
     gate.Retry();
     assert(gate.ShouldCreateWork(detected, true, false));
+    gate.RetryStop();
+    assert(gate.ShouldStopConveyor(detected));
 
+    assert(!gate.ShouldStopConveyor(SensorMessage("PI-LT-01", "DETECTED")));
     assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));
 }
 

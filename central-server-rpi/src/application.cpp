@@ -970,8 +970,8 @@ int Application::Run(int argc, char* argv[]) {
         return true;
     };
     mqtt_handler.SetCommandRouteHandler(dispatch_command);
-    mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_process_commands,
-                                           &input_detection_gate, &sorting_detection_gate,
+    mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_command,
+                                           &dispatch_process_commands, &input_detection_gate, &sorting_detection_gate,
                                            &process_state_persistence_healthy,
                                            &persist_process_state](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
@@ -990,6 +990,18 @@ int Application::Run(int argc, char* argv[]) {
         const bool process_accepts_work =
             process_orchestrator.Enabled() &&
             (system_state == ProcessSystemState::kIdle || system_state == ProcessSystemState::kRunning);
+        const bool input_sensor_detected = input_detection_gate.ShouldStopConveyor(message);
+        const auto* box = contracts::mqtt::GetPayload<contracts::mqtt::BoxDetectedPayload>(message);
+        const bool vision_box_detected = box != nullptr && box->detected;
+        if (process_orchestrator.Enabled() && !process_accepts_work && (input_sensor_detected || vision_box_detected)) {
+            const auto stop = process_orchestrator.MakeInputConveyorSafetyStop(message.message_id, message.timestamp);
+            if (!dispatch_command(stop)) {
+                if (input_sensor_detected) {
+                    input_detection_gate.RetryStop();
+                }
+                return false;
+            }
+        }
         if (input_detection_gate.ShouldCreateWork(message, process_accepts_work,
                                                   InputStationOccupied(process_orchestrator.StateMachine()))) {
             const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);

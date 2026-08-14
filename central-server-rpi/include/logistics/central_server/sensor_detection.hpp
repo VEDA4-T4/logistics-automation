@@ -93,17 +93,25 @@ class InputDetectionGate final {
 public:
     explicit InputDetectionGate(std::string input_device_id, std::int32_t sensor_id = 1);
 
+    // Physical stopping is independent from whether the process can create a
+    // work item. This closes the partial-START case where the conveyor is
+    // moving but the server already returned to STOPPED after another node
+    // timed out.
+    [[nodiscard]] bool ShouldStopConveyor(const contracts::mqtt::MqttMessage& message);
+
     // Consumes one physical DETECTED interval. A stopped process defers the
     // interval so the next reading after START can create the work; an already
     // occupied input station consumes it because vision won the same-box race.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
                                         bool input_station_occupied);
     void Retry() noexcept;
+    void RetryStop() noexcept;
 
 private:
     std::string input_device_id_;
     std::int32_t sensor_id_;
     bool consumed_{ false };
+    bool stop_consumed_{ false };
 };
 
 class SortingDetectionGate final {
