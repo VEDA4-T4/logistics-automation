@@ -611,6 +611,8 @@ void TestEmergencyHeartbeatIsSafetyStateNotError() {
 
 void TestReturnHomeAndCycleCompletePublishCompletion() {
     Fixture fixture;
+    fixture.PushHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE);
+    fixture.reports.clear();
     ActivateCycle(fixture);
     const std::uint16_t cycle_id = fixture.node->ActiveCycleId();
 
@@ -630,9 +632,9 @@ void TestReturnHomeAndCycleCompletePublishCompletion() {
     const auto& completed = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[0]);
     assert(completed.current_state == "CYCLE_COMPLETE");
     assert(completed.job_id == std::optional<std::string>(kWorkId));
-    const auto& idle = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
-    assert(idle.current_state == "IDLE");
-    assert(!idle.job_id.has_value());
+    const auto& running = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
+    assert(running.current_state == "RUNNING");
+    assert(!running.job_id.has_value());
 }
 
 void TestReconnectStatusQueryPublishesControllerState() {
@@ -646,8 +648,21 @@ void TestReconnectStatusQueryPublishesControllerState() {
     assert(!fixture.session->HasPendingCommand());
     assert(fixture.reports.size() == 1U);
     const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
-    assert(status.current_state == "IDLE");
+    assert(status.current_state == "STOPPED");
     assert(!status.job_id.has_value());
+}
+
+void TestGateHomeStatusDoesNotOverwriteRunningConveyor() {
+    Fixture fixture;
+    fixture.PushHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE);
+    fixture.reports.clear();
+
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    fixture.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE, UART_SORTING_DESTINATION_NONE);
+
+    assert(fixture.reports.size() == 1U);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
+    assert(status.current_state == "RUNNING");
 }
 
 void TestReconnectStatusRejectsDestinationMappingMismatch() {
@@ -801,6 +816,7 @@ int main() {
     TestEmergencyHeartbeatIsSafetyStateNotError();
     TestReturnHomeAndCycleCompletePublishCompletion();
     TestReconnectStatusQueryPublishesControllerState();
+    TestGateHomeStatusDoesNotOverwriteRunningConveyor();
     TestReconnectStatusRejectsDestinationMappingMismatch();
     TestConveyorStatusUsesHeartbeatStateNames();
     TestSensorStatusPublishesEveryDistanceMeasurement();

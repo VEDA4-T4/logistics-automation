@@ -376,6 +376,7 @@ void OperationsDashboardState::configureProcesses(const QList<ProcessDefinition>
     processed_message_ids_.clear();
     processed_message_order_.clear();
     last_completion_at_ = {};
+    last_command_message_at_ = {};
     last_completion_detail_.clear();
     command_override_.reset();
     command_override_stage_.clear();
@@ -492,7 +493,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                                         : (detection_status.isEmpty() ? QStringLiteral("UNKNOWN") : detection_status);
 
         auto& process = process_runtime_[process_index];
-        UpdateSensor(process.status, sensor_id, display_status, distance_cm, timestamp);
+        UpdateSensor(process.status, sensor_id, display_status, distance_cm, effective_received_at);
         process.last_received_at = effective_received_at;
         if (measurement_status == QStringLiteral("FAULT")) {
             process.status.error_code = QStringLiteral("ERR-SENSOR");
@@ -503,7 +504,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             process.status.error_code.clear();
             process.status.has_error = false;
         }
-        updateOverall(timestamp);
+        updateOverall(effective_received_at);
         publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
@@ -569,7 +570,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 process.status.current_state = current_state;
             }
             process.status.work_completed = false;
-            process.status.updated_at = timestamp;
+            process.status.updated_at = effective_received_at;
         } else {
             const auto state_text = StringValue(data, "status");
             const auto connection_state = mqtt::ConnectionStateFromString(state_text.toStdString());
@@ -594,7 +595,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             const auto sensor_id = SensorIdForCurrentState(current_state);
             const bool sensor_telemetry = !sensor_measurement.isEmpty();
             if (sensor_telemetry && sensor_id.has_value()) {
-                UpdateSensor(process.status, *sensor_id, sensor_measurement, -1, timestamp);
+                UpdateSensor(process.status, *sensor_id, sensor_measurement, -1, effective_received_at);
             }
             if (sensor_stale) {
                 ResetSensors(process.status);
@@ -618,7 +619,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             if (mqtt::IsConnectionFailure(process.status.connection_state)) {
                 process.status.destination.clear();
             }
-            process.status.updated_at = timestamp;
+            process.status.updated_at = effective_received_at;
         }
         if (position_snapshot.has_value()) {
             process.status.departure_position = position_snapshot->departure;
@@ -641,7 +642,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         process.last_device_message_at = timestamp;
         process.last_received_at = effective_received_at;
 
-        updateOverall(timestamp);
+        updateOverall(effective_received_at);
         publishProcessSnapshots();
         if (!device_order.has_value() || device_order->stream != DeviceMessageOrder::Stream::kWill) {
             rememberMessage(message_id);
@@ -655,10 +656,11 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             rememberMessage(message_id);
             return result;
         }
-        if (overall_.updated_at.isValid() && timestamp < overall_.updated_at) {
+        if (last_command_message_at_.isValid() && timestamp < last_command_message_at_) {
             return result;
         }
-        updateOverallForCommand(data, timestamp);
+        last_command_message_at_ = timestamp;
+        updateOverallForCommand(data, effective_received_at);
         publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
@@ -670,7 +672,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             if (process.status.connection_state != mqtt::ConnectionState::kOffline &&
                 process.status.connection_state != mqtt::ConnectionState::kUnknown) {
                 process.status.current_state = QStringLiteral("EMERGENCY_STOP");
-                process.status.updated_at = timestamp;
+                process.status.updated_at = effective_received_at;
             }
         }
         command_override_ = OverallProcessState::EmergencyStop;
@@ -679,7 +681,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         overall_.state = OverallProcessState::EmergencyStop;
         overall_.stage = command_override_stage_;
         overall_.detail = command_override_detail_;
-        overall_.updated_at = timestamp;
+        overall_.updated_at = effective_received_at;
         publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
@@ -736,7 +738,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 }
                 process.status.work_completed = true;
             }
-            process.status.updated_at = timestamp;
+            process.status.updated_at = effective_received_at;
             if (type == mqtt::MessageType::kWorkCompleted &&
                 StringValue(data, "result").toUpper() == QStringLiteral("FAILED")) {
                 process.status.has_error = true;
@@ -753,7 +755,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         last_completion_detail_ = StringValue(data, "message");
     }
 
-    updateOverall(timestamp);
+    updateOverall(effective_received_at);
     publishProcessSnapshots();
     rememberMessage(message_id);
     result.applied = true;
@@ -1057,6 +1059,7 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
     overall_.active_unit_count = 0;
     overall_.active_work_count = 0;
     last_completion_at_ = {};
+    last_command_message_at_ = {};
     last_completion_detail_.clear();
     command_override_.reset();
     command_override_stage_.clear();

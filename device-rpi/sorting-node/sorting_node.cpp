@@ -104,6 +104,19 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
     }
 }
 
+[[nodiscard]] std::string ConveyorStateName(std::uint8_t device_state) {
+    switch (device_state) {
+        case UART_DEVICE_RUNNING:
+            return "RUNNING";
+        case UART_DEVICE_ERROR:
+            return "ERROR";
+        case UART_DEVICE_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
+        default:
+            return "STOPPED";
+    }
+}
+
 // Measurement health only (IsValidMeasurementStatus in mqtt_codec.hpp). Box
 // arrival is decided by the central server from distanceCm, so this node just
 // relays the reading it was handed.
@@ -468,7 +481,7 @@ SortingCommandResult SortingNode::HandleEmergencyStop(const mqtt::EmergencyStopP
 void SortingNode::ResetControllerHeartbeatMonitor() noexcept {
     controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
     controller_heartbeat_timed_out_ = false;
-    last_device_state_ = 0xffU;
+    last_device_state_ = UART_DEVICE_STOPPED;
     last_device_error_ = 0xffU;
 }
 
@@ -619,12 +632,15 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
                 EmitStatus("RETURNING_HOME");
                 break;
             case UART_CMD_SORTING_RESET:
-                EmitStatus("IDLE");
+                last_device_state_ = UART_DEVICE_STOPPED;
+                EmitStatus("STOPPED");
                 break;
             case UART_CMD_SORTING_CONVEYOR_START:
+                last_device_state_ = UART_DEVICE_RUNNING;
                 EmitStatus("RUNNING");
                 break;
             case UART_CMD_SORTING_CONVEYOR_STOP:
+                last_device_state_ = UART_DEVICE_STOPPED;
                 EmitStatus("STOPPED");
                 break;
             case UART_CMD_EMERGENCY_STOP:
@@ -692,7 +708,10 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
         } else {
             active_destination_ = destination;
         }
-        EmitStatus(GateStateName(gate_state, destination),
+        const auto current_state = idle_cycle && gate_state == UART_SORTING_GATE_HOME
+                                       ? ConveyorStateName(last_device_state_)
+                                       : GateStateName(gate_state, destination);
+        EmitStatus(current_state,
                    gate_state == UART_SORTING_GATE_FAULT ? std::optional<std::string>{ "ERR-SERVO" } : std::nullopt);
         return true;
     }
@@ -705,6 +724,9 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
             return false;
         }
         configured_speed_ = speed;
+        last_device_state_ = state == UART_SORTING_CONVEYOR_RUNNING   ? UART_DEVICE_RUNNING
+                             : state == UART_SORTING_CONVEYOR_STOPPED ? UART_DEVICE_STOPPED
+                                                                      : UART_DEVICE_ERROR;
         const std::string current_state = state == UART_SORTING_CONVEYOR_RUNNING   ? "RUNNING"
                                           : state == UART_SORTING_CONVEYOR_STOPPED ? "STOPPED"
                                                                                    : "ERROR";
@@ -725,16 +747,16 @@ void SortingNode::HandleCycleComplete(const uart_frame_t& frame) noexcept {
         return;
     }
     if (active_work_id_.empty()) {
-        EmitError("ERR-CYCLE-MAPPING-UNKNOWN", "ERROR", "IDLE",
+        EmitError("ERR-CYCLE-MAPPING-UNKNOWN", "ERROR", ConveyorStateName(last_device_state_),
                   "sorting cycle completed without a server work ID mapping");
         ClearActiveCycle();
-        EmitStatus("IDLE");
+        EmitStatus(ConveyorStateName(last_device_state_));
         return;
     }
 
     EmitStatus("CYCLE_COMPLETE");
     ClearActiveCycle();
-    EmitStatus("IDLE");
+    EmitStatus(ConveyorStateName(last_device_state_));
 }
 
 void SortingNode::HandleHeartbeat(const uart_frame_t& frame) noexcept {
@@ -800,6 +822,8 @@ void SortingNode::HandleDeviceStatus(const uart_frame_t& frame) noexcept {
     if (state > UART_DEVICE_EMERGENCY_STOP) {
         return;
     }
+    last_device_state_ = state;
+    last_device_error_ = error;
     ClearControllerEventDedupIfHealthy(state, error);
     const std::string error_code = state == UART_DEVICE_EMERGENCY_STOP ? std::string{} : UartErrorCode(error);
     EmitStatus(DeviceStateName(state), error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code });

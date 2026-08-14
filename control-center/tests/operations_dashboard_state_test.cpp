@@ -639,6 +639,8 @@ int main() {
                  "2026-07-23T01:55:00.000Z"),
         received_at);
     assert(result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).updated_at == received_at);
+    assert(clock_skew_state.overall().updated_at == received_at);
     assert(!clock_skew_state.expireStaleProcesses(received_at.addMSecs(14999)));
     assert(clock_skew_state.expireStaleProcesses(received_at.addSecs(15)));
     result = clock_skew_state.applyEnvelope(Envelope("VISION-SKEWED-STALE-ERROR", "ERROR_OCCURRED",
