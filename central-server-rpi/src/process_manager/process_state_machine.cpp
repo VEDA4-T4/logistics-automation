@@ -358,7 +358,7 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             return Move(work, WorkStage::kGripperTransferring, event.source_id);
 
         case ProcessEventType::kGripperCompleted:
-            if (work.stage != WorkStage::kGripperTransferring) {
+            if (!IsOneOf(work.stage, { WorkStage::kGripperRequested, WorkStage::kGripperTransferring })) {
                 return Reject("gripper completion is not allowed in the current work stage");
             }
             return Move(work, WorkStage::kSortingRequested, event.source_id);
@@ -376,7 +376,7 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             return Move(work, WorkStage::kSorting, event.source_id);
 
         case ProcessEventType::kSortingCompleted:
-            if (!IsOneOf(work.stage, { WorkStage::kSortingRequested, WorkStage::kSorting })) {
+            if (work.stage != WorkStage::kSorting) {
                 return Reject("sorting completion is not allowed in the current work stage");
             }
             return Move(work, WorkStage::kTransporting, event.source_id);

@@ -202,7 +202,6 @@ void TestEventFlowCreatesCommandsForEachNode() {
     const auto early_completion = orchestrator.Handle(Status("MSG-GRIPPER-EARLY-DONE", "PI-GRIPPER-01", "COMPLETED"));
     assert(!early_completion.transition.Applied() && early_completion.commands.empty());
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kGripperRequested);
-    assert(orchestrator.Handle(Status("MSG-GRIPPER-START", "PI-GRIPPER-01", "TRANSFERRING")).transition.Applied());
     const auto gripper_done = orchestrator.HandleCommandCompletion(
         gripper, Message("MSG-GRIPPER-DONE", mqtt::MessageType::kCommandResponse, "PI-GRIPPER-01",
                          mqtt::CommandResponsePayload{
@@ -216,7 +215,12 @@ void TestEventFlowCreatesCommandsForEachNode() {
     const auto& sorting = gripper_done.commands.front();
     const auto* sorting_payload = mqtt::GetPayload<mqtt::DestinationSetPayload>(sorting.message);
     assert(sorting_payload != nullptr && sorting_payload->target_device_id == "PI-SORTING-01");
+    const auto premature_before_destination =
+        orchestrator.Handle(Status("MSG-SORTING-PREMATURE-BEFORE-DESTINATION", "PI-SORTING-01", "CYCLE_COMPLETE"));
+    assert(!premature_before_destination.transition.Applied());
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kSortingRequested);
     assert(orchestrator.ConfirmDispatch(sorting).Applied());
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kSortingRequested);
 
     const auto revision_after_terminal_response = orchestrator.Revision();
     const auto duplicate_status =
@@ -240,7 +244,12 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(sorting_start_payload->command == mqtt::ControlCommand::kStart);
     assert(sorting_start_payload->target_device_id == "PI-SORTING-01");
     assert(sorting_start_payload->component_id == "sorting_conveyor");
+    const auto premature_before_start =
+        orchestrator.Handle(Status("MSG-SORTING-PREMATURE-BEFORE-START", "PI-SORTING-01", "CYCLE_COMPLETE"));
+    assert(!premature_before_start.transition.Applied());
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kSortingRequested);
     assert(orchestrator.ConfirmDispatch(sorting_start).Applied());
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kSortingRequested);
 
     const auto sorting_start_done = orchestrator.HandleCommandCompletion(
         sorting_start, Message("MSG-SORTING-START-DONE", mqtt::MessageType::kCommandResponse, "PI-SORTING-01",
@@ -251,7 +260,8 @@ void TestEventFlowCreatesCommandsForEachNode() {
                                    .error_code = std::nullopt,
                                    .message = "sorting conveyor started",
                                }));
-    assert(sorting_start_done.commands.size() == 1);
+    assert(sorting_start_done.transition.Applied() && sorting_start_done.commands.size() == 1);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kSorting);
     const auto& input_start = sorting_start_done.commands.front();
     const auto* input_start_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(input_start.message);
     assert(input_start_payload != nullptr);

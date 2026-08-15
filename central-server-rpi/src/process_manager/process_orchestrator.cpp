@@ -382,9 +382,8 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleCommandCompletion(const Pr
         ++revision_;
         const auto work = state_machine_.FindWork(intent.work_id);
         if (work.has_value()) {
-            completion.commands.push_back(
-                MakeDestinationCommand(intent.work_id, work->destination, config_.sorting_device_id,
-                                       ProcessEventType::kSortingCommandDispatched, response.timestamp));
+            completion.commands.push_back(MakeDestinationCommand(
+                intent.work_id, work->destination, config_.sorting_device_id, std::nullopt, response.timestamp));
         }
         return completion;
     }
@@ -397,7 +396,19 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleCommandCompletion(const Pr
         return NotHandled();
     }
     if (command->command == mqtt::ControlCommand::kStart && command->component_id == "sorting_conveyor" &&
-        (work->stage == WorkStage::kSortingRequested || work->stage == WorkStage::kSorting)) {
+        work->stage == WorkStage::kSortingRequested) {
+        completion.transition = state_machine_.Apply({
+            .type = ProcessEventType::kSortingCommandDispatched,
+            .message_id = response.message_id + "-PROCESS-ACCEPTED",
+            .work_id = intent.work_id,
+            .source_id = config_.server_id,
+            .destination = {},
+            .reason = {},
+        });
+        if (!completion.transition.Applied()) {
+            return completion;
+        }
+        ++revision_;
         completion.commands.push_back(
             MakeInputConveyorCommand(intent.work_id, mqtt::ControlCommand::kStart, response.timestamp));
         return completion;

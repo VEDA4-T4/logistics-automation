@@ -427,27 +427,39 @@ private:
     std::uint64_t message_sequence_{};
 };
 
-void AdvanceToGripperTransfer(ProcessIntegrationHarness& harness) {
+void AdvanceToGripperRequested(ProcessIntegrationHarness& harness) {
     assert(harness.DetectBox());
     assert(mqtt::IsValidUuid(harness.WorkId()));
     assert(harness.DetectPosition());
     assert(harness.DetectBarcode());
+}
+
+void AdvanceToGripperTransfer(ProcessIntegrationHarness& harness) {
+    AdvanceToGripperRequested(harness);
     assert(harness.ReportStatus(kGripperId, "TRANSFERRING"));
 }
 
 void TestAutomaticProcessCompletesThroughAllNodes() {
     ProcessIntegrationHarness harness;
-    AdvanceToGripperTransfer(harness);
+    AdvanceToGripperRequested(harness);
     assert(harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kSuccess));
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 0);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
     assert(harness.ReportStatus(kGripperId, "COMPLETED"));
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 0);
+    assert(!harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kSortingRequested);
     assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 1);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+    assert(!harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kSortingRequested);
     assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kSorting);
     assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
     assert(harness.ReportStatus(kSortingId, "ROUTING"));
     assert(harness.DetectSortedProduct());
