@@ -88,6 +88,15 @@ struct Fixture {
         return nullptr;
     }
 
+    [[nodiscard]] const mqtt::DeviceStatusPayload* LastStatus() const {
+        for (auto iterator = reports.rbegin(); iterator != reports.rend(); ++iterator) {
+            if (iterator->channel == InputReportChannel::kStatus) {
+                return std::get_if<mqtt::DeviceStatusPayload>(&iterator->data);
+            }
+        }
+        return nullptr;
+    }
+
     AutoResponderBackend* backend{};
     std::unique_ptr<InputUartSession> session;
     std::unique_ptr<InputNode> node;
@@ -299,6 +308,25 @@ void TestRecoveryReleasesLatchFireAndForget() {
     const auto* response = fixture.LastResponse();
     assert(response != nullptr);
     assert(response->result == mqtt::CommandResult::kProcessing);
+}
+
+void TestRepeatedRecoveryLeavesInputStopped() {
+    Fixture fixture;
+    fixture.backend->responder = [](const uart_frame_t&) { return std::vector<uart_frame_t>{}; };
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const auto result = fixture.node->HandleMqttCommand(
+            MakeControlCommand(mqtt::ControlCommand::kRecovery, std::string(kDeviceId)));
+        assert(result.Succeeded());
+        fixture.node->HandleUartFrame(input_test::MakeControllerEvent(0x03U, 2U, 0U));
+        assert(!fixture.node->HasPendingSafetyCommand());
+        const auto* status = fixture.LastStatus();
+        assert(status != nullptr && status->current_state == "STOPPED" && !status->job_id.has_value());
+    }
+
+    assert(fixture.backend->write_calls == 2);
+    assert(fixture.backend->written_commands ==
+           std::vector<std::uint8_t>({ UART_CMD_RESET_DEVICE, UART_CMD_RESET_DEVICE }));
 }
 
 void TestControllerFailure() {
@@ -771,6 +799,7 @@ int main() {
     TestStatusRequestAlwaysReportsAndSyncsKeepAlive();
     TestReset();
     TestRecoveryReleasesLatchFireAndForget();
+    TestRepeatedRecoveryLeavesInputStopped();
     TestControllerFailure();
     TestControllerPolicyRejection();
     TestRestartMapsToStart();

@@ -524,6 +524,30 @@ void TestSafetyRecoveryUsesOneWayDeviceReset() {
     assert(!fixture.session->HasPendingCommand());
 }
 
+void TestRepeatedRecoveryClearsSortingStateAndCachedSpeed() {
+    Fixture fixture;
+    mqtt::Json speed = mqtt::Json::object();
+    speed["speed"] = 70;
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor", speed))
+               .Succeeded());
+    fixture.PushOperationResult();
+    fixture.PushOperationResult();
+    ActivateCycle(fixture);
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery)).Succeeded());
+        fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_RESET_COMPLETE, 0U);
+        assert(!fixture.node->HasActiveCycle());
+        assert(fixture.node->ActiveWorkId().empty());
+        assert(fixture.node->ActiveDestination() == UART_SORTING_DESTINATION_NONE);
+    }
+
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor")).Succeeded());
+    const auto command = fixture.LastCommand();
+    assert(command.command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
+    assert(command.payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
+}
+
 void TestPendingSafetyCommandCannotBeOverwritten() {
     Fixture fixture;
     assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
@@ -823,6 +847,7 @@ int main() {
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
     TestEmergencyStopReportsActiveCycleFailureBeforeRecoveryClearsIt();
     TestSafetyRecoveryUsesOneWayDeviceReset();
+    TestRepeatedRecoveryClearsSortingStateAndCachedSpeed();
     TestPendingSafetyCommandCannotBeOverwritten();
     TestSystemTargetUsesSafetyRecovery();
     TestSafetyCommandsCompleteWithOriginalRequestId();

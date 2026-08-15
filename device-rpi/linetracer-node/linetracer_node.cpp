@@ -219,6 +219,7 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             departure_position_.reset();
             target_position_.reset();
             confirmed_position_.reset();
+            last_uart_state_ = UART_LINETRACER_STATE_IDLE;
             movement_state_ = "IDLE";
             ResetStatusKeepalive();
 
@@ -264,6 +265,7 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             departure_position_.reset();
             target_position_.reset();
             confirmed_position_.reset();
+            last_uart_state_ = UART_LINETRACER_STATE_IDLE;
             movement_state_ = "IDLE";
             ResetStatusKeepalive();
         }
@@ -547,17 +549,10 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
             break;
         case DeviceControlAction::kSafetyRecovery:
             uart_command = UART_CMD_RESET_DEVICE;
-            if (HasActiveJob() && last_uart_state_ == UART_LINETRACER_STATE_EMERGENCY_STOP) {
-                // ESTOP reset resumes the controller route, so keep its MQTT mapping.
-                effect = PendingEffect::kNone;
-            } else {
-                // A normal fault invalidates the route. Reset it to the configured
-                // departure position before accepting another work assignment.
-                effect = PendingEffect::kClearJob;
-                if (!parse_requested_position()) {
-                    result.status = LineTracerCommandStatus::kInvalidPosition;
-                    return result;
-                }
+            effect = PendingEffect::kClearJob;
+            if (!parse_requested_position()) {
+                result.status = LineTracerCommandStatus::kInvalidPosition;
+                return result;
             }
             break;
         case DeviceControlAction::kStatusRequest:

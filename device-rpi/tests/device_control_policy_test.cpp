@@ -4,6 +4,7 @@
 #include <string>
 
 #include "logistics/contracts/mqtt_codec.hpp"
+#include "logistics/device/device_control_state.hpp"
 
 namespace {
 
@@ -85,6 +86,32 @@ void TestControlSpeedParsing() {
     assert(!device::ReadControlSpeed(mqtt::Json{ { "speed", "fast" } }, 100U, invalid).has_value() && invalid);
 }
 
+void TestSafetyRecoveryAlwaysClearsWork() {
+    device::DeviceControlState control({
+        .device_id = "PI-01",
+        .component_name = "test",
+    });
+    control.SetReady(true);
+    assert(control.HandleCommand(Control(mqtt::ControlCommand::kStart), "MSG-START", "2026-07-29T10:00:01+09:00")
+               .has_value());
+    assert(
+        control.HandleCommand(Control(mqtt::ControlCommand::kEmergencyStop), "MSG-ESTOP", "2026-07-29T10:00:02+09:00")
+            .has_value());
+
+    const auto recovery =
+        control.HandleCommand(Control(mqtt::ControlCommand::kRecovery), "MSG-RECOVERY", "2026-07-29T10:00:03+09:00");
+    assert(recovery.has_value());
+    assert(recovery->clear_work);
+    assert(control.ConsumeResetRequest());
+
+    const auto retry = control.HandleCommand(Control(mqtt::ControlCommand::kRecovery), "MSG-RECOVERY-RETRY",
+                                             "2026-07-29T10:00:04+09:00");
+    assert(retry.has_value());
+    assert(retry->clear_work);
+    assert(control.ConsumeResetRequest());
+    assert(!control.ConsumeResetRequest());
+}
+
 }  // namespace
 
 int main() {
@@ -93,5 +120,6 @@ int main() {
     TestRecoveryDefaultsToSafety();
     TestRequestsUseOneView();
     TestControlSpeedParsing();
+    TestSafetyRecoveryAlwaysClearsWork();
     return 0;
 }

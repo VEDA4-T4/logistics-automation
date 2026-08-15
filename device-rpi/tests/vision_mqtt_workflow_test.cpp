@@ -382,11 +382,9 @@ void TestVisionControlLifecycle() {
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 11);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kProcessing);
-    assert(decision.preserve_work);
+    assert(decision.clear_work);
     assert(control.State() == device::DeviceOperatingState::kRecovering);
-    bool preserve_work = false;
-    assert(control.ConsumeResetRequest(&preserve_work));
-    assert(preserve_work);
+    assert(control.ConsumeResetRequest());
     assert(!control.ConsumeResetRequest());
 
     control.SetReady(false);
@@ -433,6 +431,33 @@ void TestStopPreservesPendingVisionWork() {
     assert(!control.IsOperational());
 }
 
+void TestSafetyRecoveryClearsPendingVisionWork() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
+    vision::VisionResultOutbox outbox;
+    device::DeviceControlState control({
+        .device_id = "PI-VISION-01",
+        .component_name = "vision",
+        .not_ready_error_code = "ERR-CAMERA-UNAVAILABLE",
+    });
+    control.SetReady(true);
+    static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 1));
+    assert(workflow.Observe(Observation("8801234567893"), "MSG-BOX-RECOVERY", "2026-07-21T11:00:00Z").has_value());
+    assert(workflow.AssignWork(WorkCreated()));
+    assert(outbox.Enqueue(std::string(kWorkId), { { vision::VisionPublicationChannel::kEvent, WorkCreated() } }));
+
+    static_cast<void>(Handle(control, EmergencyStop(), 2));
+    const auto recovery = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 3);
+    assert(recovery.clear_work);
+    if (recovery.clear_work) {
+        workflow.Reset();
+        outbox.Reset();
+    }
+
+    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!outbox.PendingWorkId().has_value());
+    assert(control.ConsumeResetRequest());
+}
+
 }  // namespace
 
 int main() {
@@ -447,5 +472,6 @@ int main() {
     TestResultOutboxRetriesFromFirstUnsentPublication();
     TestVisionControlLifecycle();
     TestStopPreservesPendingVisionWork();
+    TestSafetyRecoveryClearsPendingVisionWork();
     return 0;
 }

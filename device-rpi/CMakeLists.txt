@@ -122,7 +122,7 @@ if(BUILD_TESTING)
 
     add_executable(device_control_policy_test tests/device_control_policy_test.cpp)
     target_include_directories(device_control_policy_test PRIVATE common/include)
-    target_link_libraries(device_control_policy_test PRIVATE logistics::contracts)
+    target_link_libraries(device_control_policy_test PRIVATE logistics::contracts logistics::device_control_state)
     logistics_enable_warnings(device_control_policy_test)
     add_test(NAME device_control_policy_test COMMAND device_control_policy_test)
 endif()
@@ -179,20 +179,20 @@ target_include_directories(device_status PUBLIC common/include)
 target_link_libraries(device_status PUBLIC logistics::contracts)
 logistics_enable_warnings(device_status)
 
+add_library(device_control_state common/device_control/device_control_state.cpp)
+add_library(logistics::device_control_state ALIAS device_control_state)
+target_include_directories(device_control_state PUBLIC common/include)
+target_link_libraries(device_control_state PUBLIC logistics::contracts)
+logistics_enable_warnings(device_control_state)
+
+add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
+add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
+target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
+target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
+logistics_enable_warnings(vision_mqtt_workflow)
+
 if(LOGISTICS_BUILD_VISION_NODE)
     find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core dnn highgui imgcodecs imgproc objdetect videoio)
-
-    add_library(device_control_state common/device_control/device_control_state.cpp)
-    add_library(logistics::device_control_state ALIAS device_control_state)
-    target_include_directories(device_control_state PUBLIC common/include)
-    target_link_libraries(device_control_state PUBLIC logistics::contracts)
-    logistics_enable_warnings(device_control_state)
-
-    add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
-    add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
-    target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
-    target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
-    logistics_enable_warnings(vision_mqtt_workflow)
 
     add_library(
         vision_processing_config
@@ -392,15 +392,15 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_log_spool_test)
     add_test(NAME device_log_spool_test COMMAND device_log_spool_test)
 
-    if(LOGISTICS_BUILD_VISION_NODE)
-        add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
-        target_link_libraries(
-            vision_mqtt_workflow_test
-            PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow
-        )
-        logistics_enable_warnings(vision_mqtt_workflow_test)
-        add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
+    add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
+    target_link_libraries(
+        vision_mqtt_workflow_test
+        PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow
+    )
+    logistics_enable_warnings(vision_mqtt_workflow_test)
+    add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
 
+    if(LOGISTICS_BUILD_VISION_NODE)
         add_executable(vision_processing_config_test tests/vision_processing_config_test.cpp)
         target_link_libraries(vision_processing_config_test PRIVATE logistics::vision_processing_config)
         logistics_enable_warnings(vision_processing_config_test)

@@ -48,7 +48,6 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
     std::optional<std::string> error_code;
     std::string response_text;
     bool clear_work = false;
-    bool preserve_work = false;
     bool state_changed = false;
 
     {
@@ -99,6 +98,7 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                     if (state_ == DeviceOperatingState::kStopped && ready_) {
                         response_text = config_.component_name + " is already recovered and stopped";
                     } else if (state_ == DeviceOperatingState::kRecovering) {
+                        clear_work = true;
                         if (ready_) {
                             state_ = DeviceOperatingState::kStopped;
                             state_changed = true;
@@ -116,15 +116,12 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                         error_code = "ERR-INVALID-STATE";
                         response_text = config_.component_name + " recovery requires ERROR or EMERGENCY_STOP";
                     } else {
-                        const bool was_emergency_stop = state_ == DeviceOperatingState::kEmergencyStop;
                         state_ = DeviceOperatingState::kRecovering;
                         state_changed = true;
                         ready_ = false;
                         reset_requested_ = true;
                         pending_recovery_request_id_ = std::string(request->request_id);
-                        clear_work = !was_emergency_stop;
-                        preserve_work = was_emergency_stop;
-                        preserve_work_on_reset_ = was_emergency_stop;
+                        clear_work = true;
                         result = mqtt::CommandResult::kProcessing;
                         response_text = config_.component_name + " recovery started";
                     }
@@ -159,7 +156,6 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
         .response = MakeResponse(request->request_id, request->command, result, std::move(error_code),
                                  std::move(response_text), std::move(response_message_id), std::move(timestamp)),
         .clear_work = clear_work,
-        .preserve_work = preserve_work,
         .state_changed = state_changed,
     };
 }
@@ -200,14 +196,10 @@ bool DeviceControlState::IsOperational() const {
     return state_ == DeviceOperatingState::kRunning && ready_;
 }
 
-bool DeviceControlState::ConsumeResetRequest(bool* preserve_work) {
+bool DeviceControlState::ConsumeResetRequest() {
     std::lock_guard lock(mutex_);
     const bool requested = reset_requested_;
     reset_requested_ = false;
-    if (preserve_work != nullptr) {
-        *preserve_work = preserve_work_on_reset_;
-    }
-    preserve_work_on_reset_ = false;
     return requested;
 }
 

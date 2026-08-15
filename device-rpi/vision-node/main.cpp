@@ -526,21 +526,16 @@ int main(const int argc, char* argv[]) {
     bool should_exit = false;
     while (!should_exit) {
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
-        bool preserve_work_on_reset = false;
-        if (control_state.ConsumeResetRequest(&preserve_work_on_reset)) {
-            if (!preserve_work_on_reset) {
-                work_generation.fetch_add(1, std::memory_order_relaxed);
-            }
+        if (control_state.ConsumeResetRequest()) {
+            work_generation.fetch_add(1, std::memory_order_relaxed);
             camera.release();
             control_state.SetReady(false);
-            if (!preserve_work_on_reset) {
-                mqtt_workflow.Reset();
-                result_outbox.Reset();
-                pending_capture.Reset();
-                pending_image_upload.reset();
-                pending_image_upload_work_id.reset();
-                device_status->SetJobId(std::nullopt);
-            }
+            mqtt_workflow.Reset();
+            result_outbox.Reset();
+            pending_capture.Reset();
+            pending_image_upload.reset();
+            pending_image_upload_work_id.reset();
+            device_status->SetJobId(std::nullopt);
             device_status->SetCurrentState(control_state.CurrentState());
         }
 #endif

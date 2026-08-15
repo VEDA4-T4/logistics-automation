@@ -958,7 +958,9 @@ void GripperNode::FinishCycle() {
                             "gripper returned home");
         const bool enters_running =
             mqtt_command == mqtt::ControlCommand::kStart || mqtt_command == mqtt::ControlCommand::kRestart;
-        EmitDeviceStatus(enters_running ? "RUNNING" : "READY");
+        EmitDeviceStatus(enters_running                                    ? "RUNNING"
+                         : mqtt_command == mqtt::ControlCommand::kRecovery ? "STOPPED"
+                                                                           : "READY");
         return;
     }
 
@@ -1144,10 +1146,25 @@ void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
         }
     }
 
+    const bool recovery_released =
+        pending_safety_.active && pending_safety_.expected == PendingSafetyEvent::kReleased && !latched;
+    if (recovery_released) {
+        mqtt::ControlCommandPayload recovery{
+            .request_id = pending_safety_.request_id,
+            .command = mqtt::ControlCommand::kRecovery,
+            .target_device_id = device_id_,
+            .component_id = {},
+            .params = mqtt::Json::object(),
+        };
+        pending_safety_ = PendingSafetyCommand{};
+        estop_requested_ = false;
+        static_cast<void>(RunInitialize(recovery));
+        return;
+    }
+
     if (requested) {
-        EmitCommandResponse(
-            pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kSuccess, std::nullopt,
-            latched ? "emergency stop latched" : "emergency stop released; send RECOVERY to home the arm");
+        EmitCommandResponse(pending_safety_.request_id, pending_safety_.command, mqtt::CommandResult::kSuccess,
+                            std::nullopt, latched ? "emergency stop latched" : "emergency stop released");
         pending_safety_ = PendingSafetyCommand{};
     }
 

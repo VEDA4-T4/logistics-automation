@@ -520,10 +520,12 @@ void test_unrequested_emergency_stop_reports_actual_hex_cause() {
     assert(status != nullptr && status->error_code == "ERR-EMERGENCY-STOP");
 }
 
-void test_recovery_releases_safety_without_component() {
+void test_recovery_homes_before_reporting_stopped() {
     Fixture fixture;
     fixture.Home();
+    static_cast<void>(fixture.node->HandleMqttCommand(MakeExecuteCommand("req-work", kWorkId)));
     fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
+    assert(!fixture.node->HasActiveCycle());
     fixture.reports.clear();
     fixture.backend->written_commands.clear();
 
@@ -533,11 +535,46 @@ void test_recovery_releases_safety_without_component() {
     assert(fixture.backend->written_commands[0] == UART_CMD_RESET_DEVICE);
     fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));
 
-    // Releasing the latch does not home the arm, so reporting READY here would
-    // invite the server to dispatch work the controller would refuse.
-    assert(!fixture.AnyStatusEquals("READY"));
-    assert(fixture.AnyStatusEquals("STOPPED"));
+    assert((fixture.backend->written_commands ==
+            std::vector<std::uint8_t>{ UART_CMD_RESET_DEVICE, UART_CMD_GRIPPER_RESET, UART_CMD_GRIPPER_HOME }));
+    assert(fixture.node->HasActiveCycle());
+    assert(fixture.node->ActiveStep() == GripperCycleStep::kReturnHome);
     assert(!fixture.node->IsHomed());
+    const auto* processing = fixture.LastResponse();
+    assert(processing != nullptr && processing->command == mqtt::ControlCommand::kRecovery &&
+           processing->result == mqtt::CommandResult::kProcessing);
+
+    const std::uint16_t motion_id = uart_gripper_home_motion_id(fixture.backend->last_written.payload);
+    fixture.node->HandleUartFrame(MakeMotionComplete(motion_id, UART_GRIPPER_MOTION_HOME));
+
+    assert(!fixture.node->HasActiveCycle());
+    assert(fixture.node->IsHomed());
+    const auto* completed = fixture.LastResponse();
+    assert(completed != nullptr && completed->command == mqtt::ControlCommand::kRecovery &&
+           completed->result == mqtt::CommandResult::kSuccess);
+    const auto* stopped = fixture.LastStatus();
+    assert(stopped != nullptr && stopped->current_state == "STOPPED" && !stopped->job_id.has_value());
+}
+
+void test_repeated_recovery_rehomes_and_stays_stopped() {
+    Fixture fixture;
+    fixture.Home();
+    fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        fixture.reports.clear();
+        fixture.backend->written_commands.clear();
+        static_cast<void>(fixture.node->HandleMqttCommand(
+            MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-recovery-" + std::to_string(attempt))));
+        fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));
+        assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_HOME);
+        fixture.node->HandleUartFrame(MakeMotionComplete(
+            uart_gripper_home_motion_id(fixture.backend->last_written.payload), UART_GRIPPER_MOTION_HOME));
+        assert(fixture.node->IsHomed());
+        assert(!fixture.node->HasActiveCycle());
+        const auto* status = fixture.LastStatus();
+        assert(status != nullptr && status->current_state == "STOPPED");
+    }
 }
 
 void test_missing_completion_event_times_out_the_cycle() {
@@ -1047,7 +1084,8 @@ int main() {
     test_emergency_stop_aborts_the_cycle_and_clears_the_home_reference();
     test_requested_emergency_stop_is_status_not_device_error();
     test_unrequested_emergency_stop_reports_actual_hex_cause();
-    test_recovery_releases_safety_without_component();
+    test_recovery_homes_before_reporting_stopped();
+    test_repeated_recovery_rehomes_and_stays_stopped();
     test_missing_completion_event_times_out_the_cycle();
     test_start_cycle_dispatch_failure_reports_exactly_one_response();
     test_stop_cancels_the_active_cycle();
