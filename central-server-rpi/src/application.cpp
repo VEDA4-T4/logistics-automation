@@ -530,14 +530,41 @@ int Application::Run(int argc, char* argv[]) {
                 MakeWorkFailureCompletion(source_id, message_id, work_id, reason, CurrentIso8601Timestamp());
             return publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), completed);
         };
+    const auto commit_recovery_response =
+        [&pending_system_commands, &process_orchestrator, &process_command_tracker, &command_manager,
+         &process_state_store, &publish_enqueued, &run_runtime_store, &restored_input_detected_work_ids,
+         &restored_vision_assigned_work_ids, &restored_pending_process_commands, &safe_restored_replay_pending,
+         qt_client_id = server_config.qt_client_id,
+         source_id = server_config.process.server_id](const contracts::mqtt::MqttMessage& device_response) {
+            if (!Application::CommitRecoveryResponse(
+                    process_orchestrator, process_command_tracker, command_manager, pending_system_commands,
+                    device_response, qt_client_id, source_id, CurrentIso8601Timestamp(),
+                    [&](std::uint64_t process_sequence, std::uint64_t command_sequence,
+                        const std::vector<PendingMqttDelivery>& completions) {
+                        return run_runtime_store(
+                            [&] {
+                                return process_state_store.CommitRecovery(process_sequence, command_sequence,
+                                                                          CurrentUnixTimeMilliseconds(), completions);
+                            },
+                            "recovery state/outbox persistence");
+                    },
+                    [&publish_enqueued](const PendingMqttDelivery& completion) {
+                        static_cast<void>(publish_enqueued(completion));
+                    })) {
+                return false;
+            }
+            restored_pending_process_commands.clear();
+            safe_restored_replay_pending = false;
+            restored_input_detected_work_ids.clear();
+            restored_vision_assigned_work_ids.clear();
+            return true;
+        };
     const auto finish_system_command = [&pending_system_commands, &process_orchestrator, &process_command_tracker,
                                         &command_manager, &process_state_store, &publish_enqueued,
                                         &replay_restored_process_commands, &persist_process_state, &run_runtime_store,
                                         &restored_input_detected_work_ids, &restored_vision_assigned_work_ids,
-                                        &restored_pending_process_commands, &safe_restored_replay_pending,
-                                        qt_client_id = server_config.qt_client_id,
-                                        source_id = server_config.process.server_id](
-                                           const contracts::mqtt::MqttMessage& message) {
+                                        qt_client_id =
+                                            server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
         const auto* response = contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(message);
         if (response == nullptr || !contracts::mqtt::IsTerminal(response->result)) {
             return true;
@@ -557,44 +584,7 @@ int Application::Run(int argc, char* argv[]) {
         };
         if (succeeded) {
             if (command == contracts::mqtt::ControlCommand::kRecovery) {
-                std::vector<PendingMqttDelivery> completions;
-                transition = process_orchestrator.CommitSystemRecovery(
-                    [&](const std::vector<WorkProcessSnapshot>& active_works) {
-                        completions.reserve(active_works.size() + 1);
-                        completions.push_back({
-                            .topic = contracts::mqtt::QtResponseTopic(qt_client_id),
-                            .message = message,
-                        });
-                        for (const auto& work : active_works) {
-                            const auto message_id = "RECOVERY-FAILED-" + work.work_id;
-                            completions.push_back({
-                                .topic = contracts::mqtt::QtEventTopic(qt_client_id),
-                                .message =
-                                    MakeWorkFailureCompletion(source_id, message_id, work.work_id,
-                                                              "CANCELLED_BY_RECOVERY", CurrentIso8601Timestamp()),
-                            });
-                        }
-                        return run_runtime_store(
-                            [&] {
-                                return process_state_store.CommitRecovery(process_orchestrator.MessageSequence(),
-                                                                          CurrentUnixTimeMilliseconds(), completions);
-                            },
-                            "recovery state/outbox persistence");
-                    });
-                if (!transition.Applied()) {
-                    return false;
-                }
-                pending_system_commands.clear();
-                process_command_tracker.Clear();
-                command_manager.Clear();
-                restored_pending_process_commands.clear();
-                safe_restored_replay_pending = false;
-                restored_input_detected_work_ids.clear();
-                restored_vision_assigned_work_ids.clear();
-                for (const auto& completion : completions) {
-                    static_cast<void>(publish_enqueued(completion));
-                }
-                return true;
+                return false;
             }
             pending_system_commands.erase(pending);
         } else {
@@ -668,14 +658,22 @@ int Application::Run(int argc, char* argv[]) {
                 command != contracts::mqtt::ControlCommand::kRestart) ||
                !replay_restored_process_commands || replay_restored_process_commands(false);
     };
-    mqtt_handler.SetQtResponseHandler([&command_manager, &process_orchestrator, &finish_system_command,
-                                       &process_command_tracker, &persist_process_state, &publish_qt_response,
+    mqtt_handler.SetQtResponseHandler([&command_manager, &process_orchestrator, &commit_recovery_response,
+                                       &finish_system_command, &process_command_tracker, &persist_process_state,
+                                       &publish_qt_response,
                                        &dispatch_process_commands](const contracts::mqtt::MqttMessage& message) {
         const auto decision = command_manager.PreviewResponse(message);
         switch (decision.disposition) {
             case CommandResponseDisposition::kForward: {
                 if (!decision.message.has_value()) {
                     return false;
+                }
+                const auto* response =
+                    contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(*decision.message);
+                if (response != nullptr && response->command == contracts::mqtt::ControlCommand::kRecovery &&
+                    (response->result == contracts::mqtt::CommandResult::kSuccess ||
+                     response->result == contracts::mqtt::CommandResult::kDuplicated)) {
+                    return commit_recovery_response(message);
                 }
                 // The terminal response is the durable commit point.  Do not consume the
                 // aggregate before it is recoverable in the MQTT outbox.
@@ -686,8 +684,6 @@ int Application::Run(int argc, char* argv[]) {
                 if (committed.disposition != CommandResponseDisposition::kForward) {
                     return committed.disposition == CommandResponseDisposition::kDuplicate;
                 }
-                const auto* response =
-                    contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(*decision.message);
                 if (const auto completed_intent = process_command_tracker.HandleResponse(message)) {
                     const bool succeeded =
                         response != nullptr && (response->result == contracts::mqtt::CommandResult::kSuccess ||

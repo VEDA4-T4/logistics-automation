@@ -44,7 +44,8 @@ public:
         const std::vector<PendingMqttDelivery>& deliveries = {},
         const std::vector<std::string>& processed_message_ids = {}, const CommandManagerSnapshot& command_manager = {},
         const std::unordered_map<std::string, contracts::mqtt::ControlCommand>& pending_system_commands = {});
-    [[nodiscard]] DatabaseStatus CommitRecovery(std::uint64_t message_sequence, std::int64_t updated_at_ms,
+    [[nodiscard]] DatabaseStatus CommitRecovery(std::uint64_t message_sequence, std::uint64_t command_message_sequence,
+                                                std::int64_t updated_at_ms,
                                                 const std::vector<PendingMqttDelivery>& terminal_deliveries);
     [[nodiscard]] DatabaseStatus LoadPendingMqttDeliveries(std::vector<PendingMqttDelivery>& output);
     [[nodiscard]] DatabaseStatus EnqueueMqttDelivery(std::string_view topic,

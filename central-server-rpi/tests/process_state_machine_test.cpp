@@ -193,6 +193,18 @@ void TestRecoveryDiscardsAllActiveWork() {
     assert(machine.ActiveWorks().empty());
 }
 
+void TestRecoveryCompletionClearsProcessedMessages() {
+    central_server::ProcessStateMachine machine;
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BEFORE-RECOVERY")).Applied());
+    assert(machine.ProcessedMessageIds() == std::vector<std::string>{ "MSG-BEFORE-RECOVERY" });
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+
+    assert(machine.CompleteSystemRecovery().Applied());
+
+    assert(machine.ProcessedMessageIds().empty());
+}
+
 void TestServerRestartSuspendsTransportRequest() {
     central_server::ProcessStateMachine machine;
     std::vector works{
@@ -282,6 +294,7 @@ int main() {
     TestErrorRecovery();
     TestServerRestartSuspendsTransportRequest();
     TestRecoveryDiscardsAllActiveWork();
+    TestRecoveryCompletionClearsProcessedMessages();
     TestParallelWorksRemainIndependent();
     TestNodeFailureWithoutWorkStopsTheProcess();
     TestServerRestartRestoresSafeState();

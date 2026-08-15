@@ -366,7 +366,6 @@ void CommandManager::Clear() {
     pending_.clear();
     completed_requests_.clear();
     completed_request_order_.clear();
-    message_sequence_ = 0;
     last_error_.clear();
 }
 

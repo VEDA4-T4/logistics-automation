@@ -328,7 +328,7 @@ void TestRecoveryCommitReplacesRuntimeAndOutboxAtomically() {
         .topic = mqtt::QtEventTopic("control-center"),
         .message = FailedCompletion(kSecondWorkId),
     };
-    assert(store.CommitRecovery(42, 1001, { completion, second_completion }).ok());
+    assert(store.CommitRecovery(42, 7, 1001, { completion, second_completion }).ok());
 
     std::optional<central_server::StoredProcessState> restored;
     assert(store.Load(restored).ok() && restored.has_value());
@@ -340,7 +340,7 @@ void TestRecoveryCommitReplacesRuntimeAndOutboxAtomically() {
     assert(restored->processed_message_ids.empty());
     assert(restored->command_manager.pending.empty());
     assert(restored->command_manager.completed_requests.empty());
-    assert(restored->command_manager.message_sequence == 0);
+    assert(restored->command_manager.message_sequence == 7);
     assert(restored->pending_system_commands.empty());
 
     std::vector<central_server::PendingMqttDelivery> pending;
@@ -393,7 +393,7 @@ void TestRecoveryCommitFailureRollsBackRuntimeAndOutbox() {
             .message = FailedCompletion(),
         },
     };
-    assert(!store.CommitRecovery(8, 1001, invalid_terminal_batch).ok());
+    assert(!store.CommitRecovery(8, 3, 1001, invalid_terminal_batch).ok());
 
     std::optional<central_server::StoredProcessState> restored;
     assert(store.Load(restored).ok() && restored.has_value());

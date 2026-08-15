@@ -190,6 +190,21 @@ void TestPreviewDoesNotConsumeResponse() {
     assert(manager.PendingCount() == 0);
 }
 
+void TestClearPreservesCommandResultSequence() {
+    central_server::CommandManager manager;
+    const auto first = manager.MakeImmediateResult(MakeCommand("REQ-SEQUENCE-1"), mqtt::CommandResult::kRejected,
+                                                   "2026-08-15T00:00:00Z", std::nullopt, "first");
+    assert(first.has_value());
+    assert(first->message_id == "COMMAND-RESULT-1");
+
+    manager.Clear();
+
+    const auto second = manager.MakeImmediateResult(MakeCommand("REQ-SEQUENCE-2"), mqtt::CommandResult::kRejected,
+                                                    "2026-08-15T00:00:01Z", std::nullopt, "second");
+    assert(second.has_value());
+    assert(second->message_id == "COMMAND-RESULT-2");
+}
+
 void TestSnapshotRestoresAggregateProgress() {
     central_server::CommandManager original;
     assert(original.TrackCommand(MakeCommand("REQ-RESTORE", "SYSTEM"), { "PI-01", "PI-02" }));
@@ -353,6 +368,7 @@ void TestExecuteProcessingExtendsCompletionTimeout() {
 
 int main() {
     TestPreviewDoesNotConsumeResponse();
+    TestClearPreservesCommandResultSequence();
     TestSnapshotRestoresAggregateProgress();
     TestPreviewTimeoutDoesNotConsumePendingCommand();
     TestCommandTargetsAreResolvedByDeviceAndRole();

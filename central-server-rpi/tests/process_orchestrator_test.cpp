@@ -536,6 +536,29 @@ void TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands() {
     assert(tracker.PendingCount() == 1);
 }
 
+void TestRecoveryRestartStaysRecovering() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    const auto restore =
+        orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRecovery,
+                                               { central_server::WorkProcessSnapshot{
+                                                   .work_id = kWorkId,
+                                                   .stage = central_server::WorkStage::kRecovering,
+                                                   .suspended_stage = central_server::WorkStage::kVisionProcessing,
+                                                   .destination = "1",
+                                                   .last_source_id = "PI-VISION-01",
+                                               } },
+                                               {}, 12, { "MSG-BEFORE-RECOVERY" });
+
+    assert(restore.restored);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
+    assert(orchestrator.StateMachine().ActiveWorks().size() == 1);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kRecovering);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->suspended_stage ==
+           central_server::WorkStage::kVisionProcessing);
+    assert(orchestrator.PreviewSystemCommand(mqtt::ControlCommand::kStart).disposition ==
+           central_server::TransitionDisposition::kRejected);
+}
+
 void TestRestoredHomographyTargetCreatesGripperCommand() {
     central_server::ProcessOrchestrator orchestrator({
         .enabled = true,
@@ -976,6 +999,7 @@ int main() {
     TestDeviceEmergencyStopPreservesEmergencyState();
     TestFailedSystemCommandsEnterSafeProcessStates();
     TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands();
+    TestRecoveryRestartStaysRecovering();
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();
     TestChangedCalibrationDiscardsRestoredTarget();

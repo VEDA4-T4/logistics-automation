@@ -208,6 +208,8 @@ ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
         return Reject("system recovery is not in progress");
     }
     works_.clear();
+    processed_message_ids_.clear();
+    processed_message_order_.clear();
     system_state_ = ProcessSystemState::kStopped;
     return {
         .disposition = TransitionDisposition::kApplied,
@@ -236,8 +238,7 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
         } else if (stored_state == ProcessSystemState::kError) {
             work.stage = WorkStage::kFailed;
         } else if (stored_state == ProcessSystemState::kRecovery) {
-            work.stage = WorkStage::kFailed;
-            work.failure_reason = "server restarted while recovery was in progress";
+            work.stage = WorkStage::kRecovering;
         } else {
             work.stage = WorkStage::kStopped;
         }
@@ -255,8 +256,10 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
     }
     if (stored_state == ProcessSystemState::kEmergencyStop) {
         system_state_ = ProcessSystemState::kEmergencyStop;
-    } else if (stored_state == ProcessSystemState::kError || stored_state == ProcessSystemState::kRecovery) {
+    } else if (stored_state == ProcessSystemState::kError) {
         system_state_ = ProcessSystemState::kError;
+    } else if (stored_state == ProcessSystemState::kRecovery) {
+        system_state_ = ProcessSystemState::kRecovery;
     } else if (stored_state == ProcessSystemState::kIdle && works_.empty()) {
         system_state_ = ProcessSystemState::kIdle;
     } else {

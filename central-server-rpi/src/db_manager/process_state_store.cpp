@@ -324,10 +324,17 @@ DatabaseStatus ProcessStateStore::Save(
                         deliveries, processed_message_ids, command_manager, pending_system_commands, false);
 }
 
-DatabaseStatus ProcessStateStore::CommitRecovery(std::uint64_t message_sequence, std::int64_t updated_at_ms,
+DatabaseStatus ProcessStateStore::CommitRecovery(std::uint64_t message_sequence, std::uint64_t command_message_sequence,
+                                                 std::int64_t updated_at_ms,
                                                  const std::vector<PendingMqttDelivery>& terminal_deliveries) {
     return SaveSnapshot(ProcessSystemState::kStopped, message_sequence, {}, {}, {}, updated_at_ms, terminal_deliveries,
-                        {}, {}, {}, true);
+                        {},
+                        CommandManagerSnapshot{
+                            .pending = {},
+                            .completed_requests = {},
+                            .message_sequence = command_message_sequence,
+                        },
+                        {}, true);
 }
 
 DatabaseStatus ProcessStateStore::SaveSnapshot(

@@ -290,6 +290,7 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         logistics_central_server
         src/main.cpp
         src/application.cpp
+        src/application_recovery.cpp
     )
 
     target_include_directories(
@@ -446,6 +447,7 @@ if(BUILD_TESTING)
     add_executable(
         central_server_process_integration_test
         tests/process_integration_test.cpp
+        src/application_recovery.cpp
     )
     target_link_libraries(
         central_server_process_integration_test
