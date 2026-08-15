@@ -36,6 +36,26 @@
   fi
   sudo install -d -o root -g root -m 0750 "${RUN_SPOOL}"
   test "$(sudo readlink -f -- "${RUN_SPOOL}")" = "${RUN_SPOOL}"
+
+  # Each host keeps non-secret run metadata and captures under its own absolute evidence directory.
+  EVIDENCE_USER="$(id -un)"
+  EVIDENCE_GROUP="$(id -gn)"
+  EVIDENCE_BASE=/var/lib/logistics/hardware-validation
+  sudo install -d -o "${EVIDENCE_USER}" -g "${EVIDENCE_GROUP}" -m 0750 "${EVIDENCE_BASE}"
+  EVIDENCE_BASE_REAL="$(sudo readlink -f -- "${EVIDENCE_BASE}")"
+  EVIDENCE_DIR="${EVIDENCE_BASE_REAL}/${RUN_ID}"
+  test ! -e "${EVIDENCE_DIR}"
+  sudo install -d -o "${EVIDENCE_USER}" -g "${EVIDENCE_GROUP}" -m 0750 "${EVIDENCE_DIR}"
+  RUN_ENV="${EVIDENCE_DIR}/run.env"
+  umask 077
+  {
+    printf "RUN_ID='%s'\n" "${RUN_ID}"
+    printf "SPOOL_BASE_REAL='%s'\n" "${SPOOL_BASE_REAL}"
+    printf "RUN_SPOOL='%s'\n" "${RUN_SPOOL}"
+    printf "EVIDENCE_DIR='%s'\n" "${EVIDENCE_DIR}"
+    printf "RUN_START=''\nRUN_END=''\n"
+  } > "${RUN_ENV}"
+  chmod 0600 "${RUN_ENV}"
   ```
 
   공통 MQTT client는 `publish_spool_directory/<device_id>/`와 그 아래 `inbound/`를 만든다. 따라서 INI의
@@ -60,7 +80,8 @@
 
   Set input, sorting, vision, and gripper `publish_spool_directory` to `${RUN_SPOOL}/input`,
   `${RUN_SPOOL}/sorting`, `${RUN_SPOOL}/vision`, and `${RUN_SPOOL}/gripper` respectively. Confirm those resolved paths
-  and ownership before each process starts; isolate only and never remove an earlier run's spool.
+  and ownership before each process starts; isolate only and never remove an earlier run's spool. On every new terminal
+  (and every host) use that host's absolute `${EVIDENCE_DIR}/run.env`; it contains no secrets and is mode `0600`.
 
 ## 빌드 및 배포 범위
 
@@ -112,6 +133,44 @@ Yocto input/sorting 이미지의 소스는 `3c87abcb49edecff24e6f676a223b51f8172
 장비 경로와 서비스 이름은 설치 환경에 맞게 확인한 뒤 사용한다. 민감한 인증 정보는 별도 보안 절차로 제공하며
 명령줄이나 이 문서에 넣지 않는다.
 
+### 모든 새 terminal의 run context source/검증
+
+각 새 terminal은 다음처럼 **기록한 절대 `run.env` 경로를 인용해** source하고 검증한 뒤에만 다음 명령을 실행한다.
+`run.env`는 앞 단계가 만든 mode `0600` non-secret metadata 파일이며, `RUN_ID`와 절대 spool/evidence 경로를 새로
+추측하지 않는다.
+
+```sh
+set -eu
+RUN_ENV='/var/lib/logistics/hardware-validation/run-YYYYMMDDTHHMMSSZ/run.env' # recorded absolute path
+test -r "${RUN_ENV}"
+test "$(stat -c '%a' "${RUN_ENV}")" = 600
+source "${RUN_ENV}"
+case "${RUN_ID}" in run-?*) ;; *) printf '%s\n' 'unsafe RUN_ID' >&2; exit 1 ;; esac
+case "${RUN_ID}" in *[!A-Za-z0-9._-]*|*..*|.|..) printf '%s\n' 'unsafe RUN_ID' >&2; exit 1 ;; esac
+SPOOL_BASE_REAL_NOW="$(readlink -f -- /var/lib/logistics/mqtt-spool)"
+test "${SPOOL_BASE_REAL}" = "${SPOOL_BASE_REAL_NOW}"
+test "${RUN_SPOOL}" = "${SPOOL_BASE_REAL}/${RUN_ID}"
+test "$(readlink -f -- "${RUN_SPOOL}")" = "${RUN_SPOOL}"
+test "$(readlink -f -- "${EVIDENCE_DIR}")" = "${EVIDENCE_DIR}"
+```
+
+### START 직전 UTC journal 범위 기록
+
+`START`를 보내기 직전, 중앙 서버 terminal에서 위 source/검증 block을 실행한 뒤 `RUN_START`를 UTC 초 정밀도로
+기록한다. journalctl의 `--since/--until` 형식과 호환되며, timeline의 ns 증거는 여전히 payload 또는 operator marker다.
+
+```sh
+RUN_START="$(date --utc '+%Y-%m-%d %H:%M:%S')"
+RUN_END=''
+umask 077
+{
+  printf "RUN_ID='%s'\n" "${RUN_ID}"
+  printf "SPOOL_BASE_REAL='%s'\nRUN_SPOOL='%s'\n" "${SPOOL_BASE_REAL}" "${RUN_SPOOL}"
+  printf "EVIDENCE_DIR='%s'\nRUN_START='%s'\nRUN_END=''\n" "${EVIDENCE_DIR}" "${RUN_START}"
+} > "${RUN_ENV}"
+chmod 0600 "${RUN_ENV}"
+```
+
 ### Step A — 첫 fresh 시작 전 catalog 보존 기준 기록
 
 중앙 서버를 처음 `startup_mode=fresh`로 시작하기 전에 중앙 host에서 실행한다. 이전 precondition terminal의
@@ -119,8 +178,8 @@ Yocto input/sorting 이미지의 소스는 `3c87abcb49edecff24e6f676a223b51f8172
 기존 증거를 덮어쓰지 않고 중단한다.
 
 ```sh
-RUN_ID='run-YYYYMMDDTHHMMSSZ' # replace with the recorded validated value
-CATALOG_EVIDENCE="${RUN_ID}-catalog-pre-fresh.txt"
+# First source and validate the recorded absolute RUN_ENV using the block above.
+CATALOG_EVIDENCE="${EVIDENCE_DIR}/catalog-pre-fresh.txt"
 test ! -e "${CATALOG_EVIDENCE}"
 sudo sqlite3 /var/lib/logistics/logistics.db 'SELECT count(*) FROM product_catalog;' > "${CATALOG_EVIDENCE}"
 test "$(sed -n '$=' "${CATALOG_EVIDENCE}")" -eq 1
@@ -129,9 +188,9 @@ test "$(sed -n '$=' "${CATALOG_EVIDENCE}")" -eq 1
 ### Step B — fresh 시작 후 runtime zero와 catalog 비교
 
 ```sh
-# Restart/terminal 경계를 넘어 Step A의 파일에서 pre-fresh count를 다시 읽고 검증한다.
-RUN_ID='run-YYYYMMDDTHHMMSSZ' # same recorded validated value as Step A
-CATALOG_EVIDENCE="${RUN_ID}-catalog-pre-fresh.txt"
+# First source and validate the recorded absolute RUN_ENV using the block above. Restart/terminal 경계를 넘어
+# Step A의 absolute evidence file에서 pre-fresh count를 다시 읽고 검증한다.
+CATALOG_EVIDENCE="${EVIDENCE_DIR}/catalog-pre-fresh.txt"
 CATALOG_COUNT_BEFORE="$(cat "${CATALOG_EVIDENCE}")"
 case "${CATALOG_COUNT_BEFORE}" in *[!0-9]*|'') printf '%s\n' 'invalid pre-fresh catalog evidence' >&2; exit 1 ;; esac
 CATALOG_COUNT_AFTER="$(sudo sqlite3 /var/lib/logistics/logistics.db 'SELECT count(*) FROM product_catalog;')"
@@ -165,12 +224,25 @@ sudo sqlite3 /var/lib/logistics/logistics.db \
 # process_runtime_state and command_manager_runtime are new-session rows (0 or 1 before/after initialization);
 # schema_migrations contains current schema metadata, not retained runtime history.
 
-# 각 Pi에서 exact role/device/inbound spool 경로와 ownership을 확인
+# Each Pi terminal first sources/validates its local absolute RUN_ENV using the block above, then checks its own
+# exact role/device/inbound spool path and ownership.
 sudo find "${RUN_SPOOL}" -printf '%M %u:%g %p\n' | sort
 
 # Broker listener와 서비스 상태
 sudo systemctl status mosquitto --no-pager
 sudo ss -ltnp 'sport = :8883'
+
+# At test end, source/validate the absolute RUN_ENV again, then persist the UTC end bound for journalctl.
+RUN_END="$(date --utc '+%Y-%m-%d %H:%M:%S')"
+umask 077
+{
+  printf "RUN_ID='%s'\n" "${RUN_ID}"
+  printf "SPOOL_BASE_REAL='%s'\nRUN_SPOOL='%s'\n" "${SPOOL_BASE_REAL}" "${RUN_SPOOL}"
+  printf "EVIDENCE_DIR='%s'\nRUN_START='%s'\nRUN_END='%s'\n" "${EVIDENCE_DIR}" "${RUN_START}" "${RUN_END}"
+} > "${RUN_ENV}"
+chmod 0600 "${RUN_ENV}"
+test -n "${RUN_START}"
+test -n "${RUN_END}"
 
 # UTC journal transport-receipt evidence. Use short-iso-precise only when supported; its precision is microseconds,
 # not nanoseconds.
@@ -186,22 +258,23 @@ ESTOP/RECOVERY에 찍는 UTC ns operator marker뿐이다.
 
 ```sh
 marker() { log_file="$1"; shift; printf '%s %s\n' "$(date -u --iso-8601=ns)" "$*" | tee -a "${log_file}"; }
-marker "${RUN_ID}-vision.log" 'vision foreground start'
+# First source and validate this Pi's recorded absolute RUN_ENV using the block above.
+marker "${EVIDENCE_DIR}/vision.log" 'vision foreground start'
 stdbuf -oL -eL ./build-vision/device-rpi/logistics_vision_node --headless \
-  --config runtime/vision-node/vision-node.ini 2>&1 | tee -a "${RUN_ID}-vision.log"
+  --config runtime/vision-node/vision-node.ini 2>&1 | tee -a "${EVIDENCE_DIR}/vision.log"
 
-marker "${RUN_ID}-gripper.log" 'gripper foreground start'
+marker "${EVIDENCE_DIR}/gripper.log" 'gripper foreground start'
 : "${GRIPPER_BINARY:?set GRIPPER_BINARY to the deployed logistics_gripper_node executable}"
 GRIPPER_CONFIG="${GRIPPER_CONFIG:-runtime/gripper-node/gripper-node.ini}"
 test -x "${GRIPPER_BINARY}"
 test -r "${GRIPPER_CONFIG}"
-stdbuf -oL -eL "${GRIPPER_BINARY}" "${GRIPPER_CONFIG}" /dev/vedauart 2>&1 | tee -a "${RUN_ID}-gripper.log"
+stdbuf -oL -eL "${GRIPPER_BINARY}" "${GRIPPER_CONFIG}" /dev/vedauart 2>&1 | tee -a "${EVIDENCE_DIR}/gripper.log"
 
-# From a second operator terminal, enter the recorded RUN_ID explicitly; this terminal has no shell-local marker()
-# function or RUN_ID from the capture terminal. Write markers at START, each ESTOP/RECOVERY, and process exit.
-RUN_ID='run-YYYYMMDDTHHMMSSZ' # replace with the recorded validated value
-printf '%s %s\n' "$(date -u --iso-8601=ns)" 'ESTOP sent at vision stage' | tee -a "${RUN_ID}-vision.log"
-printf '%s %s\n' "$(date -u --iso-8601=ns)" 'RECOVERY acknowledged at gripper stage' | tee -a "${RUN_ID}-gripper.log"
+# From a second operator terminal, source and validate the recorded absolute RUN_ENV using the block above; it has no
+# shell-local marker() function from the capture terminal. Use absolute evidence paths for START, every ESTOP/RECOVERY,
+# and process-exit markers.
+printf '%s %s\n' "$(date -u --iso-8601=ns)" 'ESTOP sent at vision stage' | tee -a "${EVIDENCE_DIR}/vision.log"
+printf '%s %s\n' "$(date -u --iso-8601=ns)" 'RECOVERY acknowledged at gripper stage' | tee -a "${EVIDENCE_DIR}/gripper.log"
 ```
 
 Broker 메시지 관찰은 TLS와 ACL이 적용된 승인된 관찰자 자격 증명으로 별도 보안 절차에 따라 실행하고, topic, payload,
