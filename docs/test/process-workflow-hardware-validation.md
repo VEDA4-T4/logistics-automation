@@ -273,25 +273,30 @@ sudo journalctl --utc -u logistics-central-server -u logistics-input-node -u log
 Vision과 gripper에는 systemd unit이 없다. 서로 다른 Pi/terminal에서 각각 독립적으로 foreground stdout/stderr를
 캡처한다. stdout capture에는 timestamp를 덧붙이지 않는다. timeline의 ns 근거는 application/MQTT payload 또는
 실행 전후와 수동 ESTOP/RECOVERY에 찍는 UTC ns operator marker뿐이다. 아래에서 operator SIGINT에 따른 `130`은
-해당 run의 다른 pass 기준을 이미 충족했다고 operator가 명시적으로 확인한 경우에만 정상 capture close로 처리한다.
+두 번째 terminal이 해당 run의 다른 pass 기준을 충족한 뒤 absolute `PASS-CONFIRMED` marker를 만든 경우에만 정상
+capture close로 처리한다.
 
 ```bash
 # Vision Pi terminal only. First source and validate this Pi's recorded absolute RUN_ENV using the block above.
 set -e
 marker() { log_file="$1"; shift; printf '%s %s\n' "$(date -u --iso-8601=ns)" "$*" | tee -a "${log_file}"; }
 marker "${EVIDENCE_DIR}/vision.log" 'vision foreground start'
-# Leave CAPTURE_CLOSE_AFTER_PASS unset during the run. Set it to yes in this terminal only after all other pass
-# criteria are recorded, immediately before the expected Ctrl-C close.
+PASS_CONFIRMATION="${EVIDENCE_DIR}/PASS-CONFIRMED"
 set +e
 set -o pipefail
 stdbuf -oL -eL ./build-vision/device-rpi/logistics_vision_node --headless \
   --config runtime/vision-node/vision-node.ini 2>&1 | tee -a "${EVIDENCE_DIR}/vision.log"
 vision_statuses=("${PIPESTATUS[@]}")
 set -e
-test "${vision_statuses[1]}" -eq 0
 case "${vision_statuses[0]}" in
-  0) ;;
-  130) test "${CAPTURE_CLOSE_AFTER_PASS:-}" = yes; marker "${EVIDENCE_DIR}/vision.log" 'operator SIGINT capture close after pass confirmation' ;;
+  0) test "${vision_statuses[1]}" -eq 0 ;;
+  130)
+    test -f "${PASS_CONFIRMATION}"
+    case "${vision_statuses[1]}" in
+      0|130) marker "${EVIDENCE_DIR}/vision.log" 'operator SIGINT capture close with PASS-CONFIRMED' ;;
+      *) marker "${EVIDENCE_DIR}/vision.log" "vision tee exited ${vision_statuses[1]}"; exit "${vision_statuses[1]}" ;;
+    esac
+    ;;
   *) marker "${EVIDENCE_DIR}/vision.log" "vision exited ${vision_statuses[0]}"; exit "${vision_statuses[0]}" ;;
 esac
 ```
@@ -305,16 +310,21 @@ marker "${EVIDENCE_DIR}/gripper.log" 'gripper foreground start'
 GRIPPER_CONFIG="${GRIPPER_CONFIG:-runtime/gripper-node/gripper-node.ini}"
 test -x "${GRIPPER_BINARY}"
 test -r "${GRIPPER_CONFIG}"
-# Leave CAPTURE_CLOSE_AFTER_PASS unset during the run. Set it to yes in this terminal only after all other pass
-# criteria are recorded, immediately before the expected Ctrl-C close.
+PASS_CONFIRMATION="${EVIDENCE_DIR}/PASS-CONFIRMED"
 set +e
+set -o pipefail
 stdbuf -oL -eL "${GRIPPER_BINARY}" "${GRIPPER_CONFIG}" /dev/vedauart 2>&1 | tee -a "${EVIDENCE_DIR}/gripper.log"
 gripper_statuses=("${PIPESTATUS[@]}")
 set -e
-test "${gripper_statuses[1]}" -eq 0
 case "${gripper_statuses[0]}" in
-  0) ;;
-  130) test "${CAPTURE_CLOSE_AFTER_PASS:-}" = yes; marker "${EVIDENCE_DIR}/gripper.log" 'operator SIGINT capture close after pass confirmation' ;;
+  0) test "${gripper_statuses[1]}" -eq 0 ;;
+  130)
+    test -f "${PASS_CONFIRMATION}"
+    case "${gripper_statuses[1]}" in
+      0|130) marker "${EVIDENCE_DIR}/gripper.log" 'operator SIGINT capture close with PASS-CONFIRMED' ;;
+      *) marker "${EVIDENCE_DIR}/gripper.log" "gripper tee exited ${gripper_statuses[1]}"; exit "${gripper_statuses[1]}" ;;
+    esac
+    ;;
   *) marker "${EVIDENCE_DIR}/gripper.log" "gripper exited ${gripper_statuses[0]}"; exit "${gripper_statuses[0]}" ;;
 esac
 ```
@@ -322,9 +332,15 @@ esac
 ```sh
 # From a second operator terminal, source and validate the recorded absolute RUN_ENV using the block above; it has no
 # shell-local marker() function from the capture terminal. Use absolute evidence paths for START, every ESTOP/RECOVERY,
-# and process-exit markers.
+# and process-exit markers. Only after all pass criteria are recorded, create this marker once before the expected
+# Ctrl-C capture close; do not pre-create it.
 printf '%s %s\n' "$(date -u --iso-8601=ns)" 'ESTOP sent at vision stage' | tee -a "${EVIDENCE_DIR}/vision.log"
 printf '%s %s\n' "$(date -u --iso-8601=ns)" 'RECOVERY acknowledged at gripper stage' | tee -a "${EVIDENCE_DIR}/gripper.log"
+PASS_CONFIRMATION="${EVIDENCE_DIR}/PASS-CONFIRMED"
+test ! -e "${PASS_CONFIRMATION}"
+umask 077
+printf '%s %s\n' "$(date -u --iso-8601=ns)" 'all non-capture pass criteria confirmed' > "${PASS_CONFIRMATION}"
+chmod 0600 "${PASS_CONFIRMATION}"
 ```
 
 Broker 메시지 관찰은 TLS와 ACL이 적용된 승인된 관찰자 자격 증명으로 별도 보안 절차에 따라 실행하고, topic, payload,
