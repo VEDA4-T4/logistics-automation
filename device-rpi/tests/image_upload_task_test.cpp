@@ -4,11 +4,15 @@
 #include <cassert>
 #include <chrono>
 #include <memory>
+#include <string_view>
 #include <thread>
 
 namespace {
 
+using logistics::vision::ImageUploadRetryState;
 using logistics::vision::ImageUploadTask;
+
+constexpr std::string_view kWorkId = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
 
 void TestCancelDoesNotWaitForWorkerAndDropsItsCompletion() {
     auto release = std::make_shared<std::atomic_bool>(false);
@@ -80,10 +84,29 @@ void TestDestructionDoesNotWaitForWorker() {
     }
 }
 
+void TestUploadIntentSurvivesResultRetryUntilScheduled() {
+    ImageUploadRetryState<int> retry;
+    assert(retry.Retain(std::string(kWorkId), 42));
+    assert(retry.PendingWorkId() == kWorkId);
+    assert(retry.PendingIntent() != nullptr && *retry.PendingIntent() == 42);
+    assert(!retry.ReadyToSchedule(true, false));
+    assert(retry.PendingWorkId() == kWorkId);
+    assert(!retry.Retain("7026045c-92ba-4fd9-93dc-6dfa04a5fd30", 7));
+
+    assert(!retry.ReadyToSchedule(false, true));
+    assert(retry.ReadyToSchedule(false, false));
+    assert(!retry.MarkScheduled("7026045c-92ba-4fd9-93dc-6dfa04a5fd30"));
+    assert(retry.MarkScheduled(kWorkId));
+    assert(!retry.PendingWorkId().has_value());
+    assert(!retry.ReadyToSchedule(false, false));
+    assert(!retry.MarkScheduled(kWorkId));
+}
+
 }  // namespace
 
 int main() {
     TestCancelDoesNotWaitForWorkerAndDropsItsCompletion();
     TestDestructionDoesNotWaitForWorker();
+    TestUploadIntentSurvivesResultRetryUntilScheduled();
     return 0;
 }

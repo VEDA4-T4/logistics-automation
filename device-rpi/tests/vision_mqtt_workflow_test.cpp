@@ -185,6 +185,35 @@ void TestBarcodeOnlyFrameCompletesConfirmedBoxWork() {
     assert(work->observation->barcode == "8801234567893");
 }
 
+void TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork() {
+    {
+        vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
+        assert(!workflow.Observe(BarcodeOnlyObservation("stale-idle"), "IGNORED", "2026-07-21T11:00:00Z").has_value());
+        assert(!workflow.Observe(Observation(), "MSG-BOX-01", "2026-07-21T11:00:01Z").has_value());
+        assert(workflow.Observe(Observation(), "MSG-BOX-02", "2026-07-21T11:00:02Z").has_value());
+        assert(workflow.AssignWork(WorkCreated()));
+        assert(!workflow.TakeAssignedWork().has_value());
+    }
+
+    FakeClock clock;
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1, std::chrono::seconds(3), std::chrono::seconds(10),
+                                        [&clock] { return clock.Now(); });
+    assert(workflow.AssignWork(WorkCreated()));
+    assert(
+        !workflow.Observe(BarcodeOnlyObservation("stale-preassigned"), "IGNORED", "2026-07-21T11:00:00Z").has_value());
+    clock.Advance(std::chrono::milliseconds(2999));
+    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!workflow.Observe(Observation(), "IGNORED", "2026-07-21T11:00:01Z").has_value());
+    assert(!workflow.Observe(Observation(), "IGNORED", "2026-07-21T11:00:02Z").has_value());
+    assert(!workflow.TakeAssignedWork().has_value());
+
+    assert(!workflow.Observe(BarcodeOnlyObservation("fresh-barcode"), "IGNORED", "2026-07-21T11:00:03Z").has_value());
+    const auto work = workflow.TakeAssignedWork();
+    assert(work.has_value());
+    assert(work->observation.has_value());
+    assert(work->observation->barcode == "fresh-barcode");
+}
+
 void TestSensorWorkCanBeAssignedBeforeVisionDetection() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
     assert(workflow.AssignWork(WorkCreated()));
@@ -605,6 +634,7 @@ void TestRecoveryCannotInterleaveAfterResultValidation() {
 int main() {
     TestDetectionAssignmentAndResultMessages();
     TestBarcodeOnlyFrameCompletesConfirmedBoxWork();
+    TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork();
     TestSensorWorkCanBeAssignedBeforeVisionDetection();
     TestBarcodeSurvivesDetectionConfirmation();
     TestMissingBarcodeProducesFailedResult();

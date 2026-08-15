@@ -35,7 +35,12 @@ std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<Visio
 
     const bool barcode_deadline_expired =
         phase_ == Phase::kAssigned && barcode_deadline_.has_value() && now >= *barcode_deadline_;
-    if (observation.has_value() && !barcode_deadline_expired) {
+    const bool confirming_box = observation.has_value() && observation->box_detected &&
+                                (phase_ == Phase::kIdle || phase_ == Phase::kPreassigned);
+    const bool awaiting_barcode_for_confirmed_box =
+        confirmed_box_observation_.has_value() && (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned);
+    if (observation.has_value() && !barcode_deadline_expired &&
+        (confirming_box || awaiting_barcode_for_confirmed_box)) {
         if (observation->barcode.has_value()) {
             barcode_ = std::move(observation->barcode);
         }

@@ -346,6 +346,14 @@ struct ImageUploadCompletion final {
     std::uint64_t generation{};
     bool encoded{};
 };
+
+struct ImageUploadIntent final {
+    logistics::vision::AssignedVisionWork work;
+    std::string upload_message_id;
+    std::string captured_at;
+    cv::Mat frame;
+    std::uint64_t generation{};
+};
 #endif
 
 }  // namespace
@@ -386,6 +394,7 @@ int main(const int argc, char* argv[]) {
         image_uploader = std::make_shared<logistics::device::ImageUploader>(mqtt_config.image_upload);
     }
     logistics::vision::ImageUploadTask<ImageUploadCompletion> pending_image_upload;
+    logistics::vision::ImageUploadRetryState<ImageUploadIntent> image_upload_retry;
     std::optional<std::string> pending_image_upload_work_id;
     logistics::vision::VisionStateTransaction vision_state;
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
@@ -422,9 +431,52 @@ int main(const int argc, char* argv[]) {
             device_status->SetCurrentState(control_state.CurrentState());
         }
     };
+    const auto start_pending_image_upload = [&]() {
+        if (!control_state.IsOperational() || image_uploader == nullptr ||
+            !image_upload_retry.ReadyToSchedule(result_outbox.PendingWorkId().has_value(),
+                                                pending_image_upload.Active())) {
+            return false;
+        }
+        const ImageUploadIntent* pending_intent = image_upload_retry.PendingIntent();
+        if (pending_intent == nullptr) {
+            return false;
+        }
+        ImageUploadIntent intent = *pending_intent;
+        const std::string work_id = intent.work.work_id;
+        const bool started = pending_image_upload.Start(
+            [uploader = image_uploader, device_id, intent = std::move(intent)](std::stop_token stop_token) mutable {
+                ImageUploadCompletion completion{
+                    .work = std::move(intent.work),
+                    .publications = {},
+                    .captured_at = intent.captured_at,
+                    .result = {},
+                    .generation = intent.generation,
+                };
+                try {
+                    std::vector<std::uint8_t> jpeg;
+                    completion.encoded = cv::imencode(".jpg", intent.frame, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 });
+                    if (completion.encoded) {
+                        completion.result = uploader->Upload(
+                            device_id, completion.work.work_id, intent.upload_message_id, intent.captured_at,
+                            completion.work.observation->image_name, "image/jpeg", jpeg, stop_token);
+                    }
+                } catch (const std::exception& error) {
+                    completion.result.error = error.what();
+                }
+                return completion;
+            });
+        if (!started) {
+            return false;
+        }
+        static_cast<void>(image_upload_retry.MarkScheduled(work_id));
+        pending_image_upload_work_id = work_id;
+        pending_capture.Reset();
+        device_status->SetCurrentState("UPLOAD_PENDING");
+        return true;
+    };
     device_status->SetCurrentState(control_state.CurrentState());
-    mqtt_client.SetCommandHandler([&mqtt_workflow, &result_outbox, &control_state, &mqtt_client, &mqtt_sequence,
-                                   &mqtt_session_id, &device_id, &vision_state,
+    mqtt_client.SetCommandHandler([&mqtt_workflow, &result_outbox, &image_upload_retry, &control_state, &mqtt_client,
+                                   &mqtt_sequence, &mqtt_session_id, &device_id, &vision_state,
                                    device_status](const logistics::contracts::mqtt::MqttMessage& message) {
         const std::string response_message_id = logistics::device::MakeMessageId(
             device_id, mqtt_session_id, mqtt_sequence.fetch_add(1, std::memory_order_relaxed));
@@ -472,6 +524,7 @@ int main(const int argc, char* argv[]) {
                 state.ClearWork();
                 mqtt_workflow.Reset();
                 result_outbox.Reset();
+                image_upload_retry.Reset();
                 device_status->SetJobId(std::nullopt);
             }
             if (decision->state_changed) {
@@ -550,6 +603,7 @@ int main(const int argc, char* argv[]) {
             control_state.SetReady(false);
             mqtt_workflow.Reset();
             result_outbox.Reset();
+            image_upload_retry.Reset();
             return true;
         });
         if (reset_requested) {
@@ -686,7 +740,8 @@ int main(const int argc, char* argv[]) {
             if (const auto pending_work_id = result_outbox.PendingWorkId();
                 control_state.IsOperational() && pending_work_id.has_value()) {
                 const bool image_upload_pending =
-                    pending_image_upload_work_id.has_value() && *pending_image_upload_work_id == *pending_work_id;
+                    (pending_image_upload_work_id.has_value() && *pending_image_upload_work_id == *pending_work_id) ||
+                    image_upload_retry.PendingWorkId() == pending_work_id;
                 if (result_outbox.Flush(
                         [&mqtt_client](const logistics::contracts::mqtt::MqttMessage& message) {
                             return mqtt_client.PublishEvent(message);
@@ -712,6 +767,7 @@ int main(const int argc, char* argv[]) {
                     }
                 }
             }
+            static_cast<void>(start_pending_image_upload());
         });
 #endif
 
@@ -871,42 +927,21 @@ int main(const int argc, char* argv[]) {
                     const std::string upload_message_id = logistics::device::MakeMessageId(
                         device_id, mqtt_session_id, mqtt_sequence.fetch_add(1, std::memory_order_relaxed));
                     const std::string captured_at = logistics::device::CurrentIso8601Timestamp();
-                    cv::Mat captured_frame = pending_capture.Frame().clone();
-                    auto assigned_work = *work;
+                    ImageUploadIntent upload_intent{
+                        .work = *work,
+                        .upload_message_id = upload_message_id,
+                        .captured_at = captured_at,
+                        .frame = pending_capture.Frame().clone(),
+                        .generation = generation,
+                    };
                     const bool current = vision_state.PublishIfCurrent(
                         generation, [&control_state] { return control_state.IsOperational(); },
                         [&] {
                             const bool queued = result_outbox.Enqueue(work->work_id, std::move(publications));
-                            const bool durable = queued && flush_result_outbox();
-                            if (durable) {
-                                pending_image_upload_work_id = work->work_id;
-                                static_cast<void>(pending_image_upload.Start(
-                                    [uploader = image_uploader, device_id, assigned_work = std::move(assigned_work),
-                                     upload_message_id, captured_at, generation,
-                                     frame = std::move(captured_frame)](std::stop_token stop_token) mutable {
-                                        ImageUploadCompletion completion{
-                                            .work = std::move(assigned_work),
-                                            .publications = {},
-                                            .captured_at = captured_at,
-                                            .result = {},
-                                            .generation = generation,
-                                        };
-                                        try {
-                                            std::vector<std::uint8_t> jpeg;
-                                            completion.encoded =
-                                                cv::imencode(".jpg", frame, jpeg, { cv::IMWRITE_JPEG_QUALITY, 90 });
-                                            if (completion.encoded) {
-                                                completion.result = uploader->Upload(
-                                                    device_id, completion.work.work_id, upload_message_id, captured_at,
-                                                    completion.work.observation->image_name, "image/jpeg", jpeg,
-                                                    stop_token);
-                                            }
-                                        } catch (const std::exception& error) {
-                                            completion.result.error = error.what();
-                                        }
-                                        return completion;
-                                    }));
-                                pending_capture.Reset();
+                            const bool retained =
+                                queued && image_upload_retry.Retain(work->work_id, std::move(upload_intent));
+                            if (retained) {
+                                static_cast<void>(flush_result_outbox());
                                 device_status->SetCurrentState("RESULT_PENDING");
                                 result_deferred = true;
                             } else {

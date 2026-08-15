@@ -5,6 +5,8 @@
 #include <future>
 #include <optional>
 #include <stop_token>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -66,6 +68,50 @@ public:
 private:
     std::optional<std::future<Completion>> completion_;
     std::optional<std::stop_source> cancellation_;
+};
+
+template <typename Intent>
+class ImageUploadRetryState final {
+public:
+    [[nodiscard]] bool Retain(std::string work_id, Intent intent) {
+        if (pending_.has_value()) {
+            return false;
+        }
+        pending_.emplace(Pending{ .work_id = std::move(work_id), .intent = std::move(intent) });
+        return true;
+    }
+
+    [[nodiscard]] std::optional<std::string> PendingWorkId() const {
+        return pending_.has_value() ? std::optional<std::string>{ pending_->work_id } : std::nullopt;
+    }
+
+    [[nodiscard]] const Intent* PendingIntent() const noexcept {
+        return pending_.has_value() ? &pending_->intent : nullptr;
+    }
+
+    [[nodiscard]] bool ReadyToSchedule(const bool result_outbox_pending, const bool upload_active) const noexcept {
+        return pending_.has_value() && !result_outbox_pending && !upload_active;
+    }
+
+    [[nodiscard]] bool MarkScheduled(const std::string_view work_id) noexcept {
+        if (!pending_.has_value() || pending_->work_id != work_id) {
+            return false;
+        }
+        pending_.reset();
+        return true;
+    }
+
+    void Reset() noexcept {
+        pending_.reset();
+    }
+
+private:
+    struct Pending final {
+        std::string work_id;
+        Intent intent;
+    };
+
+    std::optional<Pending> pending_;
 };
 
 }  // namespace logistics::vision
