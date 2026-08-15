@@ -333,7 +333,7 @@ void test_initialize_resets_then_homes() {
     assert(status != nullptr && status->current_state == "READY");
 }
 
-void test_full_cycle_walks_every_motion_and_reports_completion_once() {
+void test_full_cycle_reports_terminal_success_only_after_home() {
     Fixture fixture;
     fixture.Home();
 
@@ -360,6 +360,11 @@ void test_full_cycle_walks_every_motion_and_reports_completion_once() {
         assert(fixture.node->ActiveStep() == step);
         fixture.CompleteCurrentMotion(motion_id, motion_type);
         ++motion_id;  // the node allocates motion IDs consecutively
+
+        if (step != GripperCycleStep::kReturnHome) {
+            const auto* pending = fixture.LastResponse();
+            assert(pending != nullptr && pending->result == mqtt::CommandResult::kProcessing);
+        }
     }
 
     assert(!fixture.node->HasActiveCycle());
@@ -368,16 +373,20 @@ void test_full_cycle_walks_every_motion_and_reports_completion_once() {
     assert(response != nullptr && response->command == mqtt::ControlCommand::kExecute &&
            response->request_id == "req-1" && response->result == mqtt::CommandResult::kSuccess);
 
-    // Exactly one COMPLETED status, carrying the job ID, is what advances the
-    // server's work state machine.
+    int terminal_success_count = 0;
     int completed_count = 0;
     for (const GripperReport& report : fixture.reports) {
+        const auto* command = std::get_if<mqtt::CommandResponsePayload>(&report.data);
+        if (command != nullptr && command->request_id == "req-1" && command->result == mqtt::CommandResult::kSuccess) {
+            ++terminal_success_count;
+        }
         const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&report.data);
         if (status != nullptr && status->current_state == "COMPLETED") {
             ++completed_count;
             assert(status->job_id.has_value() && *status->job_id == kWorkId);
         }
     }
+    assert(terminal_success_count == 1);
     assert(completed_count == 1);
 }
 
@@ -1126,7 +1135,7 @@ int main() {
     test_start_homes_without_work_id();
     test_execute_is_rejected_until_the_arm_is_homed();
     test_initialize_resets_then_homes();
-    test_full_cycle_walks_every_motion_and_reports_completion_once();
+    test_full_cycle_reports_terminal_success_only_after_home();
     test_progress_states_carry_the_job_id_but_never_report_ready();
     test_controller_heartbeat_does_not_overwrite_an_active_cycle_state();
     test_duplicate_work_is_idempotent_and_a_second_work_conflicts();

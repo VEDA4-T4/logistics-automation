@@ -439,8 +439,22 @@ void TestAutomaticProcessCompletesThroughAllNodes() {
     ProcessIntegrationHarness harness;
     AdvanceToGripperTransfer(harness);
     assert(harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kSuccess));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 0);
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+    assert(harness.ReportStatus(kGripperId, "COMPLETED"));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 0);
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 1);
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
+    assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
     assert(harness.ReportStatus(kSortingId, "ROUTING"));
     assert(harness.DetectSortedProduct());
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 0);
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
     assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
     assert(harness.ReportStatus(kLineTracerId, "FOLLOWING_LINE"));
     assert(harness.CompleteWork());
@@ -452,8 +466,8 @@ void TestAutomaticProcessCompletesThroughAllNodes() {
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
     assert((harness.DeviceCommandTargets() ==
             std::vector<std::string>{ std::string(kInputId), std::string(kVisionId), std::string(kLineTracerId),
-                                      std::string(kGripperId), std::string(kSortingId), std::string(kInputId),
-                                      std::string(kSortingId), std::string(kSortingId), std::string(kSortingId) }));
+                                      std::string(kGripperId), std::string(kSortingId), std::string(kSortingId),
+                                      std::string(kInputId), std::string(kSortingId), std::string(kSortingId) }));
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
     assert(work.has_value());
@@ -464,7 +478,7 @@ void TestSortingDispatchFailureKeepsInputStopped() {
     ProcessIntegrationHarness harness;
     AdvanceToGripperTransfer(harness);
     harness.FailPublishingTo(std::string(kSortingId));
-    assert(!harness.ReportStatus(kGripperId, "COMPLETED"));
+    assert(!harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kSuccess));
 
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStop) == 1);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
