@@ -1,11 +1,14 @@
 #include "vision_mqtt_workflow.hpp"
 
+#include <atomic>
 #include <cassert>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "logistics/contracts/mqtt_validation.hpp"
 #include "logistics/device/device_control_state.hpp"
+#include "vision_state_transaction.hpp"
 
 namespace {
 
@@ -458,6 +461,65 @@ void TestSafetyRecoveryClearsPendingVisionWork() {
     assert(control.ConsumeResetRequest());
 }
 
+void TestRecoveryCannotInterleaveAfterResultValidation() {
+    vision::VisionStateTransaction transaction;
+    vision::VisionResultOutbox outbox;
+    assert(outbox.Enqueue(std::string(kWorkId), { { vision::VisionPublicationChannel::kEvent, WorkCreated() } }));
+    const std::uint64_t generation = transaction.CaptureGeneration();
+    std::atomic_bool result_validated{};
+    std::atomic_bool allow_publication{};
+    std::atomic_bool recovery_started{};
+    std::atomic_bool recovery_cleared{};
+    std::atomic_bool published_after_clear{};
+
+    std::jthread result_thread([&] {
+        const bool published = transaction.PublishIfCurrent(
+            generation, [] { return true; },
+            [&] {
+                const bool flushed = outbox.Flush(
+                    [&](const mqtt::MqttMessage&) {
+                        result_validated.store(true, std::memory_order_release);
+                        while (!allow_publication.load(std::memory_order_acquire)) {
+                            std::this_thread::yield();
+                        }
+                        published_after_clear.store(recovery_cleared.load(std::memory_order_acquire),
+                                                    std::memory_order_release);
+                        return true;
+                    },
+                    [](const mqtt::MqttMessage&) { return false; });
+                assert(flushed);
+            });
+        assert(published);
+    });
+    while (!result_validated.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+
+    std::jthread recovery_thread([&] {
+        recovery_started.store(true, std::memory_order_release);
+        transaction.Synchronize([&](auto& state) {
+            state.ClearWork();
+            outbox.Reset();
+            recovery_cleared.store(true, std::memory_order_release);
+        });
+    });
+    while (!recovery_started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    assert(!recovery_cleared.load(std::memory_order_acquire));
+
+    allow_publication.store(true, std::memory_order_release);
+    result_thread.join();
+    recovery_thread.join();
+
+    assert(recovery_cleared.load(std::memory_order_acquire));
+    assert(!published_after_clear.load(std::memory_order_acquire));
+    assert(!outbox.PendingWorkId().has_value());
+    bool stale_published = false;
+    assert(!transaction.PublishIfCurrent(generation, [] { return true; }, [&] { stale_published = true; }));
+    assert(!stale_published);
+}
+
 }  // namespace
 
 int main() {
@@ -473,5 +535,6 @@ int main() {
     TestVisionControlLifecycle();
     TestStopPreservesPendingVisionWork();
     TestSafetyRecoveryClearsPendingVisionWork();
+    TestRecoveryCannotInterleaveAfterResultValidation();
     return 0;
 }

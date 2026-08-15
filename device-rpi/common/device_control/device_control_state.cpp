@@ -98,18 +98,8 @@ std::optional<DeviceControlDecision> DeviceControlState::HandleCommand(const mqt
                     if (state_ == DeviceOperatingState::kStopped && ready_) {
                         response_text = config_.component_name + " is already recovered and stopped";
                     } else if (state_ == DeviceOperatingState::kRecovering) {
-                        clear_work = true;
-                        if (ready_) {
-                            state_ = DeviceOperatingState::kStopped;
-                            state_changed = true;
-                            pending_recovery_request_id_.reset();
-                            response_text = config_.component_name + " recovery completed";
-                        } else {
-                            result = mqtt::CommandResult::kProcessing;
-                            pending_recovery_request_id_ = std::string(request->request_id);
-                            reset_requested_ = true;
-                            response_text = config_.component_name + " recovery is in progress";
-                        }
+                        result = mqtt::CommandResult::kProcessing;
+                        response_text = config_.component_name + " recovery is in progress";
                     } else if (state_ != DeviceOperatingState::kEmergencyStop &&
                                state_ != DeviceOperatingState::kError) {
                         result = mqtt::CommandResult::kRejected;
