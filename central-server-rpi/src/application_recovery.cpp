@@ -6,12 +6,31 @@
 
 namespace logistics::central_server {
 
+std::optional<contracts::mqtt::MqttMessage> Application::StampProcessEpoch(contracts::mqtt::MqttMessage message,
+                                                                           std::string_view process_epoch) {
+    bool carries_process_epoch = contracts::mqtt::IsProcessScopedMessage(message) ||
+                                 message.message_type == contracts::mqtt::MessageType::kEmergencyStop;
+    if (const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
+        command != nullptr && command->command != contracts::mqtt::ControlCommand::kStatusRequest) {
+        carries_process_epoch = true;
+    }
+    if (!carries_process_epoch) {
+        return message;
+    }
+    if (message.process_epoch.has_value() && *message.process_epoch != process_epoch) {
+        return std::nullopt;
+    }
+    message.process_epoch = std::string(process_epoch);
+    return message;
+}
+
 bool Application::CommitRecoveryResponse(
     ProcessOrchestrator& process_orchestrator, ProcessCommandTracker& process_command_tracker,
     CommandManager& command_manager,
     std::unordered_map<std::string, contracts::mqtt::ControlCommand>& pending_system_commands,
     const contracts::mqtt::MqttMessage& device_response, std::string_view qt_client_id, std::string_view source_id,
-    std::string_view completed_at, const RecoveryPersistence& persist, const RecoveryPublisher& publish) {
+    std::string_view completed_at, std::string_view process_epoch, const RecoveryPersistence& persist,
+    const RecoveryPublisher& publish) {
     const auto decision = command_manager.PreviewResponse(device_response);
     if (decision.disposition != CommandResponseDisposition::kForward || !decision.message.has_value()) {
         return false;
@@ -28,7 +47,7 @@ bool Application::CommitRecoveryResponse(
     }
 
     auto response_message = *decision.message;
-    response_message.process_epoch = device_response.process_epoch;
+    response_message.process_epoch = std::string(process_epoch);
     const std::uint64_t command_message_sequence = command_manager.Snapshot().message_sequence + 1;
     std::vector<PendingMqttDelivery> completions;
     const auto transition =
@@ -41,7 +60,7 @@ bool Application::CommitRecoveryResponse(
             for (const auto& work : active_works) {
                 auto completion = MakeWorkFailureCompletion(source_id, "RECOVERY-FAILED-" + work.work_id, work.work_id,
                                                             "CANCELLED_BY_RECOVERY", std::string(completed_at));
-                completion.process_epoch = device_response.process_epoch;
+                completion.process_epoch = std::string(process_epoch);
                 completions.push_back({
                     .topic = contracts::mqtt::QtEventTopic(qt_client_id),
                     .message = std::move(completion),

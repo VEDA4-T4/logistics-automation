@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -22,7 +23,10 @@ public:
         CommandManager& command_manager,
         std::unordered_map<std::string, contracts::mqtt::ControlCommand>& pending_system_commands,
         const contracts::mqtt::MqttMessage& device_response, std::string_view qt_client_id, std::string_view source_id,
-        std::string_view completed_at, const RecoveryPersistence& persist, const RecoveryPublisher& publish);
+        std::string_view completed_at, std::string_view process_epoch, const RecoveryPersistence& persist,
+        const RecoveryPublisher& publish);
+    [[nodiscard]] static std::optional<contracts::mqtt::MqttMessage> StampProcessEpoch(
+        contracts::mqtt::MqttMessage message, std::string_view process_epoch);
     [[nodiscard]] static int Run(int argc, char* argv[]);
 };
 

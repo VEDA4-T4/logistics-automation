@@ -24,6 +24,8 @@ namespace {
 namespace central_server = logistics::central_server;
 namespace mqtt = logistics::contracts::mqtt;
 
+constexpr std::string_view kProcessEpoch = "46bfe627-0935-4cdb-9282-0da7c54469d8";
+
 struct LogEntry final {
     central_server::MqttHandlerLogLevel level;
     std::string message;
@@ -338,6 +340,7 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         central_server::PersistenceService persistence(database, storage);
         central_server::DeviceManager device_manager;
         central_server::MqttHandler handler(device_manager, {}, &persistence);
+        handler.SetProcessEpoch(std::string(kProcessEpoch), false);
         std::vector<mqtt::MqttMessage> qt_statuses;
         handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
             qt_statuses.push_back(message);
@@ -345,10 +348,13 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         });
 
         assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:01Z"));
-        assert(handler.Handle("device/PI-01/status", Encode(MakePositionStatus()), "2026-07-16T01:00:03Z", 1, true));
+        auto position_status = MakePositionStatus();
+        position_status.process_epoch = std::string(kProcessEpoch);
+        assert(handler.Handle("device/PI-01/status", Encode(position_status), "2026-07-16T01:00:03Z", 1, true));
         assert(Scalar(database, "SELECT qos FROM mqtt_event_log WHERE message_id='MSG-POSITION-STATUS-01'") == 1);
         assert(Scalar(database, "SELECT retained FROM mqtt_event_log WHERE message_id='MSG-POSITION-STATUS-01'") == 1);
         assert(qt_statuses.size() == 1);
+        assert(qt_statuses[0].process_epoch == kProcessEpoch);
         qt_statuses.clear();
         const mqtt::MqttMessage heartbeat{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
@@ -371,6 +377,7 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         assert(qt_statuses.size() == 1);
         assert(qt_statuses[0].message_type == mqtt::MessageType::kDeviceStatus);
         assert(qt_statuses[0].source_id == "PI-01");
+        assert(!qt_statuses[0].process_epoch.has_value());
         const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
         assert(status != nullptr);
         assert(status->status == mqtt::ConnectionState::kOnline);
@@ -493,6 +500,7 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     central_server::DeviceManager::Clock::time_point now{};
     central_server::DeviceManager device_manager({}, [&now] { return now; });
     central_server::MqttHandler handler(device_manager);
+    handler.SetProcessEpoch(std::string(kProcessEpoch), false);
     std::vector<mqtt::MqttMessage> qt_statuses;
     handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
         qt_statuses.push_back(message);
@@ -520,6 +528,7 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     now += std::chrono::seconds(10);
     assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:10Z"));
     assert(qt_statuses.size() == 1);
+    assert(qt_statuses[0].process_epoch == kProcessEpoch);
     const auto* delayed = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
     assert(delayed != nullptr);
     assert(delayed->status == mqtt::ConnectionState::kDelayed);
@@ -532,6 +541,7 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     now += std::chrono::seconds(5);
     assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:15Z"));
     assert(qt_statuses.size() == 2);
+    assert(qt_statuses[1].process_epoch == kProcessEpoch);
     const auto* offline = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[1]);
     assert(offline != nullptr);
     assert(offline->status == mqtt::ConnectionState::kOffline);
@@ -554,6 +564,8 @@ void TestRetainedPositionSnapshotReplay() {
         central_server::DeviceManager device_manager(registry_path);
         assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/register"), MakeRegistration(),
                                             "2026-07-16T01:00:01Z"));
+        assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-IDLE/register"), MakeRegistration("PI-IDLE"),
+                                            "2026-07-16T01:00:02Z"));
         assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), MakePositionStatus(),
                                             "2026-07-16T01:00:03Z"));
     }
@@ -561,6 +573,7 @@ void TestRetainedPositionSnapshotReplay() {
     {
         central_server::DeviceManager restored(registry_path);
         central_server::MqttHandler handler(restored);
+        handler.SetProcessEpoch(std::string(kProcessEpoch), false);
         std::vector<mqtt::MqttMessage> qt_statuses;
         handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
             qt_statuses.push_back(message);
@@ -571,10 +584,14 @@ void TestRetainedPositionSnapshotReplay() {
         assert(qt_statuses.size() == 1);
         assert(qt_statuses[0].source_id == "PI-01");
         assert(qt_statuses[0].timestamp == "2026-07-16T01:00:03Z");
+        assert(qt_statuses[0].process_epoch == kProcessEpoch);
         const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
         assert(status != nullptr);
         assert(status->status == mqtt::ConnectionState::kOffline);
         AssertPositionStatus(*status);
+        assert(handler.ReplayDeviceStatuses("PI-IDLE", "2026-07-16T01:05:01Z"));
+        assert(qt_statuses.size() == 2);
+        assert(!qt_statuses[1].process_epoch.has_value());
         assert(!handler.ReplayDeviceStatuses("PI-NOT-REGISTERED", "2026-07-16T01:05:01Z"));
     }
 

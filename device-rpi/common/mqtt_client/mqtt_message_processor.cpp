@@ -285,16 +285,14 @@ std::optional<mqtt::MqttMessage> MqttMessageProcessor::PrepareOutboundMessage(co
     std::optional<std::string> epoch;
     {
         std::lock_guard lock(epoch_mutex_);
-        if (mqtt::IsProcessScopedMessage(message)) {
-            epoch = active_process_epoch_;
-        }
-        if (!epoch.has_value()) {
-            if (const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(message); response != nullptr) {
-                const auto request = request_process_epochs_.find(response->request_id);
-                if (request != request_process_epochs_.end()) {
-                    epoch = request->second;
-                }
+        if (const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(message); response != nullptr) {
+            const auto request = request_process_epochs_.find(response->request_id);
+            if (request != request_process_epochs_.end()) {
+                epoch = request->second;
             }
+        }
+        if (!epoch.has_value() && mqtt::IsProcessScopedMessage(message)) {
+            epoch = active_process_epoch_;
         }
     }
     if (prepared.process_epoch.has_value() && epoch.has_value() && prepared.process_epoch != epoch) {

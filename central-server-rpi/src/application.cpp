@@ -83,22 +83,6 @@ bool InputStationOccupied(const ProcessStateMachine& machine) {
     });
 }
 
-bool CarriesProcessEpoch(const contracts::mqtt::MqttMessage& message) {
-    if (contracts::mqtt::IsProcessScopedMessage(message) ||
-        message.message_type == contracts::mqtt::MessageType::kEmergencyStop) {
-        return true;
-    }
-    const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
-    return command != nullptr && command->command != contracts::mqtt::ControlCommand::kStatusRequest;
-}
-
-contracts::mqtt::MqttMessage StampProcessEpoch(contracts::mqtt::MqttMessage message, std::string_view process_epoch) {
-    if (CarriesProcessEpoch(message)) {
-        message.process_epoch = std::string(process_epoch);
-    }
-    return message;
-}
-
 bool ResolveConfigPath(int argc, char* argv[], std::filesystem::path& config_path) {
     if (argc == 1) {
         if (const char* environment_path = std::getenv("LOGISTICS_CENTRAL_SERVER_CONFIG");
@@ -242,7 +226,12 @@ int Application::Run(int argc, char* argv[]) {
     if (stored_process_state.has_value()) {
         auto pending_commands = std::move(stored_process_state->pending_commands);
         for (auto& intent : pending_commands) {
-            intent.message = StampProcessEpoch(std::move(intent.message), process_epoch);
+            auto stamped = StampProcessEpoch(std::move(intent.message), process_epoch);
+            if (!stamped.has_value()) {
+                std::cerr << "[server][ERROR] stored process command belongs to a stale process epoch\n";
+                return 5;
+            }
+            intent.message = std::move(*stamped);
         }
         auto restore = process_orchestrator.RestoreAfterServerRestart(
             stored_process_state->system_state, std::move(stored_process_state->works),
@@ -412,16 +401,20 @@ int Application::Run(int argc, char* argv[]) {
     const auto publish_durable = [&publish_enqueued, &process_state_store, &run_runtime_store, &process_epoch](
                                      std::string_view topic, const contracts::mqtt::MqttMessage& message) {
         const auto stamped = StampProcessEpoch(message, process_epoch);
+        if (!stamped.has_value()) {
+            std::cerr << "[server][ERROR] refusing MQTT delivery from a stale process epoch\n";
+            return false;
+        }
         if (!run_runtime_store(
-                [&] { return process_state_store.EnqueueMqttDelivery(topic, stamped, CurrentUnixTimeMilliseconds()); },
+                [&] { return process_state_store.EnqueueMqttDelivery(topic, *stamped, CurrentUnixTimeMilliseconds()); },
                 "MQTT delivery outbox enqueue")) {
             return false;
         }
-        return publish_enqueued(PendingMqttDelivery{ .topic = std::string(topic), .message = stamped });
+        return publish_enqueued(PendingMqttDelivery{ .topic = std::string(topic), .message = *stamped });
     };
     const auto pump_durable = [&mqtt_client, &publish_enqueued, &process_state_store, &run_runtime_store,
                                &mqtt_delivery_mutex, &mqtt_deliveries_acknowledged, &restored_input_detected_work_ids,
-                               &restored_vision_assigned_work_ids, &delivery_key,
+                               &restored_vision_assigned_work_ids, &delivery_key, &process_epoch,
                                vision_device_id = server_config.process.vision_device_id]() {
         std::vector<PendingMqttDelivery> acknowledged;
         {
@@ -456,7 +449,20 @@ int Application::Run(int argc, char* argv[]) {
                     continue;
                 }
             }
-            static_cast<void>(publish_enqueued(delivery));
+            auto stamped = StampProcessEpoch(delivery.message, process_epoch);
+            if (!stamped.has_value()) {
+                std::cerr << "[server][ERROR] dropping MQTT delivery from a stale process epoch\n";
+                if (!run_runtime_store(
+                        [&] {
+                            return process_state_store.RemoveMqttDelivery(delivery.topic, delivery.message.message_id);
+                        },
+                        "stale MQTT delivery outbox removal")) {
+                    return false;
+                }
+                continue;
+            }
+            static_cast<void>(
+                publish_enqueued(PendingMqttDelivery{ .topic = delivery.topic, .message = std::move(*stamped) }));
         }
         return true;
     };
@@ -559,7 +565,7 @@ int Application::Run(int argc, char* argv[]) {
          source_id = server_config.process.server_id](const contracts::mqtt::MqttMessage& device_response) {
             if (!Application::CommitRecoveryResponse(
                     process_orchestrator, process_command_tracker, command_manager, pending_system_commands,
-                    device_response, qt_client_id, source_id, CurrentIso8601Timestamp(),
+                    device_response, qt_client_id, source_id, CurrentIso8601Timestamp(), process_epoch,
                     [&](std::uint64_t process_sequence, std::uint64_t command_sequence,
                         const std::vector<PendingMqttDelivery>& completions) {
                         return run_runtime_store(

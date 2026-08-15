@@ -493,6 +493,7 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
                     .message_type = mqtt::MessageType::kDeviceStatus,
                     .source_id = decoded.value.source_id,
                     .timestamp = decoded.value.timestamp,
+                    .process_epoch = decoded.value.process_epoch,
                     .data = MakeDeviceStatusPayload(*device),
                 };
                 route_succeeded = qt_status_handler_(status_message);
@@ -566,6 +567,9 @@ bool MqttHandler::CheckHeartbeatTimeouts(std::string_view checked_at) {
             .message_type = mqtt::MessageType::kDeviceStatus,
             .source_id = device.device_id,
             .timestamp = effective_checked_at,
+            .process_epoch = device.job_id.has_value() && !process_epoch_.empty()
+                                 ? std::optional<std::string>(process_epoch_)
+                                 : std::nullopt,
             .data = MakeDeviceStatusPayload(device),
         };
         if (process_message_guard_ && !process_message_guard_(status_message)) {
@@ -610,6 +614,9 @@ bool MqttHandler::ReplayDeviceStatuses(std::string_view target_device_id, std::s
             .message_type = mqtt::MessageType::kDeviceStatus,
             .source_id = device.device_id,
             .timestamp = device.last_message_timestamp.empty() ? fallback_timestamp : device.last_message_timestamp,
+            .process_epoch = device.job_id.has_value() && !process_epoch_.empty()
+                                 ? std::optional<std::string>(process_epoch_)
+                                 : std::nullopt,
             .data = MakeDeviceStatusPayload(device),
         };
         if (!qt_status_handler_(status_message)) {

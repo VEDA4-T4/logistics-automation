@@ -34,6 +34,7 @@ namespace central_server = logistics::central_server;
 namespace mqtt = logistics::contracts::mqtt;
 
 constexpr std::string_view kTimestamp = "2026-08-10T03:00:00Z";
+constexpr std::string_view kProcessEpoch = "46bfe627-0935-4cdb-9282-0da7c54469d8";
 constexpr std::string_view kInputId = "PI-INPUT-01";
 constexpr std::string_view kVisionId = "PI-VISION-01";
 constexpr std::string_view kGripperId = "PI-GRIPPER-01";
@@ -595,7 +596,6 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart() {
         .message_type = mqtt::MessageType::kCommandResponse,
         .source_id = std::string(kVisionId),
         .timestamp = std::string(kTimestamp),
-        .process_epoch = "46bfe627-0935-4cdb-9282-0da7c54469d8",
         .data =
             mqtt::CommandResponsePayload{
                 .request_id = "RECOVERY-COMMIT",
@@ -628,7 +628,7 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart() {
     std::vector<central_server::PendingMqttDelivery> published;
     assert(central_server::Application::CommitRecoveryResponse(
         orchestrator, tracker, command_manager, pending_system_commands, device_response, "control-center",
-        "central-server", kTimestamp,
+        "central-server", kTimestamp, "46bfe627-0935-4cdb-9282-0da7c54469d8",
         [&store](std::uint64_t process_sequence, std::uint64_t command_sequence,
                  const std::vector<central_server::PendingMqttDelivery>& completions) {
             return store.CommitRecovery(process_sequence, command_sequence, 1001, completions).ok();
@@ -730,7 +730,7 @@ void TestApplicationRecoveryCommitFailureLeavesAllStateRetryable() {
 
     const bool committed = central_server::Application::CommitRecoveryResponse(
         orchestrator, tracker, command_manager, pending_system_commands, device_response, "control-center",
-        "central-server", kTimestamp,
+        "central-server", kTimestamp, "46bfe627-0935-4cdb-9282-0da7c54469d8",
         [](std::uint64_t, std::uint64_t, const std::vector<central_server::PendingMqttDelivery>&) { return false; },
         [&published](const central_server::PendingMqttDelivery& delivery) { published.push_back(delivery); });
 
@@ -745,6 +745,34 @@ void TestApplicationRecoveryCommitFailureLeavesAllStateRetryable() {
     assert(published.empty());
 }
 
+void TestApplicationProcessEpochStamping() {
+    mqtt::MqttMessage legacy_work{
+        .message_id = "WORK-LEGACY-RESTORED",
+        .message_type = mqtt::MessageType::kWorkCreated,
+        .source_id = "central-server",
+        .timestamp = std::string(kTimestamp),
+        .data = mqtt::WorkCreatedPayload{ .work_id = "d8e9b2be-bfc0-471c-9000-590123412345" },
+    };
+    const auto stamped = central_server::Application::StampProcessEpoch(legacy_work, kProcessEpoch);
+    assert(stamped.has_value());
+    assert(stamped->message_id == legacy_work.message_id);
+    assert(stamped->process_epoch == kProcessEpoch);
+
+    auto stale = legacy_work;
+    stale.process_epoch = "6d395cb2-93da-4de6-8eac-b2afee09c17e";
+    assert(!central_server::Application::StampProcessEpoch(stale, kProcessEpoch).has_value());
+
+    const mqtt::MqttMessage sensor{
+        .message_id = "SENSOR-RESTORED",
+        .message_type = mqtt::MessageType::kSensorStatus,
+        .source_id = "PI-INPUT-01",
+        .timestamp = std::string(kTimestamp),
+        .data = mqtt::SensorStatusPayload{ .sensor_id = 1, .measurement_status = "OK", .distance_cm = 20 },
+    };
+    const auto telemetry = central_server::Application::StampProcessEpoch(sensor, kProcessEpoch);
+    assert(telemetry.has_value() && !telemetry->process_epoch.has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -755,5 +783,6 @@ int main() {
     TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess();
     TestRecoveryCommitDiscardsOldWorkBeforeStart();
     TestApplicationRecoveryCommitFailureLeavesAllStateRetryable();
+    TestApplicationProcessEpochStamping();
     return 0;
 }

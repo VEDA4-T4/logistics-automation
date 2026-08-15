@@ -297,7 +297,28 @@ void TestProcessEpochOwnershipAndPropagation() {
                                                   .command = mqtt::ControlCommand::kStop,
                                                   .result = mqtt::CommandResult::kSuccess,
                                                   .message = "stopped" };
+    assert(processor.PrepareOutboundMessage(response)->process_epoch == kOtherProcessEpoch);
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kProcessEpoch);
+
+    auto work_command = ProcessCommand(mqtt::ControlCommand::kExecute, "REQ-WORK-E1", std::string(kProcessEpoch));
+    auto* work_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(work_command);
+    assert(work_payload != nullptr);
+    work_payload->params["workId"] = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(work_command)).IsSuccess());
+    const auto next_start =
+        ProcessCommand(mqtt::ControlCommand::kStart, "REQ-START-E2", std::string(kOtherProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(next_start)).IsSuccess());
+    response.message_id = "RESP-WORK-E1";
+    response.data = mqtt::CommandResponsePayload{ .request_id = "REQ-WORK-E1",
+                                                  .command = mqtt::ControlCommand::kExecute,
+                                                  .result = mqtt::CommandResult::kSuccess,
+                                                  .message = "completed" };
     assert(processor.PrepareOutboundMessage(response)->process_epoch == kProcessEpoch);
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
+
+    auto mismatched = status;
+    mismatched.process_epoch = std::string(kProcessEpoch);
+    assert(!processor.PrepareOutboundMessage(mismatched).has_value());
 }
 
 void TestWorkCreatedEstablishesEpochAndRejectsConflict() {
