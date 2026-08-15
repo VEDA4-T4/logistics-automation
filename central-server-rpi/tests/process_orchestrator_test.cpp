@@ -495,9 +495,10 @@ void TestFailedSystemCommandsEnterSafeProcessStates() {
     assert(recovery_failure.BeginWork("MSG-RECOVERY-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
     assert(recovery_failure.FailSystemCommand(mqtt::ControlCommand::kStop, "input node did not stop").Applied());
     assert(recovery_failure.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
-    assert(recovery_failure.FailSystemCommand(mqtt::ControlCommand::kRecovery, "safety reset timed out").Applied());
-    assert(recovery_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
-    assert(recovery_failure.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kFailed);
+    assert(recovery_failure.FailSystemCommand(mqtt::ControlCommand::kRecovery, "safety reset timed out").disposition ==
+           central_server::TransitionDisposition::kDuplicate);
+    assert(recovery_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
+    assert(recovery_failure.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kRecovering);
 
     central_server::ProcessOrchestrator emergency_failure({ .enabled = true });
     assert(emergency_failure.BeginWork("MSG-ESTOP-FAIL-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
@@ -506,6 +507,33 @@ void TestFailedSystemCommandsEnterSafeProcessStates() {
                .disposition == central_server::TransitionDisposition::kDuplicate);
     assert(emergency_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kEmergencyStop);
     assert(emergency_failure.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kEmergencyStopped);
+}
+
+void TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    const auto begin = orchestrator.BeginWork("MSG-RECOVERY-ATOMIC", kWorkId, "PI-INPUT-01", kTimestamp);
+    assert(begin.transition.Applied() && begin.commands.size() == 1);
+    assert(orchestrator.BeginWork("MSG-RECOVERY-ATOMIC-QUEUED", kQueuedWorkId, "PI-INPUT-01", kTimestamp)
+               .transition.Applied());
+    central_server::ProcessCommandTracker tracker;
+    assert(tracker.Track(begin.commands.front()));
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+
+    std::vector<central_server::WorkProcessSnapshot> persisted_works;
+    const auto transition = orchestrator.CommitSystemRecovery(
+        [&persisted_works](const std::vector<central_server::WorkProcessSnapshot>& active_works) {
+            persisted_works = active_works;
+            return false;
+        });
+
+    assert(transition.disposition == central_server::TransitionDisposition::kRejected);
+    assert(persisted_works.size() == 2);
+    assert(std::ranges::any_of(persisted_works, [](const auto& work) { return work.work_id == kWorkId; }));
+    assert(std::ranges::any_of(persisted_works, [](const auto& work) { return work.work_id == kQueuedWorkId; }));
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
+    assert(orchestrator.StateMachine().ActiveWorks().size() == 2);
+    assert(tracker.PendingCount() == 1);
 }
 
 void TestRestoredHomographyTargetCreatesGripperCommand() {
@@ -947,6 +975,7 @@ int main() {
     TestFailedWorkIsDiscardedAfterServerRestart();
     TestDeviceEmergencyStopPreservesEmergencyState();
     TestFailedSystemCommandsEnterSafeProcessStates();
+    TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands();
     TestRestoredHomographyTargetCreatesGripperCommand();
     TestDisabledHomographyDiscardsRestoredTarget();
     TestChangedCalibrationDiscardsRestoredTarget();

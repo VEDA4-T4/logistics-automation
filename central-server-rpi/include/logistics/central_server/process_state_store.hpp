@@ -44,6 +44,8 @@ public:
         const std::vector<PendingMqttDelivery>& deliveries = {},
         const std::vector<std::string>& processed_message_ids = {}, const CommandManagerSnapshot& command_manager = {},
         const std::unordered_map<std::string, contracts::mqtt::ControlCommand>& pending_system_commands = {});
+    [[nodiscard]] DatabaseStatus CommitRecovery(std::uint64_t message_sequence, std::int64_t updated_at_ms,
+                                                const std::vector<PendingMqttDelivery>& terminal_deliveries);
     [[nodiscard]] DatabaseStatus LoadPendingMqttDeliveries(std::vector<PendingMqttDelivery>& output);
     [[nodiscard]] DatabaseStatus EnqueueMqttDelivery(std::string_view topic,
                                                      const contracts::mqtt::MqttMessage& message,
@@ -53,6 +55,15 @@ public:
     [[nodiscard]] DatabaseStatus RemoveMqttDelivery(std::string_view topic, std::string_view message_id);
 
 private:
+    [[nodiscard]] DatabaseStatus SaveSnapshot(
+        ProcessSystemState system_state, std::uint64_t message_sequence, const std::vector<WorkProcessSnapshot>& works,
+        const std::unordered_map<std::string, GripperTarget>& gripper_targets,
+        const std::vector<ProcessCommandIntent>& pending_commands, std::int64_t updated_at_ms,
+        const std::vector<PendingMqttDelivery>& deliveries, const std::vector<std::string>& processed_message_ids,
+        const CommandManagerSnapshot& command_manager,
+        const std::unordered_map<std::string, contracts::mqtt::ControlCommand>& pending_system_commands,
+        bool replace_mqtt_outbox);
+
     Database& database_;
 };
 

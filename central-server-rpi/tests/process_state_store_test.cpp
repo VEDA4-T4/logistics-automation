@@ -16,15 +16,21 @@ namespace central_server = logistics::central_server;
 namespace mqtt = logistics::contracts::mqtt;
 
 constexpr auto kWorkId = "d8e9b2be-bfc0-471c-9000-590123412345";
+constexpr auto kSecondWorkId = "a8e9b2be-bfc0-471c-9000-590123412346";
 
-[[nodiscard]] mqtt::MqttMessage FailedCompletion() {
+[[nodiscard]] mqtt::MqttMessage FailedCompletion(std::string_view work_id = kWorkId) {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = "RECOVERY-FAILED-" + std::string(kWorkId),
+        .message_id = "RECOVERY-FAILED-" + std::string(work_id),
         .message_type = mqtt::MessageType::kWorkCompleted,
         .source_id = "central-server",
         .timestamp = "2026-08-13T01:00:00Z",
-        .data = mqtt::WorkCompletedPayload{ .work_id = kWorkId, .result = "FAILED", .message = "gripper offline" },
+        .data =
+            mqtt::WorkCompletedPayload{
+                .work_id = std::string(work_id),
+                .result = "FAILED",
+                .message = "CANCELLED_BY_RECOVERY",
+            },
     };
 }
 
@@ -278,6 +284,135 @@ void TestSnapshotAndDeliveryBatchRollbackTogether() {
     std::filesystem::remove(path.string() + "-shm", error);
 }
 
+void TestRecoveryCommitReplacesRuntimeAndOutboxAtomically() {
+    const auto path = TemporaryDatabasePath();
+    central_server::Database database;
+    assert(database.Open({ .path = path, .migration_dir = LOGISTICS_TEST_MIGRATION_DIR }).ok());
+    assert(central_server::MigrationRunner::Apply(database, LOGISTICS_TEST_MIGRATION_DIR).ok());
+    central_server::ProcessStateStore store(database);
+
+    const central_server::WorkProcessSnapshot work{
+        .work_id = kWorkId,
+        .stage = central_server::WorkStage::kRecovering,
+        .suspended_stage = central_server::WorkStage::kVisionAssigned,
+        .last_source_id = "PI-VISION-01",
+    };
+    auto second_work = work;
+    second_work.work_id = kSecondWorkId;
+    central_server::ProcessCommandIntent process_command{
+        .message = ControlCommand("PROCESS-RECOVERY-PENDING", mqtt::ControlCommand::kStop),
+        .work_id = kWorkId,
+        .dispatch_confirmed = true,
+    };
+    auto* process_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(process_command.message);
+    assert(process_payload != nullptr);
+    process_payload->target_device_id = "PI-INPUT-01";
+
+    constexpr auto recovery_request_id = "RECOVERY-SYSTEM-PENDING";
+    central_server::CommandManager manager;
+    assert(manager.TrackCommand(ControlCommand(recovery_request_id, mqtt::ControlCommand::kRecovery),
+                                { "PI-INPUT-01", "PI-VISION-01" }));
+    const auto created = WorkCreated();
+    assert(store
+               .Save(central_server::ProcessSystemState::kRecovery, 41, { work, second_work }, {}, { process_command },
+                     1000, { { .topic = mqtt::DeviceCommandTopic("PI-VISION-01"), .message = created } },
+                     { "PRE-RECOVERY-EVENT" }, manager.Snapshot(),
+                     { { recovery_request_id, mqtt::ControlCommand::kRecovery } })
+               .ok());
+
+    const central_server::PendingMqttDelivery completion{
+        .topic = mqtt::QtEventTopic("control-center"),
+        .message = FailedCompletion(),
+    };
+    const central_server::PendingMqttDelivery second_completion{
+        .topic = mqtt::QtEventTopic("control-center"),
+        .message = FailedCompletion(kSecondWorkId),
+    };
+    assert(store.CommitRecovery(42, 1001, { completion, second_completion }).ok());
+
+    std::optional<central_server::StoredProcessState> restored;
+    assert(store.Load(restored).ok() && restored.has_value());
+    assert(restored->system_state == central_server::ProcessSystemState::kStopped);
+    assert(restored->message_sequence == 42);
+    assert(restored->works.empty());
+    assert(restored->gripper_targets.empty());
+    assert(restored->pending_commands.empty());
+    assert(restored->processed_message_ids.empty());
+    assert(restored->command_manager.pending.empty());
+    assert(restored->command_manager.completed_requests.empty());
+    assert(restored->command_manager.message_sequence == 0);
+    assert(restored->pending_system_commands.empty());
+
+    std::vector<central_server::PendingMqttDelivery> pending;
+    assert(store.LoadPendingMqttDeliveries(pending).ok());
+    assert(pending.size() == 2);
+    assert(pending.front().message.message_id == completion.message.message_id);
+    const auto* completed = mqtt::GetPayload<mqtt::WorkCompletedPayload>(pending.front().message);
+    assert(completed != nullptr);
+    assert(completed->work_id == kWorkId);
+    assert(completed->result == "FAILED");
+    assert(completed->message == std::optional<std::string>{ "CANCELLED_BY_RECOVERY" });
+    const auto* second_completed = mqtt::GetPayload<mqtt::WorkCompletedPayload>(pending.back().message);
+    assert(second_completed != nullptr);
+    assert(second_completed->work_id == kSecondWorkId);
+    assert(second_completed->result == "FAILED");
+    assert(second_completed->message == std::optional<std::string>{ "CANCELLED_BY_RECOVERY" });
+
+    assert(database.Close().ok());
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(path.string() + "-wal", error);
+    std::filesystem::remove(path.string() + "-shm", error);
+}
+
+void TestRecoveryCommitFailureRollsBackRuntimeAndOutbox() {
+    const auto path = TemporaryDatabasePath();
+    central_server::Database database;
+    assert(database.Open({ .path = path, .migration_dir = LOGISTICS_TEST_MIGRATION_DIR }).ok());
+    assert(central_server::MigrationRunner::Apply(database, LOGISTICS_TEST_MIGRATION_DIR).ok());
+    central_server::ProcessStateStore store(database);
+    const central_server::WorkProcessSnapshot work{
+        .work_id = kWorkId,
+        .stage = central_server::WorkStage::kRecovering,
+        .suspended_stage = central_server::WorkStage::kInputDetected,
+        .last_source_id = "PI-INPUT-01",
+    };
+    const auto created = WorkCreated();
+    assert(store
+               .Save(central_server::ProcessSystemState::kRecovery, 7, { work }, {}, {}, 1000,
+                     { { .topic = mqtt::DeviceCommandTopic("PI-VISION-01"), .message = created } })
+               .ok());
+
+    const std::vector invalid_terminal_batch{
+        central_server::PendingMqttDelivery{
+            .topic = mqtt::QtEventTopic("control-center"),
+            .message = FailedCompletion(),
+        },
+        central_server::PendingMqttDelivery{
+            .topic = {},
+            .message = FailedCompletion(),
+        },
+    };
+    assert(!store.CommitRecovery(8, 1001, invalid_terminal_batch).ok());
+
+    std::optional<central_server::StoredProcessState> restored;
+    assert(store.Load(restored).ok() && restored.has_value());
+    assert(restored->system_state == central_server::ProcessSystemState::kRecovery);
+    assert(restored->message_sequence == 7);
+    assert(restored->works.size() == 1);
+    assert(restored->works.front().work_id == kWorkId);
+    std::vector<central_server::PendingMqttDelivery> pending;
+    assert(store.LoadPendingMqttDeliveries(pending).ok());
+    assert(pending.size() == 1);
+    assert(pending.front().message.message_id == created.message_id);
+
+    assert(database.Close().ok());
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(path.string() + "-wal", error);
+    std::filesystem::remove(path.string() + "-shm", error);
+}
+
 void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
     const auto path = TemporaryDatabasePath();
     {
@@ -392,5 +527,7 @@ int main() {
     TestVisionAssignmentAcknowledgementClassification();
     TestCommandManagerAndSystemCommandSnapshotRoundTrip();
     TestSnapshotAndDeliveryBatchRollbackTogether();
+    TestRecoveryCommitReplacesRuntimeAndOutboxAtomically();
+    TestRecoveryCommitFailureRollsBackRuntimeAndOutbox();
     return 0;
 }

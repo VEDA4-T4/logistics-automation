@@ -320,6 +320,23 @@ DatabaseStatus ProcessStateStore::Save(
     const std::vector<PendingMqttDelivery>& deliveries, const std::vector<std::string>& processed_message_ids,
     const CommandManagerSnapshot& command_manager,
     const std::unordered_map<std::string, mqtt::ControlCommand>& pending_system_commands) {
+    return SaveSnapshot(system_state, message_sequence, works, gripper_targets, pending_commands, updated_at_ms,
+                        deliveries, processed_message_ids, command_manager, pending_system_commands, false);
+}
+
+DatabaseStatus ProcessStateStore::CommitRecovery(std::uint64_t message_sequence, std::int64_t updated_at_ms,
+                                                 const std::vector<PendingMqttDelivery>& terminal_deliveries) {
+    return SaveSnapshot(ProcessSystemState::kStopped, message_sequence, {}, {}, {}, updated_at_ms, terminal_deliveries,
+                        {}, {}, {}, true);
+}
+
+DatabaseStatus ProcessStateStore::SaveSnapshot(
+    ProcessSystemState system_state, std::uint64_t message_sequence, const std::vector<WorkProcessSnapshot>& works,
+    const std::unordered_map<std::string, GripperTarget>& gripper_targets,
+    const std::vector<ProcessCommandIntent>& pending_commands, std::int64_t updated_at_ms,
+    const std::vector<PendingMqttDelivery>& deliveries, const std::vector<std::string>& processed_message_ids,
+    const CommandManagerSnapshot& command_manager,
+    const std::unordered_map<std::string, mqtt::ControlCommand>& pending_system_commands, bool replace_mqtt_outbox) {
     if (updated_at_ms < 0 || message_sequence > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         return { DatabaseStatusCode::kInvalidArgument, "invalid process runtime snapshot" };
     }
@@ -499,6 +516,9 @@ DatabaseStatus ProcessStateStore::Save(
             !(status = insert_system.Bind(2, mqtt::ToString(command))).ok() ||
             !(status = insert_system.Step(row)).ok() || !(status = insert_system.Reset()).ok())
             return status;
+    }
+    if (replace_mqtt_outbox && !(status = database_.Execute("DELETE FROM process_mqtt_outbox")).ok()) {
+        return status;
     }
     Statement insert_delivery;
     if (!deliveries.empty()) {

@@ -86,6 +86,7 @@ public:
     [[nodiscard]] std::string LastError() const;
     [[nodiscard]] CommandManagerSnapshot Snapshot() const;
     [[nodiscard]] bool Restore(CommandManagerSnapshot snapshot);
+    void Clear();
 
 private:
     struct PendingCommand final {

@@ -192,6 +192,10 @@ std::size_t ProcessCommandTracker::PendingCount() const noexcept {
     return pending_.size();
 }
 
+void ProcessCommandTracker::Clear() noexcept {
+    pending_.clear();
+}
+
 ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config)
     : config_(std::move(config)), homography_(config_.homography) {
     if (!config_.IsValid()) {
@@ -449,8 +453,16 @@ ProcessTransition ProcessOrchestrator::FailSystemCommand(mqtt::ControlCommand co
         }
         return transition;
     }
+    if (command == mqtt::ControlCommand::kRecovery) {
+        return {
+            .disposition = TransitionDisposition::kDuplicate,
+            .previous_stage = std::nullopt,
+            .current_stage = std::nullopt,
+            .reason = std::move(reason),
+        };
+    }
     if (command != mqtt::ControlCommand::kStart && command != mqtt::ControlCommand::kRestart &&
-        command != mqtt::ControlCommand::kStop && command != mqtt::ControlCommand::kRecovery) {
+        command != mqtt::ControlCommand::kStop) {
         return {
             .disposition = TransitionDisposition::kDuplicate,
             .previous_stage = std::nullopt,
@@ -481,6 +493,30 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
         ++revision_;
     }
     return transition;
+}
+
+ProcessTransition ProcessOrchestrator::CommitSystemRecovery(
+    const std::function<bool(const std::vector<WorkProcessSnapshot>&)>& persist) {
+    auto preview = state_machine_;
+    auto transition = config_.enabled ? preview.CompleteSystemRecovery()
+                                      : ProcessTransition{
+                                            .disposition = TransitionDisposition::kApplied,
+                                            .previous_stage = std::nullopt,
+                                            .current_stage = std::nullopt,
+                                            .reason = {},
+                                        };
+    if (!transition.Applied()) {
+        return transition;
+    }
+    if (!persist(state_machine_.ActiveWorks())) {
+        return {
+            .disposition = TransitionDisposition::kRejected,
+            .previous_stage = std::nullopt,
+            .current_stage = std::nullopt,
+            .reason = "recovery completion persistence failed",
+        };
+    }
+    return CompleteSystemRecovery();
 }
 
 ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(

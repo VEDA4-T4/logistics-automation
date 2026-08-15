@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -45,6 +46,7 @@ public:
     [[nodiscard]] std::optional<ProcessCommandIntent> HandleResponse(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] std::vector<ProcessCommandIntent> PendingCommands() const;
     [[nodiscard]] std::size_t PendingCount() const noexcept;
+    void Clear() noexcept;
 
 private:
     std::unordered_map<std::string, ProcessCommandIntent> pending_;
@@ -90,6 +92,8 @@ public:
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
     [[nodiscard]] ProcessTransition FailSystemCommand(contracts::mqtt::ControlCommand command, std::string reason);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
+    [[nodiscard]] ProcessTransition CommitSystemRecovery(
+        const std::function<bool(const std::vector<WorkProcessSnapshot>&)>& persist);
     [[nodiscard]] ProcessRestoreResult RestoreAfterServerRestart(
         ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
         std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence,

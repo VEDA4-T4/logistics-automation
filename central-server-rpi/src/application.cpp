@@ -534,6 +534,7 @@ int Application::Run(int argc, char* argv[]) {
                                         &command_manager, &process_state_store, &publish_enqueued,
                                         &replay_restored_process_commands, &persist_process_state, &run_runtime_store,
                                         &restored_input_detected_work_ids, &restored_vision_assigned_work_ids,
+                                        &restored_pending_process_commands, &safe_restored_replay_pending,
                                         qt_client_id = server_config.qt_client_id,
                                         source_id = server_config.process.server_id](
                                            const contracts::mqtt::MqttMessage& message) {
@@ -546,10 +547,8 @@ int Application::Run(int argc, char* argv[]) {
             return true;
         }
         const auto command = pending->second;
-        pending_system_commands.erase(pending);
         const bool succeeded = response->result == contracts::mqtt::CommandResult::kSuccess ||
                                response->result == contracts::mqtt::CommandResult::kDuplicated;
-        std::vector<WorkProcessSnapshot> failed_works;
         ProcessTransition transition{
             .disposition = TransitionDisposition::kDuplicate,
             .previous_stage = std::nullopt,
@@ -558,41 +557,48 @@ int Application::Run(int argc, char* argv[]) {
         };
         if (succeeded) {
             if (command == contracts::mqtt::ControlCommand::kRecovery) {
-                failed_works = process_orchestrator.StateMachine().ActiveWorks();
                 std::vector<PendingMqttDelivery> completions;
-                for (const auto& work : failed_works) {
-                    const auto message_id = "RECOVERY-FAILED-" + work.work_id;
-                    if (!work.failure_reason.empty()) {
+                transition = process_orchestrator.CommitSystemRecovery(
+                    [&](const std::vector<WorkProcessSnapshot>& active_works) {
+                        completions.reserve(active_works.size() + 1);
                         completions.push_back({
-                            .topic = contracts::mqtt::QtEventTopic(qt_client_id),
-                            .message = MakeWorkFailureCompletion(source_id, message_id, work.work_id,
-                                                                 work.failure_reason, CurrentIso8601Timestamp()),
+                            .topic = contracts::mqtt::QtResponseTopic(qt_client_id),
+                            .message = message,
                         });
-                    }
-                }
-                transition = process_orchestrator.CompleteSystemRecovery();
+                        for (const auto& work : active_works) {
+                            const auto message_id = "RECOVERY-FAILED-" + work.work_id;
+                            completions.push_back({
+                                .topic = contracts::mqtt::QtEventTopic(qt_client_id),
+                                .message =
+                                    MakeWorkFailureCompletion(source_id, message_id, work.work_id,
+                                                              "CANCELLED_BY_RECOVERY", CurrentIso8601Timestamp()),
+                            });
+                        }
+                        return run_runtime_store(
+                            [&] {
+                                return process_state_store.CommitRecovery(process_orchestrator.MessageSequence(),
+                                                                          CurrentUnixTimeMilliseconds(), completions);
+                            },
+                            "recovery state/outbox persistence");
+                    });
                 if (!transition.Applied()) {
                     return false;
                 }
-                if (!run_runtime_store(
-                        [&] {
-                            return process_state_store.Save(process_orchestrator.StateMachine().SystemState(),
-                                                            process_orchestrator.MessageSequence(),
-                                                            process_orchestrator.StateMachine().ActiveWorks(),
-                                                            process_orchestrator.GripperTargets(),
-                                                            process_command_tracker.PendingCommands(),
-                                                            CurrentUnixTimeMilliseconds(), completions,
-                                                            process_orchestrator.StateMachine().ProcessedMessageIds(),
-                                                            command_manager.Snapshot(), pending_system_commands);
-                        },
-                        "recovery state/outbox persistence")) {
-                    return false;
-                }
+                pending_system_commands.clear();
+                process_command_tracker.Clear();
+                command_manager.Clear();
+                restored_pending_process_commands.clear();
+                safe_restored_replay_pending = false;
+                restored_input_detected_work_ids.clear();
+                restored_vision_assigned_work_ids.clear();
                 for (const auto& completion : completions) {
                     static_cast<void>(publish_enqueued(completion));
                 }
+                return true;
             }
+            pending_system_commands.erase(pending);
         } else {
+            pending_system_commands.erase(pending);
             transition = process_orchestrator.FailSystemCommand(
                 command, response->message.empty() ? "system command failed" : response->message);
         }
@@ -804,8 +810,7 @@ int Application::Run(int argc, char* argv[]) {
             // Keep same-runtime suspended assignments as well as startup-restored ones.
             // START uses these sets to reissue/retain WORK_CREATED exactly once.
             if (*system_command == contracts::mqtt::ControlCommand::kStop ||
-                *system_command == contracts::mqtt::ControlCommand::kEmergencyStop ||
-                *system_command == contracts::mqtt::ControlCommand::kRecovery) {
+                *system_command == contracts::mqtt::ControlCommand::kEmergencyStop) {
                 for (const auto& work : process_orchestrator.StateMachine().ActiveWorks()) {
                     if (work.stage == WorkStage::kInputDetected) {
                         restored_input_detected_work_ids.insert(work.work_id);

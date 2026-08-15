@@ -34,6 +34,21 @@ constexpr auto kExecuteCompletionTimeout = std::chrono::seconds{ 60 };
     return std::nullopt;
 }
 
+[[nodiscard]] std::string MissingDeviceMessage(const auto& pending) {
+    std::vector<std::string> missing;
+    for (const auto& device_id : pending.expected_devices) {
+        if (!pending.completed_devices.contains(device_id)) {
+            missing.push_back(device_id);
+        }
+    }
+    std::ranges::sort(missing);
+    std::string message = "target devices did not respond before timeout:";
+    for (const auto& device_id : missing) {
+        message += ' ' + device_id;
+    }
+    return message;
+}
+
 }  // namespace
 
 CommandRoutePlan ResolveCommandTargets(const mqtt::MqttMessage& message,
@@ -346,6 +361,15 @@ bool CommandManager::Restore(CommandManagerSnapshot snapshot) {
     return true;
 }
 
+void CommandManager::Clear() {
+    std::lock_guard lock(mutex_);
+    pending_.clear();
+    completed_requests_.clear();
+    completed_request_order_.clear();
+    message_sequence_ = 0;
+    last_error_.clear();
+}
+
 CommandResponseDecision CommandManager::PreviewResponse(const mqtt::MqttMessage& message) const {
     CommandManager preview(now_provider_);
     {
@@ -371,9 +395,12 @@ std::vector<mqtt::MqttMessage> CommandManager::CheckTimeouts(std::string_view ch
             continue;
         }
 
+        const auto message = pending.command == mqtt::ControlCommand::kRecovery
+                                 ? MissingDeviceMessage(pending)
+                                 : "one or more target devices did not respond before timeout";
         timed_out.push_back(MakeAggregateResponse(iterator->first, pending, mqtt::CommandResult::kTimeout,
                                                   std::string(checked_at), std::string("ERR-COMMAND-TIMEOUT"),
-                                                  "one or more target devices did not respond before timeout"));
+                                                  message));
         RememberCompletedRequest(iterator->first);
         iterator = pending_.erase(iterator);
     }

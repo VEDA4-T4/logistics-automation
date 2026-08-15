@@ -16,6 +16,7 @@
 #include "logistics/central_server/mqtt_handler.hpp"
 #include "logistics/central_server/persistence.hpp"
 #include "logistics/central_server/process_orchestrator.hpp"
+#include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/sensor_detection.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
@@ -493,6 +494,146 @@ void TestTimedOutGripperCommandFailsWork() {
     assert(work->stage == central_server::WorkStage::kFailed);
 }
 
+void TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    central_server::ProcessOrchestrator orchestrator(ProcessConfig());
+    const auto begin =
+        orchestrator.BeginWork("RECOVERY-TIMEOUT-WORK", "d8e9b2be-bfc0-471c-9000-590123412345", kInputId, kTimestamp);
+    assert(begin.transition.Applied() && begin.commands.size() == 1);
+    central_server::ProcessCommandTracker tracker;
+    assert(tracker.Track(begin.commands.front()));
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+
+    const mqtt::MqttMessage recovery{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "RECOVERY-TIMEOUT",
+        .message_type = mqtt::MessageType::kControlCommand,
+        .source_id = "control-center",
+        .timestamp = std::string(kTimestamp),
+        .data =
+            mqtt::ControlCommandPayload{
+                .request_id = "RECOVERY-TIMEOUT",
+                .command = mqtt::ControlCommand::kRecovery,
+                .target_device_id = "SYSTEM",
+            },
+    };
+    assert(manager.TrackCommand(recovery, { std::string(kInputId), std::string(kVisionId) }));
+    const mqtt::MqttMessage input_response{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "RECOVERY-TIMEOUT-INPUT",
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .source_id = std::string(kInputId),
+        .timestamp = std::string(kTimestamp),
+        .data =
+            mqtt::CommandResponsePayload{
+                .request_id = "RECOVERY-TIMEOUT",
+                .command = mqtt::ControlCommand::kRecovery,
+                .result = mqtt::CommandResult::kSuccess,
+                .message = "reset",
+            },
+    };
+    assert(manager.HandleResponse(input_response).message.has_value());
+    now += mqtt::kRecoveryCompletionTimeout;
+    const auto timeouts = manager.CheckTimeouts(kTimestamp);
+    assert(timeouts.size() == 1);
+    const auto* timeout = mqtt::GetPayload<mqtt::CommandResponsePayload>(timeouts.front());
+    assert(timeout != nullptr);
+    assert(timeout->message.find(kVisionId) != std::string::npos);
+    assert(orchestrator.FailSystemCommand(mqtt::ControlCommand::kRecovery, timeout->message).disposition ==
+           central_server::TransitionDisposition::kDuplicate);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
+    assert(orchestrator.StateMachine().ActiveWorks().size() == 1);
+    assert(tracker.PendingCount() == 1);
+}
+
+void TestRecoveryCommitDiscardsOldWorkBeforeStart() {
+    const auto root =
+        std::filesystem::temp_directory_path() /
+        ("logistics-recovery-commit-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    central_server::Database database;
+    const central_server::DatabaseConfig database_config{
+        .path = root / "process.db",
+        .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+    };
+    assert(database.Open(database_config).ok());
+    assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
+    central_server::ProcessStateStore store(database);
+    central_server::ProcessOrchestrator orchestrator(ProcessConfig());
+    constexpr auto work_id = "d8e9b2be-bfc0-471c-9000-590123412345";
+    const auto begin = orchestrator.BeginWork("RECOVERY-COMMIT-WORK", work_id, kInputId, kTimestamp);
+    assert(begin.transition.Applied() && begin.commands.size() == 1);
+    central_server::ProcessCommandTracker tracker;
+    assert(tracker.Track(begin.commands.front()));
+    central_server::CommandManager command_manager;
+    assert(command_manager.TrackCommand(begin.commands.front().message, { std::string(kInputId) }));
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+
+    const mqtt::MqttMessage old_created{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "WORK-" + std::string(work_id),
+        .message_type = mqtt::MessageType::kWorkCreated,
+        .source_id = "central-server",
+        .timestamp = std::string(kTimestamp),
+        .data = mqtt::WorkCreatedPayload{ .work_id = work_id },
+    };
+    assert(store
+               .Save(central_server::ProcessSystemState::kRecovery, orchestrator.MessageSequence(),
+                     orchestrator.StateMachine().ActiveWorks(), {}, tracker.PendingCommands(), 1000,
+                     { { .topic = mqtt::DeviceCommandTopic(kVisionId), .message = old_created } })
+               .ok());
+
+    const auto transition =
+        orchestrator.CommitSystemRecovery([&](const std::vector<central_server::WorkProcessSnapshot>& active_works) {
+            std::vector<central_server::PendingMqttDelivery> completions;
+            for (const auto& work : active_works) {
+                completions.push_back({
+                    .topic = mqtt::QtEventTopic("control-center"),
+                    .message =
+                        mqtt::MqttMessage{
+                            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+                            .message_id = "RECOVERY-FAILED-" + work.work_id,
+                            .message_type = mqtt::MessageType::kWorkCompleted,
+                            .source_id = "central-server",
+                            .timestamp = std::string(kTimestamp),
+                            .data =
+                                mqtt::WorkCompletedPayload{
+                                    .work_id = work.work_id,
+                                    .result = "FAILED",
+                                    .message = "CANCELLED_BY_RECOVERY",
+                                },
+                        },
+                });
+            }
+            return store.CommitRecovery(orchestrator.MessageSequence(), 1001, completions).ok();
+        });
+    assert(transition.Applied());
+    tracker.Clear();
+    command_manager.Clear();
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(orchestrator.StateMachine().ActiveWorks().empty());
+    assert(tracker.PendingCount() == 0);
+    assert(command_manager.PendingCount() == 0);
+    assert(command_manager.Snapshot().completed_requests.empty());
+    assert(command_manager.Snapshot().message_sequence == 0);
+
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
+    std::vector<central_server::PendingMqttDelivery> pending;
+    assert(store.LoadPendingMqttDeliveries(pending).ok());
+    assert(pending.size() == 1);
+    assert(pending.front().message.message_type == mqtt::MessageType::kWorkCompleted);
+    assert(std::ranges::none_of(pending, [](const auto& delivery) {
+        return delivery.message.message_type == mqtt::MessageType::kWorkCreated;
+    }));
+
+    assert(database.Close().ok());
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+}
+
 }  // namespace
 
 int main() {
@@ -500,5 +641,7 @@ int main() {
     TestSortingDispatchFailureKeepsInputStopped();
     TestRejectedGripperCommandFailsWork();
     TestTimedOutGripperCommandFailsWork();
+    TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess();
+    TestRecoveryCommitDiscardsOldWorkBeforeStart();
     return 0;
 }
