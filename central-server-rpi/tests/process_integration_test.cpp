@@ -597,6 +597,7 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart(central_server::WorkStage stag
     const central_server::DatabaseConfig database_config{
         .path = root / "process.db",
         .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+        .startup_mode = central_server::StartupMode::kResume,
     };
     assert(database.Open(database_config).ok());
     assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
@@ -725,6 +726,8 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart(central_server::WorkStage stag
     assert(store.Load(stored).ok() && stored.has_value());
     assert(stored->system_state == central_server::ProcessSystemState::kStopped);
     assert(stored->works.empty());
+    assert(stored->gripper_targets.empty());
+    assert(stored->pending_commands.empty());
     assert(stored->processed_message_ids.empty());
     assert(stored->command_manager.pending.empty());
     assert(stored->command_manager.completed_requests.empty());
@@ -746,19 +749,58 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart(central_server::WorkStage stag
     }));
     assert(std::ranges::none_of(
         pending, [](const auto& delivery) { return delivery.message.message_id == "RECOVERY-COMMIT-OLD-PROCESS"; }));
+    // Storage cleanup after an acknowledged durable publish. MqttClient callback delivery and reconnect behavior are
+    // covered separately in mqtt_client_test; this test owns only the recovery transaction and restart boundary.
     for (const auto& delivery : pending) {
         assert(store.RemoveMqttDelivery(delivery.topic, delivery.message.message_id).ok());
     }
     assert(store.LoadPendingMqttDeliveries(pending).ok() && pending.empty());
 
-    const auto publication_count_before_start = published.size();
-    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
-    assert(orchestrator.StateMachine().ActiveWorks().empty());
-    assert(tracker.PendingCount() == 0);
-    assert(command_manager.PendingCount() == 0);
-    assert(published.size() == publication_count_before_start);
-
     assert(database.Close().ok());
+
+    central_server::Database restarted_database;
+    assert(restarted_database.Open(database_config).ok());
+    assert(central_server::PrepareDatabaseForStartup(restarted_database, database_config).ok());
+    central_server::ProcessStateStore restarted_store(restarted_database);
+    std::optional<central_server::StoredProcessState> restarted_state;
+    assert(restarted_store.Load(restarted_state).ok() && restarted_state.has_value());
+    assert(restarted_state->system_state == central_server::ProcessSystemState::kStopped);
+    assert(restarted_state->works.empty());
+    assert(restarted_state->gripper_targets.empty());
+    assert(restarted_state->pending_commands.empty());
+    assert(restarted_state->processed_message_ids.empty());
+    assert(restarted_state->command_manager.pending.empty());
+    assert(restarted_state->pending_system_commands.empty());
+    assert(restarted_state->process_epoch == kProcessEpoch);
+
+    central_server::ProcessOrchestrator restarted_orchestrator(ProcessConfig());
+    central_server::ProcessCommandTracker restarted_tracker;
+    central_server::CommandManager restarted_command_manager;
+    assert(restarted_orchestrator
+               .RestoreAfterServerRestart(restarted_state->system_state, std::move(restarted_state->works),
+                                          std::move(restarted_state->gripper_targets),
+                                          restarted_state->message_sequence,
+                                          std::move(restarted_state->processed_message_ids))
+               .restored);
+    assert(restarted_tracker.Restore(std::move(restarted_state->pending_commands)));
+    assert(restarted_command_manager.Restore(std::move(restarted_state->command_manager)));
+    auto restarted_system_commands = std::move(restarted_state->pending_system_commands);
+    assert(restarted_orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(restarted_orchestrator.StateMachine().ActiveWorks().empty());
+    assert(restarted_orchestrator.GripperTargets().empty());
+    assert(restarted_tracker.PendingCommands().empty());
+    assert(restarted_command_manager.PendingCount() == 0);
+    assert(restarted_system_commands.empty());
+
+    std::vector<central_server::PendingMqttDelivery> restarted_outbox;
+    assert(restarted_store.LoadPendingMqttDeliveries(restarted_outbox).ok() && restarted_outbox.empty());
+    assert(restarted_orchestrator.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
+    assert(restarted_orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(restarted_orchestrator.StateMachine().ActiveWorks().empty());
+    assert(restarted_tracker.PendingCommands().empty());
+    assert(restarted_store.LoadPendingMqttDeliveries(restarted_outbox).ok() && restarted_outbox.empty());
+
+    assert(restarted_database.Close().ok());
     std::error_code error;
     std::filesystem::remove_all(root, error);
 }
