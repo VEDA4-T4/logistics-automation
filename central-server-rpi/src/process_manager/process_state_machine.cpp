@@ -77,7 +77,6 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
 }
 
 ProcessTransition ProcessStateMachine::ApplySystemFailure(std::string reason) {
-    resume_transport_after_recovery_ = false;
     SuspendActiveWorks(WorkStage::kFailed);
     for (auto& [work_id, work] : works_) {
         static_cast<void>(work_id);
@@ -173,7 +172,6 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
             if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop) {
                 return Reject("RECOVERY is only allowed from ERROR or EMERGENCY_STOP");
             }
-            resume_transport_after_recovery_ = system_state_ == ProcessSystemState::kEmergencyStop;
             SuspendActiveWorks(WorkStage::kRecovering);
             system_state_ = ProcessSystemState::kRecovery;
             return { .disposition = TransitionDisposition::kApplied,
@@ -209,21 +207,7 @@ ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
     if (system_state_ != ProcessSystemState::kRecovery) {
         return Reject("system recovery is not in progress");
     }
-    std::erase_if(works_, [](const auto& entry) { return !entry.second.failure_reason.empty(); });
-    for (auto& [work_id, work] : works_) {
-        static_cast<void>(work_id);
-        if (work.stage == WorkStage::kRecovering) {
-            const bool transport_was_active = work.suspended_stage == WorkStage::kTransportRequested ||
-                                              work.suspended_stage == WorkStage::kTransporting;
-            if (resume_transport_after_recovery_ && transport_was_active) {
-                work.stage = *work.suspended_stage;
-                work.suspended_stage.reset();
-            } else {
-                work.stage = WorkStage::kStopped;
-            }
-        }
-    }
-    resume_transport_after_recovery_ = false;
+    works_.clear();
     system_state_ = ProcessSystemState::kStopped;
     return {
         .disposition = TransitionDisposition::kApplied,
@@ -242,16 +226,11 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
             return false;
         }
 
-        const bool resumed_transport_after_recovery =
-            stored_state == ProcessSystemState::kStopped && !work.suspended_stage.has_value() &&
-            IsOneOf(work.stage, { WorkStage::kTransportRequested, WorkStage::kTransporting });
         const WorkStage resumable_stage = work.suspended_stage.value_or(work.stage);
         if (IsTerminal(resumable_stage) || IsSuspended(resumable_stage)) {
             return false;
         }
-        if (!resumed_transport_after_recovery) {
-            work.suspended_stage = resumable_stage;
-        }
+        work.suspended_stage = resumable_stage;
         if (stored_state == ProcessSystemState::kEmergencyStop) {
             work.stage = WorkStage::kEmergencyStopped;
         } else if (stored_state == ProcessSystemState::kError) {
@@ -259,14 +238,13 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
         } else if (stored_state == ProcessSystemState::kRecovery) {
             work.stage = WorkStage::kFailed;
             work.failure_reason = "server restarted while recovery was in progress";
-        } else if (!resumed_transport_after_recovery) {
+        } else {
             work.stage = WorkStage::kStopped;
         }
         restored.emplace(work.work_id, std::move(work));
     }
 
     works_ = std::move(restored);
-    resume_transport_after_recovery_ = false;
     processed_message_ids_.clear();
     processed_message_order_.clear();
     for (auto& message_id : processed_message_ids) {
