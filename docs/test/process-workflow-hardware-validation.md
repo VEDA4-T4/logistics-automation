@@ -25,7 +25,7 @@
     *[!A-Za-z0-9._-]*|*..*|.|..) printf '%s\n' 'unsafe RUN_ID' >&2; exit 1 ;;
   esac
   SPOOL_BASE=/var/lib/logistics/mqtt-spool
-  SPOOL_BASE_REAL="$(readlink -f -- "${SPOOL_BASE}")"
+  SPOOL_BASE_REAL="$(sudo readlink -f -- "${SPOOL_BASE}")"
   RUN_SPOOL="${SPOOL_BASE_REAL}/${RUN_ID}"
   case "${RUN_SPOOL}" in
     "${SPOOL_BASE_REAL}"/run-*) ;;
@@ -144,13 +144,13 @@ set -eu
 RUN_ENV='/var/lib/logistics/hardware-validation/run-YYYYMMDDTHHMMSSZ/run.env' # recorded absolute path
 test -r "${RUN_ENV}"
 test "$(stat -c '%a' "${RUN_ENV}")" = 600
-source "${RUN_ENV}"
+. "${RUN_ENV}"
 case "${RUN_ID}" in run-?*) ;; *) printf '%s\n' 'unsafe RUN_ID' >&2; exit 1 ;; esac
 case "${RUN_ID}" in *[!A-Za-z0-9._-]*|*..*|.|..) printf '%s\n' 'unsafe RUN_ID' >&2; exit 1 ;; esac
-SPOOL_BASE_REAL_NOW="$(readlink -f -- /var/lib/logistics/mqtt-spool)"
+SPOOL_BASE_REAL_NOW="$(sudo readlink -f -- /var/lib/logistics/mqtt-spool)"
 test "${SPOOL_BASE_REAL}" = "${SPOOL_BASE_REAL_NOW}"
 test "${RUN_SPOOL}" = "${SPOOL_BASE_REAL}/${RUN_ID}"
-test "$(readlink -f -- "${RUN_SPOOL}")" = "${RUN_SPOOL}"
+test "$(sudo readlink -f -- "${RUN_SPOOL}")" = "${RUN_SPOOL}"
 test "$(readlink -f -- "${EVIDENCE_DIR}")" = "${EVIDENCE_DIR}"
 ```
 
@@ -197,8 +197,9 @@ CATALOG_COUNT_AFTER="$(sudo sqlite3 /var/lib/logistics/logistics.db 'SELECT coun
 test "${CATALOG_COUNT_AFTER}" = "${CATALOG_COUNT_BEFORE}"
 
 # 중앙 SQLite: fresh 시작 직후 catalog는 보존, 그 외 과거 runtime/event/history 행은 0이어야 함.
-# schema_migrations는 현재 schema metadata이므로 0을 기대하지 않는다.
-sudo sqlite3 /var/lib/logistics/logistics.db \
+# schema_migrations는 현재 schema metadata이므로 0을 기대하지 않는다. Query output을 evidence file에 보존한다.
+FRESH_RUNTIME_EVIDENCE="${EVIDENCE_DIR}/fresh-runtime.txt"
+sudo sqlite3 -noheader -separator '|' /var/lib/logistics/logistics.db \
   "SELECT 'product_catalog (preserved)', count(*) FROM product_catalog UNION ALL
    SELECT 'product', count(*) FROM product UNION ALL
    SELECT 'work_history', count(*) FROM work_history UNION ALL
@@ -218,11 +219,18 @@ sudo sqlite3 /var/lib/logistics/logistics.db \
    SELECT 'command_manager_runtime (new session row allowed)', count(*) FROM command_manager_runtime UNION ALL
    SELECT 'pending_system_command', count(*) FROM pending_system_command UNION ALL
    SELECT 'process_runtime_state (new session row allowed)', count(*) FROM process_runtime_state UNION ALL
-   SELECT 'schema_migrations (current metadata allowed)', count(*) FROM schema_migrations;"
+   SELECT 'schema_migrations (current metadata allowed)', count(*) FROM schema_migrations;" > "${FRESH_RUNTIME_EVIDENCE}"
 
-# Expected: product_catalog equals ${CATALOG_COUNT_BEFORE} (and may be 0); every unlabelled row above is 0.
-# process_runtime_state and command_manager_runtime are new-session rows (0 or 1 before/after initialization);
-# schema_migrations contains current schema metadata, not retained runtime history.
+# Assert: product_catalog equals the pre-fresh count; every unlabelled runtime/event/history row is 0.
+# process_runtime_state and command_manager_runtime are new-session rows (0 or 1); schema_migrations is current metadata.
+awk -F '|' -v catalog="${CATALOG_COUNT_BEFORE}" '
+  $1 == "product_catalog (preserved)" { if ($2 != catalog) bad = 1; seen_catalog = 1; next }
+  $1 == "process_runtime_state (new session row allowed)" ||
+  $1 == "command_manager_runtime (new session row allowed)" { if ($2 !~ /^[01]$/) bad = 1; next }
+  $1 == "schema_migrations (current metadata allowed)" { if ($2 !~ /^[0-9]+$/) bad = 1; next }
+  $2 != "0" { bad = 1 }
+  END { exit !(seen_catalog && !bad) }
+' "${FRESH_RUNTIME_EVIDENCE}"
 
 # Each Pi terminal first sources/validates its local absolute RUN_ENV using the block above, then checks its own
 # exact role/device/inbound spool path and ownership.
@@ -245,30 +253,41 @@ test -n "${RUN_START}"
 test -n "${RUN_END}"
 
 # UTC journal transport-receipt evidence. Use short-iso-precise only when supported; its precision is microseconds,
-# not nanoseconds.
+# not nanoseconds. Redirected capture preserves output and propagates journalctl failure under `set -e`.
 if journalctl --help | grep -q short-iso-precise; then JOURNAL_FORMAT=short-iso-precise; else JOURNAL_FORMAT=short-iso; fi
-sudo journalctl --utc -u mosquitto --since "${RUN_START}" --until "${RUN_END}" -o "${JOURNAL_FORMAT}" --no-pager
+sudo journalctl --utc -u mosquitto --since "${RUN_START}" --until "${RUN_END}" \
+  -o "${JOURNAL_FORMAT}" --no-pager > "${EVIDENCE_DIR}/broker.journal.log"
 sudo journalctl --utc -u logistics-central-server -u logistics-input-node -u logistics-sorting-node \
-  --since "${RUN_START}" --until "${RUN_END}" -o "${JOURNAL_FORMAT}" --no-pager
+  --since "${RUN_START}" --until "${RUN_END}" -o "${JOURNAL_FORMAT}" --no-pager > "${EVIDENCE_DIR}/services.journal.log"
 ```
 
 Vision과 gripper에는 systemd unit이 없다. 해당 Pi에서 foreground stdout/stderr를 별도 파일로 캡처한다. stdout
 capture에는 timestamp를 덧붙이지 않는다. timeline의 ns 근거는 application/MQTT payload 또는 실행 전후와 수동
 ESTOP/RECOVERY에 찍는 UTC ns operator marker뿐이다.
 
-```sh
+```bash
+set -e
 marker() { log_file="$1"; shift; printf '%s %s\n' "$(date -u --iso-8601=ns)" "$*" | tee -a "${log_file}"; }
 # First source and validate this Pi's recorded absolute RUN_ENV using the block above.
 marker "${EVIDENCE_DIR}/vision.log" 'vision foreground start'
+set +e
+set -o pipefail
 stdbuf -oL -eL ./build-vision/device-rpi/logistics_vision_node --headless \
   --config runtime/vision-node/vision-node.ini 2>&1 | tee -a "${EVIDENCE_DIR}/vision.log"
+vision_status="${PIPESTATUS[0]}"
+set -e
+test "${vision_status}" -eq 0
 
 marker "${EVIDENCE_DIR}/gripper.log" 'gripper foreground start'
 : "${GRIPPER_BINARY:?set GRIPPER_BINARY to the deployed logistics_gripper_node executable}"
 GRIPPER_CONFIG="${GRIPPER_CONFIG:-runtime/gripper-node/gripper-node.ini}"
 test -x "${GRIPPER_BINARY}"
 test -r "${GRIPPER_CONFIG}"
+set +e
 stdbuf -oL -eL "${GRIPPER_BINARY}" "${GRIPPER_CONFIG}" /dev/vedauart 2>&1 | tee -a "${EVIDENCE_DIR}/gripper.log"
+gripper_status="${PIPESTATUS[0]}"
+set -e
+test "${gripper_status}" -eq 0
 
 # From a second operator terminal, source and validate the recorded absolute RUN_ENV using the block above; it has no
 # shell-local marker() function from the capture terminal. Use absolute evidence paths for START, every ESTOP/RECOVERY,
