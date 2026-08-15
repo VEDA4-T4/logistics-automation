@@ -725,6 +725,7 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart(central_server::WorkStage stag
     std::optional<central_server::StoredProcessState> stored;
     assert(store.Load(stored).ok() && stored.has_value());
     assert(stored->system_state == central_server::ProcessSystemState::kStopped);
+    assert(stored->message_sequence == 7);
     assert(stored->works.empty());
     assert(stored->gripper_targets.empty());
     assert(stored->pending_commands.empty());
@@ -765,6 +766,7 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart(central_server::WorkStage stag
     std::optional<central_server::StoredProcessState> restarted_state;
     assert(restarted_store.Load(restarted_state).ok() && restarted_state.has_value());
     assert(restarted_state->system_state == central_server::ProcessSystemState::kStopped);
+    assert(restarted_state->message_sequence == 7);
     assert(restarted_state->works.empty());
     assert(restarted_state->gripper_targets.empty());
     assert(restarted_state->pending_commands.empty());
@@ -786,6 +788,7 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart(central_server::WorkStage stag
     assert(restarted_command_manager.Restore(std::move(restarted_state->command_manager)));
     auto restarted_system_commands = std::move(restarted_state->pending_system_commands);
     assert(restarted_orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(restarted_orchestrator.MessageSequence() == 7);
     assert(restarted_orchestrator.StateMachine().ActiveWorks().empty());
     assert(restarted_orchestrator.GripperTargets().empty());
     assert(restarted_tracker.PendingCommands().empty());
