@@ -57,6 +57,9 @@ super_resolution_backend=bicubic
 super_resolution_scale=2
 failure_frames_before_super_resolution=2
 maximum_super_resolution_input_pixels=300000
+# Work assigned before a confirmed box and barcode recognition use monotonic deadlines.
+preassignment_timeout_ms=3000
+barcode_timeout_ms=10000
 failure_frame_capture_enabled=true
 failure_frame_directory=/tmp/logistics-vision-failures
 maximum_failure_frames=200

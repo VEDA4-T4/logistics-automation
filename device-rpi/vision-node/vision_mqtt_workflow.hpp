@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <mutex>
@@ -23,6 +24,7 @@ struct VisionObservation final {
     std::array<contracts::mqtt::PixelPoint, 4> box_corners{};
     std::optional<std::string> barcode;
     bool barcode_region_detected{};
+    bool box_detected{ true };
 };
 
 struct AssignedVisionWork final {
@@ -32,9 +34,15 @@ struct AssignedVisionWork final {
 
 class VisionMqttWorkflow final {
 public:
-    explicit VisionMqttWorkflow(std::string device_id, std::size_t detection_confirm_frames = 3,
-                                std::size_t clear_confirm_frames = 5, std::size_t barcode_wait_frames = 300,
-                                std::size_t preassignment_wait_frames = 90);
+    using Clock = std::chrono::steady_clock;
+    using TimePoint = Clock::time_point;
+    using MonotonicNow = std::function<TimePoint()>;
+
+    explicit VisionMqttWorkflow(
+        std::string device_id, std::size_t detection_confirm_frames = 3, std::size_t clear_confirm_frames = 5,
+        std::chrono::milliseconds preassignment_timeout = std::chrono::seconds(3),
+        std::chrono::milliseconds barcode_timeout = std::chrono::seconds(10),
+        MonotonicNow monotonic_now = [] { return Clock::now(); });
 
     [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> Observe(std::optional<VisionObservation> observation,
                                                                       std::string message_id, std::string timestamp);
@@ -49,18 +57,24 @@ public:
 private:
     enum class Phase { kIdle, kPreassigned, kAwaitingWork, kAssigned, kProcessing, kAwaitingClear };
 
+    void ExpirePreassignment(TimePoint now);
+
     std::string device_id_;
     std::size_t detection_confirm_frames_;
     std::size_t clear_confirm_frames_;
-    std::size_t barcode_wait_frames_;
-    std::size_t preassignment_wait_frames_;
+    std::chrono::milliseconds preassignment_timeout_;
+    std::chrono::milliseconds barcode_timeout_;
+    MonotonicNow monotonic_now_;
     mutable std::mutex mutex_;
     Phase phase_{ Phase::kIdle };
     std::size_t detected_frames_{};
     std::size_t clear_frames_{};
-    std::size_t assigned_frames_{};
-    std::size_t preassignment_frames_{};
-    std::optional<VisionObservation> observation_;
+    std::optional<TimePoint> preassignment_deadline_;
+    std::optional<TimePoint> barcode_deadline_;
+    std::optional<VisionObservation> box_candidate_;
+    std::optional<VisionObservation> confirmed_box_observation_;
+    std::optional<std::string> barcode_;
+    bool barcode_region_detected_{};
     std::optional<std::string> work_id_;
     std::optional<std::string> last_completed_work_id_;
 };

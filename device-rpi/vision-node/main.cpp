@@ -282,15 +282,18 @@ void DrawOperatingState(cv::Mat& frame, const std::string_view state) {
 logistics::vision::VisionObservation MakeObservation(const cv::Mat& frame,
                                                      const logistics::vision::DetectionResult& result,
                                                      std::string image_name) {
-    const cv::Rect& box = result.box->roi;
+    cv::Rect box;
     std::array<logistics::contracts::mqtt::PixelPoint, kBarcodeCornerCount> box_corners{};
-    cv::Point2f detected_corners[kBarcodeCornerCount];
-    result.box->outline.points(detected_corners);
-    for (std::size_t index = 0; index < box_corners.size(); ++index) {
-        box_corners[index] = {
-            .x = static_cast<double>(detected_corners[index].x),
-            .y = static_cast<double>(detected_corners[index].y),
-        };
+    if (result.box.has_value()) {
+        box = result.box->roi;
+        cv::Point2f detected_corners[kBarcodeCornerCount];
+        result.box->outline.points(detected_corners);
+        for (std::size_t index = 0; index < box_corners.size(); ++index) {
+            box_corners[index] = {
+                .x = static_cast<double>(detected_corners[index].x),
+                .y = static_cast<double>(detected_corners[index].y),
+            };
+        }
     }
     std::optional<std::string> barcode;
     if (!result.barcodes.empty()) {
@@ -307,6 +310,7 @@ logistics::vision::VisionObservation MakeObservation(const cv::Mat& frame,
         .box_corners = box_corners,
         .barcode = std::move(barcode),
         .barcode_region_detected = result.diagnostics.barcode_region_detected,
+        .box_detected = result.box.has_value(),
     };
 }
 
@@ -385,7 +389,9 @@ int main(const int argc, char* argv[]) {
     std::optional<std::string> pending_image_upload_work_id;
     logistics::vision::VisionStateTransaction vision_state;
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
-    logistics::vision::VisionMqttWorkflow mqtt_workflow(device_id);
+    logistics::vision::VisionMqttWorkflow mqtt_workflow(
+        device_id, 3, 5, std::chrono::milliseconds(vision_processing_config.preassignment_timeout_ms),
+        std::chrono::milliseconds(vision_processing_config.barcode_timeout_ms));
     logistics::vision::VisionResultOutbox result_outbox;
     logistics::vision::PendingWorkFrame pending_capture;
     logistics::device::DeviceControlState control_state({
@@ -774,7 +780,8 @@ int main(const int argc, char* argv[]) {
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
         std::optional<logistics::vision::VisionObservation> observation;
-        if (detection_result.box.has_value()) {
+        if (detection_result.box.has_value() || detection_result.diagnostics.barcode_region_detected ||
+            !detection_result.barcodes.empty()) {
             observation = MakeObservation(frame, detection_result,
                                           "capture-" + mqtt_session_id + '-' +
                                               std::to_string(mqtt_sequence.load(std::memory_order_relaxed)) + ".jpg");

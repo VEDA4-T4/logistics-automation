@@ -197,17 +197,17 @@ target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
 target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
 logistics_enable_warnings(vision_mqtt_workflow)
 
+add_library(
+    vision_processing_config
+    vision-node/vision_processing_config.cpp
+    vision-node/vision_processing_config.hpp
+)
+add_library(logistics::vision_processing_config ALIAS vision_processing_config)
+target_include_directories(vision_processing_config PUBLIC vision-node)
+logistics_enable_warnings(vision_processing_config)
+
 if(LOGISTICS_BUILD_VISION_NODE)
     find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core dnn highgui imgcodecs imgproc objdetect videoio)
-
-    add_library(
-        vision_processing_config
-        vision-node/vision_processing_config.cpp
-        vision-node/vision_processing_config.hpp
-    )
-    add_library(logistics::vision_processing_config ALIAS vision_processing_config)
-    target_include_directories(vision_processing_config PUBLIC vision-node)
-    logistics_enable_warnings(vision_processing_config)
 
     add_library(
         vision_failure_frame_store
@@ -406,12 +406,12 @@ if(BUILD_TESTING)
     logistics_enable_warnings(vision_mqtt_workflow_test)
     add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
 
-    if(LOGISTICS_BUILD_VISION_NODE)
-        add_executable(vision_processing_config_test tests/vision_processing_config_test.cpp)
-        target_link_libraries(vision_processing_config_test PRIVATE logistics::vision_processing_config)
-        logistics_enable_warnings(vision_processing_config_test)
-        add_test(NAME vision_processing_config_test COMMAND vision_processing_config_test)
+    add_executable(vision_processing_config_test tests/vision_processing_config_test.cpp)
+    target_link_libraries(vision_processing_config_test PRIVATE logistics::vision_processing_config)
+    logistics_enable_warnings(vision_processing_config_test)
+    add_test(NAME vision_processing_config_test COMMAND vision_processing_config_test)
 
+    if(LOGISTICS_BUILD_VISION_NODE)
         add_executable(vision_detection_test tests/vision_detection_test.cpp)
         target_link_libraries(vision_detection_test PRIVATE logistics::vision_detection)
         logistics_enable_warnings(vision_detection_test)
