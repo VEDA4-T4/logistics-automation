@@ -56,6 +56,44 @@ std::string ReadFile(const std::filesystem::path& path, DatabaseStatus& status) 
     return content.str();
 }
 
+void AppendDetail(std::string& details, std::string detail) {
+    if (!details.empty()) {
+        details += "; ";
+    }
+    details += std::move(detail);
+}
+
+DatabaseStatus RestoreDatabaseAfterResetFailure(Database& database, const DatabaseConfig& config,
+                                                const std::filesystem::path& source_path, DatabaseStatus failure) {
+    std::string rollback_failures;
+    if (const auto close_status = database.Close(); !close_status.ok()) {
+        AppendDetail(rollback_failures, close_status.message);
+    }
+
+    for (const std::filesystem::path& partial_path :
+         { config.path, std::filesystem::path(config.path.string() + "-wal"),
+           std::filesystem::path(config.path.string() + "-shm") }) {
+        std::error_code error;
+        std::filesystem::remove(partial_path, error);
+        if (error) {
+            AppendDetail(rollback_failures,
+                         "cannot remove partial database file " + partial_path.string() + ": " + error.message());
+        }
+    }
+
+    std::error_code error;
+    std::filesystem::rename(source_path, config.path, error);
+    if (error) {
+        AppendDetail(rollback_failures, "cannot restore original database: " + error.message());
+    } else if (const auto open_status = database.Open(config); !open_status.ok()) {
+        AppendDetail(rollback_failures, "cannot reopen original database: " + open_status.message);
+    }
+
+    failure.message +=
+        rollback_failures.empty() ? "; original database restored" : "; database rollback failed: " + rollback_failures;
+    return failure;
+}
+
 }  // namespace
 
 Statement::Statement(sqlite3_stmt* statement) noexcept : statement_(statement) {}
@@ -366,50 +404,62 @@ DatabaseStatus ResetDatabasePreservingProductCatalog(Database& database, const D
         error.clear();
         std::filesystem::remove(config.path.string() + std::string(suffix), error);
         if (error) {
-            return { DatabaseStatusCode::kIoError, "cannot remove stale database sidecar: " + error.message() +
-                                                       "; original database retained at " + source_path.string() };
+            return RestoreDatabaseAfterResetFailure(
+                database, config, source_path,
+                { DatabaseStatusCode::kIoError, "cannot remove stale database sidecar: " + error.message() });
         }
     }
 
     status = database.Open(config);
     if (!status.ok() || !(status = MigrationRunner::Apply(database, config.migration_dir)).ok()) {
-        status.message += "; original database retained at " + source_path.string();
-        return status;
+        return RestoreDatabaseAfterResetFailure(database, config, source_path, std::move(status));
     }
 
     if (preserve_catalog) {
-        Statement attach;
-        status = database.Prepare("ATTACH DATABASE ? AS reset_source", attach);
-        if (!status.ok() || !(status = attach.Bind(1, source_path.string())).ok()) {
-            status.message += "; original database retained at " + source_path.string();
-            return status;
+        {
+            Statement attach;
+            status = database.Prepare("ATTACH DATABASE ? AS reset_source", attach);
+            if (status.ok()) {
+                status = attach.Bind(1, source_path.string());
+            }
+            bool ignored = false;
+            if (status.ok()) {
+                status = attach.Step(ignored);
+            }
         }
-        bool ignored = false;
-        if (!(status = attach.Step(ignored)).ok()) {
-            status.message += "; original database retained at " + source_path.string();
-            return status;
+        if (!status.ok()) {
+            return RestoreDatabaseAfterResetFailure(database, config, source_path, std::move(status));
         }
 
-        Transaction transaction(database);
-        if (!transaction.status().ok()) {
-            return transaction.status();
+        {
+            Transaction transaction(database);
+            status = transaction.status();
+            if (status.ok()) {
+                status = database.Execute(
+                    "DELETE FROM product_catalog;"
+                    "INSERT INTO "
+                    "product_catalog(barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms) "
+                    "SELECT barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms "
+                    "FROM reset_source.product_catalog;");
+            }
+            if (status.ok()) {
+                status = transaction.Commit();
+            }
         }
-        status = database.Execute(
-            "DELETE FROM product_catalog;"
-            "INSERT INTO "
-            "product_catalog(barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms) "
-            "SELECT barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms "
-            "FROM reset_source.product_catalog;");
-        if (!status.ok() || !(status = transaction.Commit()).ok() ||
-            !(status = database.Execute("DETACH DATABASE reset_source")).ok()) {
-            status.message += "; original database retained at " + source_path.string();
-            return status;
+        if (!status.ok()) {
+            return RestoreDatabaseAfterResetFailure(database, config, source_path, std::move(status));
+        }
+        status = database.Execute("DETACH DATABASE reset_source");
+        if (!status.ok()) {
+            return RestoreDatabaseAfterResetFailure(database, config, source_path, std::move(status));
         }
     }
 
     std::filesystem::remove(source_path, error);
     if (error) {
-        return { DatabaseStatusCode::kIoError, "cannot remove database reset source: " + error.message() };
+        return RestoreDatabaseAfterResetFailure(
+            database, config, source_path,
+            { DatabaseStatusCode::kIoError, "cannot remove database reset source: " + error.message() });
     }
     return DatabaseStatus::Ok();
 }

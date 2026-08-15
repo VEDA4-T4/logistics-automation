@@ -511,6 +511,73 @@ int main() {
     assert(Scalar(resume_database, "SELECT count(*) FROM command_manager_runtime") == 1);
     assert(Scalar(resume_database, "SELECT count(*) FROM pending_system_command") == 1);
 
+    server::Database migration_failure_database;
+    server::DatabaseConfig migration_failure_config{ .path = root / "migration-failure.db",
+                                                     .migration_dir = database_config.migration_dir,
+                                                     .busy_timeout_ms = 100,
+                                                     .startup_mode = server::StartupMode::kFresh };
+    assert(migration_failure_database.Open(migration_failure_config).ok());
+    assert(server::MigrationRunner::Apply(migration_failure_database, migration_failure_config.migration_dir).ok());
+    PopulateStartupState(migration_failure_database, false);
+    auto invalid_migration_config = migration_failure_config;
+    invalid_migration_config.migration_dir = gap_dir;
+    const auto migration_failure_status =
+        server::PrepareDatabaseForStartup(migration_failure_database, invalid_migration_config);
+    assert(!migration_failure_status.ok());
+    assert(migration_failure_status.message.find("migration sequence has a gap") != std::string::npos);
+    assert(migration_failure_status.message.find("original database restored") != std::string::npos);
+    assert(migration_failure_database.IsOpen());
+    assert(!std::filesystem::exists(migration_failure_config.path.string() + ".reset-source"));
+    assert(Scalar(migration_failure_database,
+                  "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_id='CUSTOM-1'") == 1);
+    assert(Scalar(migration_failure_database, "SELECT count(*) FROM product WHERE work_id='OLD-WORK'") == 1);
+    auto resume_after_failure = migration_failure_config;
+    resume_after_failure.startup_mode = server::StartupMode::kResume;
+    assert(server::PrepareDatabaseForStartup(migration_failure_database, resume_after_failure).ok());
+    assert(Scalar(migration_failure_database, "SELECT count(*) FROM process_runtime_state") == 1);
+    assert(Scalar(migration_failure_database, "SELECT count(*) FROM process_mqtt_outbox") == 1);
+
+    const auto incompatible_catalog_migrations = root / "incompatible-catalog-migrations";
+    std::filesystem::copy(database_config.migration_dir, incompatible_catalog_migrations,
+                          std::filesystem::copy_options::recursive);
+    {
+        std::ofstream migration(incompatible_catalog_migrations / "011_break_catalog.sql");
+        assert(migration);
+        migration << "ALTER TABLE product_catalog RENAME COLUMN product_name TO legacy_name;\n";
+        assert(migration.good());
+    }
+    server::Database catalog_failure_database;
+    server::DatabaseConfig catalog_failure_config{ .path = root / "catalog-failure.db",
+                                                   .migration_dir = incompatible_catalog_migrations,
+                                                   .busy_timeout_ms = 100,
+                                                   .startup_mode = server::StartupMode::kFresh };
+    assert(catalog_failure_database.Open(catalog_failure_config).ok());
+    assert(server::MigrationRunner::Apply(catalog_failure_database, database_config.migration_dir).ok());
+    PopulateStartupState(catalog_failure_database, false);
+    const auto catalog_failure_status =
+        server::PrepareDatabaseForStartup(catalog_failure_database, catalog_failure_config);
+    assert(!catalog_failure_status.ok());
+    assert(catalog_failure_status.message.find("product_name") != std::string::npos);
+    assert(catalog_failure_status.message.find("original database restored") != std::string::npos);
+    assert(catalog_failure_database.IsOpen());
+    assert(!std::filesystem::exists(catalog_failure_config.path.string() + ".reset-source"));
+    assert(
+        Scalar(
+            catalog_failure_database,
+            "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_name='Custom product'") ==
+        1);
+    assert(Scalar(catalog_failure_database, "SELECT count(*) FROM product WHERE work_id='OLD-WORK'") == 1);
+    auto fresh_after_failure = catalog_failure_config;
+    fresh_after_failure.migration_dir = database_config.migration_dir;
+    assert(server::PrepareDatabaseForStartup(catalog_failure_database, fresh_after_failure).ok());
+    assert(
+        Scalar(
+            catalog_failure_database,
+            "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_name='Custom product'") ==
+        1);
+    assert(Scalar(catalog_failure_database, "SELECT count(*) FROM product") == 0);
+    assert(!std::filesystem::exists(catalog_failure_config.path.string() + ".reset-source"));
+
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);
     return 0;
