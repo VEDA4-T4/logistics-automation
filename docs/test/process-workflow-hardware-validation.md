@@ -187,7 +187,8 @@ test "$(sed -n '$=' "${CATALOG_EVIDENCE}")" -eq 1
 
 ### Step B — fresh 시작 후 runtime zero와 catalog 비교
 
-```sh
+```bash
+set -e
 # First source and validate the recorded absolute RUN_ENV using the block above. Restart/terminal 경계를 넘어
 # Step A의 absolute evidence file에서 pre-fresh count를 다시 읽고 검증한다.
 CATALOG_EVIDENCE="${EVIDENCE_DIR}/catalog-pre-fresh.txt"
@@ -234,7 +235,15 @@ awk -F '|' -v catalog="${CATALOG_COUNT_BEFORE}" '
 
 # Each Pi terminal first sources/validates its local absolute RUN_ENV using the block above, then checks its own
 # exact role/device/inbound spool path and ownership.
-sudo find "${RUN_SPOOL}" -printf '%M %u:%g %p\n' | sort
+SPOOL_EVIDENCE="${EVIDENCE_DIR}/spool.txt"
+set +e
+set -o pipefail
+sudo find "${RUN_SPOOL}" -printf '%M %u:%g %p\n' | sort | tee "${SPOOL_EVIDENCE}"
+spool_statuses=("${PIPESTATUS[@]}")
+set -e
+test "${spool_statuses[0]}" -eq 0
+test "${spool_statuses[1]}" -eq 0
+test "${spool_statuses[2]}" -eq 0
 
 # Broker listener와 서비스 상태
 sudo systemctl status mosquitto --no-pager
@@ -261,34 +270,56 @@ sudo journalctl --utc -u logistics-central-server -u logistics-input-node -u log
   --since "${RUN_START}" --until "${RUN_END}" -o "${JOURNAL_FORMAT}" --no-pager > "${EVIDENCE_DIR}/services.journal.log"
 ```
 
-Vision과 gripper에는 systemd unit이 없다. 해당 Pi에서 foreground stdout/stderr를 별도 파일로 캡처한다. stdout
-capture에는 timestamp를 덧붙이지 않는다. timeline의 ns 근거는 application/MQTT payload 또는 실행 전후와 수동
-ESTOP/RECOVERY에 찍는 UTC ns operator marker뿐이다.
+Vision과 gripper에는 systemd unit이 없다. 서로 다른 Pi/terminal에서 각각 독립적으로 foreground stdout/stderr를
+캡처한다. stdout capture에는 timestamp를 덧붙이지 않는다. timeline의 ns 근거는 application/MQTT payload 또는
+실행 전후와 수동 ESTOP/RECOVERY에 찍는 UTC ns operator marker뿐이다. 아래에서 operator SIGINT에 따른 `130`은
+해당 run의 다른 pass 기준을 이미 충족했다고 operator가 명시적으로 확인한 경우에만 정상 capture close로 처리한다.
 
 ```bash
+# Vision Pi terminal only. First source and validate this Pi's recorded absolute RUN_ENV using the block above.
 set -e
 marker() { log_file="$1"; shift; printf '%s %s\n' "$(date -u --iso-8601=ns)" "$*" | tee -a "${log_file}"; }
-# First source and validate this Pi's recorded absolute RUN_ENV using the block above.
 marker "${EVIDENCE_DIR}/vision.log" 'vision foreground start'
+# Leave CAPTURE_CLOSE_AFTER_PASS unset during the run. Set it to yes in this terminal only after all other pass
+# criteria are recorded, immediately before the expected Ctrl-C close.
 set +e
 set -o pipefail
 stdbuf -oL -eL ./build-vision/device-rpi/logistics_vision_node --headless \
   --config runtime/vision-node/vision-node.ini 2>&1 | tee -a "${EVIDENCE_DIR}/vision.log"
-vision_status="${PIPESTATUS[0]}"
+vision_statuses=("${PIPESTATUS[@]}")
 set -e
-test "${vision_status}" -eq 0
+test "${vision_statuses[1]}" -eq 0
+case "${vision_statuses[0]}" in
+  0) ;;
+  130) test "${CAPTURE_CLOSE_AFTER_PASS:-}" = yes; marker "${EVIDENCE_DIR}/vision.log" 'operator SIGINT capture close after pass confirmation' ;;
+  *) marker "${EVIDENCE_DIR}/vision.log" "vision exited ${vision_statuses[0]}"; exit "${vision_statuses[0]}" ;;
+esac
+```
 
+```bash
+# Gripper Pi terminal only. First source and validate this Pi's recorded absolute RUN_ENV using the block above.
+set -e
+marker() { log_file="$1"; shift; printf '%s %s\n' "$(date -u --iso-8601=ns)" "$*" | tee -a "${log_file}"; }
 marker "${EVIDENCE_DIR}/gripper.log" 'gripper foreground start'
 : "${GRIPPER_BINARY:?set GRIPPER_BINARY to the deployed logistics_gripper_node executable}"
 GRIPPER_CONFIG="${GRIPPER_CONFIG:-runtime/gripper-node/gripper-node.ini}"
 test -x "${GRIPPER_BINARY}"
 test -r "${GRIPPER_CONFIG}"
+# Leave CAPTURE_CLOSE_AFTER_PASS unset during the run. Set it to yes in this terminal only after all other pass
+# criteria are recorded, immediately before the expected Ctrl-C close.
 set +e
 stdbuf -oL -eL "${GRIPPER_BINARY}" "${GRIPPER_CONFIG}" /dev/vedauart 2>&1 | tee -a "${EVIDENCE_DIR}/gripper.log"
-gripper_status="${PIPESTATUS[0]}"
+gripper_statuses=("${PIPESTATUS[@]}")
 set -e
-test "${gripper_status}" -eq 0
+test "${gripper_statuses[1]}" -eq 0
+case "${gripper_statuses[0]}" in
+  0) ;;
+  130) test "${CAPTURE_CLOSE_AFTER_PASS:-}" = yes; marker "${EVIDENCE_DIR}/gripper.log" 'operator SIGINT capture close after pass confirmation' ;;
+  *) marker "${EVIDENCE_DIR}/gripper.log" "gripper exited ${gripper_statuses[0]}"; exit "${gripper_statuses[0]}" ;;
+esac
+```
 
+```sh
 # From a second operator terminal, source and validate the recorded absolute RUN_ENV using the block above; it has no
 # shell-local marker() function from the capture terminal. Use absolute evidence paths for START, every ESTOP/RECOVERY,
 # and process-exit markers.
