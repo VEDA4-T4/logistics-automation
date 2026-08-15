@@ -112,7 +112,31 @@ Yocto input/sorting 이미지의 소스는 `3c87abcb49edecff24e6f676a223b51f8172
 장비 경로와 서비스 이름은 설치 환경에 맞게 확인한 뒤 사용한다. 민감한 인증 정보는 별도 보안 절차로 제공하며
 명령줄이나 이 문서에 넣지 않는다.
 
+### Step A — 첫 fresh 시작 전 catalog 보존 기준 기록
+
+중앙 서버를 처음 `startup_mode=fresh`로 시작하기 전에 중앙 host에서 실행한다. 이전 precondition terminal의
+변수에 의존하지 않고, 기록한 validated `RUN_ID`를 다시 명시한다. 같은 `RUN_ID` evidence file이 이미 있으면
+기존 증거를 덮어쓰지 않고 중단한다.
+
 ```sh
+RUN_ID='run-YYYYMMDDTHHMMSSZ' # replace with the recorded validated value
+CATALOG_EVIDENCE="${RUN_ID}-catalog-pre-fresh.txt"
+test ! -e "${CATALOG_EVIDENCE}"
+sudo sqlite3 /var/lib/logistics/logistics.db 'SELECT count(*) FROM product_catalog;' > "${CATALOG_EVIDENCE}"
+test "$(sed -n '$=' "${CATALOG_EVIDENCE}")" -eq 1
+```
+
+### Step B — fresh 시작 후 runtime zero와 catalog 비교
+
+```sh
+# Restart/terminal 경계를 넘어 Step A의 파일에서 pre-fresh count를 다시 읽고 검증한다.
+RUN_ID='run-YYYYMMDDTHHMMSSZ' # same recorded validated value as Step A
+CATALOG_EVIDENCE="${RUN_ID}-catalog-pre-fresh.txt"
+CATALOG_COUNT_BEFORE="$(cat "${CATALOG_EVIDENCE}")"
+case "${CATALOG_COUNT_BEFORE}" in *[!0-9]*|'') printf '%s\n' 'invalid pre-fresh catalog evidence' >&2; exit 1 ;; esac
+CATALOG_COUNT_AFTER="$(sudo sqlite3 /var/lib/logistics/logistics.db 'SELECT count(*) FROM product_catalog;')"
+test "${CATALOG_COUNT_AFTER}" = "${CATALOG_COUNT_BEFORE}"
+
 # 중앙 SQLite: fresh 시작 직후 catalog는 보존, 그 외 과거 runtime/event/history 행은 0이어야 함.
 # schema_migrations는 현재 schema metadata이므로 0을 기대하지 않는다.
 sudo sqlite3 /var/lib/logistics/logistics.db \
@@ -137,7 +161,7 @@ sudo sqlite3 /var/lib/logistics/logistics.db \
    SELECT 'process_runtime_state (new session row allowed)', count(*) FROM process_runtime_state UNION ALL
    SELECT 'schema_migrations (current metadata allowed)', count(*) FROM schema_migrations;"
 
-# Expected: product_catalog equals its pre-fresh count (and may be 0); every unlabelled row above is 0.
+# Expected: product_catalog equals ${CATALOG_COUNT_BEFORE} (and may be 0); every unlabelled row above is 0.
 # process_runtime_state and command_manager_runtime are new-session rows (0 or 1 before/after initialization);
 # schema_migrations contains current schema metadata, not retained runtime history.
 
@@ -156,23 +180,28 @@ sudo journalctl --utc -u logistics-central-server -u logistics-input-node -u log
   --since "${RUN_START}" --until "${RUN_END}" -o "${JOURNAL_FORMAT}" --no-pager
 ```
 
-Vision과 gripper에는 systemd unit이 없다. 해당 Pi에서 foreground stdout/stderr를 별도 파일로 캡처한다. `ts`의
-line timestamp는 UTC seconds-level capture aid일 뿐 ns evidence가 아니며, 실행 전후와 수동 ESTOP/RECOVERY에는
-아래 UTC ns marker를 추가한다.
+Vision과 gripper에는 systemd unit이 없다. 해당 Pi에서 foreground stdout/stderr를 별도 파일로 캡처한다. stdout
+capture에는 timestamp를 덧붙이지 않는다. timeline의 ns 근거는 application/MQTT payload 또는 실행 전후와 수동
+ESTOP/RECOVERY에 찍는 UTC ns operator marker뿐이다.
 
 ```sh
 marker() { log_file="$1"; shift; printf '%s %s\n' "$(date -u --iso-8601=ns)" "$*" | tee -a "${log_file}"; }
 marker "${RUN_ID}-vision.log" 'vision foreground start'
-TZ=UTC stdbuf -oL -eL ./build-vision/device-rpi/logistics_vision_node --headless \
-  --config runtime/vision-node/vision-node.ini 2>&1 | ts '[%Y-%m-%dT%H:%M:%S]' | tee -a "${RUN_ID}-vision.log"
+stdbuf -oL -eL ./build-vision/device-rpi/logistics_vision_node --headless \
+  --config runtime/vision-node/vision-node.ini 2>&1 | tee -a "${RUN_ID}-vision.log"
 
 marker "${RUN_ID}-gripper.log" 'gripper foreground start'
-TZ=UTC stdbuf -oL -eL ./build-device/device-rpi/logistics_gripper_node \
-  runtime/gripper-node/gripper-node.ini /dev/vedauart 2>&1 | ts '[%Y-%m-%dT%H:%M:%S]' | tee -a "${RUN_ID}-gripper.log"
+: "${GRIPPER_BINARY:?set GRIPPER_BINARY to the deployed logistics_gripper_node executable}"
+GRIPPER_CONFIG="${GRIPPER_CONFIG:-runtime/gripper-node/gripper-node.ini}"
+test -x "${GRIPPER_BINARY}"
+test -r "${GRIPPER_CONFIG}"
+stdbuf -oL -eL "${GRIPPER_BINARY}" "${GRIPPER_CONFIG}" /dev/vedauart 2>&1 | tee -a "${RUN_ID}-gripper.log"
 
-# From a second operator terminal, write markers at START, each ESTOP/RECOVERY, and process exit.
-marker "${RUN_ID}-vision.log" 'ESTOP sent at vision stage'
-marker "${RUN_ID}-gripper.log" 'RECOVERY acknowledged at gripper stage'
+# From a second operator terminal, enter the recorded RUN_ID explicitly; this terminal has no shell-local marker()
+# function or RUN_ID from the capture terminal. Write markers at START, each ESTOP/RECOVERY, and process exit.
+RUN_ID='run-YYYYMMDDTHHMMSSZ' # replace with the recorded validated value
+printf '%s %s\n' "$(date -u --iso-8601=ns)" 'ESTOP sent at vision stage' | tee -a "${RUN_ID}-vision.log"
+printf '%s %s\n' "$(date -u --iso-8601=ns)" 'RECOVERY acknowledged at gripper stage' | tee -a "${RUN_ID}-gripper.log"
 ```
 
 Broker 메시지 관찰은 TLS와 ACL이 적용된 승인된 관찰자 자격 증명으로 별도 보안 절차에 따라 실행하고, topic, payload,
