@@ -217,4 +217,14 @@ std::size_t MqttPublishSpool::PendingCount() const {
     return Pending(directory_).size();
 }
 
+bool DeliverEvent(MqttPublishSpool& spool, const contracts::mqtt::MessageType type, std::string topic,
+                  std::string payload, const VolatilePublisher& publish_volatile) {
+    const auto policy = contracts::mqtt::PolicyFor(type);
+    const int qos = static_cast<int>(policy.minimum_qos);
+    if (contracts::mqtt::IsTransientTelemetry(type)) {
+        return publish_volatile(topic, payload, qos, false);
+    }
+    return spool.Enqueue(std::move(topic), std::move(payload), qos, false).has_value();
+}
+
 }  // namespace logistics::device

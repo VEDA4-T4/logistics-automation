@@ -2,10 +2,13 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+
+#include "logistics/contracts/mqtt_message.hpp"
 
 namespace logistics::device {
 
@@ -37,5 +40,10 @@ private:
     std::size_t maximum_bytes_;
     mutable std::mutex mutex_;
 };
+
+using VolatilePublisher = std::function<bool(std::string_view topic, std::string_view payload, int qos, bool retain)>;
+
+[[nodiscard]] bool DeliverEvent(MqttPublishSpool& spool, contracts::mqtt::MessageType type, std::string topic,
+                                std::string payload, const VolatilePublisher& publish_volatile);
 
 }  // namespace logistics::device

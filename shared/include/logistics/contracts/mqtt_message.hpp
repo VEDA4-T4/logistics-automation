@@ -331,6 +331,7 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 [[nodiscard]] constexpr DeliveryPolicy PolicyFor(MessageType type) noexcept {
     switch (type) {
         case MessageType::kHeartbeat:
+        case MessageType::kSensorStatus:
             return { .minimum_qos = Qos::kAtMostOnce, .maximum_qos = Qos::kAtMostOnce, .retain = RetainPolicy::kNever };
         case MessageType::kDeviceStatus:
             return { .minimum_qos = Qos::kAtMostOnce,

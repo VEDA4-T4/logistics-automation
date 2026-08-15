@@ -5,6 +5,9 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
+
+#include "logistics/contracts/mqtt_message.hpp"
 
 namespace {
 
@@ -96,11 +99,69 @@ void TestNumericOrderAndCorruptQuarantine() {
     std::filesystem::remove_all(directory, error);
 }
 
+void TestSensorTelemetryNeverEntersDurableSpool() {
+    namespace mqtt = logistics::contracts::mqtt;
+    const auto directory = TemporaryDirectory();
+    logistics::device::MqttPublishSpool spool(directory, 65536);
+    assert(spool.Start());
+
+    std::vector<std::string> volatile_payloads;
+    const auto publish_volatile = [&volatile_payloads](std::string_view topic, std::string_view payload, int qos,
+                                                       bool retain) {
+        assert(topic == "device/PI-01/event");
+        assert(qos == 0);
+        assert(!retain);
+        volatile_payloads.emplace_back(payload);
+        return true;
+    };
+
+    assert(logistics::device::DeliverEvent(spool, mqtt::MessageType::kBoxDetected, "device/PI-01/event", "command",
+                                           publish_volatile));
+    for (int index = 0; index < 10'000; ++index) {
+        assert(logistics::device::DeliverEvent(spool, mqtt::MessageType::kSensorStatus, "device/PI-01/event",
+                                               "sensor-" + std::to_string(index), publish_volatile));
+    }
+
+    assert(volatile_payloads.size() == 10'000);
+    assert(spool.PendingCount() == 1);
+    assert(spool.Next()->payload == "command");
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
+void TestDroppedSensorIsNotReplayedAndNextSamplePublishes() {
+    namespace mqtt = logistics::contracts::mqtt;
+    const auto directory = TemporaryDirectory();
+    logistics::device::MqttPublishSpool spool(directory, 4096);
+    assert(spool.Start());
+
+    std::vector<std::string> attempts;
+    const auto publish_volatile = [&attempts](std::string_view, std::string_view payload, int qos, bool retain) {
+        assert(qos == 0);
+        assert(!retain);
+        attempts.emplace_back(payload);
+        return attempts.size() != 1;
+    };
+
+    assert(!logistics::device::DeliverEvent(spool, mqtt::MessageType::kSensorStatus, "device/PI-01/event", "stale",
+                                            publish_volatile));
+    assert(logistics::device::DeliverEvent(spool, mqtt::MessageType::kSensorStatus, "device/PI-01/event", "latest",
+                                           publish_volatile));
+    assert((attempts == std::vector<std::string>{ "stale", "latest" }));
+    assert(spool.PendingCount() == 0);
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
 }  // namespace
 
 int main() {
     TestPubackControlsRemovalAndRestartReplay();
     TestRestartDoesNotOverwriteUnacknowledgedRecord();
     TestNumericOrderAndCorruptQuarantine();
+    TestSensorTelemetryNeverEntersDurableSpool();
+    TestDroppedSensorIsNotReplayedAndNextSamplePublishes();
     return 0;
 }

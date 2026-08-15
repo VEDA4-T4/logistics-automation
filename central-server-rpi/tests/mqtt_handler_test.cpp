@@ -841,6 +841,13 @@ void TestSensorTelemetryBypassesInboxAndRoutesImmediately() {
         central_server::MqttHandler handler(device_manager, {}, &persistence, {},
                                             { .enter_threshold_cm = 10, .exit_threshold_cm = 12, .debounce_count = 3 });
         std::vector<std::string> routed_detections;
+        std::size_t process_measurements{};
+        handler.SetProcessMessageHandler([&](const mqtt::MqttMessage& message) {
+            assert(message.message_type == mqtt::MessageType::kSensorStatus);
+            assert(!message.process_epoch.has_value());
+            ++process_measurements;
+            return true;
+        });
         bool fail_first = true;
         handler.SetQtEventHandler([&](const mqtt::MqttMessage& message) {
             const auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(message);
@@ -870,7 +877,15 @@ void TestSensorTelemetryBypassesInboxAndRoutesImmediately() {
         assert(handler.Handle(topic, Encode(sensor)));
         assert((routed_detections == std::vector<std::string>{ "CLEAR", "DETECTED" }));
 
+        for (int index = 3; index < 10'000; ++index) {
+            sensor.message_id = "MSG-SENSOR-INBOX-" + std::to_string(index + 1);
+            assert(handler.Handle(topic, Encode(sensor)));
+        }
+        assert(process_measurements == 10'000);
+        assert(routed_detections.size() == 9'999);
+
         assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_type='SENSOR_STATUS'") == 0);
+        assert(Scalar(database, "SELECT count(*) FROM process_mqtt_outbox") == 0);
     }
     std::filesystem::remove_all(root);
 }

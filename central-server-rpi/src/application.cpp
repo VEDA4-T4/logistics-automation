@@ -538,8 +538,8 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_handler.SetQtEventHandler([&mqtt_client, &publish_durable, qt_client_id = server_config.qt_client_id](
                                        const contracts::mqtt::MqttMessage& message) {
         if (contracts::mqtt::IsTransientTelemetry(message.message_type)) {
-            static_cast<void>(mqtt_client.PublishMessage(contracts::mqtt::QtEventTopic(qt_client_id), message,
-                                                         contracts::mqtt::Qos::kAtLeastOnce));
+            static_cast<void>(
+                mqtt_client.PublishTransientMessage(contracts::mqtt::QtEventTopic(qt_client_id), message));
             // A newer sample supersedes this one; a disconnected UI must not create a replay backlog.
             return true;
         }

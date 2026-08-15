@@ -316,22 +316,34 @@ public:
             return false;
         }
         const std::string topic = mqtt::DeviceEventTopic(config_.device_id);
-        if (!mqtt::IsTransientTelemetry(prepared->message_type)) {
-            return PublishMessage(topic, *prepared, 1, false, "device event");
-        }
-        if (!ready_ || client_ == nullptr) {
-            return false;
-        }
         const auto validation = mqtt::ValidateTopicMessage(topic, *prepared);
         if (!validation.IsSuccess()) {
-            std::cerr << "[device][mqtt][ERROR] invalid sensor telemetry: " << validation.message << '\n';
+            std::cerr << "[device][mqtt][ERROR] invalid device event: " << validation.message << '\n';
             return false;
         }
-        const bool published = PublishVolatile(topic, mqtt::SerializeMessage(*prepared), 1, false, "sensor telemetry");
-        if (published) {
-            device_status_->MarkCommunication(prepared->timestamp);
+        const auto encoded = mqtt::SerializeMessage(*prepared);
+        if (!encoded.IsSuccess()) {
+            return false;
         }
-        return published;
+        const bool delivered =
+            DeliverEvent(publish_spool_, prepared->message_type, topic, encoded.payload,
+                         [this](std::string_view volatile_topic, std::string_view payload, int qos, bool retain) {
+                             return ready_ && client_ != nullptr &&
+                                    PublishVolatile(std::string(volatile_topic),
+                                                    mqtt::EncodeResult{ .payload = std::string(payload), .status = {} },
+                                                    qos, retain, "sensor telemetry");
+                         });
+        if (!delivered) {
+            if (!mqtt::IsTransientTelemetry(prepared->message_type)) {
+                std::cerr << "[device][mqtt][ERROR] unable to persist device event for MQTT publication\n";
+            }
+            return false;
+        }
+        device_status_->MarkCommunication(prepared->timestamp);
+        if (!mqtt::IsTransientTelemetry(prepared->message_type)) {
+            PumpPublishSpool();
+        }
+        return true;
     }
 
     [[nodiscard]] bool PublishError(const mqtt::MqttMessage& message) {

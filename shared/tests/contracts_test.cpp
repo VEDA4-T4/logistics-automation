@@ -820,6 +820,11 @@ int main() {
     assert(heartbeat_policy.minimum_qos == mqtt::Qos::kAtMostOnce);
     assert(heartbeat_policy.retain == mqtt::RetainPolicy::kNever);
 
+    const auto sensor_policy = mqtt::PolicyFor(mqtt::MessageType::kSensorStatus);
+    assert(sensor_policy.minimum_qos == mqtt::Qos::kAtMostOnce);
+    assert(sensor_policy.maximum_qos == mqtt::Qos::kAtMostOnce);
+    assert(sensor_policy.retain == mqtt::RetainPolicy::kNever);
+
     const auto status_policy = mqtt::PolicyFor(mqtt::MessageType::kDeviceStatus);
     assert(status_policy.maximum_qos == mqtt::Qos::kAtLeastOnce);
     assert(status_policy.retain == mqtt::RetainPolicy::kLatestStateAllowed);

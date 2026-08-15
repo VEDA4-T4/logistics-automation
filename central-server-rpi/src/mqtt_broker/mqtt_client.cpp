@@ -283,6 +283,13 @@ bool MqttClient::PublishMessage(std::string_view topic, const mqtt::MqttMessage&
     return PublishMessageWithReceipt(topic, message, qos, retain).has_value();
 }
 
+bool MqttClient::PublishTransientMessage(std::string_view topic, const mqtt::MqttMessage& message) {
+    if (!mqtt::IsTransientTelemetry(message.message_type)) {
+        return false;
+    }
+    return PublishMessage(topic, message, mqtt::PolicyFor(message.message_type).minimum_qos, false);
+}
+
 std::optional<int> MqttClient::PublishMessageWithReceipt(std::string_view topic, const mqtt::MqttMessage& message,
                                                          mqtt::Qos qos, bool retain) {
     const auto validation = mqtt::ValidateTopicMessage(topic, message);

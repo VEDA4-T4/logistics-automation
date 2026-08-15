@@ -63,6 +63,7 @@ public:
     [[nodiscard]] bool Publish(std::string_view topic, std::string_view payload, int qos = 1, bool retain = false);
     [[nodiscard]] std::optional<int> PublishWithReceipt(std::string_view topic, std::string_view payload, int qos = 1,
                                                         bool retain = false);
+    [[nodiscard]] bool PublishTransientMessage(std::string_view topic, const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] bool PublishMessage(std::string_view topic, const contracts::mqtt::MqttMessage& message,
                                       contracts::mqtt::Qos qos, bool retain = false);
     [[nodiscard]] std::optional<int> PublishMessageWithReceipt(std::string_view topic,

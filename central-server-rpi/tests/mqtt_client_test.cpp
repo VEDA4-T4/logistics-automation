@@ -579,10 +579,35 @@ void TestTypedMessagePublishing() {
     assert(decoded.IsSuccess());
     assert(decoded.value.message_id == command.message_id);
     assert(mqtt::GetPayload<mqtt::ControlCommandPayload>(decoded.value) != nullptr);
+    assert(!client.PublishTransientMessage(mqtt::DeviceCommandTopic("PI-01"), command));
+    assert(fake->publications.size() == 1);
+
+    mqtt::MqttMessage sensor{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-SENSOR-0",
+        .message_type = mqtt::MessageType::kSensorStatus,
+        .source_id = "central-server",
+        .timestamp = "2026-08-15T03:00:00Z",
+        .data =
+            mqtt::SensorStatusPayload{
+                .sensor_id = 1, .measurement_status = "OK", .distance_cm = 20, .detection_status = "CLEAR" },
+    };
+    for (int index = 0; index < 10'000; ++index) {
+        sensor.message_id = "MSG-SENSOR-" + std::to_string(index);
+        assert(client.PublishTransientMessage(mqtt::QtEventTopic("QT-01"), sensor));
+    }
+    assert(fake->publications.size() == 10'001);
+    assert(fake->publications.front().topic == "device/PI-01/command");
+    for (auto publication = fake->publications.begin() + 1; publication != fake->publications.end(); ++publication) {
+        assert(publication->topic == "qt/QT-01/event");
+        assert(publication->qos == 0);
+        assert(!publication->retain);
+    }
+    assert(!client.PublishMessage(mqtt::QtEventTopic("QT-01"), sensor, mqtt::Qos::kAtLeastOnce));
 
     assert(!client.PublishMessage(mqtt::DeviceCommandTopic("PI-02"), command, mqtt::Qos::kAtLeastOnce));
     assert(!client.PublishMessage(mqtt::DeviceCommandTopic("PI-01"), command, mqtt::Qos::kAtLeastOnce, true));
-    assert(fake->publications.size() == 1);
+    assert(fake->publications.size() == 10'001);
 
     client.Stop();
 }
