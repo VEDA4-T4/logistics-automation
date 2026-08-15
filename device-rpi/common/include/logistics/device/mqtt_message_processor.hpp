@@ -47,6 +47,8 @@ public:
 
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceEvent(const contracts::mqtt::MqttMessage& message) const;
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceError(const contracts::mqtt::MqttMessage& message) const;
+    [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> PrepareOutboundMessage(
+        const contracts::mqtt::MqttMessage& message) const;
 
     void RememberCommandResponse(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> CachedCommandResponse(
@@ -62,6 +64,10 @@ private:
     mutable std::mutex response_cache_mutex_;
     std::unordered_map<std::string, contracts::mqtt::MqttMessage> response_cache_;
     std::deque<std::string> response_cache_order_;
+    mutable std::mutex epoch_mutex_;
+    std::optional<std::string> active_process_epoch_;
+    std::unordered_map<std::string, std::string> request_process_epochs_;
+    std::deque<std::string> request_epoch_order_;
 };
 
 }  // namespace logistics::device

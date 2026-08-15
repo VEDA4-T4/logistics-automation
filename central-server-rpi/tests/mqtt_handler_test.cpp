@@ -889,6 +889,70 @@ void TestPoisonInboxRowDoesNotStarveLaterReplay() {
     std::filesystem::remove_all(root);
 }
 
+void TestProcessEpochRejectsStaleInboxMessagesTerminally() {
+    const auto root =
+        std::filesystem::temp_directory_path() /
+        ("logistics-epoch-inbox-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    central_server::Database database;
+    const central_server::DatabaseConfig config{ .path = root / "test.db",
+                                                 .migration_dir = LOGISTICS_TEST_MIGRATION_DIR };
+    assert(database.Open(config).ok());
+    assert(central_server::MigrationRunner::Apply(database, config.migration_dir).ok());
+    central_server::StorageConfig storage;
+    storage.image_root = root / "images";
+    central_server::PersistenceService persistence(database, storage);
+    central_server::DeviceManager devices;
+    central_server::MqttHandler handler(devices, {}, &persistence);
+    constexpr std::string_view current_epoch = "4b0d7a76-49f7-4e39-b624-f59e129fa4c7";
+    handler.SetProcessEpoch(std::string(current_epoch), true);
+    int process_calls = 0;
+    handler.SetProcessMessageHandler([&process_calls](const mqtt::MqttMessage&) {
+        ++process_calls;
+        return true;
+    });
+    handler.SetWorkCreatedHandler([](std::string_view, std::string_view) { return true; });
+
+    mqtt::MqttMessage box{
+        .message_id = "BOX-CURRENT-EPOCH",
+        .message_type = mqtt::MessageType::kBoxDetected,
+        .source_id = "PI-VISION-EPOCH",
+        .timestamp = "2026-08-15T02:00:00Z",
+        .process_epoch = std::string(current_epoch),
+        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "current.jpg" },
+    };
+    const auto topic = mqtt::DeviceEventTopic(box.source_id);
+    assert(handler.Handle(topic, Encode(box)));
+    assert(process_calls == 1);
+    assert(Scalar(database, "SELECT count(*) FROM product") == 1);
+
+    box.message_id = "BOX-STALE-EPOCH";
+    box.process_epoch = "6d395cb2-93da-4de6-8eac-b2afee09c17e";
+    assert(handler.Handle(topic, Encode(box)));
+    box.message_id = "BOX-MISSING-EPOCH";
+    box.process_epoch.reset();
+    assert(handler.Handle(topic, Encode(box)));
+    assert(process_calls == 1);
+    assert(Scalar(database, "SELECT count(*) FROM product") == 1);
+    assert(Scalar(database,
+                  "SELECT count(*) FROM mqtt_event_log WHERE processing_state='REJECTED' AND "
+                  "failure_reason='REJECTED_STALE_EPOCH'") == 2);
+    assert(handler.ReplayPendingReceivedEvents());
+    std::vector<central_server::PendingReceivedEvent> pending;
+    assert(persistence.PendingReceivedEvents(pending).ok() && pending.empty());
+
+    mqtt::MqttMessage sensor{
+        .message_id = "SENSOR-NO-EPOCH",
+        .message_type = mqtt::MessageType::kSensorStatus,
+        .source_id = "PI-INPUT-EPOCH",
+        .timestamp = "2026-08-15T02:00:01Z",
+        .data = mqtt::SensorStatusPayload{ .sensor_id = 1, .measurement_status = "OK", .distance_cm = 20 },
+    };
+    assert(handler.Handle(mqtt::DeviceEventTopic(sensor.source_id), Encode(sensor)));
+    assert(process_calls == 2);
+    std::filesystem::remove_all(root);
+}
+
 }  // namespace
 
 int main() {
@@ -906,5 +970,6 @@ int main() {
     TestPendingInboxReplaysSideEffectsOnceAfterReopen();
     TestSensorTelemetryBypassesInboxAndRoutesImmediately();
     TestPoisonInboxRowDoesNotStarveLaterReplay();
+    TestProcessEpochRejectsStaleInboxMessagesTerminally();
     return 0;
 }

@@ -595,6 +595,7 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart() {
         .message_type = mqtt::MessageType::kCommandResponse,
         .source_id = std::string(kVisionId),
         .timestamp = std::string(kTimestamp),
+        .process_epoch = "46bfe627-0935-4cdb-9282-0da7c54469d8",
         .data =
             mqtt::CommandResponsePayload{
                 .request_id = "RECOVERY-COMMIT",
@@ -642,6 +643,9 @@ void TestRecoveryCommitDiscardsOldWorkBeforeStart() {
     assert(command_manager.Snapshot().message_sequence == 1);
     assert(pending_system_commands.empty());
     assert(published.size() == 2);
+    assert(std::ranges::all_of(published, [](const auto& delivery) {
+        return delivery.message.process_epoch == "46bfe627-0935-4cdb-9282-0da7c54469d8";
+    }));
 
     assert(store
                .Save(orchestrator.StateMachine().SystemState(), orchestrator.MessageSequence(),

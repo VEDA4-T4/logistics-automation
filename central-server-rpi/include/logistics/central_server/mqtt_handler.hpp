@@ -41,6 +41,7 @@ public:
     void SetQtErrorHandler(MessageRouteHandler handler);
     void SetProcessMessageGuard(ProcessMessageHandler handler);
     void SetProcessMessageHandler(ProcessMessageHandler handler);
+    void SetProcessEpoch(std::string process_epoch, bool reject_legacy_work_messages);
 
     [[nodiscard]] bool Handle(std::string_view topic, std::string_view payload, std::string_view received_at = {},
                               int qos = 1, bool retained = false);
@@ -66,6 +67,8 @@ private:
     MessageRouteHandler qt_error_handler_;
     ProcessMessageHandler process_message_guard_;
     ProcessMessageHandler process_message_handler_;
+    std::string process_epoch_;
+    bool reject_legacy_work_messages_{ false };
     std::uint64_t timeout_message_sequence_{};
     std::uint64_t replay_message_sequence_{};
 };

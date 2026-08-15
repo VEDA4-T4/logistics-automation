@@ -1,3 +1,5 @@
+#include <utility>
+
 #include "logistics/central_server/application.hpp"
 #include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
@@ -25,6 +27,8 @@ bool Application::CommitRecoveryResponse(
         return false;
     }
 
+    auto response_message = *decision.message;
+    response_message.process_epoch = device_response.process_epoch;
     const std::uint64_t command_message_sequence = command_manager.Snapshot().message_sequence + 1;
     std::vector<PendingMqttDelivery> completions;
     const auto transition =
@@ -32,13 +36,15 @@ bool Application::CommitRecoveryResponse(
             completions.reserve(active_works.size() + 1);
             completions.push_back({
                 .topic = contracts::mqtt::QtResponseTopic(qt_client_id),
-                .message = *decision.message,
+                .message = response_message,
             });
             for (const auto& work : active_works) {
+                auto completion = MakeWorkFailureCompletion(source_id, "RECOVERY-FAILED-" + work.work_id, work.work_id,
+                                                            "CANCELLED_BY_RECOVERY", std::string(completed_at));
+                completion.process_epoch = device_response.process_epoch;
                 completions.push_back({
                     .topic = contracts::mqtt::QtEventTopic(qt_client_id),
-                    .message = MakeWorkFailureCompletion(source_id, "RECOVERY-FAILED-" + work.work_id, work.work_id,
-                                                         "CANCELLED_BY_RECOVERY", std::string(completed_at)),
+                    .message = std::move(completion),
                 });
             }
             return persist(process_orchestrator.MessageSequence(), command_message_sequence, completions);

@@ -15,6 +15,7 @@ namespace logistics::central_server {
 struct StoredProcessState final {
     ProcessSystemState system_state{ ProcessSystemState::kIdle };
     std::uint64_t message_sequence{};
+    std::string process_epoch;
     std::vector<WorkProcessSnapshot> works;
     std::unordered_map<std::string, GripperTarget> gripper_targets;
     std::vector<ProcessCommandIntent> pending_commands;
@@ -22,6 +23,8 @@ struct StoredProcessState final {
     CommandManagerSnapshot command_manager;
     std::unordered_map<std::string, contracts::mqtt::ControlCommand> pending_system_commands;
 };
+
+[[nodiscard]] std::string GenerateProcessEpoch();
 
 struct PendingMqttDelivery final {
     std::string topic;
@@ -43,10 +46,12 @@ public:
         const std::vector<ProcessCommandIntent>& pending_commands, std::int64_t updated_at_ms,
         const std::vector<PendingMqttDelivery>& deliveries = {},
         const std::vector<std::string>& processed_message_ids = {}, const CommandManagerSnapshot& command_manager = {},
-        const std::unordered_map<std::string, contracts::mqtt::ControlCommand>& pending_system_commands = {});
+        const std::unordered_map<std::string, contracts::mqtt::ControlCommand>& pending_system_commands = {},
+        std::string_view process_epoch = {});
     [[nodiscard]] DatabaseStatus CommitRecovery(std::uint64_t message_sequence, std::uint64_t command_message_sequence,
                                                 std::int64_t updated_at_ms,
-                                                const std::vector<PendingMqttDelivery>& terminal_deliveries);
+                                                const std::vector<PendingMqttDelivery>& terminal_deliveries,
+                                                std::string_view process_epoch = {});
     [[nodiscard]] DatabaseStatus LoadPendingMqttDeliveries(std::vector<PendingMqttDelivery>& output);
     [[nodiscard]] DatabaseStatus EnqueueMqttDelivery(std::string_view topic,
                                                      const contracts::mqtt::MqttMessage& message,
@@ -63,7 +68,7 @@ private:
         const std::vector<PendingMqttDelivery>& deliveries, const std::vector<std::string>& processed_message_ids,
         const CommandManagerSnapshot& command_manager,
         const std::unordered_map<std::string, contracts::mqtt::ControlCommand>& pending_system_commands,
-        bool replace_mqtt_outbox);
+        bool replace_mqtt_outbox, std::string_view process_epoch);
 
     Database& database_;
 };

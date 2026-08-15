@@ -161,6 +161,8 @@ public:
     [[nodiscard]] PersistenceResult PersistValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
                                                           const EventPayload& payload,
                                                           const TransportMetadata& metadata);
+    [[nodiscard]] DatabaseStatus RejectValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
+                                                      const TransportMetadata& metadata, std::string_view reason);
     [[nodiscard]] DatabaseStatus MarkEventStored(std::string_view message_id);
     [[nodiscard]] DatabaseStatus PendingReceivedEvents(std::vector<PendingReceivedEvent>& output,
                                                        std::size_t limit = 100);

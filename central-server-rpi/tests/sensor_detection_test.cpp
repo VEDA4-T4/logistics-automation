@@ -172,7 +172,6 @@ void TestInputDetectionGateHandlesVisionRaceAndStoppedSystem() {
     assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldCreateWork(detected, false, false));
-    assert(gate.ShouldCreateWork(detected, true, false));
     assert(!gate.ShouldCreateWork(detected, true, false));
 
     const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
@@ -188,6 +187,11 @@ void TestInputDetectionGateHandlesVisionRaceAndStoppedSystem() {
     assert(gate.ShouldCreateWork(detected, true, false));
     gate.RetryStop();
     assert(gate.ShouldStopConveyor(detected));
+
+    gate.RequireClear();
+    assert(!gate.ShouldCreateWork(detected, true, false));
+    assert(!gate.ShouldCreateWork(clear, true, false));
+    assert(gate.ShouldCreateWork(detected, true, false));
 
     assert(!gate.ShouldStopConveyor(SensorMessage("PI-LT-01", "DETECTED")));
     assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));

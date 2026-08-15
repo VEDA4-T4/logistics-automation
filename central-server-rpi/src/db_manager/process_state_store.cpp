@@ -1,6 +1,10 @@
 #include "logistics/central_server/process_state_store.hpp"
 
+#include <array>
+#include <iomanip>
 #include <limits>
+#include <random>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -96,6 +100,25 @@ namespace mqtt = contracts::mqtt;
 
 }  // namespace
 
+std::string GenerateProcessEpoch() {
+    std::array<std::uint8_t, 16> value{};
+    std::random_device random;
+    for (auto& byte : value) {
+        byte = static_cast<std::uint8_t>(random());
+    }
+    value[6] = static_cast<std::uint8_t>((value[6] & 0x0fU) | 0x40U);
+    value[8] = static_cast<std::uint8_t>((value[8] & 0x3fU) | 0x80U);
+    std::ostringstream result;
+    result << std::hex << std::setfill('0');
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        if (index == 4 || index == 6 || index == 8 || index == 10) {
+            result << '-';
+        }
+        result << std::setw(2) << static_cast<int>(value[index]);
+    }
+    return result.str();
+}
+
 bool IsVisionWorkCreatedDelivery(const PendingMqttDelivery& delivery, std::string_view vision_device_id) {
     return delivery.topic == mqtt::DeviceCommandTopic(vision_device_id) &&
            delivery.message.message_type == mqtt::MessageType::kWorkCreated &&
@@ -118,8 +141,8 @@ std::optional<std::string> AcknowledgedVisionWorkId(const mqtt::MqttMessage& mes
 DatabaseStatus ProcessStateStore::Load(std::optional<StoredProcessState>& output) {
     output.reset();
     Statement runtime;
-    auto status =
-        database_.Prepare("SELECT system_state,message_sequence FROM process_runtime_state WHERE id=1", runtime);
+    auto status = database_.Prepare(
+        "SELECT system_state,message_sequence,process_epoch FROM process_runtime_state WHERE id=1", runtime);
     if (!status.ok()) {
         return status;
     }
@@ -129,13 +152,16 @@ DatabaseStatus ProcessStateStore::Load(std::optional<StoredProcessState>& output
     }
     const auto system_state = ParseProcessSystemState(runtime.ColumnText(0));
     const auto sequence = runtime.ColumnInt64(1);
-    if (!system_state.has_value() || sequence < 0) {
+    const std::string process_epoch = runtime.ColumnText(2);
+    if (!system_state.has_value() || sequence < 0 ||
+        (!process_epoch.empty() && !contracts::IsValidUuid(process_epoch))) {
         return { DatabaseStatusCode::kSqlError, "stored process runtime state is invalid" };
     }
 
     StoredProcessState restored{
         .system_state = *system_state,
         .message_sequence = static_cast<std::uint64_t>(sequence),
+        .process_epoch = process_epoch,
         .works = {},
         .gripper_targets = {},
         .pending_commands = {},
@@ -319,14 +345,17 @@ DatabaseStatus ProcessStateStore::Save(
     const std::vector<ProcessCommandIntent>& pending_commands, std::int64_t updated_at_ms,
     const std::vector<PendingMqttDelivery>& deliveries, const std::vector<std::string>& processed_message_ids,
     const CommandManagerSnapshot& command_manager,
-    const std::unordered_map<std::string, mqtt::ControlCommand>& pending_system_commands) {
+    const std::unordered_map<std::string, mqtt::ControlCommand>& pending_system_commands,
+    std::string_view process_epoch) {
     return SaveSnapshot(system_state, message_sequence, works, gripper_targets, pending_commands, updated_at_ms,
-                        deliveries, processed_message_ids, command_manager, pending_system_commands, false);
+                        deliveries, processed_message_ids, command_manager, pending_system_commands, false,
+                        process_epoch);
 }
 
 DatabaseStatus ProcessStateStore::CommitRecovery(std::uint64_t message_sequence, std::uint64_t command_message_sequence,
                                                  std::int64_t updated_at_ms,
-                                                 const std::vector<PendingMqttDelivery>& terminal_deliveries) {
+                                                 const std::vector<PendingMqttDelivery>& terminal_deliveries,
+                                                 std::string_view process_epoch) {
     return SaveSnapshot(ProcessSystemState::kStopped, message_sequence, {}, {}, {}, updated_at_ms, terminal_deliveries,
                         {},
                         CommandManagerSnapshot{
@@ -334,7 +363,7 @@ DatabaseStatus ProcessStateStore::CommitRecovery(std::uint64_t message_sequence,
                             .completed_requests = {},
                             .message_sequence = command_message_sequence,
                         },
-                        {}, true);
+                        {}, true, process_epoch);
 }
 
 DatabaseStatus ProcessStateStore::SaveSnapshot(
@@ -343,9 +372,13 @@ DatabaseStatus ProcessStateStore::SaveSnapshot(
     const std::vector<ProcessCommandIntent>& pending_commands, std::int64_t updated_at_ms,
     const std::vector<PendingMqttDelivery>& deliveries, const std::vector<std::string>& processed_message_ids,
     const CommandManagerSnapshot& command_manager,
-    const std::unordered_map<std::string, mqtt::ControlCommand>& pending_system_commands, bool replace_mqtt_outbox) {
+    const std::unordered_map<std::string, mqtt::ControlCommand>& pending_system_commands, bool replace_mqtt_outbox,
+    std::string_view process_epoch) {
     if (updated_at_ms < 0 || message_sequence > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         return { DatabaseStatusCode::kInvalidArgument, "invalid process runtime snapshot" };
+    }
+    if (!process_epoch.empty() && !contracts::IsValidUuid(process_epoch)) {
+        return { DatabaseStatusCode::kInvalidArgument, "process epoch must be a UUID" };
     }
     Transaction transaction(database_);
     if (!transaction.status().ok()) {
@@ -354,13 +387,16 @@ DatabaseStatus ProcessStateStore::SaveSnapshot(
 
     Statement runtime;
     auto status = database_.Prepare(
-        "INSERT INTO process_runtime_state(id,system_state,message_sequence,updated_at_ms) VALUES(1,?,?,?) "
+        "INSERT INTO process_runtime_state(id,system_state,message_sequence,updated_at_ms,process_epoch) "
+        "VALUES(1,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET system_state=excluded.system_state,"
-        "message_sequence=excluded.message_sequence,updated_at_ms=excluded.updated_at_ms",
+        "message_sequence=excluded.message_sequence,updated_at_ms=excluded.updated_at_ms,process_epoch=excluded."
+        "process_epoch",
         runtime);
     if (!status.ok() || !(status = runtime.Bind(1, ToString(system_state))).ok() ||
         !(status = runtime.Bind(2, static_cast<std::int64_t>(message_sequence))).ok() ||
-        !(status = runtime.Bind(3, updated_at_ms)).ok()) {
+        !(status = runtime.Bind(3, updated_at_ms)).ok() ||
+        !(status = runtime.Bind(4, process_epoch.empty() ? std::string_view("") : process_epoch)).ok()) {
         return status;
     }
     bool row = false;

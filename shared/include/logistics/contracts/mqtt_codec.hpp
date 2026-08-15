@@ -443,6 +443,7 @@ struct MqttMessage {
     MessageType message_type{ MessageType::kUnknown };
     std::string source_id;
     std::string timestamp;
+    std::optional<std::string> process_epoch{};
     MessagePayload data;
 
     [[nodiscard]] bool IsValid() const noexcept;
@@ -672,11 +673,49 @@ inline bool MqttMessage::IsValid() const noexcept {
         .message_type = message_type,
         .source_id = source_id,
         .timestamp = timestamp,
+        .process_epoch = process_epoch ? std::string_view(*process_epoch) : std::string_view{},
         .data_json = "{}",
     };
 
     return envelope.IsValid() && IsValidIso8601Timestamp(timestamp) && PayloadMatchesMessageType(message_type, data) &&
            IsPayloadValid(data);
+}
+
+[[nodiscard]] inline bool IsProcessScopedMessage(const MqttMessage& message) noexcept {
+    switch (message.message_type) {
+        case MessageType::kBoxDetected:
+        case MessageType::kWorkCreated:
+        case MessageType::kWorkCompleted:
+        case MessageType::kPositionDetected:
+        case MessageType::kBarcodeDetected:
+        case MessageType::kProductImage:
+        case MessageType::kProductInfo:
+        case MessageType::kDestinationSet:
+            return true;
+        case MessageType::kDeviceStatus: {
+            const auto* status = std::get_if<DeviceStatusPayload>(&message.data);
+            return status != nullptr && status->job_id.has_value();
+        }
+        case MessageType::kErrorOccurred: {
+            const auto* error = std::get_if<ErrorOccurredPayload>(&message.data);
+            return error != nullptr && error->job_id.has_value();
+        }
+        case MessageType::kControlCommand: {
+            const auto* command = std::get_if<ControlCommandPayload>(&message.data);
+            return command != nullptr && command->params.contains(std::string(kWorkIdField));
+        }
+        case MessageType::kCommandResponse: {
+            const auto* response = std::get_if<CommandResponsePayload>(&message.data);
+            return response != nullptr && response->command != ControlCommand::kStatusRequest;
+        }
+        case MessageType::kUnknown:
+        case MessageType::kDeviceRegister:
+        case MessageType::kHeartbeat:
+        case MessageType::kEmergencyStop:
+        case MessageType::kSensorStatus:
+            return false;
+    }
+    return false;
 }
 
 namespace codec_detail {
@@ -1034,7 +1073,13 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
     if (!ReadRequiredString(root, kMessageIdField, message.message_id, status) ||
         !ReadRequiredString(root, kMessageTypeField, message_type, status) ||
         !ReadRequiredString(root, kSourceIdField, message.source_id, status) ||
-        !ReadRequiredString(root, kTimestampField, message.timestamp, status)) {
+        !ReadRequiredString(root, kTimestampField, message.timestamp, status) ||
+        !ReadOptionalString(root, kProcessEpochField, message.process_epoch, status)) {
+        return false;
+    }
+
+    if (message.process_epoch.has_value() && !IsValidUuid(*message.process_epoch)) {
+        status = MakeError(CodecError::kInvalidFieldValue, kProcessEpochField, "processEpoch must contain a UUID");
         return false;
     }
 
@@ -1057,6 +1102,7 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
         .message_type = message.message_type,
         .source_id = message.source_id,
         .timestamp = message.timestamp,
+        .process_epoch = message.process_epoch ? std::string_view(*message.process_epoch) : std::string_view{},
         .data_json = "{}",
     };
 
@@ -1589,6 +1635,7 @@ template <typename PayloadType>
             .message_type = message.message_type,
             .source_id = message.source_id,
             .timestamp = message.timestamp,
+            .process_epoch = message.process_epoch ? std::string_view(*message.process_epoch) : std::string_view{},
             .data_json = "{}",
         };
 
@@ -1612,6 +1659,10 @@ template <typename PayloadType>
             error = CodecError::kInvalidFieldValue;
             field = kTimestampField;
             description = "Timestamp must be ISO 8601 with UTC Z or an explicit offset";
+        } else if (message.process_epoch.has_value() && !IsValidUuid(*message.process_epoch)) {
+            error = CodecError::kInvalidFieldValue;
+            field = kProcessEpochField;
+            description = "processEpoch must contain a UUID";
         } else if (!envelope.IsValid()) {
             error = CodecError::kInvalidEnvelope;
             field = "";
@@ -1645,6 +1696,10 @@ template <typename PayloadType>
             { std::string(kSourceIdField), message.source_id },
             { std::string(kTimestampField), message.timestamp },
         };
+
+        if (message.process_epoch.has_value()) {
+            root[std::string(kProcessEpochField)] = *message.process_epoch;
+        }
 
         root[std::string(kDataField)] =
             std::visit([](const auto& payload) { return codec_detail::SerializePayload(payload); }, message.data);

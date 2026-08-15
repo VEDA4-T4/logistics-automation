@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "logistics/contracts/identifier.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 
 namespace logistics::contracts::mqtt {
@@ -16,6 +17,7 @@ inline constexpr std::string_view kMessageIdField = "messageId";
 inline constexpr std::string_view kMessageTypeField = "messageType";
 inline constexpr std::string_view kSourceIdField = "sourceId";
 inline constexpr std::string_view kTimestampField = "timestamp";
+inline constexpr std::string_view kProcessEpochField = "processEpoch";
 inline constexpr std::string_view kDataField = "data";
 inline constexpr std::string_view kRequestIdField = "requestId";
 inline constexpr std::string_view kTargetDeviceIdField = "targetDeviceId";
@@ -101,12 +103,13 @@ struct EnvelopeView {
     MessageType message_type{ MessageType::kUnknown };
     std::string_view source_id;
     std::string_view timestamp;
+    std::string_view process_epoch{};
     std::string_view data_json;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return protocol_version == kCurrentProtocolVersion && IsValidTopicLevel(message_id) &&
                message_type != MessageType::kUnknown && IsValidTopicLevel(source_id) && !timestamp.empty() &&
-               !data_json.empty();
+               (process_epoch.empty() || ::logistics::contracts::IsValidUuid(process_epoch)) && !data_json.empty();
     }
 };
 

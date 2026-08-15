@@ -55,7 +55,7 @@ void PopulateStartupState(logistics::central_server::Database& database, bool st
                    "INSERT INTO mqtt_event_log(message_id,topic,payload_json,qos,retained,processing_state,"
                    "received_at_ms,last_received_at_ms) "
                    "VALUES('OLD-INBOX','device/PI-INPUT-01/event','{}',1,0,'RECEIVED',1,1);"
-                   "INSERT INTO process_runtime_state VALUES(1,'RUNNING',7,1);"
+                   "INSERT INTO process_runtime_state VALUES(1,'RUNNING',7,1,'');"
                    "INSERT INTO process_work_state(work_id,stage,updated_at_ms) VALUES('OLD-WORK','INPUT_DETECTED',1);"
                    "INSERT INTO process_command_outbox "
                    "VALUES('OLD-COMMAND','{}','OLD-WORK',NULL,0,1);"
@@ -100,7 +100,7 @@ int main() {
     server::Transaction independent_upload_transaction(upload_database);
     assert(independent_upload_transaction.status().code == server::DatabaseStatusCode::kBusy);
     assert(database.Rollback().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 10);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 11);
     assert(Scalar(database,
                   "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_mqtt_pending_received'") == 1);
     assert(Scalar(database,
@@ -458,7 +458,7 @@ int main() {
     assert(server::PrepareDatabaseForStartup(reset_database, reset_config).ok());
     assert(Scalar(reset_database,
                   "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_id='CUSTOM-1'") == 1);
-    assert(Scalar(reset_database, "SELECT count(*) FROM schema_migrations") == 10);
+    assert(Scalar(reset_database, "SELECT count(*) FROM schema_migrations") == 11);
     assert(Scalar(reset_database, "SELECT count(*) FROM schema_migrations WHERE version=999") == 0);
     assert(Scalar(reset_database, "SELECT count(*) FROM product") == 0);
     assert(Scalar(reset_database, "SELECT count(*) FROM work_history") == 0);
@@ -482,7 +482,7 @@ int main() {
                                                .startup_mode = server::StartupMode::kFresh };
     assert(first_start_database.Open(first_start_config).ok());
     assert(server::PrepareDatabaseForStartup(first_start_database, first_start_config).ok());
-    assert(Scalar(first_start_database, "SELECT count(*) FROM schema_migrations") == 10);
+    assert(Scalar(first_start_database, "SELECT count(*) FROM schema_migrations") == 11);
     assert(Scalar(first_start_database, "SELECT count(*) FROM product_catalog") == 1);
 
     server::Database resume_database;
@@ -496,7 +496,7 @@ int main() {
     assert(server::PrepareDatabaseForStartup(resume_database, resume_config).ok());
     assert(Scalar(resume_database,
                   "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_id='CUSTOM-1'") == 1);
-    assert(Scalar(resume_database, "SELECT count(*) FROM schema_migrations") == 10);
+    assert(Scalar(resume_database, "SELECT count(*) FROM schema_migrations") == 11);
     assert(Scalar(resume_database, "SELECT count(*) FROM product WHERE work_id='OLD-WORK'") == 1);
     assert(Scalar(resume_database, "SELECT count(*) FROM work_history WHERE message_id='OLD-HISTORY'") == 1);
     assert(Scalar(resume_database, "SELECT count(*) FROM mqtt_event_log WHERE message_id='OLD-INBOX'") == 1);
@@ -541,7 +541,7 @@ int main() {
     std::filesystem::copy(database_config.migration_dir, incompatible_catalog_migrations,
                           std::filesystem::copy_options::recursive);
     {
-        std::ofstream migration(incompatible_catalog_migrations / "011_break_catalog.sql");
+        std::ofstream migration(incompatible_catalog_migrations / "012_break_catalog.sql");
         assert(migration);
         migration << "ALTER TABLE product_catalog RENAME COLUMN product_name TO legacy_name;\n";
         assert(migration.good());

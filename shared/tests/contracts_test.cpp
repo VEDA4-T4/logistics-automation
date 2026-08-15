@@ -17,6 +17,7 @@ namespace mqtt = logistics::contracts::mqtt;
 namespace {
 
 constexpr std::string_view kTestWorkId = "123e4567-e89b-12d3-a456-426614174000";
+constexpr std::string_view kTestProcessEpoch = "4b0d7a76-49f7-4e39-b624-f59e129fa4c7";
 
 mqtt::MqttMessage MakeMessage(std::string message_id, mqtt::MessageType message_type, mqtt::MessagePayload payload,
                               std::string source_id = "PI-01") {
@@ -276,6 +277,49 @@ void TestAllMqttMessageRoundTrips() {
                                                                   .error_code = std::nullopt,
                                                                   .message = "Destination information received.",
                                                               }));
+}
+
+void TestProcessEpochEnvelopeAndClassification() {
+    auto work_created = MakeMessage("MSG-EPOCH-WORK", mqtt::MessageType::kWorkCreated,
+                                    mqtt::WorkCreatedPayload{ .work_id = std::string(kTestWorkId) });
+    assert(!work_created.process_epoch.has_value());
+    const auto legacy = mqtt::SerializeMessage(work_created);
+    assert(legacy.IsSuccess());
+    assert(!mqtt::Json::parse(legacy.payload).contains("processEpoch"));
+    const auto legacy_decoded = mqtt::DeserializeMessage(legacy.payload);
+    assert(legacy_decoded.IsSuccess());
+    assert(!legacy_decoded.value.process_epoch.has_value());
+
+    work_created.process_epoch = std::string(kTestProcessEpoch);
+    const auto encoded = mqtt::SerializeMessage(work_created);
+    assert(encoded.IsSuccess());
+    assert(mqtt::Json::parse(encoded.payload).at("processEpoch") == kTestProcessEpoch);
+    const auto decoded = mqtt::DeserializeMessage(encoded.payload);
+    assert(decoded.IsSuccess());
+    assert(decoded.value.process_epoch == kTestProcessEpoch);
+
+    work_created.process_epoch = "not-a-uuid";
+    const auto invalid = mqtt::SerializeMessage(work_created);
+    assert(!invalid.IsSuccess());
+    assert(invalid.status.field == "processEpoch");
+
+    assert(mqtt::IsProcessScopedMessage(decoded.value));
+    assert(mqtt::IsProcessScopedMessage(
+        MakeMessage("MSG-BOX-EPOCH", mqtt::MessageType::kBoxDetected,
+                    mqtt::BoxDetectedPayload{ .detected = true, .image_name = "box.jpg" })));
+    assert(mqtt::IsProcessScopedMessage(MakeMessage("MSG-STATUS-WORK", mqtt::MessageType::kDeviceStatus,
+                                                    mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline,
+                                                                               .current_state = "COMPLETED",
+                                                                               .job_id = std::string(kTestWorkId) })));
+    assert(!mqtt::IsProcessScopedMessage(
+        MakeMessage("MSG-STATUS-TELEMETRY", mqtt::MessageType::kDeviceStatus,
+                    mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline, .current_state = "READY" })));
+    assert(!mqtt::IsProcessScopedMessage(
+        MakeMessage("MSG-SENSOR-TELEMETRY", mqtt::MessageType::kSensorStatus,
+                    mqtt::SensorStatusPayload{ .sensor_id = 1, .measurement_status = "OK", .distance_cm = 20 })));
+    assert(!mqtt::IsProcessScopedMessage(MakeMessage(
+        "MSG-HEARTBEAT-TELEMETRY", mqtt::MessageType::kHeartbeat,
+        mqtt::HeartbeatPayload{ .status = mqtt::ConnectionState::kOnline, .current_state = "RUNNING", .uptime = 1 })));
 }
 
 void TestLineTracerPositionStatusRoundTrip() {
@@ -722,6 +766,8 @@ void TestMqttTopicMessageValidation() {
 int main() {
     using logistics::contracts::DeviceRole;
     using logistics::contracts::ProcessState;
+
+    TestProcessEpochEnvelopeAndClassification();
 
     assert(logistics::contracts::ToString(DeviceRole::kVision) == "vision");
     assert(logistics::contracts::ToString(DeviceRole::kGripper) == "gripper");

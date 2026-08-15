@@ -517,9 +517,52 @@ void TestSnapshotSurvivesRestartAndIsSafelySuspended() {
     std::filesystem::remove(path.string() + "-shm", error);
 }
 
+void TestProcessEpochSurvivesResumeAndChangesOnFreshReset() {
+    const auto path = TemporaryDatabasePath();
+    const central_server::DatabaseConfig resume_config{
+        .path = path,
+        .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+        .startup_mode = central_server::StartupMode::kResume,
+    };
+    const std::string first_epoch = central_server::GenerateProcessEpoch();
+    assert(mqtt::IsValidUuid(first_epoch));
+    {
+        central_server::Database database;
+        assert(database.Open(resume_config).ok());
+        assert(central_server::MigrationRunner::Apply(database, resume_config.migration_dir).ok());
+        central_server::ProcessStateStore store(database);
+        assert(store.Save(central_server::ProcessSystemState::kIdle, 0, {}, {}, {}, 1000, {}, {}, {}, {}, first_epoch)
+                   .ok());
+    }
+    {
+        central_server::Database database;
+        assert(database.Open(resume_config).ok());
+        assert(central_server::PrepareDatabaseForStartup(database, resume_config).ok());
+        central_server::ProcessStateStore store(database);
+        std::optional<central_server::StoredProcessState> stored;
+        assert(store.Load(stored).ok() && stored.has_value());
+        assert(stored->process_epoch == first_epoch);
+
+        auto fresh_config = resume_config;
+        fresh_config.startup_mode = central_server::StartupMode::kFresh;
+        assert(central_server::PrepareDatabaseForStartup(database, fresh_config).ok());
+        const std::string fresh_epoch = central_server::GenerateProcessEpoch();
+        assert(mqtt::IsValidUuid(fresh_epoch));
+        assert(fresh_epoch != first_epoch);
+        assert(store.Save(central_server::ProcessSystemState::kIdle, 0, {}, {}, {}, 1001, {}, {}, {}, {}, fresh_epoch)
+                   .ok());
+        assert(store.Load(stored).ok() && stored->process_epoch == fresh_epoch);
+    }
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    std::filesystem::remove(path.string() + "-wal", error);
+    std::filesystem::remove(path.string() + "-shm", error);
+}
+
 }  // namespace
 
 int main() {
+    TestProcessEpochSurvivesResumeAndChangesOnFreshReset();
     TestSnapshotSurvivesRestartAndIsSafelySuspended();
     TestMqttDeliveryOutboxSurvivesRestartAndDeduplicates();
     TestMqttDeliveryOutboxPreservesInsertionOrderForEqualTimestamps();

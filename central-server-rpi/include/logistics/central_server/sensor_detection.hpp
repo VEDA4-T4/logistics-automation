@@ -104,6 +104,7 @@ public:
     // occupied input station consumes it because vision won the same-box race.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
                                         bool input_station_occupied);
+    void RequireClear() noexcept;
     void Retry() noexcept;
     void RetryStop() noexcept;
 
@@ -112,6 +113,7 @@ private:
     std::int32_t sensor_id_;
     bool consumed_{ false };
     bool stop_consumed_{ false };
+    bool clear_observed_{ false };
 };
 
 class SortingDetectionGate final {

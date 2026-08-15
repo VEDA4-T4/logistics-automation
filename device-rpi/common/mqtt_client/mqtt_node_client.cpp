@@ -296,36 +296,48 @@ public:
     }
 
     [[nodiscard]] bool PublishResponse(const mqtt::MqttMessage& message) {
-        processor_.RememberCommandResponse(message);
-        return PublishMessage(mqtt::DeviceResponseTopic(config_.device_id), message, 1, false, "command response");
+        const auto prepared = processor_.PrepareOutboundMessage(message);
+        if (!prepared.has_value()) {
+            return false;
+        }
+        processor_.RememberCommandResponse(*prepared);
+        return PublishMessage(mqtt::DeviceResponseTopic(config_.device_id), *prepared, 1, false, "command response");
     }
 
     [[nodiscard]] bool PublishStatus(const mqtt::MqttMessage& message) {
-        return PublishMessage(mqtt::DeviceStatusTopic(config_.device_id), message, 1, true, "device status");
+        const auto prepared = processor_.PrepareOutboundMessage(message);
+        return prepared.has_value() &&
+               PublishMessage(mqtt::DeviceStatusTopic(config_.device_id), *prepared, 1, true, "device status");
     }
 
     [[nodiscard]] bool PublishEvent(const mqtt::MqttMessage& message) {
+        const auto prepared = processor_.PrepareOutboundMessage(message);
+        if (!prepared.has_value()) {
+            return false;
+        }
         const std::string topic = mqtt::DeviceEventTopic(config_.device_id);
-        if (!mqtt::IsTransientTelemetry(message.message_type)) {
-            return PublishMessage(topic, message, 1, false, "device event");
+        if (!mqtt::IsTransientTelemetry(prepared->message_type)) {
+            return PublishMessage(topic, *prepared, 1, false, "device event");
         }
         if (!ready_ || client_ == nullptr) {
             return false;
         }
-        const auto validation = mqtt::ValidateTopicMessage(topic, message);
+        const auto validation = mqtt::ValidateTopicMessage(topic, *prepared);
         if (!validation.IsSuccess()) {
             std::cerr << "[device][mqtt][ERROR] invalid sensor telemetry: " << validation.message << '\n';
             return false;
         }
-        const bool published = PublishVolatile(topic, mqtt::SerializeMessage(message), 1, false, "sensor telemetry");
+        const bool published = PublishVolatile(topic, mqtt::SerializeMessage(*prepared), 1, false, "sensor telemetry");
         if (published) {
-            device_status_->MarkCommunication(message.timestamp);
+            device_status_->MarkCommunication(prepared->timestamp);
         }
         return published;
     }
 
     [[nodiscard]] bool PublishError(const mqtt::MqttMessage& message) {
-        return PublishMessage(mqtt::DeviceErrorTopic(config_.device_id), message, 1, false, "device error");
+        const auto prepared = processor_.PrepareOutboundMessage(message);
+        return prepared.has_value() &&
+               PublishMessage(mqtt::DeviceErrorTopic(config_.device_id), *prepared, 1, false, "device error");
     }
 
 private:

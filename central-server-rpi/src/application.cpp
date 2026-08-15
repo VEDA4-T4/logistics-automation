@@ -83,6 +83,22 @@ bool InputStationOccupied(const ProcessStateMachine& machine) {
     });
 }
 
+bool CarriesProcessEpoch(const contracts::mqtt::MqttMessage& message) {
+    if (contracts::mqtt::IsProcessScopedMessage(message) ||
+        message.message_type == contracts::mqtt::MessageType::kEmergencyStop) {
+        return true;
+    }
+    const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
+    return command != nullptr && command->command != contracts::mqtt::ControlCommand::kStatusRequest;
+}
+
+contracts::mqtt::MqttMessage StampProcessEpoch(contracts::mqtt::MqttMessage message, std::string_view process_epoch) {
+    if (CarriesProcessEpoch(message)) {
+        message.process_epoch = std::string(process_epoch);
+    }
+    return message;
+}
+
 bool ResolveConfigPath(int argc, char* argv[], std::filesystem::path& config_path) {
     if (argc == 1) {
         if (const char* environment_path = std::getenv("LOGISTICS_CENTRAL_SERVER_CONFIG");
@@ -219,8 +235,15 @@ int Application::Run(int argc, char* argv[]) {
         std::cerr << "[server][ERROR] process state load failed: " << database_status.message << '\n';
         return 5;
     }
+    const std::string process_epoch = stored_process_state.has_value() && !stored_process_state->process_epoch.empty()
+                                          ? stored_process_state->process_epoch
+                                          : GenerateProcessEpoch();
+    mqtt_handler.SetProcessEpoch(process_epoch, server_config.database.startup_mode == StartupMode::kFresh);
     if (stored_process_state.has_value()) {
         auto pending_commands = std::move(stored_process_state->pending_commands);
+        for (auto& intent : pending_commands) {
+            intent.message = StampProcessEpoch(std::move(intent.message), process_epoch);
+        }
         auto restore = process_orchestrator.RestoreAfterServerRestart(
             stored_process_state->system_state, std::move(stored_process_state->works),
             std::move(stored_process_state->gripper_targets), stored_process_state->message_sequence,
@@ -321,7 +344,8 @@ int Application::Run(int argc, char* argv[]) {
         return false;
     };
     const auto persist_process_state = [&process_orchestrator, &process_command_tracker, &command_manager,
-                                        &pending_system_commands, &process_state_store, &run_runtime_store]() {
+                                        &pending_system_commands, &process_state_store, &run_runtime_store,
+                                        &process_epoch]() {
         const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
         for (const auto& intent : process_command_tracker.PendingCommands()) {
             if (std::ranges::find(active_works, intent.work_id, &WorkProcessSnapshot::work_id) == active_works.end()) {
@@ -337,7 +361,7 @@ int Application::Run(int argc, char* argv[]) {
                     process_orchestrator.StateMachine().SystemState(), process_orchestrator.MessageSequence(),
                     active_works, process_orchestrator.GripperTargets(), process_command_tracker.PendingCommands(),
                     CurrentUnixTimeMilliseconds(), {}, process_orchestrator.StateMachine().ProcessedMessageIds(),
-                    command_manager.Snapshot(), pending_system_commands);
+                    command_manager.Snapshot(), pending_system_commands, process_epoch);
             },
             "process state persistence");
     };
@@ -385,14 +409,15 @@ int Application::Run(int argc, char* argv[]) {
             }
             return true;
         };
-    const auto publish_durable = [&publish_enqueued, &process_state_store, &run_runtime_store](
+    const auto publish_durable = [&publish_enqueued, &process_state_store, &run_runtime_store, &process_epoch](
                                      std::string_view topic, const contracts::mqtt::MqttMessage& message) {
+        const auto stamped = StampProcessEpoch(message, process_epoch);
         if (!run_runtime_store(
-                [&] { return process_state_store.EnqueueMqttDelivery(topic, message, CurrentUnixTimeMilliseconds()); },
+                [&] { return process_state_store.EnqueueMqttDelivery(topic, stamped, CurrentUnixTimeMilliseconds()); },
                 "MQTT delivery outbox enqueue")) {
             return false;
         }
-        return publish_enqueued(PendingMqttDelivery{ .topic = std::string(topic), .message = message });
+        return publish_enqueued(PendingMqttDelivery{ .topic = std::string(topic), .message = stamped });
     };
     const auto pump_durable = [&mqtt_client, &publish_enqueued, &process_state_store, &run_runtime_store,
                                &mqtt_delivery_mutex, &mqtt_deliveries_acknowledged, &restored_input_detected_work_ids,
@@ -441,14 +466,15 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_handler.SetWorkCreatedHandler([&publish_enqueued, &process_orchestrator, &process_command_tracker,
                                         &persist_process_state, &process_state_store, &run_runtime_store,
                                         &dispatch_process_commands, &command_manager, &pending_system_commands,
-                                        qt_client_id = server_config.qt_client_id](std::string_view device_id,
-                                                                                   std::string_view work_id) {
+                                        &process_epoch, qt_client_id = server_config.qt_client_id](
+                                           std::string_view device_id, std::string_view work_id) {
         const contracts::mqtt::MqttMessage message{
             .protocol_version = std::string(contracts::mqtt::kCurrentProtocolVersion),
             .message_id = "WORK-" + std::string(work_id),
             .message_type = contracts::mqtt::MessageType::kWorkCreated,
             .source_id = "central-server",
             .timestamp = CurrentIso8601Timestamp(),
+            .process_epoch = process_epoch,
             .data = contracts::mqtt::WorkCreatedPayload{ .work_id = std::string(work_id) },
         };
         const auto begin = process_orchestrator.BeginWork(message.message_id, work_id, device_id, message.timestamp);
@@ -497,7 +523,7 @@ int Application::Run(int argc, char* argv[]) {
                         process_orchestrator.StateMachine().ActiveWorks(), process_orchestrator.GripperTargets(),
                         process_command_tracker.PendingCommands(), CurrentUnixTimeMilliseconds(), deliveries,
                         process_orchestrator.StateMachine().ProcessedMessageIds(), command_manager.Snapshot(),
-                        pending_system_commands);
+                        pending_system_commands, process_epoch);
                 },
                 "WORK_CREATED state/outbox persistence")) {
             return false;
@@ -529,7 +555,7 @@ int Application::Run(int argc, char* argv[]) {
         [&pending_system_commands, &process_orchestrator, &process_command_tracker, &command_manager,
          &process_state_store, &publish_enqueued, &run_runtime_store, &restored_input_detected_work_ids,
          &restored_vision_assigned_work_ids, &restored_pending_process_commands, &safe_restored_replay_pending,
-         qt_client_id = server_config.qt_client_id,
+         &process_epoch, qt_client_id = server_config.qt_client_id,
          source_id = server_config.process.server_id](const contracts::mqtt::MqttMessage& device_response) {
             if (!Application::CommitRecoveryResponse(
                     process_orchestrator, process_command_tracker, command_manager, pending_system_commands,
@@ -539,7 +565,8 @@ int Application::Run(int argc, char* argv[]) {
                         return run_runtime_store(
                             [&] {
                                 return process_state_store.CommitRecovery(process_sequence, command_sequence,
-                                                                          CurrentUnixTimeMilliseconds(), completions);
+                                                                          CurrentUnixTimeMilliseconds(), completions,
+                                                                          process_epoch);
                             },
                             "recovery state/outbox persistence");
                     },
@@ -558,8 +585,8 @@ int Application::Run(int argc, char* argv[]) {
                                         &command_manager, &process_state_store, &publish_enqueued,
                                         &replay_restored_process_commands, &persist_process_state, &run_runtime_store,
                                         &restored_input_detected_work_ids, &restored_vision_assigned_work_ids,
-                                        qt_client_id =
-                                            server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
+                                        &process_epoch, qt_client_id = server_config.qt_client_id](
+                                           const contracts::mqtt::MqttMessage& message) {
         const auto* response = contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(message);
         if (response == nullptr || !contracts::mqtt::IsTerminal(response->result)) {
             return true;
@@ -617,6 +644,7 @@ int Application::Run(int argc, char* argv[]) {
                     .message_type = contracts::mqtt::MessageType::kWorkCreated,
                     .source_id = "central-server",
                     .timestamp = CurrentIso8601Timestamp(),
+                    .process_epoch = process_epoch,
                     .data = contracts::mqtt::WorkCreatedPayload{ .work_id = work_id },
                 };
                 restored_deliveries.push_back({
@@ -634,7 +662,7 @@ int Application::Run(int argc, char* argv[]) {
                             process_orchestrator.StateMachine().ActiveWorks(), process_orchestrator.GripperTargets(),
                             process_command_tracker.PendingCommands(), CurrentUnixTimeMilliseconds(),
                             restored_deliveries, process_orchestrator.StateMachine().ProcessedMessageIds(),
-                            command_manager.Snapshot(), pending_system_commands);
+                            command_manager.Snapshot(), pending_system_commands, process_epoch);
                     },
                     "restored vision state/outbox persistence")) {
                 return false;
@@ -755,7 +783,8 @@ int Application::Run(int argc, char* argv[]) {
                                    &server_config, &pending_system_commands, &finish_system_command,
                                    &process_state_persistence_healthy, &persist_process_state, &publish_durable,
                                    &publish_qt_response, &restored_input_detected_work_ids,
-                                   &restored_vision_assigned_work_ids](const contracts::mqtt::MqttMessage& message) {
+                                   &restored_vision_assigned_work_ids,
+                                   &input_detection_gate](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
             const auto rejected = command_manager.MakeImmediateResult(
                 message, contracts::mqtt::CommandResult::kRejected, CurrentIso8601Timestamp(),
@@ -794,7 +823,7 @@ int Application::Run(int argc, char* argv[]) {
             }
         }
         const auto commit_system_command = [&process_orchestrator, &system_command, &restored_input_detected_work_ids,
-                                            &restored_vision_assigned_work_ids]() {
+                                            &restored_vision_assigned_work_ids, &input_detection_gate]() {
             if (!system_command.has_value()) {
                 return true;
             }
@@ -809,6 +838,12 @@ int Application::Run(int argc, char* argv[]) {
                         restored_vision_assigned_work_ids.insert(work.work_id);
                     }
                 }
+            }
+            if (*system_command == contracts::mqtt::ControlCommand::kStart ||
+                *system_command == contracts::mqtt::ControlCommand::kRestart ||
+                *system_command == contracts::mqtt::ControlCommand::kStop ||
+                *system_command == contracts::mqtt::ControlCommand::kRecovery) {
+                input_detection_gate.RequireClear();
             }
             const auto transition = process_orchestrator.ApplySystemCommand(*system_command);
             if (transition.disposition == TransitionDisposition::kRejected) {
@@ -1000,8 +1035,8 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_handler.SetCommandRouteHandler(dispatch_command);
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_command,
                                            &dispatch_process_commands, &input_detection_gate, &sorting_detection_gate,
-                                           &process_state_persistence_healthy,
-                                           &persist_process_state](const contracts::mqtt::MqttMessage& message) {
+                                           &process_state_persistence_healthy, &persist_process_state,
+                                           &process_epoch](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
             return false;
         }
@@ -1039,6 +1074,7 @@ int Application::Run(int argc, char* argv[]) {
                 .message_type = contracts::mqtt::MessageType::kBoxDetected,
                 .source_id = message.source_id,
                 .timestamp = message.timestamp,
+                .process_epoch = process_epoch,
                 .data =
                     contracts::mqtt::BoxDetectedPayload{
                         .detected = true,

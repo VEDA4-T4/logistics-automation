@@ -641,6 +641,27 @@ PersistenceResult PersistenceService::PersistValidatedEvent(const contracts::mqt
     return { PersistenceStatus::kStored, "message received", work_id, true };
 }
 
+DatabaseStatus PersistenceService::RejectValidatedEvent(const contracts::mqtt::EnvelopeView& envelope,
+                                                        const TransportMetadata& metadata, std::string_view reason) {
+    Transaction transaction(database_);
+    if (!transaction.status().ok()) {
+        return transaction.status();
+    }
+    EventRepository events(database_);
+    std::string existing_state;
+    auto status = events.RecordReceived(envelope, metadata, existing_state);
+    if (!status.ok()) {
+        return status;
+    }
+    if (existing_state.empty() || existing_state == "RECEIVED") {
+        status = events.MarkRejected(envelope.message_id, reason, CurrentUnixTimeMilliseconds());
+        if (!status.ok()) {
+            return status;
+        }
+    }
+    return transaction.Commit();
+}
+
 DatabaseStatus PersistenceService::MarkEventStored(std::string_view message_id) {
     if (message_id.empty()) {
         return { DatabaseStatusCode::kInvalidArgument, "message_id is required" };

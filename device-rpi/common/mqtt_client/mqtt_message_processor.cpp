@@ -44,6 +44,13 @@ namespace {
     return {};
 }
 
+[[nodiscard]] bool EstablishesProcessEpoch(const contracts::mqtt::MqttMessage& message) noexcept {
+    const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
+    return command != nullptr && (command->command == contracts::mqtt::ControlCommand::kStart ||
+                                  command->command == contracts::mqtt::ControlCommand::kRestart ||
+                                  command->command == contracts::mqtt::ControlCommand::kInitialize);
+}
+
 }  // namespace
 
 namespace mqtt = contracts::mqtt;
@@ -92,8 +99,9 @@ IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, 
         };
     }
 
+    bool duplicate = false;
     {
-        std::lock_guard lock(recent_messages_mutex_);
+        std::lock_guard recent_lock(recent_messages_mutex_);
         const auto existing = recent_messages_.find(decoded.value.message_id);
         if (existing != recent_messages_.end()) {
             if (existing->second != canonical.payload) {
@@ -102,25 +110,50 @@ IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, 
                     .error = "messageId was reused with a different MQTT command payload",
                 };
             }
-            return {
-                .message = std::move(decoded.value),
-                .error = {},
-                .duplicate = true,
-            };
+            duplicate = true;
         }
 
-        recent_message_order_.push_back(decoded.value.message_id);
-        recent_messages_.emplace(decoded.value.message_id, canonical.payload);
-        if (recent_message_order_.size() > kRecentMessageLimit) {
-            recent_messages_.erase(recent_message_order_.front());
-            recent_message_order_.pop_front();
+        if (decoded.value.process_epoch.has_value()) {
+            std::lock_guard epoch_lock(epoch_mutex_);
+            if (decoded.value.message_type == mqtt::MessageType::kWorkCreated) {
+                if (active_process_epoch_.has_value() && *active_process_epoch_ != *decoded.value.process_epoch) {
+                    return {
+                        .message = {},
+                        .error = "WORK_CREATED processEpoch conflicts with the active process",
+                    };
+                }
+                active_process_epoch_ = decoded.value.process_epoch;
+            } else if (EstablishesProcessEpoch(decoded.value)) {
+                active_process_epoch_ = decoded.value.process_epoch;
+            }
+            const auto request_id = RequestIdFromCommand(decoded.value);
+            if (!request_id.empty()) {
+                const std::string key(request_id);
+                if (!request_process_epochs_.contains(key)) {
+                    request_epoch_order_.push_back(key);
+                }
+                request_process_epochs_.insert_or_assign(key, *decoded.value.process_epoch);
+                if (request_epoch_order_.size() > kRecentMessageLimit) {
+                    request_process_epochs_.erase(request_epoch_order_.front());
+                    request_epoch_order_.pop_front();
+                }
+            }
+        }
+
+        if (!duplicate) {
+            recent_message_order_.push_back(decoded.value.message_id);
+            recent_messages_.emplace(decoded.value.message_id, canonical.payload);
+            if (recent_message_order_.size() > kRecentMessageLimit) {
+                recent_messages_.erase(recent_message_order_.front());
+                recent_message_order_.pop_front();
+            }
         }
     }
 
     return {
         .message = std::move(decoded.value),
         .error = {},
-        .duplicate = false,
+        .duplicate = duplicate,
     };
 }
 
@@ -226,11 +259,51 @@ mqtt::EncodeResult MqttMessageProcessor::EncodeOfflineStatus(std::string message
 }
 
 mqtt::EncodeResult MqttMessageProcessor::EncodeDeviceEvent(const mqtt::MqttMessage& message) const {
-    return ValidateAndSerialize(mqtt::DeviceEventTopic(device_id_), message);
+    const auto prepared = PrepareOutboundMessage(message);
+    return prepared.has_value()
+               ? ValidateAndSerialize(mqtt::DeviceEventTopic(device_id_), *prepared)
+               : mqtt::EncodeResult{ .payload = {},
+                                     .status = { .error = mqtt::CodecError::kInvalidEnvelope,
+                                                 .field = std::string(mqtt::kProcessEpochField),
+                                                 .message =
+                                                     "outbound processEpoch conflicts with the active process" } };
 }
 
 mqtt::EncodeResult MqttMessageProcessor::EncodeDeviceError(const mqtt::MqttMessage& message) const {
-    return ValidateAndSerialize(mqtt::DeviceErrorTopic(device_id_), message);
+    const auto prepared = PrepareOutboundMessage(message);
+    return prepared.has_value()
+               ? ValidateAndSerialize(mqtt::DeviceErrorTopic(device_id_), *prepared)
+               : mqtt::EncodeResult{ .payload = {},
+                                     .status = { .error = mqtt::CodecError::kInvalidEnvelope,
+                                                 .field = std::string(mqtt::kProcessEpochField),
+                                                 .message =
+                                                     "outbound processEpoch conflicts with the active process" } };
+}
+
+std::optional<mqtt::MqttMessage> MqttMessageProcessor::PrepareOutboundMessage(const mqtt::MqttMessage& message) const {
+    auto prepared = message;
+    std::optional<std::string> epoch;
+    {
+        std::lock_guard lock(epoch_mutex_);
+        if (mqtt::IsProcessScopedMessage(message)) {
+            epoch = active_process_epoch_;
+        }
+        if (!epoch.has_value()) {
+            if (const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(message); response != nullptr) {
+                const auto request = request_process_epochs_.find(response->request_id);
+                if (request != request_process_epochs_.end()) {
+                    epoch = request->second;
+                }
+            }
+        }
+    }
+    if (prepared.process_epoch.has_value() && epoch.has_value() && prepared.process_epoch != epoch) {
+        return std::nullopt;
+    }
+    if (!prepared.process_epoch.has_value()) {
+        prepared.process_epoch = std::move(epoch);
+    }
+    return prepared;
 }
 
 void MqttMessageProcessor::RememberCommandResponse(const mqtt::MqttMessage& message) {

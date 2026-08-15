@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -181,6 +182,14 @@ void MqttHandler::SetProcessMessageHandler(ProcessMessageHandler handler) {
     process_message_handler_ = std::move(handler);
 }
 
+void MqttHandler::SetProcessEpoch(std::string process_epoch, bool reject_legacy_work_messages) {
+    if (!mqtt::IsValidUuid(process_epoch)) {
+        throw std::invalid_argument("process epoch must be a UUID");
+    }
+    process_epoch_ = std::move(process_epoch);
+    reject_legacy_work_messages_ = reject_legacy_work_messages;
+}
+
 bool MqttHandler::Handle(std::string_view topic, std::string_view payload, std::string_view received_at, int qos,
                          bool retained) {
     return HandleMessage(topic, payload, received_at, qos, retained, false);
@@ -234,6 +243,39 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
 
     const auto parsed_topic = mqtt::ParseTopic(topic);
     bool device_registry_updated = false;
+    if (!process_epoch_.empty() && mqtt::IsProcessScopedMessage(decoded.value) &&
+        ((!decoded.value.process_epoch.has_value() && reject_legacy_work_messages_) ||
+         (decoded.value.process_epoch.has_value() && *decoded.value.process_epoch != process_epoch_))) {
+        if (persistence_service_ != nullptr) {
+            const auto root = mqtt::Json::parse(payload.begin(), payload.end());
+            const std::string details_json = root.at(std::string(mqtt::kDataField)).dump();
+            const mqtt::EnvelopeView envelope{
+                .protocol_version = decoded.value.protocol_version,
+                .message_id = decoded.value.message_id,
+                .message_type = decoded.value.message_type,
+                .source_id = decoded.value.source_id,
+                .timestamp = decoded.value.timestamp,
+                .process_epoch =
+                    decoded.value.process_epoch ? std::string_view(*decoded.value.process_epoch) : std::string_view{},
+                .data_json = details_json,
+            };
+            const TransportMetadata transport{
+                .topic = std::string(topic),
+                .qos = qos,
+                .retained = retained,
+                .received_at_ms = CurrentUnixTimeMilliseconds(),
+                .source_address = {},
+                .raw_payload = std::string(payload),
+            };
+            const auto status = persistence_service_->RejectValidatedEvent(envelope, transport, "REJECTED_STALE_EPOCH");
+            if (!status.ok()) {
+                Log(MqttHandlerLogLevel::kError, "stale process epoch rejection persistence failed: " + status.message);
+                return false;
+            }
+        }
+        Log(MqttHandlerLogLevel::kInfo, "MQTT process message rejected: REJECTED_STALE_EPOCH");
+        return true;
+    }
     if (process_message_guard_ && !process_message_guard_(decoded.value)) {
         Log(MqttHandlerLogLevel::kError, "MQTT process transition rejected before persistence");
         return false;
@@ -270,6 +312,8 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
             .message_type = decoded.value.message_type,
             .source_id = decoded.value.source_id,
             .timestamp = decoded.value.timestamp,
+            .process_epoch =
+                decoded.value.process_epoch ? std::string_view(*decoded.value.process_epoch) : std::string_view{},
             .data_json = details_json,
         };
         const TransportMetadata transport{
@@ -352,6 +396,7 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
                     .message_type = mqtt::MessageType::kProductInfo,
                     .source_id = "central-server",
                     .timestamp = decoded.value.timestamp,
+                    .process_epoch = decoded.value.process_epoch,
                     .data =
                         mqtt::ProductInfoPayload{
                             .work_id = barcode->work_id,
@@ -382,6 +427,9 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
                     .message_type = catalog_product_message->message_type,
                     .source_id = catalog_product_message->source_id,
                     .timestamp = catalog_product_message->timestamp,
+                    .process_epoch = catalog_product_message->process_epoch
+                                         ? std::string_view(*catalog_product_message->process_epoch)
+                                         : std::string_view{},
                     .data_json = product_details,
                 };
                 const TransportMetadata product_transport{
