@@ -401,7 +401,7 @@ if(BUILD_TESTING)
     add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
     target_link_libraries(
         vision_mqtt_workflow_test
-        PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow
+        PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow Threads::Threads
     )
     logistics_enable_warnings(vision_mqtt_workflow_test)
     add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
