@@ -37,6 +37,7 @@ struct CommandRoutePlan final {
 enum class CommandResponseDisposition : std::uint8_t {
     kForward,
     kDuplicate,
+    kLateResponse,
     kUnknownRequest,
     kRejected,
 };

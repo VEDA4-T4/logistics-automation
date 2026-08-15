@@ -488,25 +488,66 @@ void TestDeviceEmergencyStopPreservesEmergencyState() {
 void TestFailedSystemCommandsEnterSafeProcessStates() {
     central_server::ProcessOrchestrator start_failure({ .enabled = true });
     assert(start_failure.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
-    assert(start_failure.FailSystemCommand(mqtt::ControlCommand::kStart, "input node rejected START").Applied());
+    assert(start_failure
+               .FailSystemCommand(mqtt::ControlCommand::kStart, mqtt::CommandResult::kRejected,
+                                  "input node rejected START")
+               .Applied());
     assert(start_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
 
     central_server::ProcessOrchestrator recovery_failure({ .enabled = true });
     assert(recovery_failure.BeginWork("MSG-RECOVERY-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
-    assert(recovery_failure.FailSystemCommand(mqtt::ControlCommand::kStop, "input node did not stop").Applied());
+    assert(recovery_failure
+               .FailSystemCommand(mqtt::ControlCommand::kStop, mqtt::CommandResult::kFailed, "input node did not stop")
+               .Applied());
     assert(recovery_failure.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
-    assert(recovery_failure.FailSystemCommand(mqtt::ControlCommand::kRecovery, "safety reset timed out").disposition ==
-           central_server::TransitionDisposition::kDuplicate);
+    assert(
+        recovery_failure
+            .FailSystemCommand(mqtt::ControlCommand::kRecovery, mqtt::CommandResult::kTimeout, "safety reset timed out")
+            .disposition == central_server::TransitionDisposition::kDuplicate);
     assert(recovery_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
     assert(recovery_failure.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kRecovering);
 
     central_server::ProcessOrchestrator emergency_failure({ .enabled = true });
     assert(emergency_failure.BeginWork("MSG-ESTOP-FAIL-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
     assert(emergency_failure.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
-    assert(emergency_failure.FailSystemCommand(mqtt::ControlCommand::kEmergencyStop, "one device did not confirm ESTOP")
+    assert(emergency_failure
+               .FailSystemCommand(mqtt::ControlCommand::kEmergencyStop, mqtt::CommandResult::kFailed,
+                                  "one device did not confirm ESTOP")
                .disposition == central_server::TransitionDisposition::kDuplicate);
     assert(emergency_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kEmergencyStop);
     assert(emergency_failure.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kEmergencyStopped);
+}
+
+void TestCommandTimeoutOnlyFailsIdentifiableWork() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    constexpr std::string_view other_work_id = kQueuedWorkId;
+    const auto begin = orchestrator.BeginWork("MSG-TIMEOUT-WORK", kWorkId, "PI-INPUT-01", kTimestamp);
+    assert(begin.transition.Applied());
+    assert(begin.commands.size() == 1);
+    assert(orchestrator.BeginWork("MSG-OTHER-WORK", other_work_id, "PI-INPUT-01", kTimestamp).transition.Applied());
+
+    assert(orchestrator.FailDispatch(begin.commands.front(), "STOP command timed out").Applied());
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kFailed);
+    const auto other = orchestrator.StateMachine().FindWork(other_work_id);
+    assert(other.has_value());
+    assert(other->stage == central_server::WorkStage::kInputDetected);
+    assert(other->failure_reason.empty());
+}
+
+void TestSystemCommandTimeoutDoesNotMutateActiveWorks() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    constexpr std::string_view other_work_id = kQueuedWorkId;
+    assert(orchestrator.BeginWork("MSG-SYSTEM-TIMEOUT-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
+    assert(orchestrator.BeginWork("MSG-SYSTEM-TIMEOUT-OTHER", other_work_id, "PI-INPUT-01", kTimestamp)
+               .transition.Applied());
+
+    const auto timed_out = orchestrator.FailSystemCommand(mqtt::ControlCommand::kStop, mqtt::CommandResult::kTimeout,
+                                                          "STOP command timed out waiting for PI-INPUT-01");
+    assert(timed_out.disposition == central_server::TransitionDisposition::kDuplicate);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->failure_reason.empty());
+    assert(orchestrator.StateMachine().FindWork(other_work_id)->stage == central_server::WorkStage::kInputDetected);
+    assert(orchestrator.StateMachine().FindWork(other_work_id)->failure_reason.empty());
 }
 
 void TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands() {
@@ -998,6 +1039,8 @@ int main() {
     TestFailedWorkIsDiscardedAfterServerRestart();
     TestDeviceEmergencyStopPreservesEmergencyState();
     TestFailedSystemCommandsEnterSafeProcessStates();
+    TestCommandTimeoutOnlyFailsIdentifiableWork();
+    TestSystemCommandTimeoutDoesNotMutateActiveWorks();
     TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands();
     TestRecoveryRestartStaysRecovering();
     TestRestoredHomographyTargetCreatesGripperCommand();

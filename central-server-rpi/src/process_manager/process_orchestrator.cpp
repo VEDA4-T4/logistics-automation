@@ -437,7 +437,8 @@ std::vector<ProcessCommandIntent> ProcessCommandTracker::PendingCommands() const
     return commands;
 }
 
-ProcessTransition ProcessOrchestrator::FailSystemCommand(mqtt::ControlCommand command, std::string reason) {
+ProcessTransition ProcessOrchestrator::FailSystemCommand(mqtt::ControlCommand command, mqtt::CommandResult result,
+                                                         std::string reason) {
     if (!config_.enabled) {
         return {
             .disposition = TransitionDisposition::kApplied,
@@ -453,7 +454,7 @@ ProcessTransition ProcessOrchestrator::FailSystemCommand(mqtt::ControlCommand co
         }
         return transition;
     }
-    if (command == mqtt::ControlCommand::kRecovery) {
+    if (result == mqtt::CommandResult::kTimeout || command == mqtt::ControlCommand::kRecovery) {
         return {
             .disposition = TransitionDisposition::kDuplicate,
             .previous_stage = std::nullopt,

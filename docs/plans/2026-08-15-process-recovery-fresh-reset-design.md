@@ -86,6 +86,18 @@
 ## 명령과 완료 규칙
 
 - 공정 명령별 제한 시간을 분리한다. 범용 3초 제한을 UART 동작 완료 명령에 적용하지 않는다.
+
+| 대상/명령 | 제한 시간 | 근거 |
+| --- | ---: | --- |
+| input `START` | 5초 | 속도 설정과 시작 UART 왕복 및 MQTT 전달 여유 |
+| input `STOP` | 15초 | 실측 11초 완료를 수용하고 스케줄링/전달에 4초 여유 |
+| sorting 목적지/`START`/`STOP` | 5초 | 100ms UART ACK 재시도와 2단계 속도 설정/시작 여유 |
+| line tracer `EXECUTE`/경로 설정 | 5초 | 100ms UART ACK 재시도와 MQTT 전달 여유 |
+| gripper HOME/`INITIALIZE` | 15초 | 10초 HOME 상한, 노드 2초 slack, 전달 여유 3초 |
+| gripper `RECOVERY` | 30초 | 안전 해제 후 HOME까지 이어지는 체인 |
+| gripper `EXECUTE` | 180초 | 최대 13단계 × (10초 모션 상한 + 2초 노드 slack)와 전달 여유 |
+| 그 밖의 짧은 명령 | 3초 | 기존 계약 호환 fallback |
+
 - 명령이 늦게 성공했다고 해서 이미 작업 전체를 실패 처리한 상태와 모순되지 않도록, 타임아웃은 해당 명령 intent에만 기록한다.
 - `STOP`, `START`, 목적지 설정, HOME, 분류 완료는 요청 ID와 작업 ID로 멱등 처리한다.
 - 그리퍼의 terminal `COMMAND_RESPONSE`를 HOME 완료의 권위 있는 공정 신호로 사용한다.

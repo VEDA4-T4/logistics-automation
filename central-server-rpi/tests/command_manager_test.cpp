@@ -15,7 +15,8 @@ namespace central_server = logistics::central_server;
 namespace mqtt = logistics::contracts::mqtt;
 
 [[nodiscard]] mqtt::MqttMessage MakeCommand(std::string request_id = "REQ-01", std::string target_device_id = "PI-01",
-                                            mqtt::ControlCommand command = mqtt::ControlCommand::kStart) {
+                                            mqtt::ControlCommand command = mqtt::ControlCommand::kStart,
+                                            std::string component_id = {}) {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = "MSG-COMMAND-" + request_id,
@@ -27,7 +28,7 @@ namespace mqtt = logistics::contracts::mqtt;
                 .request_id = std::move(request_id),
                 .command = command,
                 .target_device_id = std::move(target_device_id),
-                .component_id = {},
+                .component_id = std::move(component_id),
                 .params = mqtt::Json::object(),
             },
     };
@@ -173,7 +174,7 @@ void TestResponsesAreAggregatedAndDuplicatesIgnored() {
     assert(manager.PendingCount() == 0);
 
     const auto late = manager.HandleResponse(MakeResponse("PI-02", "RESP-03", "REQ-AGGREGATE"));
-    assert(late.disposition == central_server::CommandResponseDisposition::kUnknownRequest);
+    assert(late.disposition == central_server::CommandResponseDisposition::kLateResponse);
     assert(!manager.TrackCommand(MakeCommand("REQ-AGGREGATE", "SYSTEM"), { "PI-01", "PI-02" }));
     assert(manager.LastError() == "requestId was already received");
 }
@@ -334,13 +335,15 @@ void TestRecoveryUsesExtendedCompletionTimeout() {
     assert(timeout->result == mqtt::CommandResult::kTimeout);
 }
 
-void TestExecuteProcessingExtendsCompletionTimeout() {
+void TestExecuteUsesFullCompletionTimeout() {
     central_server::CommandManager::Clock::time_point silent_now{};
     central_server::CommandManager silent_manager([&silent_now] { return silent_now; });
     assert(silent_manager.TrackCommand(
         MakeCommand("REQ-EXECUTE-SILENT", "PI-GRIPPER-01", mqtt::ControlCommand::kExecute), { "PI-GRIPPER-01" }));
-    silent_now += mqtt::kMqttResponseTimeout;
-    assert(silent_manager.CheckTimeouts("2026-07-25T01:00:03Z").size() == 1);
+    silent_now += mqtt::kGripperExecuteCompletionTimeout - std::chrono::seconds(1);
+    assert(silent_manager.CheckTimeouts("2026-07-25T01:02:59Z").empty());
+    silent_now += std::chrono::seconds(1);
+    assert(silent_manager.CheckTimeouts("2026-07-25T01:03:00Z").size() == 1);
 
     central_server::CommandManager::Clock::time_point now{};
     central_server::CommandManager manager([&now] { return now; });
@@ -364,6 +367,95 @@ void TestExecuteProcessingExtendsCompletionTimeout() {
     assert(manager.PendingCount() == 0);
 }
 
+void TestInputStopAcceptsSlowProcessingAndSuccess() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    assert(manager.TrackCommand(
+        MakeCommand("REQ-INPUT-STOP", "PI-INPUT-01", mqtt::ControlCommand::kStop, "input_conveyor"),
+        { "PI-INPUT-01" }));
+
+    now += std::chrono::seconds(3);
+    const auto processing =
+        manager.HandleResponse(MakeResponse("PI-INPUT-01", "RESP-INPUT-STOP-PROCESSING", "REQ-INPUT-STOP",
+                                            mqtt::CommandResult::kProcessing, mqtt::ControlCommand::kStop));
+    assert(processing.disposition == central_server::CommandResponseDisposition::kForward);
+
+    now += std::chrono::seconds(8);
+    assert(manager.CheckTimeouts("2026-08-15T00:00:11Z").empty());
+    const auto success =
+        manager.HandleResponse(MakeResponse("PI-INPUT-01", "RESP-INPUT-STOP-SUCCESS", "REQ-INPUT-STOP",
+                                            mqtt::CommandResult::kSuccess, mqtt::ControlCommand::kStop));
+    assert(success.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(success.message.has_value());
+    assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*success.message)->result == mqtt::CommandResult::kSuccess);
+}
+
+void TestTimeoutNamesCommandAndMissingDevicesDeterministically() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    auto command = MakeCommand("REQ-MISSING", "PI-INPUT-01", mqtt::ControlCommand::kStop, "input_conveyor");
+    command.process_epoch = "123e4567-e89b-42d3-a456-426614174000";
+    assert(manager.TrackCommand(command, { "PI-INPUT-03", "PI-INPUT-01", "PI-INPUT-02" }));
+    assert(manager
+               .HandleResponse(MakeResponse("PI-INPUT-02", "RESP-MISSING-2", "REQ-MISSING",
+                                            mqtt::CommandResult::kSuccess, mqtt::ControlCommand::kStop))
+               .message.has_value());
+
+    now += std::chrono::seconds(15);
+    const auto timed_out = manager.CheckTimeouts("2026-08-15T00:00:15Z");
+    assert(timed_out.size() == 1);
+    const auto* timeout = mqtt::GetPayload<mqtt::CommandResponsePayload>(timed_out.front());
+    assert(timeout != nullptr);
+    assert(timeout->command == mqtt::ControlCommand::kStop);
+    assert(timeout->error_code == std::optional<std::string>{ "ERR-COMMAND-TIMEOUT" });
+    assert(timeout->message == "STOP command timed out waiting for devices: PI-INPUT-01, PI-INPUT-03");
+    assert(timed_out.front().process_epoch == command.process_epoch);
+}
+
+void TestLateSuccessIsClassifiedAcrossSnapshotRestore() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    assert(manager.TrackCommand(MakeCommand("REQ-LATE", "PI-INPUT-01", mqtt::ControlCommand::kStop, "input_conveyor"),
+                                { "PI-INPUT-01" }));
+    const auto pending_snapshot = manager.Snapshot();
+    assert(pending_snapshot.pending.size() == 1);
+    assert(pending_snapshot.pending.front().deadline_at_ms > 0);
+    central_server::CommandManager restored_pending([&now] { return now; });
+    assert(restored_pending.Restore(pending_snapshot));
+    assert(restored_pending.Snapshot().pending.front().deadline_at_ms ==
+           pending_snapshot.pending.front().deadline_at_ms);
+
+    now += std::chrono::seconds(15);
+    assert(manager.CheckTimeouts("2026-08-15T00:00:15Z").size() == 1);
+    central_server::CommandManager restored([&now] { return now; });
+    assert(restored.Restore(manager.Snapshot()));
+
+    const auto late = restored.HandleResponse(MakeResponse("PI-INPUT-01", "RESP-LATE-SUCCESS", "REQ-LATE",
+                                                           mqtt::CommandResult::kSuccess, mqtt::ControlCommand::kStop));
+    assert(late.disposition == central_server::CommandResponseDisposition::kLateResponse);
+    assert(late.message.has_value());
+    assert(late.message->message_id == "RESP-LATE-SUCCESS");
+    assert(restored.PendingCount() == 0);
+}
+
+void TestCompletedRequestMemoryIsBounded() {
+    central_server::CommandManager manager;
+    for (int index = 0; index < 300; ++index) {
+        const std::string request_id = "REQ-COMPLETED-" + std::to_string(index);
+        assert(manager
+                   .MakeImmediateResult(MakeCommand(request_id), mqtt::CommandResult::kRejected, "2026-08-15T00:00:00Z",
+                                        std::nullopt, "rejected")
+                   .has_value());
+    }
+
+    const auto snapshot = manager.Snapshot();
+    assert(snapshot.completed_requests.size() == 256);
+    assert(manager.HandleResponse(MakeResponse("PI-01", "RESP-FORGOTTEN", "REQ-COMPLETED-0")).disposition ==
+           central_server::CommandResponseDisposition::kUnknownRequest);
+    assert(manager.HandleResponse(MakeResponse("PI-01", "RESP-REMEMBERED", "REQ-COMPLETED-299")).disposition ==
+           central_server::CommandResponseDisposition::kLateResponse);
+}
+
 }  // namespace
 
 int main() {
@@ -380,6 +472,10 @@ int main() {
     TestWrongDeviceIsRejectedAndTimeoutIsGenerated();
     TestEmergencyStopUsesShortConfirmationTimeout();
     TestRecoveryUsesExtendedCompletionTimeout();
-    TestExecuteProcessingExtendsCompletionTimeout();
+    TestExecuteUsesFullCompletionTimeout();
+    TestInputStopAcceptsSlowProcessingAndSuccess();
+    TestTimeoutNamesCommandAndMissingDevicesDeterministically();
+    TestLateSuccessIsClassifiedAcrossSnapshotRestore();
+    TestCompletedRequestMemoryIsBounded();
     return 0;
 }

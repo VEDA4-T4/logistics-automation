@@ -544,8 +544,8 @@ void TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess() {
     const auto* timeout = mqtt::GetPayload<mqtt::CommandResponsePayload>(timeouts.front());
     assert(timeout != nullptr);
     assert(timeout->message.find(kVisionId) != std::string::npos);
-    assert(orchestrator.FailSystemCommand(mqtt::ControlCommand::kRecovery, timeout->message).disposition ==
-           central_server::TransitionDisposition::kDuplicate);
+    assert(orchestrator.FailSystemCommand(mqtt::ControlCommand::kRecovery, timeout->result, timeout->message)
+               .disposition == central_server::TransitionDisposition::kDuplicate);
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
     assert(orchestrator.StateMachine().ActiveWorks().size() == 1);
     assert(tracker.PendingCount() == 1);

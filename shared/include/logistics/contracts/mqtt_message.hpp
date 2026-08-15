@@ -141,23 +141,61 @@ inline constexpr auto kHeartbeatDelayedAfter = std::chrono::seconds{ 10 };
 inline constexpr auto kHeartbeatOfflineAfter = std::chrono::seconds{ 15 };
 inline constexpr auto kMqttResponseTimeout = std::chrono::seconds{ 3 };
 inline constexpr auto kEmergencyStopConfirmationTimeout = std::chrono::seconds{ 1 };
+inline constexpr auto kInputStartCompletionTimeout = std::chrono::seconds{ 5 };
+inline constexpr auto kInputStopCompletionTimeout = std::chrono::seconds{ 15 };
+inline constexpr auto kSortingCommandCompletionTimeout = std::chrono::seconds{ 5 };
+inline constexpr auto kLineTracerCommandCompletionTimeout = std::chrono::seconds{ 5 };
+inline constexpr auto kGripperHomeCompletionTimeout = std::chrono::seconds{ 15 };
+inline constexpr auto kGripperExecuteCompletionTimeout = std::chrono::seconds{ 180 };
 inline constexpr auto kRecoveryCompletionTimeout = std::chrono::seconds{ 30 };
 inline constexpr auto kCommandResponseDeliveryGrace = std::chrono::seconds{ 2 };
 inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
-[[nodiscard]] constexpr std::chrono::seconds CommandResponseTimeout(const ControlCommand command) noexcept {
-    switch (command) {
-        case ControlCommand::kEmergencyStop:
-            return kEmergencyStopConfirmationTimeout;
-        case ControlCommand::kRecovery:
-            return kRecoveryCompletionTimeout;
-        default:
-            return kMqttResponseTimeout;
+[[nodiscard]] constexpr std::chrono::seconds CommandResponseTimeout(const ControlCommand command,
+                                                                    const std::string_view target_device = {},
+                                                                    const std::string_view component_id = {}) noexcept {
+    if (command == ControlCommand::kEmergencyStop) {
+        return kEmergencyStopConfirmationTimeout;
     }
+    if (command == ControlCommand::kRecovery) {
+        return kRecoveryCompletionTimeout;
+    }
+
+    const bool input = target_device.find("INPUT") != std::string_view::npos || component_id == "input_conveyor";
+    if (input && command == ControlCommand::kStart) {
+        return kInputStartCompletionTimeout;
+    }
+    if (input && command == ControlCommand::kStop) {
+        return kInputStopCompletionTimeout;
+    }
+
+    const bool gripper =
+        target_device.find("GRIPPER") != std::string_view::npos || component_id == "gripper" || component_id == "home";
+    if (gripper && command == ControlCommand::kExecute) {
+        return kGripperExecuteCompletionTimeout;
+    }
+    if (gripper && (command == ControlCommand::kInitialize || command == ControlCommand::kStart)) {
+        return kGripperHomeCompletionTimeout;
+    }
+
+    const bool sorting = target_device.find("SORTING") != std::string_view::npos || component_id == "sorting_conveyor";
+    if (sorting && (command == ControlCommand::kDestinationSet || command == ControlCommand::kStart ||
+                    command == ControlCommand::kStop)) {
+        return kSortingCommandCompletionTimeout;
+    }
+
+    const bool line_tracer = target_device.find("LINETRACER") != std::string_view::npos ||
+                             target_device.find("-LT-") != std::string_view::npos || component_id == "line_tracer";
+    if (line_tracer && (command == ControlCommand::kExecute || command == ControlCommand::kDestinationSet)) {
+        return kLineTracerCommandCompletionTimeout;
+    }
+    return kMqttResponseTimeout;
 }
 
-[[nodiscard]] constexpr std::chrono::seconds CommandResponseWatchdogTimeout(const ControlCommand command) noexcept {
-    return CommandResponseTimeout(command) + kCommandResponseDeliveryGrace;
+[[nodiscard]] constexpr std::chrono::seconds CommandResponseWatchdogTimeout(
+    const ControlCommand command, const std::string_view target_device = {},
+    const std::string_view component_id = {}) noexcept {
+    return CommandResponseTimeout(command, target_device, component_id) + kCommandResponseDeliveryGrace;
 }
 
 [[nodiscard]] constexpr std::string_view ToString(MessageType type) noexcept {

@@ -617,7 +617,7 @@ int Application::Run(int argc, char* argv[]) {
         } else {
             pending_system_commands.erase(pending);
             transition = process_orchestrator.FailSystemCommand(
-                command, response->message.empty() ? "system command failed" : response->message);
+                command, response->result, response->message.empty() ? "system command failed" : response->message);
         }
         if (transition.disposition == TransitionDisposition::kRejected) {
             std::cerr << "[server][ERROR] system command result transition failed: " << transition.reason << '\n';
@@ -743,8 +743,12 @@ int Application::Run(int argc, char* argv[]) {
             case CommandResponseDisposition::kDuplicate:
                 std::clog << "[server][INFO] duplicate command response ignored: " << decision.reason << '\n';
                 return true;
+            case CommandResponseDisposition::kLateResponse:
+                std::clog << "[server][INFO] LATE_RESPONSE recorded without process transition: " << decision.reason
+                          << '\n';
+                return true;
             case CommandResponseDisposition::kUnknownRequest:
-                std::clog << "[server][INFO] late or unknown command response ignored: " << decision.reason << '\n';
+                std::clog << "[server][INFO] unknown command response ignored: " << decision.reason << '\n';
                 return true;
             case CommandResponseDisposition::kRejected:
                 std::cerr << "[server][ERROR] command response rejected: " << decision.reason << '\n';

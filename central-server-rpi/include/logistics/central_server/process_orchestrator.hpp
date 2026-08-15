@@ -90,7 +90,8 @@ public:
     [[nodiscard]] ProcessTransition FailDispatch(const ProcessCommandIntent& intent, std::string reason);
     [[nodiscard]] ProcessTransition PreviewSystemCommand(contracts::mqtt::ControlCommand command) const;
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
-    [[nodiscard]] ProcessTransition FailSystemCommand(contracts::mqtt::ControlCommand command, std::string reason);
+    [[nodiscard]] ProcessTransition FailSystemCommand(contracts::mqtt::ControlCommand command,
+                                                      contracts::mqtt::CommandResult result, std::string reason);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
     [[nodiscard]] ProcessTransition CommitSystemRecovery(
         const std::function<bool(const std::vector<WorkProcessSnapshot>&)>& persist);
