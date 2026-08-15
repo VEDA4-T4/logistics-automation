@@ -25,6 +25,7 @@
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
 #include "logistics/device/node_command_queue.hpp"
+#include "logistics/device/outbound_delivery.hpp"
 
 namespace logistics::device {
 namespace {
@@ -112,23 +113,22 @@ void UpdateDeviceStatus(const InputReport& report, DeviceStatus& device_status) 
 [[nodiscard]] bool EnqueueOutbound(std::deque<OutboundMessage>& outbox, const InputReport& report,
                                    std::string_view device_id, std::string_view message_session_id,
                                    std::uint64_t& message_sequence, DeviceStatus& device_status,
-                                   MqttNodeClient* durable_client = nullptr) {
+                                   MqttNodeClient* mqtt_client = nullptr) {
     UpdateDeviceStatus(report, device_status);
     auto outbound = MakeOutboundMessage(report, device_id, message_session_id, message_sequence);
-    if (durable_client != nullptr && report.channel != InputReportChannel::kStatus &&
-        report.message_type != mqtt::MessageType::kSensorStatus) {
-        if (PublishOutbound(*durable_client, outbound)) {
+    return PublishOrQueueOutbound(
+        report.message_type, mqtt_client != nullptr && report.channel != InputReportChannel::kStatus,
+        [&] { return PublishOutbound(*mqtt_client, outbound); },
+        [&] {
+            if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
+                    return queued.channel == InputReportChannel::kStatus;
+                })) {
+                std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued messages\n";
+                return false;
+            }
+            outbox.push_back(std::move(outbound));
             return true;
-        }
-    }
-    if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
-            return queued.channel == InputReportChannel::kStatus;
-        })) {
-        std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued messages\n";
-        return false;
-    }
-    outbox.push_back(std::move(outbound));
-    return true;
+        });
 }
 
 [[nodiscard]] bool PublishOutbound(MqttNodeClient& mqtt_client, const OutboundMessage& outbound) {

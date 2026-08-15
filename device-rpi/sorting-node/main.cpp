@@ -2,7 +2,6 @@
 
 #ifdef LOGISTICS_SORTING_DAEMON_ENABLED
 
-#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -24,6 +23,7 @@
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
 #include "logistics/device/node_command_queue.hpp"
+#include "logistics/device/outbound_delivery.hpp"
 #include "logistics/device/sorting_node.hpp"
 #include "logistics/device/uart_session.hpp"
 #include "logistics/device/uart_transport.hpp"
@@ -109,32 +109,22 @@ void UpdateDeviceStatus(const SortingReport& report, const std::shared_ptr<Devic
 [[nodiscard]] bool EnqueueOutbound(std::deque<OutboundMessage>& outbox, const SortingReport& report,
                                    std::string_view device_id, std::string_view message_session_id,
                                    std::uint64_t& message_sequence, const std::shared_ptr<DeviceStatus>& device_status,
-                                   MqttNodeClient* durable_client = nullptr) {
+                                   MqttNodeClient* mqtt_client = nullptr) {
     UpdateDeviceStatus(report, device_status);
     auto outbound = MakeOutboundMessage(report, device_id, message_session_id, message_sequence);
-    if (durable_client != nullptr && report.channel != SortingReportChannel::kStatus &&
-        report.message_type != mqtt::MessageType::kSensorStatus && PublishOutbound(*durable_client, outbound)) {
-        return true;
-    }
-    if (const auto* sensor = std::get_if<mqtt::SensorStatusPayload>(&report.data); sensor != nullptr) {
-        const auto older_measurement =
-            std::find_if(outbox.begin(), outbox.end(), [sensor](const OutboundMessage& queued) {
-                const auto* queued_sensor = std::get_if<mqtt::SensorStatusPayload>(&queued.message.data);
-                return queued_sensor != nullptr && queued_sensor->sensor_id == sensor->sensor_id;
-            });
-        if (older_measurement != outbox.end()) {
-            outbox.erase(older_measurement);
-        }
-    }
-    if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
-            return queued.channel == SortingReportChannel::kStatus ||
-                   queued.message.message_type == mqtt::MessageType::kSensorStatus;
-        })) {
-        std::cerr << "[sorting][mqtt][ERROR] outbound queue full; preserving queued messages\n";
-        return false;
-    }
-    outbox.push_back(std::move(outbound));
-    return true;
+    return PublishOrQueueOutbound(
+        report.message_type, mqtt_client != nullptr && report.channel != SortingReportChannel::kStatus,
+        [&] { return PublishOutbound(*mqtt_client, outbound); },
+        [&] {
+            if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
+                    return queued.channel == SortingReportChannel::kStatus;
+                })) {
+                std::cerr << "[sorting][mqtt][ERROR] outbound queue full; preserving queued messages\n";
+                return false;
+            }
+            outbox.push_back(std::move(outbound));
+            return true;
+        });
 }
 
 [[nodiscard]] bool PublishOutbound(MqttNodeClient& mqtt_client, const OutboundMessage& outbound) {

@@ -126,6 +126,12 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_node_command_queue_test)
     add_test(NAME device_node_command_queue_test COMMAND device_node_command_queue_test)
 
+    add_executable(device_outbound_delivery_test tests/outbound_delivery_test.cpp)
+    target_include_directories(device_outbound_delivery_test PRIVATE common/include)
+    target_link_libraries(device_outbound_delivery_test PRIVATE logistics::contracts)
+    logistics_enable_warnings(device_outbound_delivery_test)
+    add_test(NAME device_outbound_delivery_test COMMAND device_outbound_delivery_test)
+
     add_executable(device_control_policy_test tests/device_control_policy_test.cpp)
     target_include_directories(device_control_policy_test PRIVATE common/include)
     target_link_libraries(device_control_policy_test PRIVATE logistics::contracts logistics::device_control_state)
