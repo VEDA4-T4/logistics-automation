@@ -110,6 +110,7 @@ private:
     QNetworkAccessManager* history_network_manager_{ nullptr };
     QString control_target_device_id_{ "SYSTEM" };
     QString pending_target_device_id_;
+    QString pending_component_id_;
     QString pending_request_id_;
     QSet<QString> individual_command_request_ids_;
     QQueue<QString> individual_command_request_order_;

@@ -390,6 +390,55 @@ void TestInputStopAcceptsSlowProcessingAndSuccess() {
     assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*success.message)->result == mqtt::CommandResult::kSuccess);
 }
 
+void TestSystemCommandsUseLongestResolvedTargetDeadline() {
+    auto destination = MakeCommand("REQ-SYSTEM-DESTINATION", "SYSTEM", mqtt::ControlCommand::kDestinationSet);
+    destination.message_type = mqtt::MessageType::kDestinationSet;
+    destination.data = mqtt::DestinationSetPayload{
+        .request_id = "REQ-SYSTEM-DESTINATION",
+        .work_id = "d8e9b2be-bfc0-471c-590123412345",
+        .command = mqtt::ControlCommand::kDestinationSet,
+        .target_device_id = "SYSTEM",
+        .destination = "1",
+    };
+
+    central_server::CommandManager::Clock::time_point destination_now{};
+    central_server::CommandManager destination_manager([&destination_now] { return destination_now; });
+    assert(destination_manager.TrackCommand(destination, { "CUSTOM-LINE-01" }));
+    destination_now += std::chrono::milliseconds(4999);
+    assert(destination_manager.CheckTimeouts("2026-08-15T00:00:04.999Z").empty());
+    destination_now += std::chrono::milliseconds(1);
+    assert(destination_manager.CheckTimeouts("2026-08-15T00:00:05Z").size() == 1);
+
+    for (const auto command : { mqtt::ControlCommand::kStart, mqtt::ControlCommand::kStop }) {
+        central_server::CommandManager::Clock::time_point now{};
+        central_server::CommandManager manager([&now] { return now; });
+        assert(manager.TrackCommand(
+            MakeCommand("REQ-SYSTEM-LONGEST-" + std::string(mqtt::ToString(command)), "SYSTEM", command),
+            { "CUSTOM-A", "CUSTOM-B", "CUSTOM-C" }));
+        now += std::chrono::milliseconds(14999);
+        assert(manager.CheckTimeouts("2026-08-15T00:00:14.999Z").empty());
+        now += std::chrono::milliseconds(1);
+        assert(manager.CheckTimeouts("2026-08-15T00:00:15Z").size() == 1);
+    }
+}
+
+void TestRestorePreservesSubsecondDeadlinePrecision() {
+    central_server::CommandManager original;
+    assert(original.TrackCommand(MakeCommand("REQ-PRECISE-RESTORE"), { "PI-01" }));
+    auto snapshot = original.Snapshot();
+    assert(snapshot.pending.size() == 1);
+    const auto wall_now =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    snapshot.pending.front().deadline_at_ms = wall_now + 1500;
+
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager restored([&now] { return now; });
+    assert(restored.Restore(std::move(snapshot)));
+    now += std::chrono::milliseconds(1500);
+    assert(restored.CheckTimeouts("2026-08-15T00:00:01.500Z").size() == 1);
+}
+
 void TestTimeoutNamesCommandAndMissingDevicesDeterministically() {
     central_server::CommandManager::Clock::time_point now{};
     central_server::CommandManager manager([&now] { return now; });
@@ -474,6 +523,8 @@ int main() {
     TestRecoveryUsesExtendedCompletionTimeout();
     TestExecuteUsesFullCompletionTimeout();
     TestInputStopAcceptsSlowProcessingAndSuccess();
+    TestRestorePreservesSubsecondDeadlinePrecision();
+    TestSystemCommandsUseLongestResolvedTargetDeadline();
     TestTimeoutNamesCommandAndMissingDevicesDeterministically();
     TestLateSuccessIsClassifiedAcrossSnapshotRestore();
     TestCompletedRequestMemoryIsBounded();

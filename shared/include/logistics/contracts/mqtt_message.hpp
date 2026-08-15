@@ -151,6 +151,35 @@ inline constexpr auto kRecoveryCompletionTimeout = std::chrono::seconds{ 30 };
 inline constexpr auto kCommandResponseDeliveryGrace = std::chrono::seconds{ 2 };
 inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
+[[nodiscard]] constexpr char AsciiLower(const char value) noexcept {
+    return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
+}
+
+[[nodiscard]] constexpr bool AsciiEqualsIgnoreCase(const std::string_view left, const std::string_view right) noexcept {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        if (AsciiLower(left[index]) != AsciiLower(right[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] constexpr bool AsciiContainsIgnoreCase(const std::string_view text,
+                                                     const std::string_view needle) noexcept {
+    if (needle.empty() || needle.size() > text.size()) {
+        return false;
+    }
+    for (std::size_t offset = 0; offset + needle.size() <= text.size(); ++offset) {
+        if (AsciiEqualsIgnoreCase(text.substr(offset, needle.size()), needle)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] constexpr std::chrono::seconds CommandResponseTimeout(const ControlCommand command,
                                                                     const std::string_view target_device = {},
                                                                     const std::string_view component_id = {}) noexcept {
@@ -161,7 +190,25 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
         return kRecoveryCompletionTimeout;
     }
 
-    const bool input = target_device.find("INPUT") != std::string_view::npos || component_id == "input_conveyor";
+    if (AsciiEqualsIgnoreCase(target_device, "system") || AsciiEqualsIgnoreCase(target_device, "all")) {
+        switch (command) {
+            case ControlCommand::kStart:
+                return kGripperHomeCompletionTimeout;
+            case ControlCommand::kStop:
+                return kInputStopCompletionTimeout;
+            case ControlCommand::kExecute:
+                return kGripperExecuteCompletionTimeout;
+            case ControlCommand::kInitialize:
+                return kGripperHomeCompletionTimeout;
+            case ControlCommand::kDestinationSet:
+                return kLineTracerCommandCompletionTimeout;
+            default:
+                break;
+        }
+    }
+
+    const bool input =
+        AsciiContainsIgnoreCase(target_device, "input") || AsciiEqualsIgnoreCase(component_id, "input_conveyor");
     if (input && command == ControlCommand::kStart) {
         return kInputStartCompletionTimeout;
     }
@@ -169,8 +216,8 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
         return kInputStopCompletionTimeout;
     }
 
-    const bool gripper =
-        target_device.find("GRIPPER") != std::string_view::npos || component_id == "gripper" || component_id == "home";
+    const bool gripper = AsciiContainsIgnoreCase(target_device, "gripper") ||
+                         AsciiEqualsIgnoreCase(component_id, "gripper") || AsciiEqualsIgnoreCase(component_id, "home");
     if (gripper && command == ControlCommand::kExecute) {
         return kGripperExecuteCompletionTimeout;
     }
@@ -178,14 +225,16 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
         return kGripperHomeCompletionTimeout;
     }
 
-    const bool sorting = target_device.find("SORTING") != std::string_view::npos || component_id == "sorting_conveyor";
+    const bool sorting =
+        AsciiContainsIgnoreCase(target_device, "sorting") || AsciiEqualsIgnoreCase(component_id, "sorting_conveyor");
     if (sorting && (command == ControlCommand::kDestinationSet || command == ControlCommand::kStart ||
                     command == ControlCommand::kStop)) {
         return kSortingCommandCompletionTimeout;
     }
 
-    const bool line_tracer = target_device.find("LINETRACER") != std::string_view::npos ||
-                             target_device.find("-LT-") != std::string_view::npos || component_id == "line_tracer";
+    const bool line_tracer = AsciiContainsIgnoreCase(target_device, "linetracer") ||
+                             AsciiContainsIgnoreCase(target_device, "-lt-") ||
+                             AsciiEqualsIgnoreCase(component_id, "line_tracer");
     if (line_tracer && (command == ControlCommand::kExecute || command == ControlCommand::kDestinationSet)) {
         return kLineTracerCommandCompletionTimeout;
     }

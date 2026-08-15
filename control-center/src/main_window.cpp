@@ -719,6 +719,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     statusBar()->setSizeGripEnabled(false);
 
     command_response_timer_ = new QTimer(this);
+    command_response_timer_->setObjectName(QStringLiteral("commandResponseTimer"));
     command_response_timer_->setSingleShot(true);
     connect(command_response_timer_, &QTimer::timeout, this, &MainWindow::handleCommandTimeout);
     node_status_timer_ = new QTimer(this);
@@ -836,9 +837,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 }
             });
     connect(mqtt_client_, &MqttClient::commandPublished, this,
-            [this](qint32, const QString& request_id, logistics::contracts::mqtt::ControlCommand command) {
+            [this](qint32, const QString& request_id, logistics::contracts::mqtt::ControlCommand command,
+                   const QString& target_device_id, const QString& component_id) {
                 pending_request_id_ = request_id;
                 pending_command_ = command;
+                pending_target_device_id_ = target_device_id;
+                pending_component_id_ = component_id;
                 if (pending_target_device_id_ != QStringLiteral("SYSTEM") &&
                     pending_target_device_id_ != QStringLiteral("ALL")) {
                     individual_command_request_ids_.insert(request_id);
@@ -850,7 +854,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 }
                 process_control_panel_->setCommandPending(command);
 
-                const auto timeout = logistics::contracts::mqtt::CommandResponseWatchdogTimeout(command);
+                const auto timeout = logistics::contracts::mqtt::CommandResponseWatchdogTimeout(
+                    command, pending_target_device_id_.toStdString(), pending_component_id_.toStdString());
                 command_response_timer_->start(
                     static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
             });
@@ -1447,11 +1452,13 @@ void MainWindow::sendControlCommand(logistics::contracts::mqtt::ControlCommand c
                                    ? QStringLiteral("SYSTEM")
                                    : target_device_id;
     pending_target_device_id_ = actual_target;
+    pending_component_id_.clear();
     const auto message_id = mqtt_client_->publishCommand(command, actual_target);
     if (message_id < 0) {
         process_control_panel_->setCommandFinished(command, logistics::contracts::mqtt::CommandResult::kFailed,
                                                    QStringLiteral("MQTT 명령 발행 실패"));
         pending_target_device_id_.clear();
+        pending_component_id_.clear();
     }
 }
 
@@ -1538,7 +1545,8 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
     }
 
     process_control_panel_->setCommandProgress(response.command, response.result, detail);
-    const auto timeout = logistics::contracts::mqtt::CommandResponseWatchdogTimeout(response.command);
+    const auto timeout = logistics::contracts::mqtt::CommandResponseWatchdogTimeout(
+        response.command, pending_target_device_id_.toStdString(), pending_component_id_.toStdString());
     command_response_timer_->start(
         static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
 }
@@ -1585,6 +1593,7 @@ void MainWindow::clearPendingCommand() {
     command_response_timer_->stop();
     pending_request_id_.clear();
     pending_target_device_id_.clear();
+    pending_component_id_.clear();
     pending_command_ = logistics::contracts::mqtt::ControlCommand::kUnknown;
 }
 

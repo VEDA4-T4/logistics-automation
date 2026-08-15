@@ -551,6 +551,46 @@ int main(int argc, char* argv[]) {
     if (!check(mqtt_client != nullptr, "MqttClient is missing")) {
         return 2;
     }
+    auto* command_response_timer = window.findChild<QTimer*>(QStringLiteral("commandResponseTimer"));
+    if (!check(command_response_timer != nullptr, "command response timer is missing")) {
+        return 2;
+    }
+    mqtt_client->commandPublished(1, QStringLiteral("REQ-INPUT-STOP"),
+                                  logistics::contracts::mqtt::ControlCommand::kStop, QStringLiteral("pi-input-01"),
+                                  QString{});
+    application.processEvents();
+    if (!check(command_response_timer->isActive() && command_response_timer->interval() == 17000,
+               "direct input STOP did not start the target-aware 17 second watchdog")) {
+        return 2;
+    }
+    const auto emit_input_stop_response = [&](const QString& message_id, const QString& result) {
+        mqtt_client->messageReceived(
+            QStringLiteral("qt/control-center/response"),
+            { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
+              { QStringLiteral("messageId"), message_id },
+              { QStringLiteral("messageType"), QStringLiteral("COMMAND_RESPONSE") },
+              { QStringLiteral("sourceId"), QStringLiteral("central-server") },
+              { QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) },
+              { QStringLiteral("data"),
+                QJsonObject{ { QStringLiteral("requestId"), QStringLiteral("REQ-INPUT-STOP") },
+                             { QStringLiteral("command"), QStringLiteral("STOP") },
+                             { QStringLiteral("result"), result },
+                             { QStringLiteral("errorCode"), QJsonValue::Null },
+                             { QStringLiteral("message"), QStringLiteral("input stop progress") } } } });
+        application.processEvents();
+    };
+    emit_input_stop_response(QStringLiteral("RESP-INPUT-STOP-PROCESSING"), QStringLiteral("PROCESSING"));
+    constexpr int kProcessingAtMs = 3000;
+    constexpr int kSuccessAtMs = 11000;
+    if (!check(command_response_timer->isActive() && command_response_timer->interval() == 17000 &&
+                   kSuccessAtMs - kProcessingAtMs < command_response_timer->interval(),
+               "PROCESSING at 3 seconds did not preserve enough watchdog time for SUCCESS at 11 seconds")) {
+        return 2;
+    }
+    emit_input_stop_response(QStringLiteral("RESP-INPUT-STOP-SUCCESS"), QStringLiteral("SUCCESS"));
+    if (!check(!command_response_timer->isActive(), "SUCCESS at 11 seconds was not accepted as terminal")) {
+        return 2;
+    }
     const auto vision_color_before = factory->nodeColor(QStringLiteral("vision"));
     const auto vision_opacity_before = factory->nodeOpacity(QStringLiteral("vision"));
     mqtt_client->messageReceived(

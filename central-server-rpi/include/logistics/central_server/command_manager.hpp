@@ -94,7 +94,7 @@ private:
         contracts::mqtt::ControlCommand command{ contracts::mqtt::ControlCommand::kUnknown };
         contracts::mqtt::MqttMessage original_message;
         Clock::time_point started_at;
-        std::chrono::seconds timeout{};
+        std::chrono::milliseconds timeout{};
         std::unordered_set<std::string> expected_devices;
         std::unordered_set<std::string> completed_devices;
         std::unordered_set<std::string> response_message_ids;
