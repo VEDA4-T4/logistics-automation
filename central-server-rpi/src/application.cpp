@@ -440,7 +440,19 @@ int Application::Run(int argc, char* argv[]) {
         if (!mqtt_client.IsReady()) {
             return true;
         }
-        for (const auto& delivery : pending) {
+        for (auto delivery : pending) {
+            const auto epoch_result = PreparePendingMqttDeliveryEpoch(
+                delivery, process_epoch, [&](std::string_view topic, std::string_view message_id) {
+                    return run_runtime_store([&] { return process_state_store.RemoveMqttDelivery(topic, message_id); },
+                                             "stale MQTT delivery outbox removal");
+                });
+            if (epoch_result == PendingDeliveryEpochResult::kError) {
+                return false;
+            }
+            if (epoch_result == PendingDeliveryEpochResult::kDropped) {
+                std::cerr << "[server][ERROR] dropped MQTT delivery from a stale process epoch\n";
+                continue;
+            }
             if (IsVisionWorkCreatedDelivery(delivery, vision_device_id)) {
                 const auto* created =
                     contracts::mqtt::GetPayload<contracts::mqtt::WorkCreatedPayload>(delivery.message);
@@ -449,20 +461,7 @@ int Application::Run(int argc, char* argv[]) {
                     continue;
                 }
             }
-            auto stamped = StampProcessEpoch(delivery.message, process_epoch);
-            if (!stamped.has_value()) {
-                std::cerr << "[server][ERROR] dropping MQTT delivery from a stale process epoch\n";
-                if (!run_runtime_store(
-                        [&] {
-                            return process_state_store.RemoveMqttDelivery(delivery.topic, delivery.message.message_id);
-                        },
-                        "stale MQTT delivery outbox removal")) {
-                    return false;
-                }
-                continue;
-            }
-            static_cast<void>(
-                publish_enqueued(PendingMqttDelivery{ .topic = delivery.topic, .message = std::move(*stamped) }));
+            static_cast<void>(publish_enqueued(delivery));
         }
         return true;
     };

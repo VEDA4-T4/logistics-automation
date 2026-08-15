@@ -773,6 +773,46 @@ void TestApplicationProcessEpochStamping() {
     assert(telemetry.has_value() && !telemetry->process_epoch.has_value());
 }
 
+void TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold() {
+    const central_server::PendingMqttDelivery legacy{
+        .topic = mqtt::DeviceCommandTopic(kVisionId),
+        .message =
+            mqtt::MqttMessage{
+                .message_id = "WORK-LEGACY-HELD",
+                .message_type = mqtt::MessageType::kWorkCreated,
+                .source_id = "central-server",
+                .timestamp = std::string(kTimestamp),
+                .data = mqtt::WorkCreatedPayload{ .work_id = "d8e9b2be-bfc0-471c-9000-590123412345" },
+            },
+    };
+    auto prepared_legacy = legacy;
+    std::vector<std::string> removed;
+    const auto legacy_result = central_server::Application::PreparePendingMqttDeliveryEpoch(
+        prepared_legacy, kProcessEpoch, [&removed](std::string_view topic, std::string_view message_id) {
+            removed.push_back(std::string(topic) + "\n" + std::string(message_id));
+            return true;
+        });
+    assert(legacy_result == central_server::Application::PendingDeliveryEpochResult::kReady);
+    assert(prepared_legacy.topic == legacy.topic);
+    assert(prepared_legacy.message.message_id == legacy.message.message_id);
+    assert(prepared_legacy.message.process_epoch == kProcessEpoch);
+    assert(removed.empty());
+
+    auto stale = legacy;
+    stale.message.process_epoch = "6d395cb2-93da-4de6-8eac-b2afee09c17e";
+    const auto stale_result = central_server::Application::PreparePendingMqttDeliveryEpoch(
+        stale, kProcessEpoch, [&removed](std::string_view topic, std::string_view message_id) {
+            removed.push_back(std::string(topic) + "\n" + std::string(message_id));
+            return true;
+        });
+    assert(stale_result == central_server::Application::PendingDeliveryEpochResult::kDropped);
+    assert(removed == std::vector{ legacy.topic + "\n" + legacy.message.message_id });
+
+    const auto failed_removal = central_server::Application::PreparePendingMqttDeliveryEpoch(
+        stale, kProcessEpoch, [](std::string_view, std::string_view) { return false; });
+    assert(failed_removal == central_server::Application::PendingDeliveryEpochResult::kError);
+}
+
 }  // namespace
 
 int main() {
@@ -784,5 +824,6 @@ int main() {
     TestRecoveryCommitDiscardsOldWorkBeforeStart();
     TestApplicationRecoveryCommitFailureLeavesAllStateRetryable();
     TestApplicationProcessEpochStamping();
+    TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold();
     return 0;
 }

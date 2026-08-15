@@ -355,6 +355,23 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         assert(Scalar(database, "SELECT retained FROM mqtt_event_log WHERE message_id='MSG-POSITION-STATUS-01'") == 1);
         assert(qt_statuses.size() == 1);
         assert(qt_statuses[0].process_epoch == kProcessEpoch);
+
+        auto legacy_job_status = MakePositionStatus();
+        legacy_job_status.message_id = "MSG-POSITION-STATUS-LEGACY";
+        legacy_job_status.timestamp = "2026-07-16T01:00:04Z";
+        assert(handler.Handle("device/PI-01/status", Encode(legacy_job_status), "2026-07-16T01:00:04Z"));
+        assert(qt_statuses.size() == 2);
+        assert(qt_statuses[1].process_epoch == kProcessEpoch);
+
+        auto idle_status = MakePositionStatus();
+        idle_status.message_id = "MSG-POSITION-STATUS-IDLE";
+        idle_status.timestamp = "2026-07-16T01:00:04.500Z";
+        idle_status.process_epoch = std::string(kProcessEpoch);
+        mqtt::GetPayload<mqtt::DeviceStatusPayload>(idle_status)->job_id.reset();
+        assert(handler.Handle("device/PI-01/status", Encode(idle_status), "2026-07-16T01:00:04.500Z"));
+        assert(qt_statuses.size() == 3);
+        assert(!qt_statuses[2].process_epoch.has_value());
+
         qt_statuses.clear();
         const mqtt::MqttMessage heartbeat{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
@@ -377,7 +394,7 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         assert(qt_statuses.size() == 1);
         assert(qt_statuses[0].message_type == mqtt::MessageType::kDeviceStatus);
         assert(qt_statuses[0].source_id == "PI-01");
-        assert(!qt_statuses[0].process_epoch.has_value());
+        assert(qt_statuses[0].process_epoch == kProcessEpoch);
         const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
         assert(status != nullptr);
         assert(status->status == mqtt::ConnectionState::kOnline);

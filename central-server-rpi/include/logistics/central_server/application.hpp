@@ -14,9 +14,16 @@ namespace logistics::central_server {
 
 class Application final {
 public:
+    enum class PendingDeliveryEpochResult {
+        kReady,
+        kDropped,
+        kError,
+    };
+
     using RecoveryPersistence =
         std::function<bool(std::uint64_t, std::uint64_t, const std::vector<PendingMqttDelivery>&)>;
     using RecoveryPublisher = std::function<void(const PendingMqttDelivery&)>;
+    using MqttDeliveryRemoval = std::function<bool(std::string_view, std::string_view)>;
 
     [[nodiscard]] static bool CommitRecoveryResponse(
         ProcessOrchestrator& process_orchestrator, ProcessCommandTracker& process_command_tracker,
@@ -27,6 +34,9 @@ public:
         const RecoveryPublisher& publish);
     [[nodiscard]] static std::optional<contracts::mqtt::MqttMessage> StampProcessEpoch(
         contracts::mqtt::MqttMessage message, std::string_view process_epoch);
+    [[nodiscard]] static PendingDeliveryEpochResult PreparePendingMqttDeliveryEpoch(PendingMqttDelivery& delivery,
+                                                                                    std::string_view process_epoch,
+                                                                                    const MqttDeliveryRemoval& remove);
     [[nodiscard]] static int Run(int argc, char* argv[]);
 };
 

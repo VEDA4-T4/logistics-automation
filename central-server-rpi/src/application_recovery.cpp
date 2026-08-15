@@ -24,6 +24,17 @@ std::optional<contracts::mqtt::MqttMessage> Application::StampProcessEpoch(contr
     return message;
 }
 
+Application::PendingDeliveryEpochResult Application::PreparePendingMqttDeliveryEpoch(
+    PendingMqttDelivery& delivery, std::string_view process_epoch, const MqttDeliveryRemoval& remove) {
+    auto stamped = StampProcessEpoch(delivery.message, process_epoch);
+    if (!stamped.has_value()) {
+        return remove(delivery.topic, delivery.message.message_id) ? PendingDeliveryEpochResult::kDropped
+                                                                   : PendingDeliveryEpochResult::kError;
+    }
+    delivery.message = std::move(*stamped);
+    return PendingDeliveryEpochResult::kReady;
+}
+
 bool Application::CommitRecoveryResponse(
     ProcessOrchestrator& process_orchestrator, ProcessCommandTracker& process_command_tracker,
     CommandManager& command_manager,
