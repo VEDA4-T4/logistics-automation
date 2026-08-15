@@ -11,16 +11,56 @@
   inbox/outbox, 처리 메시지는 남아 있지 않아야 한다. 새 세션의 `STOPPED` 공정 상태와 새 epoch는 생성될 수 있다.
 - 중앙 서버, input, vision, gripper, sorting 장비 ID와 TLS/ACL 연결을 확인한다. 이 문서와 셸 이력에는
   비밀번호, 토큰, 개인키를 기록하지 않는다.
-- 시험마다 새 `RUN_ID`와 중앙이 만든 새 process epoch를 기록한다. input/sorting/vision/gripper의 MQTT
-  outbound 및 inbound spool은 기존 내용을 재사용하지 않는 별도 run 디렉터리로 설정한다. 예:
+- 시험마다 새 `RUN_ID`와 중앙이 만든 새 process epoch를 기록한다. `RUN_ID`를 생성·검증하고 run 절대 경로를
+  확인한 뒤에만 input/sorting/vision/gripper spool을 격리한다. 기존 spool 또는 shared root는 삭제하지 않는다.
 
   ```sh
-  sudo install -d -o logistics -g logistics -m 0750 \
-    /var/lib/logistics/mqtt-spool/${RUN_ID}/{input,sorting,vision,gripper}
+  set -eu
+  RUN_ID="${RUN_ID:-run-$(date -u +%Y%m%dT%H%M%SZ)}"
+  case "${RUN_ID}" in
+    run-?*) ;;
+    *) printf '%s\n' 'RUN_ID must begin with run-' >&2; exit 1 ;;
+  esac
+  case "${RUN_ID}" in
+    *[!A-Za-z0-9._-]*|*..*|.|..) printf '%s\n' 'unsafe RUN_ID' >&2; exit 1 ;;
+  esac
+  SPOOL_BASE=/var/lib/logistics/mqtt-spool
+  SPOOL_BASE_REAL="$(readlink -f -- "${SPOOL_BASE}")"
+  RUN_SPOOL="${SPOOL_BASE_REAL}/${RUN_ID}"
+  case "${RUN_SPOOL}" in
+    "${SPOOL_BASE_REAL}"/run-*) ;;
+    *) printf '%s\n' 'unsafe spool path' >&2; exit 1 ;;
+  esac
+  if [ -e "${RUN_SPOOL}" ]; then
+    printf '%s\n' "run spool already exists: ${RUN_SPOOL}" >&2; exit 1
+  fi
+  sudo install -d -o root -g root -m 0750 "${RUN_SPOOL}"
+  test "$(sudo readlink -f -- "${RUN_SPOOL}")" = "${RUN_SPOOL}"
   ```
 
-  설정한 각 노드의 `publish_spool_directory`가 해당 run 디렉터리를 사용하고, 이전 spool 경로가 비어 있거나
-  격리된 것을 시작 전에 확인한다. spool을 삭제하는 절차는 운영자 승인과 백업 정책을 따른다.
+  공통 MQTT client는 `publish_spool_directory/<device_id>/`와 그 아래 `inbound/`를 만든다. 따라서 INI의
+  `publish_spool_directory`는 역할별 경로로 설정하고, 각 정확한 role/device/inbound 경로를 실행 계정이 쓸 수
+  있게 미리 만든다. `PI-…` 값은 실제 INI의 `device_id`로 교체한다.
+
+  ```sh
+  # Yocto systemd users: logistics-input:logistics, logistics-sorting:logistics
+  sudo install -d -o logistics-input -g logistics -m 0750 "${RUN_SPOOL}/input"
+  sudo install -d -o logistics-input -g logistics -m 0750 "${RUN_SPOOL}/input/PI-INPUT-01/inbound"
+  sudo install -d -o logistics-sorting -g logistics -m 0750 "${RUN_SPOOL}/sorting"
+  sudo install -d -o logistics-sorting -g logistics -m 0750 "${RUN_SPOOL}/sorting/PI-SORTING-01/inbound"
+
+  # Foreground vision/gripper: use the account that will run each process.
+  VISION_USER="$(id -un)"; VISION_GROUP="$(id -gn)"
+  GRIPPER_USER="$(id -un)"; GRIPPER_GROUP="$(id -gn)"
+  sudo install -d -o "${VISION_USER}" -g "${VISION_GROUP}" -m 0750 "${RUN_SPOOL}/vision"
+  sudo install -d -o "${VISION_USER}" -g "${VISION_GROUP}" -m 0750 "${RUN_SPOOL}/vision/PI-VISION-01/inbound"
+  sudo install -d -o "${GRIPPER_USER}" -g "${GRIPPER_GROUP}" -m 0750 "${RUN_SPOOL}/gripper"
+  sudo install -d -o "${GRIPPER_USER}" -g "${GRIPPER_GROUP}" -m 0750 "${RUN_SPOOL}/gripper/PI-GRIPPER-01/inbound"
+  ```
+
+  Set input, sorting, vision, and gripper `publish_spool_directory` to `${RUN_SPOOL}/input`,
+  `${RUN_SPOOL}/sorting`, `${RUN_SPOOL}/vision`, and `${RUN_SPOOL}/gripper` respectively. Confirm those resolved paths
+  and ownership before each process starts; isolate only and never remove an earlier run's spool.
 
 ## 빌드 및 배포 범위
 
@@ -37,9 +77,12 @@ Yocto input/sorting 이미지의 소스는 `3c87abcb49edecff24e6f676a223b51f8172
 ## 실행과 3상자 UTC 나노초 타임라인
 
 1. 중앙과 모든 노드가 안전한 정지/초기 상태인지 확인한 뒤 `START`를 한 번만 보낸다.
-2. 실제 상자 세 개를 한 번에 하나씩 통과시키고, 각 이벤트의 발생 또는 중앙 수신 시각을 ISO-8601 UTC
-   나노초(`YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ`)로 기록한다.
-3. 아래 필드가 빠지거나 순서가 어긋나면 즉시 실패로 표시하고 해당 `RUN_ID`에서 추가 상자를 투입하지 않는다.
+2. 실제 상자 세 개를 한 번에 하나씩 통과시킨다. 각 timeline 값은 다음 두 evidence class 중 하나를 반드시
+   표시한다: (a) application/MQTT payload의 timestamp와 그 payload가 제공한 precision, 또는 (b) operator가
+   `date -u --iso-8601=ns`로 찍은 UTC nanosecond marker. journal 수신 시각은 timeline의 ns 근거가 아니다.
+3. ns 값을 주장하는 cell은 `payload-ns` 또는 `operator-marker-ns`를 함께 적는다. 다른 precision의 application
+   timestamp는 원문 precision을 보존해 기록하고 ns로 채우거나 보간하지 않는다.
+4. 아래 필드가 빠지거나 순서가 어긋나면 즉시 실패로 표시하고 해당 `RUN_ID`에서 추가 상자를 투입하지 않는다.
 
 | box | sensor publish | central receive | input STOP command / ACK | WORK_CREATED / WORK_ASSIGNED | first box / barcode / success | gripper pickup / HOME / terminal response | sorting destination / START / detected / STOP / complete | verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -70,31 +113,71 @@ Yocto input/sorting 이미지의 소스는 `3c87abcb49edecff24e6f676a223b51f8172
 명령줄이나 이 문서에 넣지 않는다.
 
 ```sh
-# 중앙 SQLite: fresh 세션에 catalog 외 공정 런타임 데이터가 남지 않았는지 확인
+# 중앙 SQLite: fresh 시작 직후 catalog는 보존, 그 외 과거 runtime/event/history 행은 0이어야 함.
+# schema_migrations는 현재 schema metadata이므로 0을 기대하지 않는다.
 sudo sqlite3 /var/lib/logistics/logistics.db \
-  "SELECT 'catalog', count(*) FROM product_catalog UNION ALL
-   SELECT 'work', count(*) FROM process_work_state UNION ALL
+  "SELECT 'product_catalog (preserved)', count(*) FROM product_catalog UNION ALL
+   SELECT 'product', count(*) FROM product UNION ALL
+   SELECT 'work_history', count(*) FROM work_history UNION ALL
+   SELECT 'image_file', count(*) FROM image_file UNION ALL
+   SELECT 'device_status', count(*) FROM device_status UNION ALL
+   SELECT 'error_log', count(*) FROM error_log UNION ALL
+   SELECT 'mqtt_event_log', count(*) FROM mqtt_event_log UNION ALL
+   SELECT 'security_log', count(*) FROM security_log UNION ALL
+   SELECT 'http_upload', count(*) FROM http_upload UNION ALL
+   SELECT 'process_work_state', count(*) FROM process_work_state UNION ALL
+   SELECT 'process_gripper_target', count(*) FROM process_gripper_target UNION ALL
    SELECT 'command_outbox', count(*) FROM process_command_outbox UNION ALL
    SELECT 'mqtt_outbox', count(*) FROM process_mqtt_outbox UNION ALL
-   SELECT 'pending_command', count(*) FROM command_manager_pending;"
+   SELECT 'processed_message', count(*) FROM process_processed_message UNION ALL
+   SELECT 'pending_command', count(*) FROM command_manager_pending UNION ALL
+   SELECT 'completed_command', count(*) FROM command_manager_completed UNION ALL
+   SELECT 'command_manager_runtime (new session row allowed)', count(*) FROM command_manager_runtime UNION ALL
+   SELECT 'pending_system_command', count(*) FROM pending_system_command UNION ALL
+   SELECT 'process_runtime_state (new session row allowed)', count(*) FROM process_runtime_state UNION ALL
+   SELECT 'schema_migrations (current metadata allowed)', count(*) FROM schema_migrations;"
 
-# 각 Pi에서 RUN_ID spool만 사용하며 pending 파일이 남는지 확인
-sudo find /var/lib/logistics/mqtt-spool/${RUN_ID} -type f -printf '%p %TY-%Tm-%TdT%TTZ\n' | sort
+# Expected: product_catalog equals its pre-fresh count (and may be 0); every unlabelled row above is 0.
+# process_runtime_state and command_manager_runtime are new-session rows (0 or 1 before/after initialization);
+# schema_migrations contains current schema metadata, not retained runtime history.
+
+# 각 Pi에서 exact role/device/inbound spool 경로와 ownership을 확인
+sudo find "${RUN_SPOOL}" -printf '%M %u:%g %p\n' | sort
 
 # Broker listener와 서비스 상태
 sudo systemctl status mosquitto --no-pager
 sudo ss -ltnp 'sport = :8883'
 
-# Broker, 서버, 노드 journal의 UTC 나노초 로그를 보존
-sudo journalctl -u mosquitto --since "${RUN_START}" --until "${RUN_END}" -o short-precise --no-pager
-sudo journalctl -u logistics-central-server --since "${RUN_START}" --until "${RUN_END}" -o short-precise --no-pager
-sudo journalctl -u logistics-input-node -u logistics-sorting-node -u logistics-vision-node \
-  -u logistics-gripper-node --since "${RUN_START}" --until "${RUN_END}" -o short-precise --no-pager
+# UTC journal transport-receipt evidence. Use short-iso-precise only when supported; its precision is microseconds,
+# not nanoseconds.
+if journalctl --help | grep -q short-iso-precise; then JOURNAL_FORMAT=short-iso-precise; else JOURNAL_FORMAT=short-iso; fi
+sudo journalctl --utc -u mosquitto --since "${RUN_START}" --until "${RUN_END}" -o "${JOURNAL_FORMAT}" --no-pager
+sudo journalctl --utc -u logistics-central-server -u logistics-input-node -u logistics-sorting-node \
+  --since "${RUN_START}" --until "${RUN_END}" -o "${JOURNAL_FORMAT}" --no-pager
+```
+
+Vision과 gripper에는 systemd unit이 없다. 해당 Pi에서 foreground stdout/stderr를 별도 파일로 캡처한다. `ts`의
+line timestamp는 UTC seconds-level capture aid일 뿐 ns evidence가 아니며, 실행 전후와 수동 ESTOP/RECOVERY에는
+아래 UTC ns marker를 추가한다.
+
+```sh
+marker() { log_file="$1"; shift; printf '%s %s\n' "$(date -u --iso-8601=ns)" "$*" | tee -a "${log_file}"; }
+marker "${RUN_ID}-vision.log" 'vision foreground start'
+TZ=UTC stdbuf -oL -eL ./build-vision/device-rpi/logistics_vision_node --headless \
+  --config runtime/vision-node/vision-node.ini 2>&1 | ts '[%Y-%m-%dT%H:%M:%S]' | tee -a "${RUN_ID}-vision.log"
+
+marker "${RUN_ID}-gripper.log" 'gripper foreground start'
+TZ=UTC stdbuf -oL -eL ./build-device/device-rpi/logistics_gripper_node \
+  runtime/gripper-node/gripper-node.ini /dev/vedauart 2>&1 | ts '[%Y-%m-%dT%H:%M:%S]' | tee -a "${RUN_ID}-gripper.log"
+
+# From a second operator terminal, write markers at START, each ESTOP/RECOVERY, and process exit.
+marker "${RUN_ID}-vision.log" 'ESTOP sent at vision stage'
+marker "${RUN_ID}-gripper.log" 'RECOVERY acknowledged at gripper stage'
 ```
 
 Broker 메시지 관찰은 TLS와 ACL이 적용된 승인된 관찰자 자격 증명으로 별도 보안 절차에 따라 실행하고, topic, payload,
-수신 UTC 나노초와 process epoch를 증거에 저장한다. broker 로그에는 해당 `RUN_ID`의 연결/재연결과 ACL 거부도
-함께 보관한다.
+payload timestamp precision, process epoch를 증거에 저장한다. broker journal은 연결/재연결과 ACL 거부의 UTC
+microsecond transport receipt로 보관한다.
 
 ## 통과/실패 기준과 롤백
 
