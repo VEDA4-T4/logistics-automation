@@ -5,7 +5,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
-#include <future>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -24,6 +23,7 @@
 
 #include "detection.hpp"
 #include "failure_frame_store.hpp"
+#include "image_upload_task.hpp"
 #include "vision_mqtt_workflow.hpp"
 #include "vision_processing_config.hpp"
 
@@ -376,11 +376,11 @@ int main(const int argc, char* argv[]) {
         return 2;
     }
     const std::string device_id = mqtt_config.device_id;
-    std::unique_ptr<logistics::device::ImageUploader> image_uploader;
+    std::shared_ptr<logistics::device::ImageUploader> image_uploader;
     if (mqtt_config.image_upload_enabled) {
-        image_uploader = std::make_unique<logistics::device::ImageUploader>(mqtt_config.image_upload);
+        image_uploader = std::make_shared<logistics::device::ImageUploader>(mqtt_config.image_upload);
     }
-    std::optional<std::future<ImageUploadCompletion>> pending_image_upload;
+    logistics::vision::ImageUploadTask<ImageUploadCompletion> pending_image_upload;
     std::optional<std::string> pending_image_upload_work_id;
     std::atomic_uint64_t work_generation{};
     auto device_status = std::make_shared<logistics::device::DeviceStatus>(device_id);
@@ -533,7 +533,7 @@ int main(const int argc, char* argv[]) {
             mqtt_workflow.Reset();
             result_outbox.Reset();
             pending_capture.Reset();
-            pending_image_upload.reset();
+            pending_image_upload.Cancel();
             pending_image_upload_work_id.reset();
             device_status->SetJobId(std::nullopt);
             device_status->SetCurrentState(control_state.CurrentState());
@@ -587,11 +587,9 @@ int main(const int argc, char* argv[]) {
 
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
         const auto loop_now = Clock::now();
-        if (control_state.IsOperational() && pending_image_upload.has_value() &&
-            !result_outbox.PendingWorkId().has_value() &&
-            pending_image_upload->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            ImageUploadCompletion completion = pending_image_upload->get();
-            pending_image_upload.reset();
+        if (control_state.IsOperational() && pending_image_upload.Active() &&
+            !result_outbox.PendingWorkId().has_value() && pending_image_upload.Ready()) {
+            ImageUploadCompletion completion = pending_image_upload.Take();
             pending_image_upload_work_id.reset();
             if (completion.generation == work_generation.load(std::memory_order_relaxed) &&
                 control_state.IsOperational()) {
@@ -817,7 +815,7 @@ int main(const int argc, char* argv[]) {
                 });
             }
             if (barcode_detected && image_uploader != nullptr && !pending_capture.Empty()) {
-                if (pending_image_upload.has_value()) {
+                if (pending_image_upload.Active()) {
                     publications.push_back({
                         logistics::vision::VisionPublicationChannel::kError,
                         MakeVisionError(
@@ -838,11 +836,10 @@ int main(const int argc, char* argv[]) {
                     const bool durable = queued && flush_result_outbox();
                     if (durable) {
                         pending_image_upload_work_id = work->work_id;
-                        // ponytail: the workflow permits one active work, so one future is the queue limit.
-                        pending_image_upload.emplace(std::async(
-                            std::launch::async,
-                            [uploader = image_uploader.get(), device_id, assigned_work = std::move(assigned_work),
-                             upload_message_id, captured_at, generation, frame = std::move(captured_frame)]() mutable {
+                        static_cast<void>(pending_image_upload.Start(
+                            [uploader = image_uploader, device_id, assigned_work = std::move(assigned_work),
+                             upload_message_id, captured_at, generation,
+                             frame = std::move(captured_frame)](std::stop_token stop_token) mutable {
                                 ImageUploadCompletion completion{
                                     .work = std::move(assigned_work),
                                     .publications = {},
@@ -857,7 +854,7 @@ int main(const int argc, char* argv[]) {
                                     if (completion.encoded) {
                                         completion.result = uploader->Upload(
                                             device_id, completion.work.work_id, upload_message_id, captured_at,
-                                            completion.work.observation->image_name, "image/jpeg", jpeg);
+                                            completion.work.observation->image_name, "image/jpeg", jpeg, stop_token);
                                     }
                                 } catch (const std::exception& error) {
                                     completion.result.error = error.what();
@@ -931,6 +928,7 @@ int main(const int argc, char* argv[]) {
         cv::destroyAllWindows();
     }
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
+    pending_image_upload.Cancel();
     mqtt_client.Stop();
 #endif
     return exit_code;

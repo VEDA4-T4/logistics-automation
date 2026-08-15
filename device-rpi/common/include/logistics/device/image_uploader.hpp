@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -56,7 +57,7 @@ struct ImageUploadResult final {
 class ImageUploadTransport {
 public:
     virtual ~ImageUploadTransport() = default;
-    [[nodiscard]] virtual ImageUploadResult Upload(const ImageUploadRequest& request) = 0;
+    [[nodiscard]] virtual ImageUploadResult Upload(const ImageUploadRequest& request, std::stop_token stop_token) = 0;
 };
 
 [[nodiscard]] std::unique_ptr<ImageUploadTransport> CreateCurlImageUploadTransport(const ImageUploadConfig& config);
@@ -67,7 +68,7 @@ public:
 
     [[nodiscard]] ImageUploadResult Upload(std::string device_id, std::string work_id, std::string message_id,
                                            std::string captured_at, std::string image_name, std::string mime_type,
-                                           std::span<const std::uint8_t> bytes) const;
+                                           std::span<const std::uint8_t> bytes, std::stop_token stop_token = {}) const;
 
 private:
     ImageUploadConfig config_;

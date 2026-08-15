@@ -577,6 +577,57 @@ void test_repeated_recovery_rehomes_and_stays_stopped() {
     }
 }
 
+void test_duplicate_recovery_during_homing_preserves_the_original_request() {
+    Fixture fixture;
+    fixture.Home();
+    fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
+    static_cast<void>(
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-original")));
+    fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));
+    const std::uint16_t original_motion_id = uart_gripper_home_motion_id(fixture.backend->last_written.payload);
+    const std::size_t commands_before_duplicate = fixture.backend->written_commands.size();
+    fixture.reports.clear();
+
+    const GripperCommandResult duplicate =
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-duplicate"));
+
+    assert(duplicate.status == GripperCommandStatus::kDuplicate);
+    assert(fixture.backend->written_commands.size() == commands_before_duplicate);
+    const auto* duplicate_response = fixture.LastResponse();
+    assert(duplicate_response != nullptr && duplicate_response->request_id == "req-duplicate" &&
+           duplicate_response->result == mqtt::CommandResult::kDuplicated);
+    assert(fixture.node->HasActiveCycle());
+
+    fixture.node->HandleUartFrame(MakeMotionComplete(original_motion_id, UART_GRIPPER_MOTION_HOME));
+
+    const auto* completed = fixture.LastResponse();
+    assert(completed != nullptr && completed->request_id == "req-original" &&
+           completed->result == mqtt::CommandResult::kSuccess);
+    assert(fixture.node->IsHomed());
+    assert(!fixture.node->HasActiveCycle());
+}
+
+void test_duplicate_release_during_recovery_homing_does_not_report_stopped() {
+    Fixture fixture;
+    fixture.Home();
+    fixture.node->HandleUartFrame(MakeSafetyEvent(true, UART_CMD_EMERGENCY_STOP));
+    static_cast<void>(
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kRecovery, "req-recovery")));
+    fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));
+    const std::uint16_t recovery_motion_id = uart_gripper_home_motion_id(fixture.backend->last_written.payload);
+    fixture.reports.clear();
+
+    fixture.node->HandleUartFrame(MakeSafetyEvent(false, UART_CMD_RESET_DEVICE));
+
+    assert(fixture.node->HasActiveCycle());
+    assert(!fixture.AnyStatusEquals("STOPPED"));
+    fixture.node->HandleUartFrame(MakeMotionComplete(recovery_motion_id, UART_GRIPPER_MOTION_HOME));
+    const auto* completed = fixture.LastResponse();
+    assert(completed != nullptr && completed->request_id == "req-recovery" &&
+           completed->result == mqtt::CommandResult::kSuccess);
+    assert(fixture.AnyStatusEquals("STOPPED"));
+}
+
 void test_missing_completion_event_times_out_the_cycle() {
     Fixture fixture;
     fixture.Home();
@@ -1086,6 +1137,8 @@ int main() {
     test_unrequested_emergency_stop_reports_actual_hex_cause();
     test_recovery_homes_before_reporting_stopped();
     test_repeated_recovery_rehomes_and_stays_stopped();
+    test_duplicate_recovery_during_homing_preserves_the_original_request();
+    test_duplicate_release_during_recovery_homing_does_not_report_stopped();
     test_missing_completion_event_times_out_the_cycle();
     test_start_cycle_dispatch_failure_reports_exactly_one_response();
     test_stop_cancels_the_active_cycle();

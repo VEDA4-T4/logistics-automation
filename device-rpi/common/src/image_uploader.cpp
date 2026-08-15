@@ -4,9 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
-#include <thread>
 #include <utility>
 
 #include "logistics/contracts/http_upload.hpp"
@@ -38,6 +39,18 @@ std::string Sha256(std::span<const std::uint8_t> bytes) {
     return output.str();
 }
 
+ImageUploadResult CancelledUpload() {
+    return { ImageUploadDisposition::kPermanentFailure, {}, {}, {}, "image upload cancelled" };
+}
+
+bool WaitForRetry(std::chrono::seconds delay, std::stop_token stop_token) {
+    std::condition_variable condition;
+    std::mutex mutex;
+    std::stop_callback wake_on_stop(stop_token, [&condition] { condition.notify_all(); });
+    std::unique_lock lock(mutex);
+    return condition.wait_for(lock, delay, [&stop_token] { return stop_token.stop_requested(); });
+}
+
 }  // namespace
 
 ImageUploader::ImageUploader(ImageUploadConfig config, std::unique_ptr<ImageUploadTransport> transport)
@@ -49,7 +62,10 @@ ImageUploader::ImageUploader(ImageUploadConfig config, std::unique_ptr<ImageUplo
 
 ImageUploadResult ImageUploader::Upload(std::string device_id, std::string work_id, std::string message_id,
                                         std::string captured_at, std::string image_name, std::string mime_type,
-                                        std::span<const std::uint8_t> bytes) const {
+                                        std::span<const std::uint8_t> bytes, std::stop_token stop_token) const {
+    if (stop_token.stop_requested()) {
+        return CancelledUpload();
+    }
     if (!config_.IsValid() || transport_ == nullptr || bytes.empty()) {
         return { ImageUploadDisposition::kPermanentFailure, {}, {}, {}, "invalid image upload configuration" };
     }
@@ -82,11 +98,16 @@ ImageUploadResult ImageUploader::Upload(std::string device_id, std::string work_
     auto backoff = config_.initial_backoff;
     ImageUploadResult result;
     for (int attempt = 1; attempt <= config_.maximum_attempts; ++attempt) {
-        result = transport_->Upload(request);
+        result = transport_->Upload(request, stop_token);
+        if (stop_token.stop_requested()) {
+            return CancelledUpload();
+        }
         if (result.disposition != ImageUploadDisposition::kRetryableFailure || attempt == config_.maximum_attempts) {
             break;
         }
-        std::this_thread::sleep_for(backoff);
+        if (WaitForRetry(backoff, stop_token)) {
+            return CancelledUpload();
+        }
         backoff = std::min(backoff * 2, config_.maximum_backoff);
     }
     if (result.IsConfirmed() && (!contracts::IsValidUuid(result.upload_id) || result.checksum != request.sha256 ||

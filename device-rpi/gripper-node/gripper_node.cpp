@@ -667,6 +667,16 @@ GripperCommandResult GripperNode::RunRecovery(const mqtt::ControlCommandPayload&
                                  .mqtt_command = command.command,
                                  .request_id = command.request_id };
 
+    const bool recovery_pending = pending_safety_.active && pending_safety_.expected == PendingSafetyEvent::kReleased;
+    const bool recovery_homing =
+        cycle_.active && cycle_.mqtt_command == mqtt::ControlCommand::kRecovery && cycle_.phase == GripperPhase::kHome;
+    if (recovery_pending || recovery_homing) {
+        result.status = GripperCommandStatus::kDuplicate;
+        EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kDuplicated, std::nullopt,
+                            "recovery is already in progress");
+        return result;
+    }
+
     result = ExecuteAsync(std::move(result), UART_CMD_RESET_DEVICE, {});
     if (result.Succeeded()) {
         pending_safety_ = PendingSafetyCommand{ .active = true,
@@ -1159,6 +1169,11 @@ void GripperNode::HandleSafetyEvent(const uart_frame_t& frame) {
         pending_safety_ = PendingSafetyCommand{};
         estop_requested_ = false;
         static_cast<void>(RunInitialize(recovery));
+        return;
+    }
+
+    if (!latched && cycle_.active && cycle_.mqtt_command == mqtt::ControlCommand::kRecovery &&
+        cycle_.phase == GripperPhase::kHome) {
         return;
     }
 
