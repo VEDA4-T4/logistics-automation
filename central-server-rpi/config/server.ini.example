@@ -20,8 +20,8 @@ path=devices.json
 path=/var/lib/logistics/logistics.db
 migration_dir=/usr/share/logistics/migrations
 busy_timeout_ms=5000
-# Development-only: recreate the database on every start and copy only product_catalog.
-reset_on_start=false
+# fresh recreates the database before migrations and copies only product_catalog; resume preserves all state.
+startup_mode=fresh
 
 [storage]
 image_root=/var/lib/logistics/images

@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 #include <locale>
 #include <sstream>
 #include <string_view>
@@ -199,8 +200,19 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
         config.database.busy_timeout_ms = ParseInteger(path, line_number, key, value, 0, 600'000);
         return;
     }
+    if (section == "database" && key == "startup_mode") {
+        if (value == "fresh") {
+            config.database.startup_mode = StartupMode::kFresh;
+        } else if (value == "resume") {
+            config.database.startup_mode = StartupMode::kResume;
+        } else {
+            ThrowLineError(path, line_number, "startup_mode must be fresh or resume");
+        }
+        return;
+    }
     if (section == "database" && key == "reset_on_start") {
-        config.database.reset_on_start = ParseBoolean(path, line_number, key, value);
+        config.database.startup_mode =
+            ParseBoolean(path, line_number, key, value) ? StartupMode::kFresh : StartupMode::kResume;
         return;
     }
     if (section == "storage" && key == "log_root") {
@@ -383,6 +395,16 @@ ServerConfig LoadServerConfig(const std::filesystem::path& path) {
             ThrowLineError(path, line_number, "duplicate setting: " + identity);
         }
         AssignValue(config, path, line_number, section, key, value);
+    }
+
+    const bool startup_mode_assigned = assigned_keys.contains("database.startup_mode");
+    const bool reset_on_start_assigned = assigned_keys.contains("database.reset_on_start");
+    if (startup_mode_assigned && reset_on_start_assigned) {
+        throw ConfigError(path.string() +
+                          ": [database] startup_mode and deprecated reset_on_start cannot be used together");
+    }
+    if (reset_on_start_assigned) {
+        std::clog << "[server][WARNING] reset_on_start is deprecated; use startup_mode=fresh|resume\n";
     }
 
     ValidateConfig(path, config);

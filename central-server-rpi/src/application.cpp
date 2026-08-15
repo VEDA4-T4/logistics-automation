@@ -163,18 +163,13 @@ int Application::Run(int argc, char* argv[]) {
         return 3;
     }
 
-    database_status = MigrationRunner::Apply(database, server_config.database.migration_dir);
+    database_status = PrepareDatabaseForStartup(database, server_config.database);
     if (!database_status.ok()) {
-        std::cerr << "[server][ERROR] database migration failed: " << database_status.message << '\n';
+        std::cerr << "[server][ERROR] database startup preparation failed: " << database_status.message << '\n';
         return 3;
     }
 
-    if (server_config.database.reset_on_start) {
-        database_status = ResetDatabasePreservingProductCatalog(database, server_config.database);
-        if (!database_status.ok()) {
-            std::cerr << "[server][ERROR] database reset failed: " << database_status.message << '\n';
-            return 3;
-        }
+    if (server_config.database.startup_mode == StartupMode::kFresh) {
         std::cout << "[server][INFO] database reset; product catalog preserved\n";
     }
 

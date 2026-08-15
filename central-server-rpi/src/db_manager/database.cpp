@@ -342,7 +342,18 @@ DatabaseStatus ResetDatabasePreservingProductCatalog(Database& database, const D
                                                    : "database reset source already exists: " + source_path.string() };
     }
 
-    auto status = database.Checkpoint();
+    bool preserve_catalog = false;
+    DatabaseStatus status;
+    {
+        Statement catalog_lookup;
+        status = database.Prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='product_catalog'",
+                                  catalog_lookup);
+        if (!status.ok() || !(status = catalog_lookup.Step(preserve_catalog)).ok()) {
+            return status;
+        }
+    }
+
+    status = database.Checkpoint();
     if (!status.ok() || !(status = database.Close()).ok()) {
         return status;
     }
@@ -366,7 +377,7 @@ DatabaseStatus ResetDatabasePreservingProductCatalog(Database& database, const D
         return status;
     }
 
-    {
+    if (preserve_catalog) {
         Statement attach;
         status = database.Prepare("ATTACH DATABASE ? AS reset_source", attach);
         if (!status.ok() || !(status = attach.Bind(1, source_path.string())).ok()) {
@@ -378,21 +389,22 @@ DatabaseStatus ResetDatabasePreservingProductCatalog(Database& database, const D
             status.message += "; original database retained at " + source_path.string();
             return status;
         }
-    }
 
-    Transaction transaction(database);
-    if (!transaction.status().ok()) {
-        return transaction.status();
-    }
-    status = database.Execute(
-        "DELETE FROM product_catalog;"
-        "INSERT INTO product_catalog(barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms) "
-        "SELECT barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms "
-        "FROM reset_source.product_catalog;");
-    if (!status.ok() || !(status = transaction.Commit()).ok() ||
-        !(status = database.Execute("DETACH DATABASE reset_source")).ok()) {
-        status.message += "; original database retained at " + source_path.string();
-        return status;
+        Transaction transaction(database);
+        if (!transaction.status().ok()) {
+            return transaction.status();
+        }
+        status = database.Execute(
+            "DELETE FROM product_catalog;"
+            "INSERT INTO "
+            "product_catalog(barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms) "
+            "SELECT barcode,product_id,product_name,destination,active,created_at_ms,updated_at_ms "
+            "FROM reset_source.product_catalog;");
+        if (!status.ok() || !(status = transaction.Commit()).ok() ||
+            !(status = database.Execute("DETACH DATABASE reset_source")).ok()) {
+            status.message += "; original database retained at " + source_path.string();
+            return status;
+        }
     }
 
     std::filesystem::remove(source_path, error);
@@ -400,6 +412,11 @@ DatabaseStatus ResetDatabasePreservingProductCatalog(Database& database, const D
         return { DatabaseStatusCode::kIoError, "cannot remove database reset source: " + error.message() };
     }
     return DatabaseStatus::Ok();
+}
+
+DatabaseStatus PrepareDatabaseForStartup(Database& database, const DatabaseConfig& config) {
+    return config.startup_mode == StartupMode::kFresh ? ResetDatabasePreservingProductCatalog(database, config)
+                                                      : MigrationRunner::Apply(database, config.migration_dir);
 }
 
 }  // namespace logistics::central_server
