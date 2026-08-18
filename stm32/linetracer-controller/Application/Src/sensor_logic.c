@@ -77,29 +77,37 @@ static uint8_t SensorLogic_DebounceUpdate(sensor_debounce_filter_t* filter, uint
 
 static linetracer_line_state_t SensorLogic_CalculateTrackingState(uint8_t left_black, uint8_t center_black,
                                                                   uint8_t right_black) {
-    /*
-     * The outer sensors are the tracking authority. With the 18 mm black
-     * tape centered between them, both
-     * outer sensors normally see white.
-     * A missed center sample must therefore not disable line following.
-     *
-     * The center sensor is still consumed by the separate all-black marker
-     * check before this function is
-     * called.
-     */
-    (void)center_black;
     if ((left_black != 0U) && (right_black == 0U)) {
         return LINETRACER_LINE_LEFT_ONLY;
     }
     if ((left_black == 0U) && (right_black != 0U)) {
         return LINETRACER_LINE_RIGHT_ONLY;
     }
+    if ((left_black == 0U) && (center_black == 0U) && (right_black == 0U)) {
+        return LINETRACER_LINE_WHITE_GAP;
+    }
     return LINETRACER_LINE_CENTERED;
 }
 
-static int16_t SensorLogic_ApplyDigitalPidDirection(int16_t analog_error, linetracer_line_state_t line_state,
-                                                    uint8_t center_black) {
+static void SensorLogic_RememberLineError(sensor_logic_context_t* context, int16_t line_error, uint32_t now_ms) {
+    if ((context == NULL) || (line_error == 0)) {
+        return;
+    }
+
+    context->line_last_valid_error = line_error;
+    context->line_last_valid_at_ms = now_ms;
+    context->line_last_valid_error_valid = 1U;
+}
+
+static int16_t SensorLogic_ApplyDigitalPidDirection(sensor_logic_context_t* context, int16_t analog_error,
+                                                    linetracer_line_state_t line_state, uint8_t center_black,
+                                                    uint32_t now_ms) {
     int32_t magnitude = analog_error;
+    int16_t directed_error;
+
+    if (context == NULL) {
+        return 0;
+    }
 
     if (magnitude < 0) {
         magnitude = -magnitude;
@@ -111,20 +119,48 @@ static int16_t SensorLogic_ApplyDigitalPidDirection(int16_t analog_error, linetr
     switch (line_state) {
         case LINETRACER_LINE_LEFT_ONLY:
             /* Black is on the left: slow the physical left wheel and steer left. */
-            return (int16_t)magnitude;
+            directed_error = (int16_t)magnitude;
+            SensorLogic_RememberLineError(context, directed_error, now_ms);
+            return directed_error;
 
         case LINETRACER_LINE_RIGHT_ONLY:
             /* Black is on the right: slow the physical right wheel and steer right. */
-            return (int16_t)-magnitude;
+            directed_error = (int16_t)-magnitude;
+            SensorLogic_RememberLineError(context, directed_error, now_ms);
+            return directed_error;
 
         case LINETRACER_LINE_CENTERED:
-            /* 010 is a confirmed centred line, so retain AO error for small continuous PID corrections. */
-            return (center_black != 0U) ? analog_error : 0;
+            /* 010 is centred; three-sensor AO still provides small continuous correction before DO changes. */
+            if ((center_black != 0U) || (context->line_analog_signal_valid != 0U)) {
+                SensorLogic_RememberLineError(context, analog_error, now_ms);
+                return analog_error;
+            }
+            return 0;
+
+        case LINETRACER_LINE_WHITE_GAP:
+            /* A valid AO centroid overrides a simultaneous DO miss. */
+            if (context->line_analog_signal_valid != 0U) {
+                SensorLogic_RememberLineError(context, analog_error, now_ms);
+                return analog_error;
+            }
+
+            /* Bridge only a short physical gap, using the latest trustworthy direction. */
+            if ((context->line_last_valid_error_valid != 0U) &&
+                (SensorLogic_TimeElapsed(now_ms, context->line_last_valid_at_ms, SENSOR_LINE_LOST_RECOVERY_MS) == 0U)) {
+                magnitude = context->line_last_valid_error;
+                if (magnitude < 0) {
+                    magnitude = -magnitude;
+                }
+                if (magnitude < (int32_t)SENSOR_LINE_DO_PID_MIN_ERROR) {
+                    magnitude = (int32_t)SENSOR_LINE_DO_PID_MIN_ERROR;
+                }
+                return (context->line_last_valid_error > 0) ? (int16_t)magnitude : (int16_t)-magnitude;
+            }
+            return 0;
 
         case LINETRACER_LINE_UNKNOWN:
-        case LINETRACER_LINE_WHITE_GAP:
         default:
-            return analog_error;
+            return 0;
     }
 }
 
@@ -167,13 +203,11 @@ static void SensorLogic_SetErrorFlags(sensor_logic_context_t* context, uint32_t 
 static app_marker_code_t SensorLogic_MarkerCodeFromCount(uint8_t count) {
     switch (count) {
         case 1U:
-            return APP_MARKER_JUNCTION;
         case 2U:
-            return APP_MARKER_DEST_A;
         case 3U:
-            return APP_MARKER_DEST_B;
         case 4U:
-            return APP_MARKER_DEST_C;
+            /* Route phase owns marker meaning; every valid physical marker uses the same code. */
+            return APP_MARKER_JUNCTION;
         default:
             return APP_MARKER_INVALID;
     }
@@ -406,8 +440,8 @@ void SensorLogic_UpdateLine(sensor_logic_context_t* context, uint8_t line_left, 
     previous_state = context->snapshot.line_state;
     next_state = SensorLogic_CalculateTrackingState(context->snapshot.line_left, context->snapshot.line_center,
                                                     context->snapshot.line_right);
-    context->snapshot.line_error =
-        SensorLogic_ApplyDigitalPidDirection(context->snapshot.line_error, next_state, context->snapshot.line_center);
+    context->snapshot.line_error = SensorLogic_ApplyDigitalPidDirection(context, context->line_analog_error, next_state,
+                                                                        context->snapshot.line_center, now_ms);
     if (((left_changed != 0U) || (center_changed != 0U) || (right_changed != 0U)) && (next_state != previous_state)) {
         context->snapshot.line_state = next_state;
         context->diagnostics.line_changed_at_ms = now_ms;
@@ -417,9 +451,13 @@ void SensorLogic_UpdateLine(sensor_logic_context_t* context, uint8_t line_left, 
     SensorLogic_UpdateMarkerRearm(context, now_ms);
 }
 
-void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t* context, uint16_t line_left_raw, uint16_t line_right_raw) {
+void SensorLogic_UpdateLineAnalogRawWithCenter(sensor_logic_context_t* context, uint16_t line_left_raw,
+                                               uint16_t line_center_raw, uint16_t line_right_raw) {
     uint16_t line_left_normalized;
+    uint16_t line_center_normalized;
     uint16_t line_right_normalized;
+    uint32_t line_signal;
+    int32_t line_numerator;
     int32_t line_error;
 
     if (context == NULL) {
@@ -427,20 +465,26 @@ void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t* context, uint16_t l
     }
 
     context->snapshot.line_left_raw = line_left_raw;
+    context->snapshot.line_center_raw = line_center_raw;
     context->snapshot.line_right_raw = line_right_raw;
 
     line_left_normalized =
         SensorLogic_NormalizeLineRaw(line_left_raw, SENSOR_LINE_LEFT_WHITE_RAW, SENSOR_LINE_LEFT_BLACK_RAW);
+    line_center_normalized =
+        SensorLogic_NormalizeLineRaw(line_center_raw, SENSOR_LINE_CENTER_WHITE_RAW, SENSOR_LINE_CENTER_BLACK_RAW);
     line_right_normalized =
         SensorLogic_NormalizeLineRaw(line_right_raw, SENSOR_LINE_RIGHT_WHITE_RAW, SENSOR_LINE_RIGHT_BLACK_RAW);
 
     if (context->line_analog_initialized == 0U) {
         context->line_left_filtered = line_left_normalized;
+        context->line_center_filtered = line_center_normalized;
         context->line_right_filtered = line_right_normalized;
         context->line_analog_initialized = 1U;
     } else {
         context->line_left_filtered =
             SensorLogic_FilterLineNormalized(context->line_left_filtered, line_left_normalized);
+        context->line_center_filtered =
+            SensorLogic_FilterLineNormalized(context->line_center_filtered, line_center_normalized);
         context->line_right_filtered =
             SensorLogic_FilterLineNormalized(context->line_right_filtered, line_right_normalized);
     }
@@ -449,7 +493,18 @@ void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t* context, uint16_t l
     context->line_right_black =
         SensorLogic_UpdateBlackHysteresis(context->line_right_filtered, context->line_right_black);
 
-    line_error = (int32_t)context->line_left_filtered - (int32_t)context->line_right_filtered;
+    line_signal = (uint32_t)context->line_left_filtered + (uint32_t)context->line_center_filtered +
+                  (uint32_t)context->line_right_filtered;
+    if (line_signal >= SENSOR_LINE_ANALOG_MIN_SIGNAL) {
+        line_numerator = ((int32_t)context->line_left_filtered - (int32_t)context->line_right_filtered) *
+                         (int32_t)SENSOR_LINE_NORMALIZED_MAX;
+        line_error = line_numerator / (int32_t)line_signal;
+        context->line_analog_signal_valid = 1U;
+    } else {
+        line_error = 0;
+        context->line_analog_signal_valid = 0U;
+    }
+
     if (line_error > (int32_t)SENSOR_LINE_NORMALIZED_MAX) {
         line_error = (int32_t)SENSOR_LINE_NORMALIZED_MAX;
     } else if (line_error < -(int32_t)SENSOR_LINE_NORMALIZED_MAX) {
@@ -457,18 +512,20 @@ void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t* context, uint16_t l
     }
 
     /*
-     * Both outer sensors normally observe the white board while the 18 mm
-     * black guide tape is centred
-     * between them. Ignore a small calibrated
-     * sensor mismatch here; otherwise PID would continuously bias one
-     * wheel
-     * while the vehicle is already centred.
+     * Ignore a small calibrated sensor mismatch; otherwise PID would
+     * continuously bias one wheel while the
+     * vehicle is already centred.
      */
     if (line_error <= (int32_t)SENSOR_LINE_ERROR_DEADBAND && line_error >= -(int32_t)SENSOR_LINE_ERROR_DEADBAND) {
         line_error = 0;
     }
 
-    context->snapshot.line_error = (int16_t)line_error;
+    context->line_analog_error = (int16_t)line_error;
+    context->snapshot.line_error = context->line_analog_error;
+}
+
+void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t* context, uint16_t line_left_raw, uint16_t line_right_raw) {
+    SensorLogic_UpdateLineAnalogRawWithCenter(context, line_left_raw, SENSOR_LINE_CENTER_WHITE_RAW, line_right_raw);
 }
 
 void SensorLogic_UpdateLineCenter(sensor_logic_context_t* context, uint8_t line_center, uint16_t line_center_raw) {
@@ -476,11 +533,7 @@ void SensorLogic_UpdateLineCenter(sensor_logic_context_t* context, uint8_t line_
         return;
     }
 
-    /*
-     * Keep the ADC value observable for calibration, but use PB8's normalized
-     * digital output as the control authority. This keeps left, center, and
-     * right line decisions on the same DO threshold/polarity basis.
-     */
+    /* PB8 remains the center DO authority; the ADC value participates in the weighted PID position. */
     context->snapshot.line_center_raw = line_center_raw;
     context->line_center_black = (line_center != 0U) ? 1U : 0U;
     context->snapshot.line_center = context->line_center_black;

@@ -556,7 +556,7 @@ void TestJunctionAcceptsOneDebouncedOuterBlackSample() {
     assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_GO_STRAIGHT);
 }
 
-void TestRouteBLeftTurnSkipsFirstDetectedBlackLine() {
+void TestRouteBLeftTurnUsesFirstDetectedTargetLine() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_B, 417U, 0U);
 
@@ -572,7 +572,6 @@ void TestRouteBLeftTurnSkipsFirstDetectedBlackLine() {
     assert(result.action == ROUTE_ACTION_TURN_LEFT);
     assert(context.state == LINETRACER_CONTROL_TURNING_TO_PICKUP);
     assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
-    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_FIRST);
     assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_GO_STRAIGHT);
 
     const auto pivot_started_at = after_guard + CONTROL_JUNCTION_CENTER_ADVANCE_MS;
@@ -583,21 +582,7 @@ void TestRouteBLeftTurnSkipsFirstDetectedBlackLine() {
                                                    pivot_started_at + 1U + CONTROL_TURN_SOURCE_CLEAR_MS);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
-    const auto first_black_at = pivot_started_at + CONTROL_TURN_SOURCE_CLEAR_MS + 20U;
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, first_black_at);
-    assert(result.maneuver_completed == 0U);
-    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR);
-    assert(context.junction_target_edge_seen == 0U);
-
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, first_black_at + 10U);
-    assert(result.maneuver_completed == 0U);
-    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR);
-
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, first_black_at + 20U);
-    assert(result.maneuver_completed == 0U);
-    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_DISABLED);
-
-    const auto target_black_at = first_black_at + 30U;
+    const auto target_black_at = pivot_started_at + CONTROL_TURN_SOURCE_CLEAR_MS + 20U;
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, target_black_at);
     assert(result.maneuver_completed == 0U);
     assert(context.junction_target_edge_seen != 0U);
@@ -617,21 +602,75 @@ void TestOtherLeftTurnsDoNotSkipFirstTargetLine() {
     assert(result.action_valid != 0U);
     assert(result.action == ROUTE_ACTION_TURN_LEFT);
     assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
-    assert(context.target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_DISABLED);
 }
 
-void TestEndpointStopPrioritizesOuterDo() {
+void TestStopMarkerUsesSameOuterPairAsTurnMarker() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, 415U, 0U);
 
     assert(HandleExpectedMarker(context, 40U) == ROUTE_ACTION_GO_STRAIGHT);
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
 
-    /* 101 is an endpoint marker even when center AO/DO remains white. */
+    /* Turn and stop markers both use the same-sample outer DO pair; center may remain white. */
     const auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 1U, 50U);
     assert(result.action_valid != 0U);
     assert(result.action == ROUTE_ACTION_STOP_AT_PICKUP);
     assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
+}
+
+void TestStopMarkerRejectsSeparatedOuterHits() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, 422U, 0U);
+
+    assert(HandleExpectedMarker(context, 40U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+
+    auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, 100U);
+    assert(result.action_valid == 0U);
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, 110U);
+    assert(result.action_valid == 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+}
+
+void TestStopMarkerUsesSameExitGuardAsTurnMarker() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, 416U, 0U);
+
+    assert(HandleExpectedMarker(context, 40U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+
+    /* Stop markers obey the same post-maneuver guard used by turn markers. */
+    context.junction_guard_active = 1U;
+    context.junction_guard_until_ms = 200U;
+
+    assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_JUNCTION, 60U, 60U) != 0U);
+    auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 1U, 60U);
+    assert(result.action_valid == 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 1U, 201U);
+    assert(result.action_valid != 0U);
+    assert(result.action == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
+}
+
+void TestDelayedOneStripeMarkerFallbackIsNotDropped() {
+    control_context_t turn_context{};
+    StartRoute(turn_context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_B, 419U, 0U);
+
+    /* If the immediate 101/111 sample is missed, the finalized one-stripe event must still start the turn. */
+    assert(ControlLogic_ShouldIgnoreMarker(&turn_context, APP_MARKER_JUNCTION, 100U, 451U) == 0U);
+    assert(ControlLogic_HandleMarker(&turn_context, APP_MARKER_JUNCTION, 100U, 451U) == ROUTE_ACTION_TURN_RIGHT);
+
+    control_context_t stop_context{};
+    StartRoute(stop_context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, 420U, 0U);
+    assert(HandleExpectedMarker(stop_context, 50U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(stop_context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+
+    /* The same fallback must stop at an endpoint; all route markers intentionally use one stripe. */
+    assert(ControlLogic_ShouldIgnoreMarker(&stop_context, APP_MARKER_JUNCTION, 100U, 451U) == 0U);
+    assert(ControlLogic_HandleMarker(&stop_context, APP_MARKER_JUNCTION, 100U, 451U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(stop_context.state == LINETRACER_CONTROL_WAITING_LOAD);
 }
 
 void TestRightTurnCompletesOnStableRightTargetSide() {
@@ -766,6 +805,82 @@ void TestStraightJunctionCrossingAndGuard() {
     const auto after_guard_ms = completed_at_ms + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U;
     assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, 100U, after_guard_ms) != 0U);
     assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, completed_at_ms + 1U, after_guard_ms) == 0U);
+}
+
+void TestStraightJunctionClearsDuringSingleOuterCorrection() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, 421U, 0U);
+
+    const auto detected = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, 100U);
+    assert(detected.action_valid != 0U);
+    assert(detected.action == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+    assert(context.junction_phase == CONTROL_JUNCTION_CROSS_STRAIGHT);
+
+    /* 100 is a valid post-marker PID correction and must still clear the crossing. */
+    auto cleared = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, 110U);
+    assert(cleared.maneuver_completed == 0U);
+    cleared = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, 110U + CONTROL_JUNCTION_CROSS_CLEAR_MS);
+    assert(cleared.maneuver_completed != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+
+    /* Stop and turn markers are both accepted after the common exit guard. */
+    const auto stopped = ControlLogic_ProcessLineSampleWithCenter(
+        &context, 1U, 0U, 1U, 110U + CONTROL_JUNCTION_CROSS_CLEAR_MS + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U);
+    assert(stopped.action_valid != 0U);
+    assert(stopped.action == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
+}
+
+void TestStopMarkerWaitsForSameCrossingAndGuardAsTurnMarker() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, 424U, 0U);
+
+    const auto detected = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, 100U);
+    assert(detected.action_valid != 0U);
+    assert(detected.action == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+    assert(context.junction_phase == CONTROL_JUNCTION_CROSS_STRAIGHT);
+
+    /* A second full-width sample cannot become a stop marker while the crossing maneuver is active. */
+    auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, 110U);
+    assert(result.action_valid == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_CROSS_STRAIGHT);
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, 120U);
+    assert(result.action_valid == 0U);
+
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, 130U);
+    assert(result.maneuver_completed == 0U);
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, 130U + CONTROL_JUNCTION_CROSS_CLEAR_MS);
+    assert(result.maneuver_completed != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, 200U);
+    assert(result.action_valid == 0U);
+    result = ControlLogic_ProcessLineSampleWithCenter(
+        &context, 1U, 1U, 1U, 130U + CONTROL_JUNCTION_CROSS_CLEAR_MS + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U);
+    assert(result.action_valid != 0U);
+    assert(result.action == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
+}
+
+void TestDestinationStopUsesSameOuterPairAsTurnMarker() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, 426U, 0U);
+
+    assert(HandleExpectedMarker(context, 20U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(HandleExpectedMarker(context, 30U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(ControlLogic_HandleLoadOn(&context, 40U) == ROUTE_ACTION_TURN_AROUND);
+    assert(ControlLogic_CompleteTurn(&context, 50U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
+
+    assert(HandleExpectedMarker(context, 60U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.route_plan.expected_marker == ROUTE_MARKER_DEST);
+
+    const auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 1U, 70U);
+    assert(result.action_valid != 0U);
+    assert(result.action == ROUTE_ACTION_STOP_AT_DEST);
+    assert(context.state == LINETRACER_CONTROL_UNLOADING);
 }
 
 void TestJobCompletionAllowsNextAssignment() {
@@ -1021,14 +1136,20 @@ int main() {
     TestTurningStateDetection();
     TestTurnAroundActivityDetection();
     TestJunctionAcceptsOneDebouncedOuterBlackSample();
-    TestRouteBLeftTurnSkipsFirstDetectedBlackLine();
+    TestRouteBLeftTurnUsesFirstDetectedTargetLine();
     TestOtherLeftTurnsDoNotSkipFirstTargetLine();
-    TestEndpointStopPrioritizesOuterDo();
+    TestStopMarkerUsesSameOuterPairAsTurnMarker();
+    TestStopMarkerRejectsSeparatedOuterHits();
+    TestStopMarkerUsesSameExitGuardAsTurnMarker();
+    TestDelayedOneStripeMarkerFallbackIsNotDropped();
     TestRightTurnCompletesOnStableRightTargetSide();
     TestTurnCompletesWhenCenterIsStable();
     TestTurnAroundCompletesOnStableRightTargetSide();
     TestLeftTurnCompletesOnStableLeftTargetSide();
     TestStraightJunctionCrossingAndGuard();
+    TestStraightJunctionClearsDuringSingleOuterCorrection();
+    TestStopMarkerWaitsForSameCrossingAndGuardAsTurnMarker();
+    TestDestinationStopUsesSameOuterPairAsTurnMarker();
     TestJobCompletionAllowsNextAssignment();
     TestCompletionOutsideUnloadingDoesNothing();
     TestStopDuringUnloadRequestsAbort();

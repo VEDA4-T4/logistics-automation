@@ -620,7 +620,8 @@ void StartSensorTask(void* argument) {
         adc_state = PollSensorAdcScan(now_ms, &adc_sample);
         if (adc_state == SENSOR_ADC_READY) {
             SensorLogic_UpdateFsr(&context.logic, adc_sample.fsr_raw, now_ms, &update);
-            SensorLogic_UpdateLineAnalogRaw(&context.logic, adc_sample.line_left_raw, adc_sample.line_right_raw);
+            SensorLogic_UpdateLineAnalogRawWithCenter(&context.logic, adc_sample.line_left_raw,
+                                                      adc_sample.line_center_raw, adc_sample.line_right_raw);
             SensorLogic_UpdateLineCenter(&context.logic, NormalizeLineInput(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_8)),
                                          adc_sample.line_center_raw);
             (void)StartSensorAdcScan(now_ms);

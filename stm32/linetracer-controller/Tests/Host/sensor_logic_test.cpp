@@ -38,6 +38,22 @@ sensor_logic_update_t UpdateLineWithCenter(sensor_logic_context_t& context, std:
     return update;
 }
 
+sensor_logic_update_t UpdateStableLineWithCenter(sensor_logic_context_t& context, std::uint8_t left,
+                                                 std::uint8_t center, std::uint8_t right,
+                                                 std::uint32_t first_sample_at_ms) {
+    sensor_logic_update_t update{};
+
+    for (std::uint32_t index = 0U; index < APP_TIMING_LINE_DEBOUNCE_SAMPLES; ++index) {
+        update = UpdateLineWithCenter(context, left, center, right, first_sample_at_ms + (index * 10U));
+    }
+    return update;
+}
+
+sensor_logic_update_t UpdateStableLine(sensor_logic_context_t& context, std::uint8_t left, std::uint8_t right,
+                                       std::uint32_t first_sample_at_ms) {
+    return UpdateStableLineWithCenter(context, left, 1U, right, first_sample_at_ms);
+}
+
 sensor_logic_update_t UpdateFsr(sensor_logic_context_t& context, std::uint16_t raw, std::uint32_t now_ms) {
     sensor_logic_update_t update{};
     SensorLogic_UpdateFsr(&context, raw, now_ms, &update);
@@ -45,20 +61,20 @@ sensor_logic_update_t UpdateFsr(sensor_logic_context_t& context, std::uint16_t r
 }
 
 void InitializeCentered(sensor_logic_context_t& context, std::uint32_t start_ms) {
-    (void)UpdateLine(context, 0U, 0U, start_ms);
-    (void)UpdateLine(context, 0U, 0U, start_ms + 10U);
-    (void)UpdateLine(context, 0U, 0U, start_ms + 20U);
+    (void)UpdateStableLine(context, 0U, 0U, start_ms);
 }
 
 std::uint32_t EmitMarkerStripe(sensor_logic_context_t& context, std::uint32_t start_ms) {
-    (void)UpdateLine(context, 1U, 1U, start_ms);
-    (void)UpdateLine(context, 1U, 1U, start_ms + 10U);
-    (void)UpdateLine(context, 1U, 1U, start_ms + 20U);
-    (void)UpdateLine(context, 0U, 0U, start_ms + 60U);
-    (void)UpdateLine(context, 0U, 0U, start_ms + 70U);
-    (void)UpdateLine(context, 0U, 0U, start_ms + 80U);
-    (void)UpdateLine(context, 0U, 0U, start_ms + 130U);
-    return start_ms + 80U;
+    constexpr std::uint32_t kStripeDurationMs = 60U;
+    const auto debounce_lag_ms = (APP_TIMING_LINE_DEBOUNCE_SAMPLES - 1U) * 10U;
+    const auto black_confirmed_at_ms = start_ms + debounce_lag_ms;
+    const auto first_white_at_ms = black_confirmed_at_ms + kStripeDurationMs - debounce_lag_ms;
+    const auto stripe_finished_at_ms = first_white_at_ms + debounce_lag_ms;
+
+    (void)UpdateStableLine(context, 1U, 1U, start_ms);
+    (void)UpdateStableLine(context, 0U, 0U, first_white_at_ms);
+    (void)UpdateLine(context, 0U, 0U, stripe_finished_at_ms + SENSOR_MARKER_REARM_MS);
+    return stripe_finished_at_ms;
 }
 
 sensor_logic_update_t EmitMarkerGroup(sensor_logic_context_t& context, std::uint8_t stripe_count,
@@ -103,40 +119,27 @@ void TestLineNormalizationAndDebounce() {
     sensor_logic_context_t context{};
 
     SensorLogic_Init(&context, 0U);
-    CHECK_TRUE(UpdateLine(context, 0U, 0U, 0U).event_flags == 0U);
-    CHECK_TRUE(UpdateLine(context, 0U, 0U, 10U).event_flags == 0U);
-    auto update = UpdateLine(context, 0U, 0U, 20U);
+    auto update = UpdateStableLine(context, 0U, 0U, 0U);
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
+    CHECK_TRUE(UpdateStableLine(context, 0U, 0U, 30U).event_flags == 0U);
 
-    CHECK_TRUE(UpdateLine(context, 1U, 0U, 30U).event_flags == 0U);
-    CHECK_TRUE(UpdateLine(context, 0U, 0U, 40U).event_flags == 0U);
-    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
-
-    CHECK_TRUE(UpdateLine(context, 1U, 0U, 50U).event_flags == 0U);
-    CHECK_TRUE(UpdateLine(context, 1U, 0U, 60U).event_flags == 0U);
-    update = UpdateLine(context, 1U, 0U, 70U);
+    update = UpdateStableLine(context, 1U, 0U, 60U);
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_LEFT_ONLY);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
-    CHECK_TRUE(UpdateLine(context, 1U, 0U, 80U).event_flags == 0U);
+    CHECK_TRUE(UpdateStableLine(context, 1U, 0U, 90U).event_flags == 0U);
 
-    (void)UpdateLine(context, 0U, 1U, 90U);
-    (void)UpdateLine(context, 0U, 1U, 100U);
-    update = UpdateLine(context, 0U, 1U, 110U);
+    update = UpdateStableLine(context, 0U, 1U, 120U);
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_RIGHT_ONLY);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
 
-    (void)UpdateLine(context, 1U, 1U, 120U);
-    (void)UpdateLine(context, 1U, 1U, 130U);
-    update = UpdateLine(context, 1U, 1U, 140U);
+    update = UpdateStableLine(context, 1U, 1U, 150U);
     CHECK_TRUE(context.snapshot.marker_active != 0U);
     CHECK_TRUE(context.diagnostics.marker_active != 0U);
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_RIGHT_ONLY);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) == 0U);
 
-    (void)UpdateLine(context, 0U, 0U, 150U);
-    (void)UpdateLine(context, 0U, 0U, 160U);
-    update = UpdateLine(context, 0U, 0U, 170U);
+    update = UpdateStableLine(context, 0U, 0U, 210U);
     CHECK_TRUE(context.snapshot.marker_active == 0U);
     CHECK_TRUE(context.diagnostics.marker_active == 0U);
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
@@ -177,14 +180,14 @@ void TestAnalogLineSamples() {
     CHECK_TRUE(context.snapshot.line_right_raw == SENSOR_LINE_RIGHT_BLACK_RAW);
     CHECK_TRUE(context.line_left_filtered == 500U);
     CHECK_TRUE(context.line_right_filtered == 1000U);
-    CHECK_TRUE(context.snapshot.line_error == -500);
+    CHECK_TRUE(context.snapshot.line_error == -333);
     CHECK_TRUE(context.line_left_black == 0U);
     CHECK_TRUE(context.line_right_black != 0U);
 
     SensorLogic_UpdateLineAnalogRaw(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_RIGHT_WHITE_RAW);
     CHECK_TRUE(context.line_left_filtered == 625U);
     CHECK_TRUE(context.line_right_filtered == 750U);
-    CHECK_TRUE(context.snapshot.line_error == -125);
+    CHECK_TRUE(context.snapshot.line_error == 0);
 
     SensorLogic_Init(&context, 0U);
     SensorLogic_UpdateLineAnalogRaw(&context, 0U, 4095U);
@@ -197,6 +200,33 @@ void TestAnalogLineSamples() {
     CHECK_TRUE(context.line_left_filtered == SENSOR_LINE_NORMALIZED_MAX);
     CHECK_TRUE(context.line_right_filtered == 0U);
     CHECK_TRUE(context.snapshot.line_error == 1000);
+}
+
+void TestThreeSensorAnalogPosition() {
+    sensor_logic_context_t context{};
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, SENSOR_LINE_LEFT_WHITE_RAW, SENSOR_LINE_CENTER_BLACK_RAW,
+                                              SENSOR_LINE_RIGHT_WHITE_RAW);
+    CHECK_TRUE(context.line_center_filtered == SENSOR_LINE_NORMALIZED_MAX);
+    CHECK_TRUE(context.line_analog_signal_valid != 0U);
+    CHECK_TRUE(context.snapshot.line_error == 0);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_CENTER_BLACK_RAW,
+                                              SENSOR_LINE_RIGHT_WHITE_RAW);
+    CHECK_TRUE(context.snapshot.line_error == 500);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, SENSOR_LINE_LEFT_WHITE_RAW, SENSOR_LINE_CENTER_BLACK_RAW,
+                                              SENSOR_LINE_RIGHT_BLACK_RAW);
+    CHECK_TRUE(context.snapshot.line_error == -500);
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, SENSOR_LINE_LEFT_WHITE_RAW, SENSOR_LINE_CENTER_WHITE_RAW,
+                                              SENSOR_LINE_RIGHT_WHITE_RAW);
+    CHECK_TRUE(context.line_analog_signal_valid == 0U);
+    CHECK_TRUE(context.snapshot.line_error == 0);
 }
 
 void TestAnalogBlackHysteresis() {
@@ -257,7 +287,7 @@ void TestThreeSensorTrackingState() {
     (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 60U);
     (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 70U);
     (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 80U);
-    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_WHITE_GAP);
 
     (void)UpdateLineWithCenter(context, 1U, 1U, 1U, 90U);
     (void)UpdateLineWithCenter(context, 1U, 1U, 1U, 100U);
@@ -277,11 +307,13 @@ void TestAnalogLineErrorDeadband() {
             SENSOR_LINE_NORMALIZED_MAX;
 
     SensorLogic_Init(&context, 0U);
-    SensorLogic_UpdateLineAnalogRaw(&context, kLeftInsideDeadband, SENSOR_LINE_RIGHT_WHITE_RAW);
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, kLeftInsideDeadband, SENSOR_LINE_CENTER_BLACK_RAW,
+                                              SENSOR_LINE_RIGHT_WHITE_RAW);
     CHECK_TRUE(context.snapshot.line_error == 0);
 
     SensorLogic_Init(&context, 0U);
-    SensorLogic_UpdateLineAnalogRaw(&context, kLeftOutsideDeadband, SENSOR_LINE_RIGHT_WHITE_RAW);
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, kLeftOutsideDeadband, SENSOR_LINE_CENTER_BLACK_RAW,
+                                              SENSOR_LINE_RIGHT_WHITE_RAW);
     CHECK_TRUE(context.snapshot.line_error > (int16_t)SENSOR_LINE_ERROR_DEADBAND);
 }
 
@@ -317,19 +349,45 @@ void TestDigitalLineStateOwnsPidDirection() {
     (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 0U);
     (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 10U);
     (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 20U);
-    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_WHITE_GAP);
+    CHECK_TRUE(context.snapshot.line_error >= (int16_t)SENSOR_LINE_DO_PID_MIN_ERROR);
+}
+
+void TestWhiteGapUsesRecentDirectionOnly() {
+    sensor_logic_context_t context{};
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_CENTER_WHITE_RAW,
+                                              SENSOR_LINE_RIGHT_WHITE_RAW);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 0U);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 10U);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 20U);
+    CHECK_TRUE(context.line_last_valid_error > 0);
+
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, SENSOR_LINE_LEFT_WHITE_RAW, SENSOR_LINE_CENTER_WHITE_RAW,
+                                              SENSOR_LINE_RIGHT_WHITE_RAW);
+    context.line_analog_signal_valid = 0U;
+    context.line_analog_error = 0;
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 30U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 40U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 50U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_WHITE_GAP);
+    CHECK_TRUE(context.snapshot.line_error >= (int16_t)SENSOR_LINE_DO_PID_MIN_ERROR);
+
+    context.line_last_valid_at_ms = 0U;
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, SENSOR_LINE_LOST_RECOVERY_MS);
     CHECK_TRUE(context.snapshot.line_error == 0);
 }
 
-void TestMarkerGroupClassification() {
+void TestMarkerGroupsUseSingleRouteCode() {
     struct MarkerCase {
         std::uint8_t count;
         app_marker_code_t expected_code;
     };
 
     constexpr MarkerCase kCases[] = {
-        { 1U, APP_MARKER_JUNCTION }, { 2U, APP_MARKER_DEST_A },  { 3U, APP_MARKER_DEST_B },
-        { 4U, APP_MARKER_DEST_C },   { 5U, APP_MARKER_INVALID },
+        { 1U, APP_MARKER_JUNCTION }, { 2U, APP_MARKER_JUNCTION }, { 3U, APP_MARKER_JUNCTION },
+        { 4U, APP_MARKER_JUNCTION }, { 5U, APP_MARKER_INVALID },
     };
 
     for (const auto& marker_case : kCases) {
@@ -371,12 +429,8 @@ void TestInvalidMarkerWidthAndNoise() {
 
     SensorLogic_Init(&context, 0U);
     InitializeCentered(context, 0U);
-    (void)UpdateLine(context, 1U, 1U, 30U);
-    (void)UpdateLine(context, 1U, 1U, 40U);
-    (void)UpdateLine(context, 1U, 1U, 50U);
-    (void)UpdateLine(context, 0U, 0U, SENSOR_MARKER_MAX_BLACK_MS + 60U);
-    (void)UpdateLine(context, 0U, 0U, SENSOR_MARKER_MAX_BLACK_MS + 70U);
-    update = UpdateLine(context, 0U, 0U, SENSOR_MARKER_MAX_BLACK_MS + 80U);
+    (void)UpdateStableLine(context, 1U, 1U, 30U);
+    update = UpdateStableLine(context, 0U, 0U, SENSOR_MARKER_MAX_BLACK_MS + 80U);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER) != 0U);
     CHECK_TRUE(context.snapshot.marker_code == APP_MARKER_INVALID);
     CHECK_TRUE(context.latest_marker_event.type == SENSOR_MARKER_EVENT_INVALID_WIDTH);
@@ -675,12 +729,14 @@ int main() {
     TestLineNormalizationAndDebounce();
     TestOuterSensorsDetectMarkerWhenCenterMisses();
     TestAnalogLineSamples();
+    TestThreeSensorAnalogPosition();
     TestAnalogBlackHysteresis();
     TestCenterDigitalInputOwnsBlackState();
     TestThreeSensorTrackingState();
     TestAnalogLineErrorDeadband();
     TestDigitalLineStateOwnsPidDirection();
-    TestMarkerGroupClassification();
+    TestWhiteGapUsesRecentDirectionOnly();
+    TestMarkerGroupsUseSingleRouteCode();
     TestInvalidMarkerWidthAndNoise();
     TestFsrStabilityAndHysteresis();
     TestLightFsrLoadTriggersAfterStableWindow();

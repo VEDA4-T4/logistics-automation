@@ -415,7 +415,7 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
 
     if (ControlTask_PidLineFollowEnabled() != 0U &&
         (controlTaskLineState == LINETRACER_LINE_CENTERED || controlTaskLineState == LINETRACER_LINE_LEFT_ONLY ||
-         controlTaskLineState == LINETRACER_LINE_RIGHT_ONLY)) {
+         controlTaskLineState == LINETRACER_LINE_RIGHT_ONLY || controlTaskLineState == LINETRACER_LINE_WHITE_GAP)) {
 #if SENSOR_LINE_USE_ANALOG_PID
         int16_t correction = LineFollowPid_Update(&controlTaskLinePid, controlTaskLineError, now_ms);
 

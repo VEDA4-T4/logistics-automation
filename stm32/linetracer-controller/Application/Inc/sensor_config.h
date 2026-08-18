@@ -53,12 +53,11 @@
 
 /*
  * DO decides the debounced L/C/R state used for tracking and marker
- * detection. AO remains available for
- * diagnostics and later PID tuning, but
- * Set this to 1U to use the outer AO sensors for continuous PID correction.
- *
- * DO continues to provide the debounced L/C/R state and intersection marker
- * detection.
+ * detection. Set this to 1U to use the weighted
+ * left/center/right AO position
+ * for continuous PID correction.
+ * DO continues to provide the debounced L/C/R state
+ * and intersection marker detection.
  */
 #define SENSOR_LINE_USE_ANALOG_PID 1U
 
@@ -71,6 +70,24 @@
  * this normalized error band are therefore treated as centred.
  */
 #define SENSOR_LINE_ERROR_DEADBAND 100U
+
+/*
+ * A three-sensor weighted position is considered usable only when the
+ * combined normalized AO response is above
+ * this floor. This rejects the
+ * residual white-board noise from becoming a steering direction.
+ */
+#define SENSOR_LINE_ANALOG_MIN_SIGNAL 250U
+
+/*
+ * If all three DO inputs briefly become white, retain the most recent
+ * trustworthy steering direction long enough
+ * to bridge the physical gap
+ * between adjacent sensor modules. The route/turn state machine remains the
+ * owner of
+ * deliberate junction maneuvers.
+ */
+#define SENSOR_LINE_LOST_RECOVERY_MS 300U
 
 /*
  * A confirmed outer DO hit owns the PID direction. AO then only supplies a
@@ -88,10 +105,10 @@
  * marker
  * stripe.
  */
-#define SENSOR_MARKER_MIN_BLACK_MS 20U
+#define SENSOR_MARKER_MIN_BLACK_MS 10U
 #define SENSOR_MARKER_MAX_BLACK_MS 600U
 #define SENSOR_MARKER_REARM_MS 50U
-#define SENSOR_MARKER_GROUP_TIMEOUT_MS 350U
+#define SENSOR_MARKER_GROUP_TIMEOUT_MS 80U
 #define SENSOR_MARKER_MAX_STRIPES 4U
 
 /*
@@ -185,6 +202,14 @@
 
 #if (SENSOR_LINE_ERROR_DEADBAND > SENSOR_LINE_NORMALIZED_MAX)
 #error "Line error deadband must fit the normalized line-sensor range"
+#endif
+
+#if ((SENSOR_LINE_ANALOG_MIN_SIGNAL == 0U) || (SENSOR_LINE_ANALOG_MIN_SIGNAL > (3U * SENSOR_LINE_NORMALIZED_MAX)))
+#error "Analog line-signal floor must fit the combined three-sensor range"
+#endif
+
+#if (SENSOR_LINE_LOST_RECOVERY_MS < APP_TIMING_SENSOR_PERIOD_MS)
+#error "Line-loss recovery must cover at least one SensorTask period"
 #endif
 
 #if ((SENSOR_LINE_DO_PID_MIN_ERROR == 0U) || (SENSOR_LINE_DO_PID_MIN_ERROR > SENSOR_LINE_NORMALIZED_MAX))

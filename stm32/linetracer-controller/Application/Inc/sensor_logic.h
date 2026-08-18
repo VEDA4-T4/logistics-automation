@@ -119,6 +119,8 @@ typedef struct {
     uint16_t line_left_filtered;
     uint16_t line_right_filtered;
     uint16_t line_center_filtered;
+    int16_t line_analog_error;
+    int16_t line_last_valid_error;
     app_sensor_snapshot_t snapshot;
     sensor_logic_diagnostics_t diagnostics;
     sensor_marker_event_t latest_marker_event;
@@ -129,6 +131,7 @@ typedef struct {
     uint32_t fsr_baseline_sum;
     uint32_t overload_candidate_since_ms;
     uint32_t last_fsr_sample_ms;
+    uint32_t line_last_valid_at_ms;
     uint32_t ultrasonic_last_success_ms[SENSOR_LOGIC_ULTRASONIC_COUNT];
     linetracer_line_state_t marker_entry_state;
     sensor_marker_state_t marker_state;
@@ -148,7 +151,8 @@ typedef struct {
     sensor_fsr_baseline_mode_t fsr_baseline_mode;
     uint8_t overload_candidate_active;
     uint8_t line_analog_initialized;
-    uint8_t line_center_analog_initialized;
+    uint8_t line_analog_signal_valid;
+    uint8_t line_last_valid_error_valid;
     uint8_t line_left_black;
     uint8_t line_right_black;
     uint8_t line_center_black;
@@ -158,6 +162,8 @@ void SensorLogic_Init(sensor_logic_context_t* context, uint32_t now_ms);
 void SensorLogic_UpdateLine(sensor_logic_context_t* context, uint8_t line_left, uint8_t line_center, uint8_t line_right,
                             uint32_t now_ms, sensor_logic_update_t* update);
 void SensorLogic_UpdateLineAnalogRaw(sensor_logic_context_t* context, uint16_t line_left_raw, uint16_t line_right_raw);
+void SensorLogic_UpdateLineAnalogRawWithCenter(sensor_logic_context_t* context, uint16_t line_left_raw,
+                                               uint16_t line_center_raw, uint16_t line_right_raw);
 void SensorLogic_UpdateLineCenter(sensor_logic_context_t* context, uint8_t line_center, uint16_t line_center_raw);
 void SensorLogic_UpdateFsr(sensor_logic_context_t* context, uint16_t raw_value, uint32_t now_ms,
                            sensor_logic_update_t* update);

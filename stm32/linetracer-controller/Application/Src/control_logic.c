@@ -39,7 +39,6 @@ static void ControlLogic_ResetJunctionManeuver(control_context_t* context) {
     context->junction_candidate_since_ms = 0U;
     context->junction_candidate_active = 0U;
     context->junction_target_edge_seen = 0U;
-    context->target_line_skip_phase = CONTROL_TARGET_LINE_SKIP_DISABLED;
 }
 
 static void ControlLogic_StartJunctionGuard(control_context_t* context, uint32_t now_ms) {
@@ -111,12 +110,6 @@ static uint8_t ControlLogic_StartJunctionManeuver(control_context_t* context, ro
 
     context->junction_action = action;
     context->junction_candidate_active = 0U;
-    context->target_line_skip_phase =
-        (action == ROUTE_ACTION_TURN_LEFT && context->state == LINETRACER_CONTROL_TURNING_TO_PICKUP &&
-         context->current_position == UART_LINETRACER_POSITION_DEST_A &&
-         context->active_route == UART_LINETRACER_ROUTE_B && context->route_plan.phase == ROUTE_PHASE_TO_PICKUP)
-            ? CONTROL_TARGET_LINE_SKIP_WAIT_FIRST
-            : CONTROL_TARGET_LINE_SKIP_DISABLED;
     return 1U;
 }
 
@@ -349,11 +342,6 @@ uint8_t ControlLogic_ShouldIgnoreMarker(const control_context_t* context, app_ma
 
     if (context->delayed_marker_ignore_valid != 0U && marker_detected_at_ms != 0U &&
         (int32_t)(marker_detected_at_ms - context->delayed_marker_ignore_before_ms) <= 0) {
-        return 1U;
-    }
-
-    /* A stable all-black sample already consumed this one-stripe marker; ignore its delayed duplicate event. */
-    if (marker_code == APP_MARKER_JUNCTION && ControlLogic_ExpectedMarkerCode(context) == APP_MARKER_JUNCTION) {
         return 1U;
     }
 
@@ -1103,24 +1091,6 @@ static app_marker_code_t ControlLogic_MarkerCodeForIndex(uint8_t index) {
     return APP_MARKER_JUNCTION;
 }
 
-static uint8_t ControlLogic_EndpointStopMarkerExpected(const control_context_t* context) {
-    if (context == NULL || context->route_plan.valid == 0U) {
-        return 0U;
-    }
-
-    if (context->state == LINETRACER_CONTROL_MOVING_TO_PICKUP &&
-        context->route_plan.expected_marker == ROUTE_MARKER_PICKUP) {
-        return 1U;
-    }
-
-    if (context->state == LINETRACER_CONTROL_MOVING_TO_DEST &&
-        context->route_plan.expected_marker == ROUTE_MARKER_DEST) {
-        return 1U;
-    }
-
-    return 0U;
-}
-
 app_marker_code_t ControlLogic_ExpectedMarkerCode(const control_context_t* context) {
     if (context == NULL || context->route_plan.valid == 0U) {
         return APP_MARKER_NONE;
@@ -1322,8 +1292,8 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
     uint8_t all_white;
     uint8_t both_black;
     uint8_t both_white;
+    uint8_t junction_guard_active;
     uint8_t target_aligned;
-    uint32_t required_black_stable_ms;
     linetracer_control_state_t previous_state;
 
     result.action = ROUTE_ACTION_NONE;
@@ -1337,13 +1307,10 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
     both_black = (line_left != 0U && line_right != 0U) ? 1U : 0U;
     both_white = (line_left == 0U && line_right == 0U) ? 1U : 0U;
     all_white = (both_white != 0U && line_center == 0U) ? 1U : 0U;
-    required_black_stable_ms = (ControlLogic_EndpointStopMarkerExpected(context) != 0U)
-                                   ? CONTROL_ENDPOINT_STOP_BLACK_STABLE_MS
-                                   : CONTROL_JUNCTION_BLACK_STABLE_MS;
 
     if (context->junction_phase == CONTROL_JUNCTION_IDLE) {
-        if (ControlLogic_JunctionGuardActive(context, now_ms) != 0U ||
-            ControlLogic_ExpectedMarkerCode(context) != APP_MARKER_JUNCTION) {
+        junction_guard_active = ControlLogic_JunctionGuardActive(context, now_ms);
+        if (junction_guard_active != 0U || ControlLogic_ExpectedMarkerCode(context) != APP_MARKER_JUNCTION) {
             context->junction_candidate_active = 0U;
             return result;
         }
@@ -1356,12 +1323,12 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
         if (context->junction_candidate_active == 0U) {
             context->junction_candidate_active = 1U;
             context->junction_candidate_since_ms = now_ms;
-            if (required_black_stable_ms != 0U) {
+            if (CONTROL_JUNCTION_BLACK_STABLE_MS != 0U) {
                 return result;
             }
         }
 
-        if ((uint32_t)(now_ms - context->junction_candidate_since_ms) < required_black_stable_ms) {
+        if ((uint32_t)(now_ms - context->junction_candidate_since_ms) < CONTROL_JUNCTION_BLACK_STABLE_MS) {
             return result;
         }
 
@@ -1391,7 +1358,15 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
             break;
 
         case CONTROL_JUNCTION_CROSS_STRAIGHT:
-            if (ControlLogic_ConditionStable(context, both_white, now_ms, CONTROL_JUNCTION_CROSS_CLEAR_MS) != 0U) {
+            /*
+             * A transverse marker is clear as soon as it no longer covers both
+             * outer
+             * sensors. Requiring 000 here can wedge the maneuver forever
+             * when normal PID correction
+             * resumes as 100/110 or 001/011.
+             */
+            if (ControlLogic_ConditionStable(context, (both_black == 0U) ? 1U : 0U, now_ms,
+                                             CONTROL_JUNCTION_CROSS_CLEAR_MS) != 0U) {
                 ControlLogic_ResetJunctionManeuver(context);
                 ControlLogic_StartJunctionGuard(context, now_ms);
                 result.maneuver_completed = 1U;
@@ -1415,24 +1390,6 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
             break;
 
         case CONTROL_JUNCTION_TURN_SEARCH_TARGET:
-            // The A -> B pickup left turn crosses one residual intersection stripe before the real B branch.
-            // Ignore that complete first black region, wait for 000, then enable normal line reacquisition.
-            if (context->target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_FIRST) {
-                if (ControlLogic_TargetEdgeDetected(context, line_left, line_center, line_right) != 0U) {
-                    context->target_line_skip_phase = CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR;
-                }
-                break;
-            }
-
-            if (context->target_line_skip_phase == CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR) {
-                if (all_white != 0U) {
-                    context->target_line_skip_phase = CONTROL_TARGET_LINE_SKIP_DISABLED;
-                    context->junction_target_edge_seen = 0U;
-                    context->junction_condition_active = 0U;
-                }
-                break;
-            }
-
             if (context->junction_target_edge_seen == 0U) {
                 if (ControlLogic_TargetEdgeDetected(context, line_left, line_center, line_right) != 0U) {
                     context->junction_target_edge_seen = 1U;

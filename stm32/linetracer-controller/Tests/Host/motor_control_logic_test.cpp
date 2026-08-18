@@ -55,8 +55,7 @@ void TestLineFollow() {
     AssertForward(output,
                   MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_BASE_PWM + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM +
                                              MOTOR_CONTROL_LEFT_TRIM),
-                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM - MOTOR_CONTROL_LINE_RECOVERY_CORRECTION_PWM +
-                                             MOTOR_CONTROL_RIGHT_TRIM));
+                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 }
 
 void TestDifferentialForward() {
@@ -185,8 +184,7 @@ void TestControlStateOutputPriority() {
     AssertForward(output,
                   MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_BASE_PWM + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM +
                                              MOTOR_CONTROL_LEFT_TRIM),
-                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM - MOTOR_CONTROL_LINE_RECOVERY_CORRECTION_PWM +
-                                             MOTOR_CONTROL_RIGHT_TRIM));
+                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 }
 
 void TestControlWhiteGapHoldsPreviousOutput() {

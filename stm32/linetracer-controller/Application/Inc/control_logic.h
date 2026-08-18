@@ -21,12 +21,11 @@ extern "C" {
  * requiring a second sample can silently miss the junction at driving speed.
  */
 #define CONTROL_JUNCTION_BLACK_STABLE_MS 0U
-#define CONTROL_ENDPOINT_STOP_BLACK_STABLE_MS 0U
 /*
  * The three sensors are mounted ahead of the wheel axle. After the full-width
  * junction stripe is detected, drive
- * forward long enough to place the axle
- * near the intersection centre before beginning the pivot turn.
+
+ * * forward long enough to place the axle near the intersection centre before beginning the pivot turn.
  */
 #define CONTROL_JUNCTION_CENTER_ADVANCE_MS 300U
 #define CONTROL_JUNCTION_CROSS_TIMEOUT_MS 1000U
@@ -59,12 +58,6 @@ typedef enum {
     CONTROL_JUNCTION_TURN_SEARCH_TARGET
 } control_junction_phase_t;
 
-typedef enum {
-    CONTROL_TARGET_LINE_SKIP_DISABLED = 0,
-    CONTROL_TARGET_LINE_SKIP_WAIT_FIRST,
-    CONTROL_TARGET_LINE_SKIP_WAIT_CLEAR
-} control_target_line_skip_phase_t;
-
 typedef struct {
     linetracer_control_state_t state;
     linetracer_control_state_t resume_state;
@@ -84,7 +77,6 @@ typedef struct {
     uint16_t active_job_id;
     app_marker_code_t last_marker_code;
     control_junction_phase_t junction_phase;
-    control_target_line_skip_phase_t target_line_skip_phase;
     route_action_t junction_action;
     uint8_t route_active;
     uint8_t resume_valid;
