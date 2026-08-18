@@ -13,8 +13,8 @@
 #define MOTOR_CONTROL_LEFT_PIVOT_PWM 300U
 
 #define MOTOR_CONTROL_RIGHT_PIVOT_PWM 320U
-/* The physical right motor is weaker; give it extra authority during a left pivot. */
-#define MOTOR_CONTROL_LEFT_TURN_RIGHT_BOOST_PWM 60U
+/* Keep left- and right-pivot wheel magnitudes symmetric. */
+#define MOTOR_CONTROL_LEFT_TURN_RIGHT_BOOST_PWM 0U
 #define MOTOR_CONTROL_LEFT_UTURN_PWM 420U
 #define MOTOR_CONTROL_RIGHT_UTURN_PWM 335U
 #define MOTOR_CONTROL_LEFT_TRIM 0
