@@ -1102,6 +1102,8 @@ app_marker_code_t ControlLogic_ExpectedMarkerCode(const control_context_t* conte
 
         case ROUTE_MARKER_SOURCE_JUNCTION:
         case ROUTE_MARKER_COMMON_JUNCTION:
+        case ROUTE_MARKER_C_PICKUP_TURN:
+        case ROUTE_MARKER_C_RETURN_JUNCTION:
         case ROUTE_MARKER_TARGET_JUNCTION:
         case ROUTE_MARKER_RETURN_JUNCTION:
             return APP_MARKER_JUNCTION;
@@ -1183,6 +1185,8 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, app_marker_
             if (action == ROUTE_ACTION_GO_STRAIGHT) {
                 if (context->route_plan.phase == ROUTE_PHASE_TO_PICKUP) {
                     transition_ok = ControlLogic_Transition(context, LINETRACER_CONTROL_MOVING_TO_PICKUP, now_ms);
+                } else if (context->route_plan.phase == ROUTE_PHASE_TO_C_PICKUP_TURN) {
+                    transition_ok = ControlLogic_Transition(context, LINETRACER_CONTROL_MOVING_ON_COMMON_LINE, now_ms);
                 } else if (context->route_plan.phase != ROUTE_PHASE_TO_SOURCE_JUNCTION) {
                     transition_ok = 0U;
                 }

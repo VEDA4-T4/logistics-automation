@@ -366,8 +366,16 @@ void TestSameRouteCase(uart_linetracer_position_t position_id, uart_linetracer_r
 
     assert(ControlLogic_ExpectedMarkerCode(&context) == APP_MARKER_JUNCTION);
     assert(HandleExpectedMarker(context, 40U) == ROUTE_ACTION_GO_STRAIGHT);
+    std::uint32_t pickup_marker_ms = 50U;
+    if (route_id == UART_LINETRACER_ROUTE_C) {
+        assert(context.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE);
+        assert(HandleExpectedMarker(context, 50U) == ROUTE_ACTION_TURN_LEFT);
+        assert(context.state == LINETRACER_CONTROL_TURNING_TO_PICKUP);
+        assert(ControlLogic_CompleteTurn(&context, 55U) != 0U);
+        pickup_marker_ms = 60U;
+    }
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
-    assert(HandleExpectedMarker(context, 50U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(HandleExpectedMarker(context, pickup_marker_ms) == ROUTE_ACTION_STOP_AT_PICKUP);
     assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
 }
 
@@ -1047,6 +1055,37 @@ void TestMarkerAndLoadEventsDriveRouteB() {
     assert(context.route_plan.valid == 0U);
 }
 
+void TestMarkerAndLoadEventsDriveRouteC() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_C, 203U, 0U);
+
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION);
+    assert(HandleExpectedMarker(context, 10U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE);
+    assert(HandleExpectedMarker(context, 20U) == ROUTE_ACTION_TURN_LEFT);
+    assert(context.state == LINETRACER_CONTROL_TURNING_TO_PICKUP);
+    assert(ControlLogic_CompleteTurn(&context, 30U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+
+    assert(HandleExpectedMarker(context, 40U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
+    assert(ControlLogic_HandleLoadOn(&context, 50U) == ROUTE_ACTION_TURN_AROUND);
+    assert(context.route_plan.phase == ROUTE_PHASE_TO_C_RETURN_JUNCTION);
+    assert(context.route_plan.expected_marker == ROUTE_MARKER_C_RETURN_JUNCTION);
+    assert(ControlLogic_CompleteTurn(&context, 60U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
+
+    assert(HandleExpectedMarker(context, 70U) == ROUTE_ACTION_TURN_RIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
+    assert(ControlLogic_CompleteTurn(&context, 80U) != 0U);
+    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
+
+    assert(HandleExpectedMarker(context, 90U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.route_plan.expected_marker == ROUTE_MARKER_DEST);
+    assert(HandleExpectedMarker(context, 100U) == ROUTE_ACTION_STOP_AT_DEST);
+    assert(context.state == LINETRACER_CONTROL_UNLOADING);
+}
+
 void TestLoadOffDuringReturnIsFault() {
     control_context_t context{};
     ControlLogic_Init(&context, 0U);
@@ -1060,12 +1099,14 @@ void TestLoadOffDuringReturnIsFault() {
     assign.route_id = UART_LINETRACER_ROUTE_C;
     assert(ControlLogic_HandleCommand(&context, &assign, 2U).accepted != 0U);
     assert(HandleExpectedMarker(context, 5U) == ROUTE_ACTION_GO_STRAIGHT);
-    assert(HandleExpectedMarker(context, 6U) == ROUTE_ACTION_STOP_AT_PICKUP);
-    assert(ControlLogic_HandleLoadOn(&context, 7U) == ROUTE_ACTION_TURN_AROUND);
-    assert(ControlLogic_CompleteTurn(&context, 8U) != 0U);
+    assert(HandleExpectedMarker(context, 6U) == ROUTE_ACTION_TURN_LEFT);
+    assert(ControlLogic_CompleteTurn(&context, 7U) != 0U);
+    assert(HandleExpectedMarker(context, 8U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(ControlLogic_HandleLoadOn(&context, 9U) == ROUTE_ACTION_TURN_AROUND);
+    assert(ControlLogic_CompleteTurn(&context, 10U) != 0U);
 
     control_job_completion_t completion{};
-    assert(ControlLogic_HandleLoadOff(&context, 9U, &completion) == ROUTE_ACTION_LOAD_LOST);
+    assert(ControlLogic_HandleLoadOff(&context, 11U, &completion) == ROUTE_ACTION_LOAD_LOST);
     assert(completion.completed == 0U);
     assert(context.state == LINETRACER_CONTROL_ERROR);
     assert(context.stop_reason == LINETRACER_STOP_REASON_LOAD_LOST);
@@ -1154,6 +1195,7 @@ int main() {
     TestCompletionOutsideUnloadingDoesNothing();
     TestStopDuringUnloadRequestsAbort();
     TestMarkerAndLoadEventsDriveRouteB();
+    TestMarkerAndLoadEventsDriveRouteC();
     TestLoadOffDuringReturnIsFault();
     TestTelemetrySnapshotAndLifecycleEvents();
     return 0;
