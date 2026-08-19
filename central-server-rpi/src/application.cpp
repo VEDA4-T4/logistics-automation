@@ -1302,6 +1302,13 @@ int Application::Run(int argc, char* argv[]) {
     });
 
     const auto replay_pending_vision_measurement = [&]() {
+        const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
+        const bool vision_work_ready = std::ranges::any_of(active_works, [](const WorkProcessSnapshot& work) {
+            return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
+        });
+        if (!vision_work_ready) {
+            return true;
+        }
         auto pending = pending_vision_measurement.Take();
         if (!pending.has_value()) {
             return true;
