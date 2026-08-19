@@ -1514,7 +1514,12 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
 
     switch (context->junction_phase) {
         case CONTROL_JUNCTION_APPROACH_CENTER:
-            if ((uint32_t)(now_ms - context->junction_phase_started_at_ms) >= CONTROL_JUNCTION_CENTER_ADVANCE_MS) {
+            /*
+             * Treat the fixed advance as a minimum. A loaded vehicle must also
+             * move both outer sensors off the source marker before pivoting.
+             */
+            if ((uint32_t)(now_ms - context->junction_phase_started_at_ms) >= CONTROL_JUNCTION_CENTER_ADVANCE_MS &&
+                both_black == 0U) {
                 context->junction_turn_started_at_ms = now_ms;
                 ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_CLEAR_SOURCE, now_ms);
             }
@@ -1574,8 +1579,13 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
                     break;
                 }
 
-                /* Stop pivoting now; a low-speed PID stage centres the acquired line. */
-                ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_REACQUIRE, now_ms);
+                /*
+                 * The directional edge proves that the new branch was acquired.
+                 * Stop pivoting and let normal PID consume this same sample.
+                 */
+                ControlLogic_ResetJunctionManeuver(context);
+                ControlLogic_StartJunctionGuard(context, now_ms);
+                result.maneuver_completed = 1U;
                 result.state_changed = (previous_state != context->state) ? 1U : 0U;
                 break;
             }

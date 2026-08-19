@@ -632,15 +632,10 @@ void TestRouteBLeftTurnUsesFirstDetectedTargetLine() {
 
     const auto target_black_at = source_clear_at + CONTROL_TURN_SOURCE_CLEAR_MS + 1U;
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, target_black_at);
-    assert(result.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, target_black_at + 1U);
-    assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(
-        &context, 1U, 1U, 0U, target_black_at + 1U + CONTROL_TURN_REACQUIRE_CENTERED_MS);
     assert(result.maneuver_completed != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+    assert(context.junction_guard_active != 0U);
 }
 
 void TestOtherLeftTurnsDoNotSkipFirstTargetLine() {
@@ -747,10 +742,15 @@ void TestCToBDelayedRightMarkerRetainsCenterAdvance() {
 
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, 500U + CONTROL_JUNCTION_CENTER_ADVANCE_MS);
     assert(result.maneuver_completed == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
+
+    /* The time budget alone cannot start a pivot while a slow vehicle is still on the marker. */
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, 501U + CONTROL_JUNCTION_CENTER_ADVANCE_MS);
+    assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
 }
 
-void TestRightTurnUsesPidReacquisitionAfterTargetEdge() {
+void TestRightTurnHandsTargetEdgeToNormalPidImmediately() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_C, 406U, 0U);
     assert(HandleExpectedMarker(context, 30U) == ROUTE_ACTION_TURN_RIGHT);
@@ -762,18 +762,12 @@ void TestRightTurnUsesPidReacquisitionAfterTargetEdge() {
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
-    /* A right-side edge stops the pivot and hands centring to the low-speed PID stage. */
+    /* A right-side edge stops the pivot and hands this sample directly to normal PID. */
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U, search_at + 20U);
-    assert(result.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
-
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U, search_at + 30U);
-    assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(
-        &context, 0U, 1U, 1U, search_at + 30U + CONTROL_TURN_REACQUIRE_CENTERED_MS);
     assert(result.maneuver_completed != 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.junction_guard_active != 0U);
 }
 
 void TestCenteredSampleCannotCompleteTurnWithoutDirectionalEdge() {
@@ -789,16 +783,10 @@ void TestCenteredSampleCannotCompleteTurnWithoutDirectionalEdge() {
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, search_at + 20U);
-    assert(result.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
-
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, search_at + 30U);
-    assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(
-        &context, 0U, 1U, 0U, search_at + 30U + CONTROL_TURN_REACQUIRE_CENTERED_MS);
     assert(result.maneuver_completed != 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.junction_guard_active != 0U);
 }
 
 void TestTurnAroundCompletesOnStableRightTargetSide() {
@@ -839,7 +827,7 @@ void TestTurnAroundCompletesOnStableRightTargetSide() {
     assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, stable_completed_at + 1U, after_guard) == 0U);
 }
 
-void TestLeftTurnUsesPidReacquisitionAfterTargetEdge() {
+void TestLeftTurnHandsTargetEdgeToNormalPidImmediately() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_A, 407U, 0U);
     assert(HandleExpectedMarker(context, 30U) == ROUTE_ACTION_TURN_LEFT);
@@ -852,23 +840,17 @@ void TestLeftTurnUsesPidReacquisitionAfterTargetEdge() {
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
-    /* 100 stops the pivot and starts low-speed PID reacquisition. */
+    /* 100 stops the pivot and is immediately handed to normal PID. */
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, search_at + 20U);
-    assert(result.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
-
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, search_at + 21U);
-    assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(
-        &context, 1U, 1U, 0U, search_at + 21U + CONTROL_TURN_REACQUIRE_CENTERED_MS);
     assert(result.maneuver_completed != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
     assert(result.state_changed == 0U);
     assert(context.state == original_state);
-    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+    assert(context.junction_guard_active != 0U);
 }
 
-void TestTurnReacquisitionFallsBackToNormalPidWithoutCenterHit() {
+void TestTurnTargetEdgeDoesNotWaitForCenterHit() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_A, 428U, 0U);
     assert(HandleExpectedMarker(context, 30U) == ROUTE_ACTION_TURN_LEFT);
@@ -877,21 +859,11 @@ void TestTurnReacquisitionFallsBackToNormalPidWithoutCenterHit() {
 
     /* 100 acquires the new left branch even if the centre sensor never turns black. */
     const auto target_edge_at = search_at + 20U;
-    auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, target_edge_at);
-    assert(result.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
-                                                      target_edge_at + CONTROL_TURN_REACQUIRE_MAX_MS - 1U);
-    assert(result.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-
-    /* The assist stage is bounded; normal PID must take over from the edge sample. */
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
-                                                      target_edge_at + CONTROL_TURN_REACQUIRE_MAX_MS);
+    const auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, target_edge_at);
     assert(result.maneuver_completed != 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.junction_guard_active != 0U);
 }
 
 void TestStraightJunctionCrossingAndGuard() {
@@ -978,21 +950,21 @@ void TestRouteCSecondMarkerIsAcceptedImmediatelyAfterFirstCrossingClears() {
     assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_GO_STRAIGHT);
     assert(ControlLogic_MarkerApproachHoldActive(&context) == 0U);
 
-    /* Keep driving through the marker for the full centre-advance interval before pivoting. */
+    /* The interval is a minimum; the pivot waits until the source marker has also cleared. */
     const auto pivot_started_at_ms = completed_at_ms + 2U + CONTROL_JUNCTION_CENTER_ADVANCE_MS;
     auto turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, pivot_started_at_ms - 1U);
     assert(turning.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, pivot_started_at_ms);
     assert(turning.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+    assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
 
     /* The stripe that triggered the turn is the source marker and must not complete the turn. */
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, pivot_started_at_ms + 1U);
     assert(turning.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
 
-    /* Stable 000 clears the source marker; 100 hands the new line to low-speed PID. */
+    /* Stable 000 clears the source marker; 100 hands the new line directly to normal PID. */
     const auto source_clear_at_ms = pivot_started_at_ms + 2U;
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, source_clear_at_ms);
     assert(turning.maneuver_completed == 0U);
@@ -1004,15 +976,10 @@ void TestRouteCSecondMarkerIsAcceptedImmediatelyAfterFirstCrossingClears() {
 
     const auto target_edge_at_ms = source_clear_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 1U;
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, target_edge_at_ms);
-    assert(turning.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-    turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, target_edge_at_ms + 1U);
-    assert(turning.maneuver_completed == 0U);
-    turning = ControlLogic_ProcessLineSampleWithCenter(
-        &context, 1U, 1U, 0U, target_edge_at_ms + 1U + CONTROL_TURN_REACQUIRE_CENTERED_MS);
     assert(turning.maneuver_completed != 0U);
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+    assert(context.junction_guard_active != 0U);
     assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_NONE);
 }
 
@@ -1040,7 +1007,7 @@ void TestRouteCReturnTurnRequiresStableSourceClear() {
     assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, pivot_started_at_ms);
     assert(turning.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+    assert(context.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER);
 
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, pivot_started_at_ms + 1U);
     assert(turning.maneuver_completed == 0U);
@@ -1055,17 +1022,11 @@ void TestRouteCReturnTurnRequiresStableSourceClear() {
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U,
                                                        source_clear_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 1U);
-    assert(turning.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-    turning = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U,
-                                                       source_clear_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 2U);
-    assert(turning.maneuver_completed == 0U);
-    turning = ControlLogic_ProcessLineSampleWithCenter(
-        &context, 0U, 1U, 1U,
-        source_clear_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 2U + CONTROL_TURN_REACQUIRE_CENTERED_MS);
     assert(turning.maneuver_completed != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
     assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.junction_guard_active != 0U);
 }
 
 void TestRouteCToBUsesCommonImmediateReacquisition() {
@@ -1082,22 +1043,16 @@ void TestRouteCToBUsesCommonImmediateReacquisition() {
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
     const auto first_clear_at = first_pivot_at + 1U;
     (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, first_clear_at);
-    (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U,
-                                                   first_clear_at + CONTROL_TURN_SOURCE_CLEAR_MS);
+    (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, first_clear_at + CONTROL_TURN_SOURCE_CLEAR_MS);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
     const auto first_target_edge_at = first_clear_at + CONTROL_TURN_SOURCE_CLEAR_MS + 1U;
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, first_target_edge_at);
-    assert(turning.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-    turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 0U, first_target_edge_at + 1U);
-    assert(turning.maneuver_completed == 0U);
-    turning = ControlLogic_ProcessLineSampleWithCenter(
-        &context, 1U, 1U, 0U, first_target_edge_at + 1U + CONTROL_TURN_REACQUIRE_CENTERED_MS);
     assert(turning.maneuver_completed != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE);
+    assert(context.junction_guard_active != 0U);
 
-    const auto target_marker_at = first_target_edge_at + 1U + CONTROL_TURN_REACQUIRE_CENTERED_MS +
-                                  CONTROL_JUNCTION_EXIT_GUARD_MS;
+    const auto target_marker_at = first_target_edge_at + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U;
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 1U, 1U, target_marker_at);
     assert(turning.action_valid != 0U);
     assert(turning.action == ROUTE_ACTION_TURN_RIGHT);
@@ -1122,16 +1077,10 @@ void TestRouteCToBUsesCommonImmediateReacquisition() {
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
     turning = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U,
                                                        stable_clear_at + CONTROL_TURN_SOURCE_CLEAR_MS + 1U);
-    assert(turning.maneuver_completed == 0U);
-    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
-    turning = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U,
-                                                       stable_clear_at + CONTROL_TURN_SOURCE_CLEAR_MS + 2U);
-    assert(turning.maneuver_completed == 0U);
-    turning = ControlLogic_ProcessLineSampleWithCenter(
-        &context, 0U, 1U, 1U,
-        stable_clear_at + CONTROL_TURN_SOURCE_CLEAR_MS + 2U + CONTROL_TURN_REACQUIRE_CENTERED_MS);
     assert(turning.maneuver_completed != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+    assert(context.junction_guard_active != 0U);
 }
 
 void TestStraightJunctionClearsDuringSingleOuterCorrection() {
@@ -1505,11 +1454,11 @@ int main() {
     TestCToBDelayedRightMarkerRetainsCenterAdvance();
     TestExpectedMarkerEdgeStartsLimitedPidWindow();
     TestPersistentSingleOuterHitReturnsControlToPid();
-    TestRightTurnUsesPidReacquisitionAfterTargetEdge();
+    TestRightTurnHandsTargetEdgeToNormalPidImmediately();
     TestCenteredSampleCannotCompleteTurnWithoutDirectionalEdge();
     TestTurnAroundCompletesOnStableRightTargetSide();
-    TestLeftTurnUsesPidReacquisitionAfterTargetEdge();
-    TestTurnReacquisitionFallsBackToNormalPidWithoutCenterHit();
+    TestLeftTurnHandsTargetEdgeToNormalPidImmediately();
+    TestTurnTargetEdgeDoesNotWaitForCenterHit();
     TestStraightJunctionCrossingAndGuard();
     TestRouteCSecondMarkerIsAcceptedImmediatelyAfterFirstCrossingClears();
     TestRouteCReturnTurnRequiresStableSourceClear();
