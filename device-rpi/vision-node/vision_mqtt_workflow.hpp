@@ -44,8 +44,7 @@ public:
         std::chrono::milliseconds barcode_timeout = std::chrono::seconds(10),
         MonotonicNow monotonic_now = [] { return Clock::now(); });
 
-    [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> Observe(std::optional<VisionObservation> observation,
-                                                                      std::string message_id, std::string timestamp);
+    void Observe(std::optional<VisionObservation> observation);
     [[nodiscard]] bool AssignWork(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] bool HasPendingBarcode() const;
     [[nodiscard]] bool NeedsBarcodeFallback() const;

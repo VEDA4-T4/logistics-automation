@@ -27,8 +27,7 @@ VisionMqttWorkflow::VisionMqttWorkflow(std::string device_id, const std::size_t 
     }
 }
 
-std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<VisionObservation> observation,
-                                                             std::string message_id, std::string timestamp) {
+void VisionMqttWorkflow::Observe(std::optional<VisionObservation> observation) {
     std::lock_guard lock(mutex_);
     const TimePoint now = monotonic_now_();
     ExpirePreassignment(now);
@@ -63,18 +62,18 @@ std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<Visio
             barcode_region_detected_ = false;
             work_id_.reset();
         }
-        return std::nullopt;
+        return;
     }
 
     clear_frames_ = 0;
     if (phase_ != Phase::kIdle && phase_ != Phase::kPreassigned) {
-        return std::nullopt;
+        return;
     }
     box_candidate_ = std::move(observation);
     box_candidate_->barcode.reset();
     box_candidate_->barcode_region_detected = false;
     if (++detected_frames_ < detection_confirm_frames_) {
-        return std::nullopt;
+        return;
     }
 
     detected_frames_ = 0;
@@ -83,17 +82,9 @@ std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<Visio
         preassignment_deadline_.reset();
         barcode_deadline_ = now + barcode_timeout_;
         phase_ = Phase::kAssigned;
-        return std::nullopt;
+        return;
     }
     phase_ = Phase::kAwaitingWork;
-    return mqtt::MqttMessage{
-        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = std::move(message_id),
-        .message_type = mqtt::MessageType::kBoxDetected,
-        .source_id = device_id_,
-        .timestamp = std::move(timestamp),
-        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = confirmed_box_observation_->image_name },
-    };
 }
 
 bool VisionMqttWorkflow::AssignWork(const mqtt::MqttMessage& message) {
