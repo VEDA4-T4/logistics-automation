@@ -9,7 +9,7 @@
 
 ## 목표
 
-중앙 서버를 유일한 공정 상태·명령 순서·복구·timeout 소유자로 만들고, 비전 노드는 카메라 측정값만 전달한다. 비전은 위치와 바코드를 측정해 `POSITION_DETECTED` 및 `BARCODE_DETECTED`를 발행하지만 작업 생성이나 후속 장치 명령을 결정하지 않는다.
+중앙 서버를 유일한 공정 상태·명령 순서·복구·timeout 소유자로 만들고, 비전 노드는 카메라 측정값만 전달한다. 비전은 작업 ID 없이 바코드와 위치 측정값을 반복 발행하고, 중앙은 투입 초음파가 만든 현재 작업에만 측정값을 연결한다.
 
 ## 현재 문제
 
@@ -21,8 +21,8 @@
 
 1. 투입 초음파 `SENSOR_STATUS`를 감지한다.
 2. 중앙이 작업 ID와 process epoch를 발급한다.
-3. 투입 컨베이어 정지 명령을 발행하고 성공한 뒤 `WORK_CREATED`를 비전에 전달한다.
-4. 비전의 위치·바코드 측정값을 작업 ID와 epoch로 검증한다.
+3. 투입 컨베이어 정지 명령을 발행하고 중앙 내부 작업 ID를 유지한다.
+4. 초음파 감지 이후 수신한 `VISION_MEASUREMENT`를 현재 작업에 연결하고, 기존 작업 전이용 `POSITION_DETECTED`·`BARCODE_DETECTED`를 중앙 내부에서 생성한다.
 5. 바코드 성공 시 상품 카탈로그에서 `PRODUCT_INFO`를 생성한다.
 6. 그리퍼, 분류, 이송 명령을 기존 ACK 게이트에 따라 순차 발행한다.
 7. timeout, 실패, RECOVERY, START/RESTART를 중앙 상태 머신에서 처리한다.
@@ -31,12 +31,12 @@
 ### 비전 노드
 
 1. 카메라 프레임과 barcode/box 위치를 계산한다.
-2. 중앙에서 받은 `WORK_CREATED`는 결과 correlation을 위한 최소 작업 컨텍스트로만 보관한다.
-3. 측정 결과를 `POSITION_DETECTED`, `BARCODE_DETECTED`로 발행한다.
-4. 이미지 업로드가 활성화된 경우 `PRODUCT_IMAGE`를 부가 결과로 발행한다.
+2. 작업 ID나 `WORK_ASSIGNED` 상태를 기다리지 않는다.
+3. 바코드와 box 위치·크기·corner를 `VISION_MEASUREMENT`로 일정 주기 반복 발행한다.
+4. `VISION_MEASUREMENT`는 작업 ID 없는 QoS0·non-retained 관측값이며 durable outbox/SQLite 이벤트 로그에 저장하지 않는다.
 5. `BOX_DETECTED`를 MQTT로 발행하지 않는다.
 6. 작업 생성, 그리퍼·분류·이송 명령, `WORK_COMPLETED`, 시스템 ESTOP을 결정하지 않는다.
-7. 바코드 실패는 해당 작업의 실패 측정 결과로 전송하며 비전 노드 자체는 ESTOP으로 전환하지 않는다.
+7. 바코드 실패는 관측값을 보내지 않는 상태로 처리하며 비전 노드 자체는 ESTOP으로 전환하지 않는다.
 
 ## 위치와 homography
 
@@ -65,7 +65,7 @@ STM32, UART 명령 형식, 그리퍼·분류 노드의 장치 제어 알고리�
 
 1. 비전이 `BOX_DETECTED`를 발행하지 않는다.
 2. 투입 초음파 한 번으로 중앙 작업이 하나만 생성된다.
-3. 중앙이 보낸 `WORK_CREATED` 뒤 비전의 위치·바코드 결과가 같은 work ID/epoch로 전달된다.
+3. 비전의 반복 `VISION_MEASUREMENT`는 초음파 감지 전에는 무시되고, 감지 후 현재 work ID에 한 번만 연결된다.
 4. 중앙이 catalog→gripper→sorting 순서로 명령을 발행하고 각 terminal response 전에는 다음 명령을 발행하지 않는다.
 5. 비전 바코드 실패가 시스템 ESTOP으로 바뀌지 않는다.
 6. 중앙 fresh/recovery 뒤 이전 epoch 작업이 재생되지 않는다.

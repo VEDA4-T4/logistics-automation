@@ -890,6 +890,46 @@ void TestSensorTelemetryBypassesInboxAndRoutesImmediately() {
     std::filesystem::remove_all(root);
 }
 
+void TestVisionMeasurementBypassesInboxAndRoutesImmediately() {
+    central_server::DeviceManager device_manager;
+    central_server::MqttHandler handler(device_manager);
+    std::size_t measurements{};
+    handler.SetProcessMessageGuard([](const mqtt::MqttMessage&) { return false; });
+    handler.SetProcessMessageHandler([&](const mqtt::MqttMessage& message) {
+        assert(message.message_type == mqtt::MessageType::kVisionMeasurement);
+        const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(message);
+        assert(payload != nullptr && payload->barcode == "5901234123457");
+        ++measurements;
+        return true;
+    });
+
+    const mqtt::MqttMessage measurement{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "VISION-MEASUREMENT-1",
+        .message_type = mqtt::MessageType::kVisionMeasurement,
+        .source_id = "PI-VISION-01",
+        .timestamp = "2026-08-19T00:00:00Z",
+        .data =
+            mqtt::VisionMeasurementPayload{
+                .barcode = "5901234123457",
+                .box_x = 10,
+                .box_y = 20,
+                .box_width = 100,
+                .box_height = 80,
+                .frame_width = 1280,
+                .frame_height = 720,
+                .box_corners = std::nullopt,
+            },
+    };
+    const auto topic = mqtt::DeviceEventTopic(measurement.source_id);
+    for (int index = 0; index < 1000; ++index) {
+        auto copy = measurement;
+        copy.message_id += '-' + std::to_string(index);
+        assert(handler.Handle(topic, Encode(copy), {}, 0, false));
+    }
+    assert(measurements == 1000);
+}
+
 void TestPoisonInboxRowDoesNotStarveLaterReplay() {
     const auto root =
         std::filesystem::temp_directory_path() /
@@ -1074,6 +1114,7 @@ int main() {
     TestMessageTypesUseDedicatedRouteHandlers();
     TestPendingInboxReplaysSideEffectsOnceAfterReopen();
     TestSensorTelemetryBypassesInboxAndRoutesImmediately();
+    TestVisionMeasurementBypassesInboxAndRoutesImmediately();
     TestPoisonInboxRowDoesNotStarveLaterReplay();
     TestNonAuthoritativeBoxIsRejectedWithoutCreatingWork();
     TestProcessEpochRejectsStaleInboxMessagesTerminally();

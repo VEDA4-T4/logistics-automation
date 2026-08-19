@@ -153,6 +153,12 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), barcode).IsSuccess());
     const auto* position_payload = mqtt::GetPayload<mqtt::PositionDetectedPayload>(position);
     assert(position_payload != nullptr && position_payload->box_corners.has_value());
+    const auto measurement = vision::MakeVisionMeasurementMessage(
+        "PI-VISION-01", Observation(std::string("5901234123457"), true), "MSG-MEASUREMENT-01", "2026-07-21T11:00:02Z");
+    assert(measurement.message_type == mqtt::MessageType::kVisionMeasurement);
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), measurement).IsSuccess());
+    const auto* measurement_payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
+    assert(measurement_payload != nullptr && measurement_payload->barcode == "5901234123457");
     const auto image = vision::MakeProductImageMessage(
         "PI-VISION-01", kWorkId, "42f8e6f1-1277-4748-9e5e-c41c7bf605f7",
         "/uploads/images/42f8e6f1-1277-4748-9e5e-c41c7bf605f7.jpg",

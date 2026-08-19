@@ -42,6 +42,7 @@ enum class MessageType : std::uint8_t {
     kEmergencyStop,
     kCommandResponse,
     kSensorStatus,
+    kVisionMeasurement,
 };
 
 enum class ControlCommand : std::uint8_t {
@@ -281,6 +282,8 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
             return "COMMAND_RESPONSE";
         case MessageType::kSensorStatus:
             return "SENSOR_STATUS";
+        case MessageType::kVisionMeasurement:
+            return "VISION_MEASUREMENT";
         case MessageType::kUnknown:
             break;
     }
@@ -289,12 +292,12 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
 [[nodiscard]] constexpr MessageType MessageTypeFromString(std::string_view value) noexcept {
     constexpr std::array values = {
-        MessageType::kDeviceRegister,  MessageType::kHeartbeat,     MessageType::kBoxDetected,
-        MessageType::kWorkCreated,     MessageType::kWorkCompleted, MessageType::kPositionDetected,
-        MessageType::kBarcodeDetected, MessageType::kProductImage,  MessageType::kProductInfo,
-        MessageType::kDestinationSet,  MessageType::kDeviceStatus,  MessageType::kControlCommand,
-        MessageType::kErrorOccurred,   MessageType::kEmergencyStop, MessageType::kCommandResponse,
-        MessageType::kSensorStatus,
+        MessageType::kDeviceRegister,  MessageType::kHeartbeat,         MessageType::kBoxDetected,
+        MessageType::kWorkCreated,     MessageType::kWorkCompleted,     MessageType::kPositionDetected,
+        MessageType::kBarcodeDetected, MessageType::kProductImage,      MessageType::kProductInfo,
+        MessageType::kDestinationSet,  MessageType::kDeviceStatus,      MessageType::kControlCommand,
+        MessageType::kErrorOccurred,   MessageType::kEmergencyStop,     MessageType::kCommandResponse,
+        MessageType::kSensorStatus,    MessageType::kVisionMeasurement,
     };
     for (const auto type : values) {
         if (ToString(type) == value) {
@@ -412,13 +415,15 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 }
 
 [[nodiscard]] constexpr bool IsTransientTelemetry(MessageType type) noexcept {
-    return type == MessageType::kHeartbeat || type == MessageType::kSensorStatus;
+    return type == MessageType::kHeartbeat || type == MessageType::kSensorStatus ||
+           type == MessageType::kVisionMeasurement;
 }
 
 [[nodiscard]] constexpr DeliveryPolicy PolicyFor(MessageType type) noexcept {
     switch (type) {
         case MessageType::kHeartbeat:
         case MessageType::kSensorStatus:
+        case MessageType::kVisionMeasurement:
             return { .minimum_qos = Qos::kAtMostOnce, .maximum_qos = Qos::kAtMostOnce, .retain = RetainPolicy::kNever };
         case MessageType::kDeviceStatus:
             return { .minimum_qos = Qos::kAtMostOnce,

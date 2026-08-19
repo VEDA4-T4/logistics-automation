@@ -313,6 +313,31 @@ mqtt::MqttMessage MakeBarcodeDetectedMessage(std::string_view device_id, const A
     };
 }
 
+mqtt::MqttMessage MakeVisionMeasurementMessage(std::string_view device_id, const VisionObservation& observation,
+                                               std::string message_id, std::string timestamp) {
+    if (!observation.box_detected || !observation.barcode.has_value()) {
+        throw std::invalid_argument("vision measurement requires a detected box and barcode");
+    }
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = std::move(message_id),
+        .message_type = mqtt::MessageType::kVisionMeasurement,
+        .source_id = std::string(device_id),
+        .timestamp = std::move(timestamp),
+        .data =
+            mqtt::VisionMeasurementPayload{
+                .barcode = *observation.barcode,
+                .box_x = observation.box_x,
+                .box_y = observation.box_y,
+                .box_width = observation.box_width,
+                .box_height = observation.box_height,
+                .frame_width = observation.frame_width,
+                .frame_height = observation.frame_height,
+                .box_corners = observation.box_corners,
+            },
+    };
+}
+
 mqtt::MqttMessage MakeProductImageMessage(std::string_view device_id, std::string_view work_id,
                                           std::string_view image_id, std::string_view image_path,
                                           std::string_view checksum, std::string message_id, std::string timestamp) {

@@ -315,7 +315,12 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
             "ignored BOX_DETECTED from non-authoritative work source=" + decoded.value.source_id);
         return true;
     }
-    if (process_message_guard_ && !process_message_guard_(decoded.value)) {
+    // Vision measurements are transient observations.  They have no work id
+    // until the central input ultrasonic gate binds them to an active work, so
+    // applying the normal process preview here would reject every observation
+    // before the application-level binding handler can see it.
+    if (decoded.value.message_type != mqtt::MessageType::kVisionMeasurement && process_message_guard_ &&
+        !process_message_guard_(decoded.value)) {
         Log(MqttHandlerLogLevel::kError, "MQTT process transition rejected before persistence");
         return false;
     }
@@ -326,6 +331,13 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
         }
         if (qt_event_handler_ && !qt_event_handler_(decoded.value)) {
             Log(MqttHandlerLogLevel::kError, "sensor telemetry Qt routing failed");
+            return false;
+        }
+        return true;
+    }
+    if (!replaying && decoded.value.message_type == mqtt::MessageType::kVisionMeasurement) {
+        if (process_message_handler_ && !process_message_handler_(decoded.value)) {
+            Log(MqttHandlerLogLevel::kError, "vision measurement process handling failed");
             return false;
         }
         return true;

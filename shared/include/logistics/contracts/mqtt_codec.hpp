@@ -55,6 +55,8 @@ inline constexpr std::string_view kOffsetXField = "offsetX";
 inline constexpr std::string_view kOffsetYField = "offsetY";
 inline constexpr std::string_view kPositionStatusField = "positionStatus";
 inline constexpr std::string_view kBoxCornersField = "boxCorners";
+inline constexpr std::string_view kFrameWidthField = "frameWidth";
+inline constexpr std::string_view kFrameHeightField = "frameHeight";
 inline constexpr std::string_view kXField = "x";
 inline constexpr std::string_view kYField = "y";
 inline constexpr std::string_view kBarcodeField = "barcode";
@@ -251,6 +253,25 @@ struct PositionDetectedPayload {
     }
 };
 
+struct VisionMeasurementPayload {
+    std::string barcode;
+    std::int32_t box_x{ 0 };
+    std::int32_t box_y{ 0 };
+    std::int32_t box_width{ 0 };
+    std::int32_t box_height{ 0 };
+    std::int32_t frame_width{ 0 };
+    std::int32_t frame_height{ 0 };
+    std::optional<std::array<PixelPoint, 4>> box_corners;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        const bool valid_corners =
+            !box_corners.has_value() || std::all_of(box_corners->begin(), box_corners->end(),
+                                                    [](const PixelPoint& point) { return point.IsValid(); });
+        return !barcode.empty() && box_x >= 0 && box_y >= 0 && box_width > 0 && box_height > 0 && frame_width > 0 &&
+               frame_height > 0 && valid_corners;
+    }
+};
+
 struct BarcodeDetectedPayload {
     std::string work_id;
     std::string recognition_status;
@@ -435,7 +456,8 @@ using MessagePayload =
     std::variant<std::monostate, DeviceRegisterPayload, HeartbeatPayload, BoxDetectedPayload, WorkCreatedPayload,
                  WorkCompletedPayload, PositionDetectedPayload, BarcodeDetectedPayload, ProductImagePayload,
                  ProductInfoPayload, DestinationSetPayload, DeviceStatusPayload, ControlCommandPayload,
-                 ErrorOccurredPayload, EmergencyStopPayload, CommandResponsePayload, SensorStatusPayload>;
+                 ErrorOccurredPayload, EmergencyStopPayload, CommandResponsePayload, SensorStatusPayload,
+                 VisionMeasurementPayload>;
 
 struct MqttMessage {
     std::string protocol_version{ std::string(kCurrentProtocolVersion) };
@@ -645,6 +667,8 @@ struct MqttMessage {
             return std::holds_alternative<CommandResponsePayload>(payload);
         case MessageType::kSensorStatus:
             return std::holds_alternative<SensorStatusPayload>(payload);
+        case MessageType::kVisionMeasurement:
+            return std::holds_alternative<VisionMeasurementPayload>(payload);
         case MessageType::kUnknown:
             return false;
     }
@@ -713,6 +737,7 @@ inline bool MqttMessage::IsValid() const noexcept {
         case MessageType::kHeartbeat:
         case MessageType::kEmergencyStop:
         case MessageType::kSensorStatus:
+        case MessageType::kVisionMeasurement:
             return false;
     }
     return false;
@@ -1158,6 +1183,26 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
     return data;
 }
 
+[[nodiscard]] inline Json SerializePayload(const VisionMeasurementPayload& payload) {
+    Json data = {
+        { std::string(kBarcodeField), payload.barcode },
+        { std::string(kBoxXField), payload.box_x },
+        { std::string(kBoxYField), payload.box_y },
+        { std::string(kBoxWidthField), payload.box_width },
+        { std::string(kBoxHeightField), payload.box_height },
+        { std::string(kFrameWidthField), payload.frame_width },
+        { std::string(kFrameHeightField), payload.frame_height },
+    };
+    if (payload.box_corners.has_value()) {
+        data[std::string(kBoxCornersField)] = Json::array();
+        for (const auto& point : *payload.box_corners) {
+            data[std::string(kBoxCornersField)].push_back(
+                Json{ { std::string(kXField), point.x }, { std::string(kYField), point.y } });
+        }
+    }
+    return data;
+}
+
 [[nodiscard]] inline Json SerializePayload(const WorkCreatedPayload& payload) {
     return {
         { std::string(kWorkIdField), payload.work_id },
@@ -1363,6 +1408,47 @@ inline void WriteOptionalLineTracerPosition(Json& data, std::string_view field,
            ReadRequiredString(data, kMeasurementStatusField, payload.measurement_status, status) &&
            ReadRequiredSignedInteger(data, kDistanceCmField, payload.distance_cm, status) &&
            ReadOptionalString(data, kDetectionStatusField, payload.detection_status, status);
+}
+
+[[nodiscard]] inline bool DeserializePayload(const Json& data, VisionMeasurementPayload& payload, CodecStatus& status) {
+    if (!ReadRequiredString(data, kBarcodeField, payload.barcode, status) ||
+        !ReadRequiredSignedInteger(data, kBoxXField, payload.box_x, status) ||
+        !ReadRequiredSignedInteger(data, kBoxYField, payload.box_y, status) ||
+        !ReadRequiredSignedInteger(data, kBoxWidthField, payload.box_width, status) ||
+        !ReadRequiredSignedInteger(data, kBoxHeightField, payload.box_height, status) ||
+        !ReadRequiredSignedInteger(data, kFrameWidthField, payload.frame_width, status) ||
+        !ReadRequiredSignedInteger(data, kFrameHeightField, payload.frame_height, status)) {
+        return false;
+    }
+
+    const auto corners = data.find(std::string(kBoxCornersField));
+    if (corners == data.end()) {
+        payload.box_corners.reset();
+        return true;
+    }
+    if (!corners->is_array() || corners->size() != 4U) {
+        status =
+            MakeError(CodecError::kInvalidFieldValue, kBoxCornersField, "boxCorners must contain exactly four points");
+        return false;
+    }
+    std::array<PixelPoint, 4> decoded{};
+    for (std::size_t index = 0; index < decoded.size(); ++index) {
+        const Json& point = (*corners)[index];
+        if (!point.is_object()) {
+            status = MakeError(CodecError::kInvalidFieldType, kBoxCornersField, "boxCorners entries must be objects");
+            return false;
+        }
+        const auto x = point.find(std::string(kXField));
+        const auto y = point.find(std::string(kYField));
+        if (x == point.end() || y == point.end() || !x->is_number() || !y->is_number()) {
+            status = MakeError(CodecError::kInvalidFieldType, kBoxCornersField,
+                               "boxCorners entries require numeric x and y");
+            return false;
+        }
+        decoded[index] = { .x = x->get<double>(), .y = y->get<double>() };
+    }
+    payload.box_corners = decoded;
+    return true;
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, WorkCreatedPayload& payload, CodecStatus& status) {
@@ -1790,6 +1876,10 @@ template <typename PayloadType>
             break;
         case MessageType::kSensorStatus:
             decoded = codec_detail::DecodeAndAssignPayload<SensorStatusPayload>(*data, result.value, result.status);
+            break;
+        case MessageType::kVisionMeasurement:
+            decoded =
+                codec_detail::DecodeAndAssignPayload<VisionMeasurementPayload>(*data, result.value, result.status);
             break;
         case MessageType::kUnknown:
             result.status = codec_detail::MakeError(CodecError::kUnknownMessageType, kMessageTypeField,

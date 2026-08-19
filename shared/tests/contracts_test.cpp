@@ -128,6 +128,24 @@ void TestAllMqttMessageRoundTrips() {
                                                                .detection_status = "DETECTED",
                                                            }));
 
+    AssertRoundTrip<mqtt::VisionMeasurementPayload>(MakeMessage("MSG-0003-V", mqtt::MessageType::kVisionMeasurement,
+                                                                mqtt::VisionMeasurementPayload{
+                                                                    .barcode = "5901234123457",
+                                                                    .box_x = 120,
+                                                                    .box_y = 80,
+                                                                    .box_width = 380,
+                                                                    .box_height = 260,
+                                                                    .frame_width = 1280,
+                                                                    .frame_height = 720,
+                                                                    .box_corners =
+                                                                        std::array{
+                                                                            mqtt::PixelPoint{ 120.0, 80.0 },
+                                                                            mqtt::PixelPoint{ 500.0, 80.0 },
+                                                                            mqtt::PixelPoint{ 500.0, 340.0 },
+                                                                            mqtt::PixelPoint{ 120.0, 340.0 },
+                                                                        },
+                                                                }));
+
     AssertRoundTrip<mqtt::WorkCreatedPayload>(MakeMessage("MSG-0003-A", mqtt::MessageType::kWorkCreated,
                                                           mqtt::WorkCreatedPayload{
                                                               .work_id = std::string(kTestWorkId),
@@ -806,6 +824,7 @@ int main() {
     assert(mqtt::MessageTypeFromString("WORK_CREATED") == mqtt::MessageType::kWorkCreated);
     assert(mqtt::MessageTypeFromString("WORK_COMPLETED") == mqtt::MessageType::kWorkCompleted);
     assert(mqtt::MessageTypeFromString("SENSOR_STATUS") == mqtt::MessageType::kSensorStatus);
+    assert(mqtt::MessageTypeFromString("VISION_MEASUREMENT") == mqtt::MessageType::kVisionMeasurement);
     assert(mqtt::kWorkIdField == "workId");
     assert(mqtt::IsValidUuid(kTestWorkId));
     assert(mqtt::ControlCommandFromString("EXECUTE") == mqtt::ControlCommand::kExecute);
@@ -824,6 +843,11 @@ int main() {
     assert(sensor_policy.minimum_qos == mqtt::Qos::kAtMostOnce);
     assert(sensor_policy.maximum_qos == mqtt::Qos::kAtMostOnce);
     assert(sensor_policy.retain == mqtt::RetainPolicy::kNever);
+
+    const auto vision_measurement_policy = mqtt::PolicyFor(mqtt::MessageType::kVisionMeasurement);
+    assert(vision_measurement_policy.minimum_qos == mqtt::Qos::kAtMostOnce);
+    assert(vision_measurement_policy.maximum_qos == mqtt::Qos::kAtMostOnce);
+    assert(vision_measurement_policy.retain == mqtt::RetainPolicy::kNever);
 
     const auto status_policy = mqtt::PolicyFor(mqtt::MessageType::kDeviceStatus);
     assert(status_policy.maximum_qos == mqtt::Qos::kAtLeastOnce);
@@ -905,6 +929,7 @@ int main() {
     static_assert(mqtt::kMqttMaximumRetries == 3);
     static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kHeartbeat));
     static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kSensorStatus));
+    static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kVisionMeasurement));
     static_assert(!mqtt::IsTransientTelemetry(mqtt::MessageType::kWorkCompleted));
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 9 }) == mqtt::ConnectionState::kOnline);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 10 }) == mqtt::ConnectionState::kDelayed);
