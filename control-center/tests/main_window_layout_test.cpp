@@ -622,10 +622,9 @@ int main(int argc, char* argv[]) {
               { QStringLiteral("messageType"), QStringLiteral("DEVICE_STATUS") },
               { QStringLiteral("sourceId"), source_id },
               { QStringLiteral("timestamp"), now.addMSecs(timestamp_offset_ms).toString(Qt::ISODateWithMs) },
-              { QStringLiteral("data"),
-                QJsonObject{ { QStringLiteral("status"), QStringLiteral("ONLINE") },
-                             { QStringLiteral("currentState"), current_state },
-                             { QStringLiteral("jobId"), job_id } } } });
+              { QStringLiteral("data"), QJsonObject{ { QStringLiteral("status"), QStringLiteral("ONLINE") },
+                                                     { QStringLiteral("currentState"), current_state },
+                                                     { QStringLiteral("jobId"), job_id } } } });
     };
     QFrame* transition_vision_card = nullptr;
     for (auto* card : window.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
