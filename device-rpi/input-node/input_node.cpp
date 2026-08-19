@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -258,18 +259,43 @@ bool InputNode::IsTargetedToThisNode(std::string_view target_device_id) const no
 
 InputCommandResult InputNode::HandleMqttCommand(const mqtt::MqttMessage& message) {
     if (!message.IsValid()) {
+        std::cerr << "[input][command][ERROR] rejected invalid MQTT command; messageId=" << message.message_id << '\n';
         InputCommandResult result{};
         result.status = InputCommandStatus::kInvalidMessage;
         return result;
     }
 
     if (const auto* emergency = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message)) {
-        return HandleEmergencyStop(*emergency);
+        std::clog << "[input][command][INFO] received; messageId=" << message.message_id
+                  << "; requestId=" << emergency->request_id << "; command=" << mqtt::ToString(emergency->command)
+                  << "; target=" << emergency->target_device_id << '\n';
+        const auto result = HandleEmergencyStop(*emergency);
+        std::clog << "[input][command][INFO] completed; requestId=" << result.request_id
+                  << "; command=" << mqtt::ToString(result.mqtt_command)
+                  << "; status=" << (result.Succeeded() ? "success" : "failure")
+                  << "; statusCode=" << static_cast<int>(result.status) << '\n';
+        return result;
     }
     if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
-        return HandleControlCommand(*command);
+        std::string work_id;
+        if (command->params.is_object() && command->params.contains("workId") &&
+            command->params.at("workId").is_string()) {
+            work_id = command->params.at("workId").get<std::string>();
+        }
+        std::clog << "[input][command][INFO] received; messageId=" << message.message_id
+                  << "; requestId=" << command->request_id << "; command=" << mqtt::ToString(command->command)
+                  << "; target=" << command->target_device_id << "; component=" << command->component_id
+                  << "; workId=" << work_id << '\n';
+        const auto result = HandleControlCommand(*command);
+        std::clog << "[input][command][INFO] completed; requestId=" << result.request_id
+                  << "; command=" << mqtt::ToString(result.mqtt_command)
+                  << "; status=" << (result.Succeeded() ? "success" : "failure")
+                  << "; statusCode=" << static_cast<int>(result.status) << '\n';
+        return result;
     }
 
+    std::cerr << "[input][command][ERROR] unsupported MQTT command message; messageId=" << message.message_id
+              << "; messageType=" << mqtt::ToString(message.message_type) << '\n';
     InputCommandResult result{};
     result.status = InputCommandStatus::kUnsupportedMessage;
     EmitCommandResponse(result, "input node does not handle this MQTT message type");
@@ -438,11 +464,27 @@ InputCommandResult InputNode::HandleControlCommand(const mqtt::ControlCommandPay
 InputCommandResult InputNode::Execute(InputCommandResult result, std::uint8_t command,
                                       std::span<const std::uint8_t> payload) {
     result.uart_command = command;
+    const bool log_command = !result.request_id.empty() || result.mqtt_command != mqtt::ControlCommand::kUnknown;
+    if (log_command) {
+        std::clog << "[input][uart][INFO] transmit; requestId=" << result.request_id
+                  << "; mqttCommand=" << mqtt::ToString(result.mqtt_command)
+                  << "; uartCommand=" << static_cast<int>(command) << '\n';
+    }
     result.uart_result = uart_session_.Transact(command, payload);
     result.status = CommandStatusFromTransact(result.uart_result.status);
     if (result.status == InputCommandStatus::kRejected &&
         IsControllerExecutionFailure(result.uart_result.response_error)) {
         result.status = InputCommandStatus::kControllerFailure;
+    }
+    if (log_command) {
+        std::clog << "[input][uart][INFO] completed; requestId=" << result.request_id
+                  << "; uartCommand=" << static_cast<int>(command)
+                  << "; status=" << (result.Succeeded() ? "success" : "failure")
+                  << "; statusCode=" << static_cast<int>(result.status)
+                  << "; sequence=" << static_cast<int>(result.uart_result.sequence)
+                  << "; responseStatus=" << static_cast<int>(result.uart_result.response_status)
+                  << "; responseError=" << static_cast<int>(result.uart_result.response_error)
+                  << "; retries=" << static_cast<int>(result.uart_result.retries) << '\n';
     }
     return result;
 }

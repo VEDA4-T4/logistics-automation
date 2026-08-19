@@ -3,8 +3,10 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -193,11 +195,19 @@ void TestStop() {
     Fixture fixture;
     fixture.backend->responder = AlwaysSucceed();
 
+    std::ostringstream logs;
+    auto* previous_log_buffer = std::clog.rdbuf(logs.rdbuf());
     const InputCommandResult result =
         fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStop, std::string(kDeviceId)));
+    std::clog.rdbuf(previous_log_buffer);
 
     assert(result.status == InputCommandStatus::kSuccess);
     assert(fixture.backend->last_written.command == UART_CMD_INPUT_CONVEYOR_STOP);
+    assert(logs.str().find("[input][command][INFO] received; messageId=MSG-1; requestId=req-1") != std::string::npos);
+    assert(logs.str().find("command=STOP; target=PI-INPUT-01") != std::string::npos);
+    assert(logs.str().find("[input][uart][INFO] completed; requestId=req-1; uartCommand=") != std::string::npos);
+    assert(logs.str().find("[input][command][INFO] completed; requestId=req-1; command=STOP; status=success") !=
+           std::string::npos);
 }
 
 void TestStatusRequest() {

@@ -374,12 +374,18 @@ int Application::Run(int argc, char* argv[]) {
         [&mqtt_client, &mqtt_delivery_mutex, &mqtt_deliveries_in_flight, &mqtt_deliveries_acknowledged, &delivery_key,
          vision_device_id = server_config.process.vision_device_id](const PendingMqttDelivery& delivery) {
             if (!mqtt_client.IsReady()) {
+                std::clog << "[server][MQTT][INFO] publish deferred; topic=" << delivery.topic
+                          << "; messageId=" << delivery.message.message_id
+                          << "; messageType=" << contracts::mqtt::ToString(delivery.message.message_type)
+                          << "; reason=client-not-ready\n";
                 return true;
             }
             const auto key = delivery_key(delivery.topic, delivery.message.message_id);
             {
                 const std::lock_guard delivery_lock(mqtt_delivery_mutex);
                 if (!mqtt_deliveries_in_flight.insert(key).second) {
+                    std::clog << "[server][MQTT][INFO] publish already in flight; topic=" << delivery.topic
+                              << "; messageId=" << delivery.message.message_id << '\n';
                     return true;
                 }
             }
@@ -967,6 +973,16 @@ int Application::Run(int argc, char* argv[]) {
                                  &persist_process_state,
                                  &fail_process_dispatch](const std::vector<ProcessCommandIntent>& commands) {
         for (const auto& intent : commands) {
+            const std::string request_log_id = ProcessCommandRequestId(intent.message).value_or("<none>");
+            std::clog << "[server][PROCESS][INFO] dispatch requested; workId=" << intent.work_id
+                      << "; messageId=" << intent.message.message_id << "; requestId=" << request_log_id;
+            if (const auto* command =
+                    contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(intent.message);
+                command != nullptr) {
+                std::clog << "; command=" << contracts::mqtt::ToString(command->command)
+                          << "; target=" << command->target_device_id << "; component=" << command->component_id;
+            }
+            std::clog << '\n';
             if (!ResolveCommandTargets(intent.message, device_manager->RegisteredDevices()).IsValid()) {
                 if (!fail_process_dispatch(intent, "target process node is unavailable")) {
                     std::cerr << "[server][ERROR] process command failure could not be reported: " << intent.work_id
@@ -993,6 +1009,8 @@ int Application::Run(int argc, char* argv[]) {
                 }
                 return false;
             }
+            std::clog << "[server][PROCESS][INFO] dispatch accepted; workId=" << intent.work_id
+                      << "; messageId=" << intent.message.message_id << "; requestId=" << *request_id << '\n';
             const auto confirmed = process_orchestrator.ConfirmDispatch(intent);
             if (!confirmed.Applied()) {
                 static_cast<void>(process_command_tracker.Remove(*request_id));
@@ -1227,6 +1245,17 @@ int Application::Run(int argc, char* argv[]) {
         const bool process_accepts_work =
             process_orchestrator.Enabled() && process_orchestrator.StateMachine().AcceptsNewWork();
         const bool input_sensor_detected = input_detection_gate.ShouldStopConveyor(message);
+        if (input_sensor_detected) {
+            const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
+            std::clog << "[server][SENSOR][INFO] input stop decision; messageId=" << message.message_id
+                      << "; processState=" << ToString(system_state)
+                      << "; processAcceptsWork=" << (process_accepts_work ? "true" : "false") << "; stationOccupied="
+                      << (InputStationOccupied(process_orchestrator.StateMachine()) ? "true" : "false");
+            if (sensor != nullptr) {
+                std::clog << "; sensorId=" << sensor->sensor_id << "; distanceCm=" << sensor->distance_cm;
+            }
+            std::clog << '\n';
+        }
         if (process_orchestrator.Enabled() && !process_accepts_work && input_sensor_detected) {
             const auto stop = process_orchestrator.MakeInputConveyorSafetyStop(message.message_id, message.timestamp);
             if (!dispatch_command(stop)) {
@@ -1236,9 +1265,13 @@ int Application::Run(int argc, char* argv[]) {
                 return false;
             }
         }
-        if (input_detection_gate.ShouldCreateWork(message, process_accepts_work,
-                                                  InputStationOccupied(process_orchestrator.StateMachine()))) {
+        const bool create_work = input_detection_gate.ShouldCreateWork(
+            message, process_accepts_work, InputStationOccupied(process_orchestrator.StateMachine()));
+        if (create_work) {
             const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
+            std::clog << "[server][PROCESS][INFO] input sensor created work; messageId=" << message.message_id
+                      << "; source=" << message.source_id
+                      << "; sensorId=" << (sensor != nullptr ? std::to_string(sensor->sensor_id) : "<unknown>") << '\n';
             const contracts::mqtt::MqttMessage box_detected{
                 .protocol_version = message.protocol_version,
                 .message_id = "SENSOR-BOX-" + message.message_id,

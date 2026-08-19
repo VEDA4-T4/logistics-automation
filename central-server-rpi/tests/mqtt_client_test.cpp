@@ -549,6 +549,8 @@ void TestTypedMessagePublishing() {
     auto transport = std::make_unique<FakeTransport>();
     auto* fake = transport.get();
     central_server::MqttClient client(MakeConfig(), std::move(transport));
+    std::vector<std::string> logs;
+    client.SetLogger([&logs](central_server::MqttLogLevel, std::string_view message) { logs.emplace_back(message); });
 
     assert(client.Start());
     fake->SimulateConnected();
@@ -579,6 +581,16 @@ void TestTypedMessagePublishing() {
     assert(decoded.IsSuccess());
     assert(decoded.value.message_id == command.message_id);
     assert(mqtt::GetPayload<mqtt::ControlCommandPayload>(decoded.value) != nullptr);
+    bool command_publish_logged = false;
+    for (const auto& log : logs) {
+        if (log.find("MQTT publish accepted; topic=device/PI-01/command; messageId=MSG-PUBLISH-01") !=
+            std::string::npos) {
+            command_publish_logged = log.find("requestId=REQ-PUBLISH-01") != std::string::npos &&
+                                     log.find("target=PI-01") != std::string::npos;
+            break;
+        }
+    }
+    assert(command_publish_logged);
     assert(!client.PublishTransientMessage(mqtt::DeviceCommandTopic("PI-01"), command));
     assert(fake->publications.size() == 1);
 

@@ -1,6 +1,7 @@
 #include "logistics/central_server/sensor_detection.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <utility>
 
 #include "logistics/contracts/mqtt_codec.hpp"
@@ -65,6 +66,10 @@ bool InputDetectionGate::ShouldStopConveyor(const contracts::mqtt::MqttMessage& 
         return false;
     }
     stop_consumed_ = true;
+    std::clog << "[server][SENSOR][INFO] input detection consumed; messageId=" << message.message_id
+              << "; source=" << message.source_id << "; sensorId=" << sensor->sensor_id
+              << "; distanceCm=" << sensor->distance_cm << "; detectionStatus=" << *sensor->detection_status
+              << "; decision=STOP_CONVEYOR\n";
     return true;
 }
 

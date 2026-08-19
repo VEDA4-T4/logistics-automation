@@ -203,6 +203,18 @@ int RunInputDaemon(int argc, char* argv[]) {
     uart_session.SetSpontaneousFrameHandler(
         [&input_node](const uart_frame_t& frame) { input_node.HandleUartFrame(frame); });
     mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
+        std::clog << "[input][mqtt][INFO] command received; messageId=" << message.message_id
+                  << "; messageType=" << mqtt::ToString(message.message_type)
+                  << "; queueSizeBefore=" << command_inbox.Size();
+        if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message); command != nullptr) {
+            std::clog << "; requestId=" << command->request_id << "; command=" << mqtt::ToString(command->command)
+                      << "; target=" << command->target_device_id << "; component=" << command->component_id;
+        } else if (const auto* emergency = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message);
+                   emergency != nullptr) {
+            std::clog << "; requestId=" << emergency->request_id << "; command=" << mqtt::ToString(emergency->command)
+                      << "; target=" << emergency->target_device_id;
+        }
+        std::clog << '\n';
         std::deque<mqtt::MqttMessage> preempted;
         bool handled = command_inbox.Push(message, &preempted);
         if (!handled) {
@@ -228,6 +240,9 @@ int RunInputDaemon(int argc, char* argv[]) {
                           << command.message_id << '\n';
             }
         }
+        std::clog << "[input][mqtt][INFO] command queue result; messageId=" << message.message_id
+                  << "; accepted=" << (handled ? "true" : "false") << "; queueSize=" << command_inbox.Size()
+                  << "; preempted=" << preempted.size() << '\n';
         return handled;
     });
 

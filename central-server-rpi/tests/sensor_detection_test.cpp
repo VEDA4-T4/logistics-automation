@@ -6,6 +6,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 #include "logistics/contracts/mqtt_codec.hpp"
@@ -197,6 +198,20 @@ void TestInputDetectionGateCreatesWorkWithoutPriorClear() {
     assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));
 }
 
+void TestInputDetectionGateLogsConsumedStopDecision() {
+    logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
+    const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
+    std::ostringstream logs;
+    auto* previous_log_buffer = std::clog.rdbuf(logs.rdbuf());
+    assert(gate.ShouldStopConveyor(detected));
+    std::clog.rdbuf(previous_log_buffer);
+
+    assert(logs.str().find("[server][SENSOR][INFO] input detection consumed") != std::string::npos);
+    assert(logs.str().find("messageId=MSG-INPUT-SENSOR-GATE") != std::string::npos);
+    assert(logs.str().find("sensorId=1") != std::string::npos);
+    assert(logs.str().find("distanceCm=5") != std::string::npos);
+}
+
 void TestSortingDetectionGateMatchesDestinationAndConsumesOneInterval() {
     SortingDetectionGate gate(kDevice);
     const std::vector works{
@@ -240,6 +255,7 @@ int main() {
     TestThresholdsComeFromConfig();
     TestConfigValidation();
     TestInputDetectionGateCreatesWorkWithoutPriorClear();
+    TestInputDetectionGateLogsConsumedStopDecision();
     TestSortingDetectionGateMatchesDestinationAndConsumesOneInterval();
     std::cout << "sensor_detection_test passed\n";
     return 0;

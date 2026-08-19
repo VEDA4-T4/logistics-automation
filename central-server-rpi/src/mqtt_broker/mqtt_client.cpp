@@ -50,6 +50,36 @@ inline constexpr std::size_t kMaximumMqttPayloadSize = 268435455U;
     return !retain || policy.retain != mqtt::RetainPolicy::kNever;
 }
 
+[[nodiscard]] std::string PublishContext(std::string_view topic, const mqtt::MqttMessage& message,
+                                         const int packet_id) {
+    std::ostringstream output;
+    output << "MQTT publish accepted; topic=" << topic << "; messageId=" << message.message_id
+           << "; messageType=" << mqtt::ToString(message.message_type) << "; source=" << message.source_id
+           << "; packetId=" << packet_id;
+    if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message); command != nullptr) {
+        output << "; requestId=" << command->request_id << "; command=" << mqtt::ToString(command->command)
+               << "; target=" << command->target_device_id << "; component=" << command->component_id;
+        if (command->params.is_object() && command->params.contains("workId") &&
+            command->params.at("workId").is_string()) {
+            output << "; workId=" << command->params.at("workId").get<std::string>();
+        }
+    } else if (const auto* emergency = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message); emergency != nullptr) {
+        output << "; requestId=" << emergency->request_id << "; command=" << mqtt::ToString(emergency->command)
+               << "; target=" << emergency->target_device_id;
+    } else if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(message);
+               destination != nullptr) {
+        output << "; requestId=" << destination->request_id << "; command=DESTINATION_SET"
+               << "; target=" << destination->target_device_id << "; workId=" << destination->work_id
+               << "; destination=" << destination->destination;
+    } else if (const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(message); response != nullptr) {
+        output << "; requestId=" << response->request_id << "; command=" << mqtt::ToString(response->command)
+               << "; result=" << mqtt::ToString(response->result);
+    } else if (const auto* work = mqtt::GetPayload<mqtt::WorkCreatedPayload>(message); work != nullptr) {
+        output << "; workId=" << work->work_id;
+    }
+    return output.str();
+}
+
 void DefaultLog(MqttLogLevel level, std::string_view message) {
     const char* label = "INFO";
     std::ostream* output = &std::clog;
@@ -314,7 +344,11 @@ std::optional<int> MqttClient::PublishMessageWithReceipt(std::string_view topic,
         return std::nullopt;
     }
 
-    return PublishWithReceipt(topic, encoded.payload, static_cast<int>(qos), retain);
+    const auto receipt = PublishWithReceipt(topic, encoded.payload, static_cast<int>(qos), retain);
+    if (receipt.has_value() && connected_ && !mqtt::IsTransientTelemetry(message.message_type)) {
+        Log(MqttLogLevel::kInfo, PublishContext(topic, message, *receipt));
+    }
+    return receipt;
 }
 
 bool MqttClient::PublishMessageAcknowledged(std::string_view topic, const mqtt::MqttMessage& message, mqtt::Qos qos,
