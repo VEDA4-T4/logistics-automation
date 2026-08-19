@@ -105,8 +105,7 @@
   Add a pure outbound classification helper only if needed to test the main-loop decision without OpenCV. The expected behavior is:
 
   ```cpp
-  const auto box_measurement = workflow.Observe(Observation());
-  assert(!box_measurement.has_value());
+  workflow.Observe(Observation());
   assert(workflow.AssignWork(WorkCreated()));
   workflow.Observe(Observation("8801234567893", true));
   const auto work = workflow.TakeAssignedWork();
@@ -266,9 +265,9 @@
 
   Expected before the reset/epoch guard is complete: stale local correlation or old epoch result can remain available to the workflow/central process.
 
-- [ ] **Step 3: Implement only the missing reset/epoch guard**
+- [ ] **Step 3: Verify only the existing reset/epoch guard is required**
 
-  Reuse the existing `Reset` callback in the vision MQTT command handler for `START`/`RESTART`/`INITIALIZE` and existing central stale-epoch rejection. Do not add a new persistent queue or work-state database to the vision node. A stale result must be discarded, not converted into `ERROR_OCCURRED`/ESTOP.
+  Reuse the existing `Reset` callback in the vision MQTT command handler for `START`/`RESTART`/`INITIALIZE` and existing central stale-epoch rejection. Do not add a new persistent queue or work-state database to the vision node. A stale result must be discarded, not converted into `ERROR_OCCURRED`/ESTOP. The existing guards and reset tests satisfy this contract, so no production change is required unless a focused test exposes a regression.
 
 - [ ] **Step 4: Re-run focused tests**
 
@@ -280,8 +279,8 @@
 - [ ] **Step 5: Commit the recovery regression**
 
   ```bash
-  git add device-rpi/tests/vision_mqtt_workflow_test.cpp central-server-rpi/tests/process_integration_test.cpp device-rpi/vision-node/main.cpp central-server-rpi/src/application.cpp
-  git commit -m "test: isolate vision measurements across recovery epochs"
+  git add central-server-rpi/tests/process_integration_test.cpp
+  git commit -m "test: keep vision barcode failures out of estop"
   ```
 
 ### Task 5: Documentation and final verification

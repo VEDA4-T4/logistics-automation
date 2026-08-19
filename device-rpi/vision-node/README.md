@@ -66,8 +66,9 @@ switches to headless mode automatically when neither `DISPLAY` nor `WAYLAND_DISP
 The runtime sequence is:
 
 1. The vision node connects, publishes registration, and starts heartbeats.
-2. After a box is stable for the configured confirmation frames, it publishes `BOX_DETECTED`.
-3. The central server creates a work and sends `WORK_CREATED` to the vision node.
+2. The node confirms a box locally and retains its position/barcode measurements; it does not create a work or
+   publish `BOX_DETECTED`.
+3. The input ultrasonic event causes the central server to create the work and send `WORK_CREATED` to the vision node.
 4. The vision node reads the barcode attached to the product's top face and publishes `POSITION_DETECTED` and
    `BARCODE_DETECTED` for that work.
 5. If image upload is enabled, it uploads the JPEG over HTTP(S), verifies the response, and publishes `PRODUCT_IMAGE`.
@@ -84,8 +85,8 @@ area. The vision node does not request product rotation or search the other five
 ## Barcode fallback pipeline
 
 The normal path detects the box, detects barcode regions inside the original box ROI, and decodes EAN-13 from the
-original pixels. Expensive processing is not run continuously. Once a box has been announced and its barcode is still
-missing, the node waits for `failure_frames_before_super_resolution` consecutive failures and then:
+original pixels. Expensive processing is not run continuously. Once a confirmed box has a server-assigned work and its
+barcode is still missing, the node waits for `failure_frames_before_super_resolution` consecutive failures and then:
 
 1. retries barcode-region detection on a 2x super-resolved box ROI;
 2. maps every detected point back to the original frame coordinate system;
@@ -116,9 +117,9 @@ node must remain in `RESULT_PENDING` while disconnected, publish only the unsent
 then return to `WAITING_FOR_PRODUCT`. Replaying the same `WORK_CREATED` after completion must not produce a second
 result for that `workId`.
 
-No-box frames before `BOX_DETECTED` are not reported as a work failure because the server has not assigned a `workId`
-yet. The node keeps scanning without raising a system error. A box-arrival timeout requires an upstream sensor event
-that creates an expected work before vision processing; it must not be inferred from ordinary empty camera frames.
+No-box frames before `WORK_CREATED` are not reported as a work failure because the server has not assigned a `workId`
+yet. The node keeps scanning without raising a system error. A box-arrival timeout requires the upstream ultrasonic
+event to create an expected work before vision processing; it must not be inferred from ordinary empty camera frames.
 
 ## Vision ablation benchmark
 

@@ -125,14 +125,13 @@ public:
 
     [[nodiscard]] bool DetectInputSensor() {
         for (int reading = 0; reading < 3; ++reading) {
-            if (!Handle(mqtt::DeviceEventTopic(kInputId),
-                        Message(mqtt::MessageType::kSensorStatus, kInputId,
-                                mqtt::SensorStatusPayload{
-                                    .sensor_id = 1,
-                                    .measurement_status = "OK",
-                                    .distance_cm = 5,
-                                    .detection_status = std::nullopt,
-                                }))) {
+            if (!Handle(mqtt::DeviceEventTopic(kInputId), Message(mqtt::MessageType::kSensorStatus, kInputId,
+                                                                  mqtt::SensorStatusPayload{
+                                                                      .sensor_id = 1,
+                                                                      .measurement_status = "OK",
+                                                                      .distance_cm = 5,
+                                                                      .detection_status = std::nullopt,
+                                                                  }))) {
                 return false;
             }
         }
@@ -407,14 +406,15 @@ private:
                     .message_type = mqtt::MessageType::kBoxDetected,
                     .source_id = message.source_id,
                     .timestamp = message.timestamp,
-                    .data = mqtt::BoxDetectedPayload{
-                        .detected = true,
-                        .image_name = "ultrasonic-sensor-" + std::to_string(sensor->sensor_id),
-                    },
+                    .data =
+                        mqtt::BoxDetectedPayload{
+                            .detected = true,
+                            .image_name = "ultrasonic-sensor-" + std::to_string(sensor->sensor_id),
+                        },
                 };
                 const auto encoded = mqtt::SerializeMessage(box_detected);
-                if (!encoded.IsSuccess() || !handler_->Handle(mqtt::DeviceEventTopic(message.source_id), encoded.payload,
-                                                               kTimestamp)) {
+                if (!encoded.IsSuccess() ||
+                    !handler_->Handle(mqtt::DeviceEventTopic(message.source_id), encoded.payload, kTimestamp)) {
                     input_detection_gate_.Retry();
                     return false;
                 }
