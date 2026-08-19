@@ -123,6 +123,22 @@ public:
                               mqtt::BoxDetectedPayload{ .detected = true, .image_name = "integration-box.jpg" }));
     }
 
+    [[nodiscard]] bool DetectInputSensor() {
+        for (int reading = 0; reading < 3; ++reading) {
+            if (!Handle(mqtt::DeviceEventTopic(kInputId),
+                        Message(mqtt::MessageType::kSensorStatus, kInputId,
+                                mqtt::SensorStatusPayload{
+                                    .sensor_id = 1,
+                                    .measurement_status = "OK",
+                                    .distance_cm = 5,
+                                    .detection_status = std::nullopt,
+                                }))) {
+                return false;
+            }
+        }
+        return mqtt::IsValidUuid(work_id_);
+    }
+
     [[nodiscard]] bool DetectPosition() {
         return Handle(mqtt::DeviceEventTopic(kVisionId), Message(mqtt::MessageType::kPositionDetected, kVisionId,
                                                                  mqtt::PositionDetectedPayload{
@@ -208,6 +224,12 @@ public:
             }
         }
         return targets;
+    }
+
+    [[nodiscard]] bool HasMessage(mqtt::MessageType type, std::string_view source_id) const {
+        return std::ranges::any_of(published_, [type, source_id](const PublishedMessage& publication) {
+            return publication.message.message_type == type && publication.message.source_id == source_id;
+        });
     }
 
     [[nodiscard]] bool ReportCommandResult(std::string_view target, mqtt::CommandResult result) {
@@ -350,8 +372,42 @@ private:
             return !preview.handled ||
                    preview.transition.disposition != central_server::TransitionDisposition::kRejected;
         });
-        handler_->SetProcessMessageHandler(
-            [this](const mqtt::MqttMessage& message) { return HandleProcessMessage(message); });
+        handler_->SetProcessMessageHandler([this](const mqtt::MqttMessage& message) {
+            const bool process_accepts_work = orchestrator_.Enabled() && orchestrator_.StateMachine().AcceptsNewWork();
+            const bool input_station_occupied = !orchestrator_.StateMachine().ActiveWorks().empty();
+            if (input_detection_gate_.ShouldStopConveyor(message)) {
+                const auto stop = orchestrator_.MakeInputConveyorSafetyStop(message.message_id, message.timestamp);
+                if (!DispatchCommand(stop)) {
+                    input_detection_gate_.RetryStop();
+                    return false;
+                }
+            }
+            if (input_detection_gate_.ShouldCreateWork(message, process_accepts_work, input_station_occupied)) {
+                const auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(message);
+                if (sensor == nullptr) {
+                    input_detection_gate_.Retry();
+                    return false;
+                }
+                const mqtt::MqttMessage box_detected{
+                    .protocol_version = message.protocol_version,
+                    .message_id = "SENSOR-BOX-" + message.message_id,
+                    .message_type = mqtt::MessageType::kBoxDetected,
+                    .source_id = message.source_id,
+                    .timestamp = message.timestamp,
+                    .data = mqtt::BoxDetectedPayload{
+                        .detected = true,
+                        .image_name = "ultrasonic-sensor-" + std::to_string(sensor->sensor_id),
+                    },
+                };
+                const auto encoded = mqtt::SerializeMessage(box_detected);
+                if (!encoded.IsSuccess() || !handler_->Handle(mqtt::DeviceEventTopic(message.source_id), encoded.payload,
+                                                               kTimestamp)) {
+                    input_detection_gate_.Retry();
+                    return false;
+                }
+            }
+            return HandleProcessMessage(message);
+        });
         handler_->SetWorkCreatedHandler([this](std::string_view device_id, std::string_view work_id) {
             work_id_ = work_id;
             const mqtt::MqttMessage created{
@@ -424,6 +480,7 @@ private:
     central_server::DeviceManager device_manager_;
     central_server::CommandManager command_manager_;
     central_server::ProcessOrchestrator orchestrator_;
+    central_server::InputDetectionGate input_detection_gate_{ std::string(kInputId) };
     central_server::SortingDetectionGate sorting_detection_gate_{ std::string(kSortingId) };
     central_server::ProcessCommandTracker process_command_tracker_;
     std::unique_ptr<central_server::MqttHandler> handler_;
@@ -438,6 +495,15 @@ void AdvanceToGripperRequested(ProcessIntegrationHarness& harness) {
     assert(mqtt::IsValidUuid(harness.WorkId()));
     assert(harness.DetectPosition());
     assert(harness.DetectBarcode());
+}
+
+void TestInputSensorCreatesWorkWithoutVisionBoxEvent() {
+    ProcessIntegrationHarness harness(false);
+    assert(harness.DetectInputSensor());
+    assert(harness.DetectPosition());
+    assert(harness.DetectBarcode());
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
+    assert(!harness.HasMessage(mqtt::MessageType::kBoxDetected, kVisionId));
 }
 
 void AdvanceToGripperTransfer(ProcessIntegrationHarness& harness) {
@@ -944,6 +1010,7 @@ void TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold() {
 }  // namespace
 
 int main() {
+    TestInputSensorCreatesWorkWithoutVisionBoxEvent();
     for (const bool line_tracer_enabled : std::to_array({ true, false })) {
         TestAutomaticProcessCompletes(line_tracer_enabled);
     }
