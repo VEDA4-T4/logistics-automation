@@ -846,21 +846,7 @@ int main(const int argc, char* argv[]) {
             if (!control_state.IsOperational()) {
                 return;
             }
-            auto box_event = mqtt_workflow.Observe(
-                std::move(observation),
-                logistics::device::MakeMessageId(device_id, mqtt_session_id,
-                                                 mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
-                logistics::device::CurrentIso8601Timestamp());
-            if (box_event.has_value()) {
-                pending_capture.Reset();
-                if (mqtt_client.PublishEvent(*box_event)) {
-                    device_status->SetCurrentState("AWAITING_WORK_ID");
-                } else {
-                    mqtt_workflow.CancelPendingWork();
-                    device_status->SetCurrentState("MQTT_DISCONNECTED");
-                    device_status->SetErrorCode(std::nullopt);
-                }
-            }
+            mqtt_workflow.Observe(std::move(observation));
             pending_capture.Observe(frame, detection_result.box.has_value(), !detection_result.barcodes.empty(),
                                     mqtt_workflow.HasPendingBarcode() || mqtt_workflow.NeedsBarcodeFallback());
         });
