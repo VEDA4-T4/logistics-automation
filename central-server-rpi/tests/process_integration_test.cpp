@@ -169,6 +169,19 @@ public:
                                                                  }));
     }
 
+    [[nodiscard]] bool FailBarcode() {
+        return Handle(mqtt::DeviceEventTopic(kVisionId), Message(mqtt::MessageType::kBarcodeDetected, kVisionId,
+                                                                 mqtt::BarcodeDetectedPayload{
+                                                                     .work_id = work_id_,
+                                                                     .recognition_status = "FAILED",
+                                                                     .barcode = {},
+                                                                     .confidence = std::nullopt,
+                                                                     .message = std::string("barcode not recognized"),
+                                                                     .error_code = std::string("ERR-VISION-BARCODE"),
+                                                                     .failure_stage = std::string("BARCODE_DETECTION"),
+                                                                 }));
+    }
+
     [[nodiscard]] bool ReportStatus(std::string_view device_id, std::string state) {
         return Handle(mqtt::DeviceStatusTopic(device_id), Message(mqtt::MessageType::kDeviceStatus, device_id,
                                                                   mqtt::DeviceStatusPayload{
@@ -504,6 +517,14 @@ void TestInputSensorCreatesWorkWithoutVisionBoxEvent() {
     assert(harness.DetectBarcode());
     assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
     assert(!harness.HasMessage(mqtt::MessageType::kBoxDetected, kVisionId));
+}
+
+void TestVisionBarcodeFailureDoesNotEmergencyStopProcess() {
+    ProcessIntegrationHarness harness(false);
+    assert(harness.DetectInputSensor());
+    assert(harness.FailBarcode());
+    assert(harness.Orchestrator().StateMachine().ActiveWorks().empty());
+    assert(harness.Orchestrator().StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
 }
 
 void AdvanceToGripperTransfer(ProcessIntegrationHarness& harness) {
@@ -1011,6 +1032,7 @@ void TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold() {
 
 int main() {
     TestInputSensorCreatesWorkWithoutVisionBoxEvent();
+    TestVisionBarcodeFailureDoesNotEmergencyStopProcess();
     for (const bool line_tracer_enabled : std::to_array({ true, false })) {
         TestAutomaticProcessCompletes(line_tracer_enabled);
     }
