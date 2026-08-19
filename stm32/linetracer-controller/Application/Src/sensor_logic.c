@@ -353,6 +353,21 @@ void SensorLogic_Init(sensor_logic_context_t* context, uint32_t now_ms) {
     }
 }
 
+void SensorLogic_ResetLineTrackingHistory(sensor_logic_context_t* context) {
+    if (context == NULL) {
+        return;
+    }
+
+    /* Keep debounced DO and marker state, but discard steering history from the completed pivot. */
+    context->line_analog_error = 0;
+    context->line_last_valid_error = 0;
+    context->line_last_valid_at_ms = 0U;
+    context->line_analog_initialized = 0U;
+    context->line_analog_signal_valid = 0U;
+    context->line_last_valid_error_valid = 0U;
+    context->snapshot.line_error = 0;
+}
+
 void SensorLogic_StartFsrBaselineCapture(sensor_logic_context_t* context, sensor_fsr_baseline_mode_t mode) {
     if (context == NULL) {
         return;
@@ -420,7 +435,9 @@ void SensorLogic_UpdateLine(sensor_logic_context_t* context, uint8_t line_left, 
     if (context->marker_state == SENSOR_MARKER_BLACK_CANDIDATE) {
         black_duration_ms = (uint32_t)(now_ms - context->marker_black_since_ms);
         context->snapshot.marker_active = 0U;
+        context->snapshot.marker_cleared_at_ms = now_ms;
         context->diagnostics.marker_active = 0U;
+        update->event_flags |= APP_SENSOR_EVENT_MARKER_CLEARED;
 
         if ((black_duration_ms >= SENSOR_MARKER_MIN_BLACK_MS) && (black_duration_ms <= SENSOR_MARKER_MAX_BLACK_MS)) {
             SensorLogic_AccumulateMarkerStripe(context, black_duration_ms, now_ms);

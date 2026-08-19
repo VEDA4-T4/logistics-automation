@@ -15,6 +15,9 @@ void StartSensorTask(void* argument);
 /* Non-blocking access to the most recent normalized sensor snapshot. */
 bool SensorTask_GetLatest(app_sensor_snapshot_t* snapshot);
 
+/* Drop line-follow history after a pivot without resetting marker or safety state. */
+void SensorTask_RequestLineTrackingReset(void);
+
 typedef enum {
     SENSOR_TASK_FSR_BASELINE_FOR_LOAD_ON = 0,
     SENSOR_TASK_FSR_BASELINE_FOR_LOAD_OFF

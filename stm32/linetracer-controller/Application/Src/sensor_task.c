@@ -126,6 +126,7 @@ static volatile uint8_t s_latest_marker_event_valid;
 static volatile uint32_t s_marker_event_count;
 static volatile uint8_t s_fsr_baseline_capture_requested;
 static volatile sensor_task_fsr_baseline_mode_t s_fsr_baseline_capture_mode;
+static volatile uint8_t s_line_tracking_reset_requested;
 
 static uint8_t TimeElapsed(uint32_t now_ms, uint32_t since_ms, uint32_t duration_ms) {
     return ((uint32_t)(now_ms - since_ms) >= duration_ms) ? 1U : 0U;
@@ -190,6 +191,10 @@ bool SensorTask_GetLatest(app_sensor_snapshot_t* snapshot) {
     *snapshot = s_latest_snapshot;
     ExitShortCriticalSection(primask);
     return true;
+}
+
+void SensorTask_RequestLineTrackingReset(void) {
+    s_line_tracking_reset_requested = 1U;
 }
 
 void SensorTask_RequestFsrBaselineCapture(sensor_task_fsr_baseline_mode_t mode) {
@@ -322,7 +327,7 @@ static void PublishSnapshot(sensor_task_context_t* context, uint32_t new_event_f
         return;
     }
 
-    /* Latest-state queue: discard one stale state, but retain all event bits. */
+    /* Latest-state queue: discard one stale state, but retain event bits and their timestamps. */
     if (osMessageQueueGet(sensorSnapshotQueue, &discarded, NULL, 0U) == osOK) {
         (void)SensorEventLatch_Pend(&context->event_latch, discarded.event_flags);
     }
@@ -571,6 +576,7 @@ static void InitializeContext(sensor_task_context_t* context, uint32_t now_ms) {
     s_latest_snapshot_valid = 0U;
     s_latest_marker_event_valid = 0U;
     s_marker_event_count = 0U;
+    s_line_tracking_reset_requested = 0U;
 
     SensorLogic_Init(&context->logic, now_ms);
     SensorEventLatch_Init(&context->event_latch);
@@ -608,6 +614,11 @@ void StartSensorTask(void* argument) {
     for (;;) {
         now_ms = osKernelGetTickCount();
         (void)memset(&update, 0, sizeof(update));
+
+        if (s_line_tracking_reset_requested != 0U) {
+            SensorLogic_ResetLineTrackingHistory(&context.logic);
+            s_line_tracking_reset_requested = 0U;
+        }
 
         if (s_fsr_baseline_capture_requested != 0U) {
             SensorLogic_StartFsrBaselineCapture(&context.logic,

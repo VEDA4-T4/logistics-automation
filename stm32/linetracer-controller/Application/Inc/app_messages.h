@@ -65,7 +65,8 @@ typedef enum {
     APP_SENSOR_EVENT_LOAD_OFF = (1U << 4U),
     APP_SENSOR_EVENT_OVERLOAD = (1U << 5U),
     APP_SENSOR_EVENT_OBSTACLE = (1U << 6U),
-    APP_SENSOR_EVENT_FSR_BASELINE_READY = (1U << 7U)
+    APP_SENSOR_EVENT_FSR_BASELINE_READY = (1U << 7U),
+    APP_SENSOR_EVENT_MARKER_CLEARED = (1U << 8U)
 } app_sensor_event_flags_t;
 
 /*
@@ -86,6 +87,7 @@ typedef struct {
     uint32_t sampled_at_ms;
     uint32_t event_flags;
     uint32_t marker_detected_at_ms;
+    uint32_t marker_cleared_at_ms;
     uint16_t fsr_raw;
     uint16_t line_left_raw;
     uint16_t line_center_raw;

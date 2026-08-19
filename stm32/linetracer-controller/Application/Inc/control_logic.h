@@ -27,12 +27,15 @@ extern "C" {
 
  * * forward long enough to place the axle near the intersection centre before beginning the pivot turn.
  */
-#define CONTROL_JUNCTION_CENTER_ADVANCE_MS 300U
+#define CONTROL_JUNCTION_CENTER_ADVANCE_MS 450U
 #define CONTROL_JUNCTION_CROSS_TIMEOUT_MS 1000U
 #define CONTROL_JUNCTION_CROSS_CLEAR_MS 50U
-#define CONTROL_TURN_SOURCE_CLEAR_MS 60U
+#define CONTROL_C_JUNCTION_CROSS_CLEAR_MS 20U
+#define CONTROL_TURN_SOURCE_CLEAR_MS 20U
 #define CONTROL_TURN_TARGET_CENTERED_MS 10U
+#define CONTROL_TURN_REACQUIRE_CENTERED_MS 20U
 #define CONTROL_JUNCTION_EXIT_GUARD_MS 100U
+#define CONTROL_MARKER_APPROACH_HOLD_MS 20U
 
 #if ((CONTROL_ROUTE_TIMEOUTS_ENABLED != 0U) && (CONTROL_ROUTE_TIMEOUTS_ENABLED != 1U))
 #error "CONTROL_ROUTE_TIMEOUTS_ENABLED must be either 0 or 1"
@@ -50,13 +53,28 @@ extern "C" {
 #error "Control marker timeout must be greater than zero"
 #endif
 
+#if CONTROL_MARKER_APPROACH_HOLD_MS == 0U
+#error "Control marker approach hold time must be greater than zero"
+#endif
+
+#if CONTROL_TURN_REACQUIRE_CENTERED_MS == 0U
+#error "Control turn reacquisition time must be greater than zero"
+#endif
+
 typedef enum {
     CONTROL_JUNCTION_IDLE = 0,
     CONTROL_JUNCTION_APPROACH_CENTER,
     CONTROL_JUNCTION_CROSS_STRAIGHT,
     CONTROL_JUNCTION_TURN_CLEAR_SOURCE,
-    CONTROL_JUNCTION_TURN_SEARCH_TARGET
+    CONTROL_JUNCTION_TURN_SEARCH_TARGET,
+    CONTROL_JUNCTION_TURN_REACQUIRE
 } control_junction_phase_t;
+
+typedef enum {
+    CONTROL_MARKER_APPROACH_IDLE = 0,
+    CONTROL_MARKER_APPROACH_HOLD,
+    CONTROL_MARKER_APPROACH_REJECTED
+} control_marker_approach_state_t;
 
 typedef struct {
     linetracer_control_state_t state;
@@ -74,9 +92,12 @@ typedef struct {
     uint32_t junction_candidate_since_ms;
     uint32_t junction_guard_until_ms;
     uint32_t delayed_marker_ignore_before_ms;
+    uint32_t marker_approach_started_at_ms;
+    uint32_t c_marker_rearm_clear_since_ms;
     uint16_t active_job_id;
     app_marker_code_t last_marker_code;
     control_junction_phase_t junction_phase;
+    control_marker_approach_state_t marker_approach_state;
     route_action_t junction_action;
     uint8_t route_active;
     uint8_t resume_valid;
@@ -89,6 +110,8 @@ typedef struct {
     uint8_t junction_target_edge_seen;
     uint8_t junction_guard_active;
     uint8_t delayed_marker_ignore_valid;
+    uint8_t c_marker_rearm_pending;
+    uint8_t c_marker_rearm_clear_active;
     /* Set after an unload completes; the next assigned job must turn around before departure. */
     uint8_t departure_turn_required;
     /* A pickup must observe EMPTY after arrival before a new load can start the return. */
@@ -145,6 +168,8 @@ uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
 uint8_t ControlLogic_IsTurning(const control_context_t* context);
 uint8_t ControlLogic_IsTurnAroundActive(const control_context_t* context);
 uint8_t ControlLogic_JunctionManeuverActive(const control_context_t* context);
+uint8_t ControlLogic_JunctionReacquireActive(const control_context_t* context);
+uint8_t ControlLogic_MarkerApproachHoldActive(const control_context_t* context);
 uint8_t ControlLogic_StartPendingManeuver(control_context_t* context, uint32_t now_ms);
 route_action_t ControlLogic_JunctionMotorAction(const control_context_t* context);
 uint8_t ControlLogic_ShouldIgnoreMarker(const control_context_t* context, app_marker_code_t marker_code,

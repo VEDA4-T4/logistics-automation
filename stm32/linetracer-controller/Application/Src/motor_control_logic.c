@@ -64,8 +64,10 @@ uint8_t MotorControlLogic_ComputeDifferentialForward(uint16_t left_base_pwm, uin
 
     /*
      * Slow the detected-line side and boost the opposite wheel in proportion
-     * to the PID correction. Capping only the fast-wheel boost keeps small AO
-     * errors smooth while a confirmed outer DO hit receives full steering
+     * to the PID correction.
+     * Capping only the fast-wheel boost keeps small AO
+     * errors smooth while a confirmed outer DO hit receives
+     * full steering
      * authority immediately.
      */
     if (correction > 0) {
@@ -134,7 +136,8 @@ uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output
             return 1U;
 
         case ROUTE_ACTION_TURN_RIGHT:
-            MotorControlLogic_MakePivot(MOTOR_DIRECTION_FORWARD, MOTOR_DIRECTION_REVERSE, MOTOR_CONTROL_LEFT_PIVOT_PWM,
+            MotorControlLogic_MakePivot(MOTOR_DIRECTION_FORWARD, MOTOR_DIRECTION_REVERSE,
+                                        MOTOR_CONTROL_LEFT_PIVOT_PWM + MOTOR_CONTROL_RIGHT_TURN_LEFT_BOOST_PWM,
                                         MOTOR_CONTROL_RIGHT_PIVOT_PWM, output);
             return 1U;
 

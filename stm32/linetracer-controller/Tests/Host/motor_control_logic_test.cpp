@@ -46,8 +46,7 @@ void TestLineFollow() {
                   MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 
     assert(MotorControlLogic_ComputeLineFollow(LINETRACER_LINE_LEFT_ONLY, &output) != 0U);
-    AssertForward(output,
-                  MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_LEFT_TRIM),
+    AssertForward(output, MotorControlLogic_ClampPwm(MOTOR_CONTROL_TRACKING_MIN_PWM + MOTOR_CONTROL_LEFT_TRIM),
                   MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_BASE_PWM +
                                              MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
 
@@ -131,6 +130,10 @@ void TestRouteActions() {
     assert(MotorControlLogic_ComputeRouteAction(ROUTE_ACTION_TURN_RIGHT, &output) != 0U);
     assert(output.left_direction == MOTOR_DIRECTION_FORWARD);
     assert(output.right_direction == MOTOR_DIRECTION_REVERSE);
+    assert(output.left_pwm ==
+           MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_PIVOT_PWM + MOTOR_CONTROL_RIGHT_TURN_LEFT_BOOST_PWM +
+                                      MOTOR_CONTROL_LEFT_TRIM));
+    assert(output.right_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_PIVOT_PWM + MOTOR_CONTROL_RIGHT_TRIM));
     assert(output.standby != 0U);
 
     assert(MotorControlLogic_ComputeRouteAction(ROUTE_ACTION_TURN_AROUND, &output) != 0U);

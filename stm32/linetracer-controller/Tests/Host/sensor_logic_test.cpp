@@ -142,6 +142,8 @@ void TestLineNormalizationAndDebounce() {
     update = UpdateStableLine(context, 0U, 0U, 210U);
     CHECK_TRUE(context.snapshot.marker_active == 0U);
     CHECK_TRUE(context.diagnostics.marker_active == 0U);
+    CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_MARKER_CLEARED) != 0U);
+    CHECK_TRUE(context.snapshot.marker_cleared_at_ms == 210U + ((APP_TIMING_LINE_DEBOUNCE_SAMPLES - 1U) * 10U));
     CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_CENTERED);
     CHECK_TRUE((update.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U);
 }
@@ -376,6 +378,32 @@ void TestWhiteGapUsesRecentDirectionOnly() {
 
     context.line_last_valid_at_ms = 0U;
     (void)UpdateLineWithCenter(context, 0U, 0U, 0U, SENSOR_LINE_LOST_RECOVERY_MS);
+    CHECK_TRUE(context.snapshot.line_error == 0);
+}
+
+void TestLineTrackingResetDropsPivotHistory() {
+    sensor_logic_context_t context{};
+
+    SensorLogic_Init(&context, 0U);
+    SensorLogic_UpdateLineAnalogRawWithCenter(&context, SENSOR_LINE_LEFT_BLACK_RAW, SENSOR_LINE_CENTER_WHITE_RAW,
+                                              SENSOR_LINE_RIGHT_WHITE_RAW);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 0U);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 10U);
+    (void)UpdateLineWithCenter(context, 1U, 0U, 0U, 20U);
+    CHECK_TRUE(context.line_last_valid_error_valid != 0U);
+    CHECK_TRUE(context.line_last_valid_error > 0);
+
+    SensorLogic_ResetLineTrackingHistory(&context);
+    CHECK_TRUE(context.line_last_valid_error_valid == 0U);
+    CHECK_TRUE(context.line_analog_initialized == 0U);
+    CHECK_TRUE(context.snapshot.line_error == 0);
+
+    context.line_analog_signal_valid = 0U;
+    context.line_analog_error = 0;
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 30U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 40U);
+    (void)UpdateLineWithCenter(context, 0U, 0U, 0U, 50U);
+    CHECK_TRUE(context.snapshot.line_state == LINETRACER_LINE_WHITE_GAP);
     CHECK_TRUE(context.snapshot.line_error == 0);
 }
 
@@ -736,6 +764,7 @@ int main() {
     TestAnalogLineErrorDeadband();
     TestDigitalLineStateOwnsPidDirection();
     TestWhiteGapUsesRecentDirectionOnly();
+    TestLineTrackingResetDropsPivotHistory();
     TestMarkerGroupsUseSingleRouteCode();
     TestInvalidMarkerWidthAndNoise();
     TestFsrStabilityAndHysteresis();

@@ -15,8 +15,108 @@ static uint8_t ControlLogic_HasActiveJob(const control_context_t* context) {
                : 0U;
 }
 
+static uint8_t ControlLogic_IsNinetyDegreeTurn(route_action_t action) {
+    return (action == ROUTE_ACTION_TURN_LEFT || action == ROUTE_ACTION_TURN_RIGHT) ? 1U : 0U;
+}
+
 static uint8_t ControlLogic_TimeReached(uint32_t now_ms, uint32_t deadline_ms) {
     return ((int32_t)(now_ms - deadline_ms) >= 0) ? 1U : 0U;
+}
+
+static void ControlLogic_ResetMarkerApproach(control_context_t* context) {
+    if (context == NULL) {
+        return;
+    }
+
+    context->marker_approach_started_at_ms = 0U;
+    context->marker_approach_state = CONTROL_MARKER_APPROACH_IDLE;
+}
+
+static void ControlLogic_ResetCMarkerRearm(control_context_t* context) {
+    if (context == NULL) {
+        return;
+    }
+
+    context->c_marker_rearm_clear_since_ms = 0U;
+    context->c_marker_rearm_pending = 0U;
+    context->c_marker_rearm_clear_active = 0U;
+}
+
+static void ControlLogic_StartCMarkerRearm(control_context_t* context, uint32_t now_ms) {
+    if (context == NULL) {
+        return;
+    }
+
+    context->c_marker_rearm_clear_since_ms = now_ms;
+    context->c_marker_rearm_pending = 1U;
+    context->c_marker_rearm_clear_active = 0U;
+    ControlLogic_ResetMarkerApproach(context);
+}
+
+static uint8_t ControlLogic_UpdateCMarkerRearm(control_context_t* context, uint8_t both_white, uint32_t now_ms) {
+    if (context == NULL || context->c_marker_rearm_pending == 0U) {
+        return 0U;
+    }
+
+    ControlLogic_ResetMarkerApproach(context);
+    if (both_white == 0U) {
+        context->c_marker_rearm_clear_since_ms = now_ms;
+        context->c_marker_rearm_clear_active = 0U;
+        return 1U;
+    }
+
+    if (context->c_marker_rearm_clear_active == 0U) {
+        context->c_marker_rearm_clear_since_ms = now_ms;
+        context->c_marker_rearm_clear_active = 1U;
+        return 1U;
+    }
+
+    if ((uint32_t)(now_ms - context->c_marker_rearm_clear_since_ms) >= CONTROL_C_JUNCTION_CROSS_CLEAR_MS) {
+        ControlLogic_ResetCMarkerRearm(context);
+    }
+
+    return 1U;
+}
+
+static uint8_t ControlLogic_StateAllowsMarkerApproach(linetracer_control_state_t state) {
+    switch (state) {
+        case LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION:
+        case LINETRACER_CONTROL_MOVING_ON_COMMON_LINE:
+        case LINETRACER_CONTROL_MOVING_TO_PICKUP:
+        case LINETRACER_CONTROL_MOVING_TO_DEST:
+            return 1U;
+
+        default:
+            return 0U;
+    }
+}
+
+static void ControlLogic_UpdateMarkerApproach(control_context_t* context, uint8_t line_left, uint8_t line_right,
+                                              uint8_t junction_guard_active, uint32_t now_ms) {
+    if (context == NULL || context->junction_phase != CONTROL_JUNCTION_IDLE || junction_guard_active != 0U ||
+        ControlLogic_StateAllowsMarkerApproach(context->state) == 0U ||
+        ControlLogic_ExpectedMarkerCode(context) != APP_MARKER_JUNCTION) {
+        ControlLogic_ResetMarkerApproach(context);
+        return;
+    }
+
+    /* Equal outer inputs are either normal tracking (00) or a confirmed full-width marker (11). */
+    if (line_left == line_right) {
+        ControlLogic_ResetMarkerApproach(context);
+        return;
+    }
+
+    if (context->marker_approach_state == CONTROL_MARKER_APPROACH_IDLE) {
+        context->marker_approach_started_at_ms = now_ms;
+        context->marker_approach_state = CONTROL_MARKER_APPROACH_HOLD;
+        return;
+    }
+
+    if (context->marker_approach_state == CONTROL_MARKER_APPROACH_HOLD &&
+        (uint32_t)(now_ms - context->marker_approach_started_at_ms) >= CONTROL_MARKER_APPROACH_HOLD_MS) {
+        /* No full-width marker followed within the short window: this is a genuine line error. */
+        context->marker_approach_state = CONTROL_MARKER_APPROACH_REJECTED;
+    }
 }
 
 static void ControlLogic_SetJunctionPhase(control_context_t* context, control_junction_phase_t phase, uint32_t now_ms) {
@@ -39,14 +139,19 @@ static void ControlLogic_ResetJunctionManeuver(control_context_t* context) {
     context->junction_candidate_since_ms = 0U;
     context->junction_candidate_active = 0U;
     context->junction_target_edge_seen = 0U;
+    ControlLogic_ResetMarkerApproach(context);
+}
+
+static void ControlLogic_RejectDelayedMarkersThrough(control_context_t* context, uint32_t now_ms) {
+    /* Reject stripe events detected before this maneuver completed, even if they are delivered later. */
+    context->delayed_marker_ignore_before_ms = now_ms;
+    context->delayed_marker_ignore_valid = 1U;
 }
 
 static void ControlLogic_StartJunctionGuard(control_context_t* context, uint32_t now_ms) {
     context->junction_guard_until_ms = now_ms + CONTROL_JUNCTION_EXIT_GUARD_MS;
     context->junction_guard_active = 1U;
-    /* Reject stripe events detected before this maneuver completed, even if they are delivered later. */
-    context->delayed_marker_ignore_before_ms = now_ms;
-    context->delayed_marker_ignore_valid = 1U;
+    ControlLogic_RejectDelayedMarkersThrough(context, now_ms);
 }
 
 static uint8_t ControlLogic_JunctionGuardActive(control_context_t* context, uint32_t now_ms) {
@@ -91,10 +196,10 @@ static uint8_t ControlLogic_StartJunctionManeuver(control_context_t* context, ro
 
         case ROUTE_ACTION_TURN_LEFT:
         case ROUTE_ACTION_TURN_RIGHT:
-            ControlLogic_SetJunctionPhase(
-                context, (from_junction != 0U) ? CONTROL_JUNCTION_APPROACH_CENTER : CONTROL_JUNCTION_TURN_CLEAR_SOURCE,
-                now_ms);
-            if (from_junction == 0U) {
+            if (from_junction != 0U) {
+                ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_APPROACH_CENTER, now_ms);
+            } else {
+                ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_CLEAR_SOURCE, now_ms);
                 context->junction_turn_started_at_ms = now_ms;
             }
             break;
@@ -110,6 +215,7 @@ static uint8_t ControlLogic_StartJunctionManeuver(control_context_t* context, ro
 
     context->junction_action = action;
     context->junction_candidate_active = 0U;
+    ControlLogic_ResetMarkerApproach(context);
     return 1U;
 }
 
@@ -290,6 +396,14 @@ uint8_t ControlLogic_JunctionManeuverActive(const control_context_t* context) {
     return (context != NULL && context->junction_phase != CONTROL_JUNCTION_IDLE) ? 1U : 0U;
 }
 
+uint8_t ControlLogic_JunctionReacquireActive(const control_context_t* context) {
+    return (context != NULL && context->junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE) ? 1U : 0U;
+}
+
+uint8_t ControlLogic_MarkerApproachHoldActive(const control_context_t* context) {
+    return (context != NULL && context->marker_approach_state == CONTROL_MARKER_APPROACH_HOLD) ? 1U : 0U;
+}
+
 uint8_t ControlLogic_StartPendingManeuver(control_context_t* context, uint32_t now_ms) {
     if (context == NULL || ControlLogic_HasActiveJob(context) == 0U ||
         ControlLogic_JunctionManeuverActive(context) != 0U || ControlLogic_IsTurning(context) == 0U) {
@@ -302,7 +416,15 @@ uint8_t ControlLogic_StartPendingManeuver(control_context_t* context, uint32_t n
         return 0U;
     }
 
-    return ControlLogic_StartJunctionManeuver(context, context->pending_route_action, 0U, now_ms);
+    /*
+     * A pending 90-degree action can come from the delayed marker-event path.
+     * It still originated at a
+     * junction, so retain the same centre-advance
+     * phase used by an immediate 101/111 line sample. U-turns remain
+     * immediate.
+     */
+    return ControlLogic_StartJunctionManeuver(context, context->pending_route_action,
+                                              ControlLogic_IsNinetyDegreeTurn(context->pending_route_action), now_ms);
 }
 
 route_action_t ControlLogic_JunctionMotorAction(const control_context_t* context) {
@@ -319,6 +441,9 @@ route_action_t ControlLogic_JunctionMotorAction(const control_context_t* context
         case CONTROL_JUNCTION_TURN_SEARCH_TARGET:
             return context->junction_action;
 
+        case CONTROL_JUNCTION_TURN_REACQUIRE:
+            return ROUTE_ACTION_GO_STRAIGHT;
+
         case CONTROL_JUNCTION_IDLE:
         default:
             return ROUTE_ACTION_NONE;
@@ -327,11 +452,17 @@ route_action_t ControlLogic_JunctionMotorAction(const control_context_t* context
 
 uint8_t ControlLogic_ShouldIgnoreMarker(const control_context_t* context, app_marker_code_t marker_code,
                                         uint32_t marker_detected_at_ms, uint32_t now_ms) {
+    (void)marker_code;
+
     if (context == NULL) {
         return 1U;
     }
 
     if (ControlLogic_JunctionManeuverActive(context) != 0U) {
+        return 1U;
+    }
+
+    if (context->c_marker_rearm_pending != 0U) {
         return 1U;
     }
 
@@ -404,6 +535,7 @@ static void ControlLogic_RestartResumeTimers(control_context_t* context, uint32_
     context->junction_condition_active = 0U;
     context->junction_candidate_since_ms = now_ms;
     context->junction_candidate_active = 0U;
+    ControlLogic_ResetMarkerApproach(context);
 
     if (ControlLogic_StateExpectsMarker(context->state) != 0U) {
         context->marker_wait_started_at_ms = now_ms;
@@ -539,6 +671,7 @@ void ControlLogic_Init(control_context_t* context, uint32_t now_ms) {
     context->marker_wait_started_at_ms = now_ms;
     context->last_marker_detected_at_ms = 0U;
     context->junction_guard_until_ms = 0U;
+    ControlLogic_ResetCMarkerRearm(context);
     context->active_job_id = UART_LINETRACER_JOB_ID_NONE;
     context->last_marker_code = APP_MARKER_NONE;
     context->route_active = 0U;
@@ -574,6 +707,7 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
             context->safety_error_code = UART_ERROR_SENSOR;
             context->junction_condition_active = 0U;
             context->junction_candidate_active = 0U;
+            ControlLogic_ResetMarkerApproach(context);
             return ControlLogic_Transition(context, LINETRACER_CONTROL_OBSTACLE_STOP, now_ms);
 
         case APP_CONTROL_SAFETY_OBSTACLE_CLEARED:
@@ -597,6 +731,7 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
             return 1U;
 
         case APP_CONTROL_SAFETY_LATCHED:
+            ControlLogic_ResetMarkerApproach(context);
             reason = event->reason;
             if (reason == LINETRACER_STOP_REASON_NONE) {
                 reason = context->stop_reason;
@@ -778,6 +913,8 @@ static void ControlLogic_HandleSetPosition(control_context_t* context, const app
     }
 
     context->current_position = command->position;
+    ControlLogic_ResetMarkerApproach(context);
+    ControlLogic_ResetCMarkerRearm(context);
     /* INITIALIZE/SET_CURRENT_POSITION stages the vehicle in its requested initial heading. */
     context->departure_turn_required = 0U;
     if (ControlLogic_Transition(context, LINETRACER_CONTROL_WAITING_AT_DEST, now_ms) == 0U) {
@@ -813,6 +950,8 @@ static void ControlLogic_HandleAssignRoute(control_context_t* context, const app
     context->last_marker_code = APP_MARKER_NONE;
     context->last_marker_detected_at_ms = 0U;
     context->last_marker_valid = 0U;
+    ControlLogic_ResetMarkerApproach(context);
+    ControlLogic_ResetCMarkerRearm(context);
 
     if (RoutePlanner_Create(context->current_position, context->active_route, &context->route_plan) == 0U) {
         context->active_job_id = UART_LINETRACER_JOB_ID_NONE;
@@ -1081,6 +1220,7 @@ static route_action_t ControlLogic_RouteError(control_context_t* context, linetr
     context->resume_valid = 0U;
     context->pending_route_action = action;
     ControlLogic_ResetJunctionManeuver(context);
+    ControlLogic_ResetCMarkerRearm(context);
     (void)ControlLogic_Transition(context, LINETRACER_CONTROL_ERROR, now_ms);
     return action;
 }
@@ -1250,11 +1390,15 @@ static uint8_t ControlLogic_TargetEdgeDetected(const control_context_t* context,
     }
 
     if (context->junction_action == ROUTE_ACTION_TURN_LEFT) {
-        /* Accept 100, 110, or 010 so a fast left turn cannot skip a narrow target edge. */
-        return (line_right == 0U && (line_left != 0U || line_center != 0U)) ? 1U : 0U;
+        /* A directional outer edge is required before PID can own the new line. */
+        return (line_left != 0U && line_right == 0U) ? 1U : 0U;
     }
 
-    /* Accept 001, 011, or 010 so a fast right turn/U-turn cannot skip a narrow target edge. */
+    if (context->junction_action == ROUTE_ACTION_TURN_RIGHT) {
+        return (line_left == 0U && line_right != 0U) ? 1U : 0U;
+    }
+
+    /* Preserve the established U-turn target search. */
     return (line_left == 0U && (line_center != 0U || line_right != 0U)) ? 1U : 0U;
 }
 
@@ -1296,12 +1440,19 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
     uint8_t all_white;
     uint8_t both_black;
     uint8_t both_white;
+    uint8_t crossing_clear;
     uint8_t junction_guard_active;
     uint8_t target_aligned;
+    uint32_t crossing_clear_ms;
     linetracer_control_state_t previous_state;
 
     result.action = ROUTE_ACTION_NONE;
-    if (context == NULL || ControlLogic_HasActiveJob(context) == 0U || context->safety_latched != 0U) {
+    if (context == NULL) {
+        return result;
+    }
+
+    if (ControlLogic_HasActiveJob(context) == 0U || context->safety_latched != 0U) {
+        ControlLogic_ResetMarkerApproach(context);
         return result;
     }
 
@@ -1313,7 +1464,13 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
     all_white = (both_white != 0U && line_center == 0U) ? 1U : 0U;
 
     if (context->junction_phase == CONTROL_JUNCTION_IDLE) {
+        if (ControlLogic_UpdateCMarkerRearm(context, both_white, now_ms) != 0U) {
+            context->junction_candidate_active = 0U;
+            return result;
+        }
+
         junction_guard_active = ControlLogic_JunctionGuardActive(context, now_ms);
+        ControlLogic_UpdateMarkerApproach(context, line_left, line_right, junction_guard_active, now_ms);
         if (junction_guard_active != 0U || ControlLogic_ExpectedMarkerCode(context) != APP_MARKER_JUNCTION) {
             context->junction_candidate_active = 0U;
             return result;
@@ -1353,6 +1510,8 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
         return result;
     }
 
+    ControlLogic_ResetMarkerApproach(context);
+
     switch (context->junction_phase) {
         case CONTROL_JUNCTION_APPROACH_CENTER:
             if ((uint32_t)(now_ms - context->junction_phase_started_at_ms) >= CONTROL_JUNCTION_CENTER_ADVANCE_MS) {
@@ -1362,38 +1521,65 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
             break;
 
         case CONTROL_JUNCTION_CROSS_STRAIGHT:
-            /*
-             * A transverse marker is clear as soon as it no longer covers both
-             * outer
-             * sensors. Requiring 000 here can wedge the maneuver forever
-             * when normal PID correction
-             * resumes as 100/110 or 001/011.
-             */
-            if (ControlLogic_ConditionStable(context, (both_black == 0U) ? 1U : 0U, now_ms,
-                                             CONTROL_JUNCTION_CROSS_CLEAR_MS) != 0U) {
+            /* General crossings clear after both-black ends. */
+            /* C resumes PID at the first marker edge and rearms the next marker separately. */
+            if (context->route_plan.phase == ROUTE_PHASE_TO_C_PICKUP_TURN) {
+                crossing_clear = (both_black == 0U) ? 1U : 0U;
+                crossing_clear_ms = 0U;
+            } else {
+                crossing_clear = (both_black == 0U) ? 1U : 0U;
+                crossing_clear_ms = CONTROL_JUNCTION_CROSS_CLEAR_MS;
+            }
+
+            if (ControlLogic_ConditionStable(context, crossing_clear, now_ms, crossing_clear_ms) != 0U) {
                 ControlLogic_ResetJunctionManeuver(context);
-                ControlLogic_StartJunctionGuard(context, now_ms);
+                if (context->route_plan.phase == ROUTE_PHASE_TO_C_PICKUP_TURN &&
+                    context->route_plan.expected_marker == ROUTE_MARKER_C_PICKUP_TURN) {
+                    /* C's next marker is nearby, so skip only the post-clear time guard. */
+                    /* The timestamp cutoff still rejects delayed first-stripe events. */
+                    context->junction_guard_active = 0U;
+                    context->junction_guard_until_ms = 0U;
+                    ControlLogic_StartCMarkerRearm(context, now_ms);
+                    ControlLogic_RejectDelayedMarkersThrough(context, now_ms);
+                } else {
+                    ControlLogic_StartJunctionGuard(context, now_ms);
+                }
                 result.maneuver_completed = 1U;
             }
             break;
 
         case CONTROL_JUNCTION_TURN_CLEAR_SOURCE:
-            /*
-             * A clockwise U-turn does not wait for a stable 000 interval. Once the
-             * centre
-             * and right sensors have left the source line (000 or 100), search
-             * continuously. Regular
-             * 90-degree turns retain the stronger all-white guard.
-             */
-            if (context->junction_action == ROUTE_ACTION_TURN_AROUND && line_center == 0U && line_right == 0U) {
-                ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_SEARCH_TARGET, now_ms);
-            } else if (context->junction_action != ROUTE_ACTION_TURN_AROUND &&
-                       ControlLogic_ConditionStable(context, all_white, now_ms, CONTROL_TURN_SOURCE_CLEAR_MS) != 0U) {
+            if (ControlLogic_IsNinetyDegreeTurn(context->junction_action) != 0U) {
+                /* Both directions must leave the source stripe for a stable interval. */
+                if (ControlLogic_ConditionStable(context, all_white, now_ms, CONTROL_TURN_SOURCE_CLEAR_MS) != 0U) {
+                    ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_SEARCH_TARGET, now_ms);
+                }
+            } else if (context->junction_action == ROUTE_ACTION_TURN_AROUND && line_center == 0U && line_right == 0U) {
                 ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_SEARCH_TARGET, now_ms);
             }
             break;
 
         case CONTROL_JUNCTION_TURN_SEARCH_TARGET:
+            if (ControlLogic_IsNinetyDegreeTurn(context->junction_action) != 0U) {
+                if (ControlLogic_TargetEdgeDetected(context, line_left, line_center, line_right) == 0U) {
+                    break;
+                }
+
+                previous_state = context->state;
+                context->junction_target_edge_seen = 1U;
+                if (ControlLogic_CompleteDetectedTurn(context, now_ms) == 0U) {
+                    result.action = ControlLogic_RouteError(context, LINETRACER_STOP_REASON_MARKER_SEQUENCE,
+                                                            ROUTE_ACTION_ERROR, now_ms);
+                    result.action_valid = 1U;
+                    break;
+                }
+
+                /* Stop pivoting now; a low-speed PID stage centres the acquired line. */
+                ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_REACQUIRE, now_ms);
+                result.state_changed = (previous_state != context->state) ? 1U : 0U;
+                break;
+            }
+
             if (context->junction_target_edge_seen == 0U) {
                 if (ControlLogic_TargetEdgeDetected(context, line_left, line_center, line_right) != 0U) {
                     context->junction_target_edge_seen = 1U;
@@ -1417,6 +1603,16 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
                 ControlLogic_StartJunctionGuard(context, now_ms);
                 result.maneuver_completed = 1U;
                 result.state_changed = (previous_state != context->state) ? 1U : 0U;
+            }
+            break;
+
+        case CONTROL_JUNCTION_TURN_REACQUIRE:
+            target_aligned = ControlLogic_TargetAligned(context, line_left, line_center, line_right);
+            if (ControlLogic_ConditionStable(context, target_aligned, now_ms,
+                                             CONTROL_TURN_REACQUIRE_CENTERED_MS) != 0U) {
+                ControlLogic_ResetJunctionManeuver(context);
+                ControlLogic_StartJunctionGuard(context, now_ms);
+                result.maneuver_completed = 1U;
             }
             break;
 
@@ -1580,6 +1776,7 @@ static control_job_completion_t ControlLogic_CompleteJob(control_context_t* cont
     context->last_marker_detected_at_ms = 0U;
     context->last_marker_valid = 0U;
     context->departure_turn_required = 1U;
+    ControlLogic_ResetCMarkerRearm(context);
     RoutePlanner_Reset(&context->route_plan);
     context->pending_route_action = ROUTE_ACTION_NONE;
 
