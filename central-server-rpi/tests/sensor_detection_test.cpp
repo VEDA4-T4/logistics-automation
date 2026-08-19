@@ -165,7 +165,7 @@ mqtt::MqttMessage SortingSensorMessage(std::int32_t sensor_id, std::string detec
     return message;
 }
 
-void TestInputDetectionGateHandlesVisionRaceAndStoppedSystem() {
+void TestInputDetectionGateHandlesOccupiedStationAndStoppedSystem() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
 
@@ -239,7 +239,7 @@ int main() {
     TestChannelsAreIndependentPerDeviceAndSensor();
     TestThresholdsComeFromConfig();
     TestConfigValidation();
-    TestInputDetectionGateHandlesVisionRaceAndStoppedSystem();
+    TestInputDetectionGateHandlesOccupiedStationAndStoppedSystem();
     TestSortingDetectionGateMatchesDestinationAndConsumesOneInterval();
     std::cout << "sensor_detection_test passed\n";
     return 0;

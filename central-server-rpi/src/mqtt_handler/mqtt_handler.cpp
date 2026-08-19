@@ -154,6 +154,10 @@ void MqttHandler::SetWorkCreatedHandler(WorkCreatedHandler handler) {
     work_created_handler_ = std::move(handler);
 }
 
+void MqttHandler::SetWorkCreationSourceGuard(WorkCreationSourceGuard guard) {
+    work_creation_source_guard_ = std::move(guard);
+}
+
 void MqttHandler::SetQtEventHandler(QtEventHandler handler) {
     qt_event_handler_ = std::move(handler);
 }
@@ -274,6 +278,41 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
             }
         }
         Log(MqttHandlerLogLevel::kInfo, "MQTT process message rejected: REJECTED_STALE_EPOCH");
+        return true;
+    }
+    if (decoded.value.message_type == mqtt::MessageType::kBoxDetected && work_creation_source_guard_ &&
+        !work_creation_source_guard_(decoded.value.source_id)) {
+        if (persistence_service_ != nullptr) {
+            const auto root = mqtt::Json::parse(payload.begin(), payload.end());
+            const std::string details_json = root.at(std::string(mqtt::kDataField)).dump();
+            const mqtt::EnvelopeView envelope{
+                .protocol_version = decoded.value.protocol_version,
+                .message_id = decoded.value.message_id,
+                .message_type = decoded.value.message_type,
+                .source_id = decoded.value.source_id,
+                .timestamp = decoded.value.timestamp,
+                .process_epoch =
+                    decoded.value.process_epoch ? std::string_view(*decoded.value.process_epoch) : std::string_view{},
+                .data_json = details_json,
+            };
+            const TransportMetadata transport{
+                .topic = std::string(topic),
+                .qos = qos,
+                .retained = retained,
+                .received_at_ms = CurrentUnixTimeMilliseconds(),
+                .source_address = {},
+                .raw_payload = std::string(payload),
+            };
+            const auto status = persistence_service_->RejectValidatedEvent(envelope, transport,
+                                                                           "REJECTED_NON_AUTHORITATIVE_WORK_SOURCE");
+            if (!status.ok()) {
+                Log(MqttHandlerLogLevel::kError,
+                    "non-authoritative BOX_DETECTED rejection persistence failed: " + status.message);
+                return false;
+            }
+        }
+        Log(MqttHandlerLogLevel::kInfo,
+            "ignored BOX_DETECTED from non-authoritative work source=" + decoded.value.source_id);
         return true;
     }
     if (process_message_guard_ && !process_message_guard_(decoded.value)) {
@@ -459,10 +498,12 @@ bool MqttHandler::HandleMessage(std::string_view topic, std::string_view payload
                 Log(MqttHandlerLogLevel::kInfo, "product catalog miss for barcode=" + barcode->barcode);
             }
         }
-        if (decoded.value.message_type == mqtt::MessageType::kBoxDetected && result.work_id && work_created_handler_ &&
-            !work_created_handler_(decoded.value.source_id, *result.work_id)) {
-            Log(MqttHandlerLogLevel::kError, "WORK_CREATED publish failed for workId=" + *result.work_id);
-            return false;
+        if (decoded.value.message_type == mqtt::MessageType::kBoxDetected && result.work_id && work_created_handler_) {
+            const auto disposition = work_created_handler_(decoded.value.source_id, *result.work_id);
+            if (disposition == WorkCreationDisposition::kFailed) {
+                Log(MqttHandlerLogLevel::kError, "WORK_CREATED publish failed for workId=" + *result.work_id);
+                return false;
+            }
         }
         if (IsQtProductEvent(decoded.value.message_type) && qt_event_handler_ && !qt_event_handler_(decoded.value)) {
             Log(MqttHandlerLogLevel::kError, "Qt product event publish failed");

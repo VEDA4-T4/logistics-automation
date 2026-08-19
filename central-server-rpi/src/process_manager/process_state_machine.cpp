@@ -27,6 +27,10 @@ ProcessSystemState ProcessStateMachine::SystemState() const noexcept {
     return system_state_;
 }
 
+bool ProcessStateMachine::AcceptsNewWork() const noexcept {
+    return system_state_ == ProcessSystemState::kIdle || system_state_ == ProcessSystemState::kRunning;
+}
+
 ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
     if (!contracts::IsValidUuid(event.work_id)) {
         return Reject("process event workId must be a UUID");
@@ -42,7 +46,7 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
 
     ProcessTransition transition;
     if (event.type == ProcessEventType::kWorkCreated) {
-        if (system_state_ != ProcessSystemState::kIdle && system_state_ != ProcessSystemState::kRunning) {
+        if (!AcceptsNewWork()) {
             transition = Reject("new work is not allowed while the system is stopped, failed, or recovering");
         } else if (works_.contains(event.work_id)) {
             transition = Reject("workId already exists");

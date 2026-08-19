@@ -207,6 +207,10 @@ bool ProcessOrchestrator::Enabled() const noexcept {
     return config_.enabled;
 }
 
+bool ProcessOrchestrator::IsWorkCreationSource(std::string_view device_id) const noexcept {
+    return config_.enabled && device_id == config_.input_device_id;
+}
+
 std::string_view ProcessOrchestrator::VisionDeviceId() const noexcept {
     return config_.vision_device_id;
 }

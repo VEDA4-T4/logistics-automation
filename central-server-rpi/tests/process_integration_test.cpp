@@ -364,12 +364,14 @@ private:
             };
             const auto begin = orchestrator_.BeginWork(created.message_id, work_id_, device_id, created.timestamp);
             if (!begin.transition.Applied() || !DispatchProcessCommands(begin.commands)) {
-                return false;
+                return central_server::WorkCreationDisposition::kFailed;
             }
             const bool sent_to_vision = Publish(mqtt::DeviceCommandTopic(kVisionId), created);
             const bool sent_to_qt = Publish(mqtt::QtEventTopic("control-center"), created);
             return sent_to_vision && sent_to_qt &&
-                   orchestrator_.ConfirmVisionAssignment(created.message_id, work_id_).Applied();
+                           orchestrator_.ConfirmVisionAssignment(created.message_id, work_id_).Applied()
+                       ? central_server::WorkCreationDisposition::kCreated
+                       : central_server::WorkCreationDisposition::kFailed;
         });
         handler_->SetQtEventHandler([this](const mqtt::MqttMessage& message) {
             return Publish(mqtt::QtEventTopic("control-center"), message);

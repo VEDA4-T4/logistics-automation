@@ -76,6 +76,16 @@ mqtt::MqttMessage SuccessResponse(std::string id, std::string source,
                    });
 }
 
+void TestOnlyInputNodeCanCreateWork() {
+    central_server::ProcessOrchestrator orchestrator({
+        .input_device_id = "PI-INPUT-01",
+        .vision_device_id = "PI-VISION-01",
+    });
+    assert(orchestrator.IsWorkCreationSource("PI-INPUT-01"));
+    assert(!orchestrator.IsWorkCreationSource("PI-VISION-01"));
+    assert(!orchestrator.IsWorkCreationSource("PI-SORTING-01"));
+}
+
 void TestEventFlowCreatesCommandsForEachNode() {
     central_server::ProcessOrchestrator orchestrator({
         .enabled = true,
@@ -1118,6 +1128,7 @@ void TestLineTracerBypassRunsGripperAndSortingToCompletion() {
 }  // namespace
 
 int main() {
+    TestOnlyInputNodeCanCreateWork();
     TestEventFlowCreatesCommandsForEachNode();
     TestInputDetectionSafetyStopDoesNotCreateWork();
     TestInvalidOrderAndDispatchFailureEnterError();

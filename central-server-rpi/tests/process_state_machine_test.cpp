@@ -169,6 +169,17 @@ void TestErrorRecovery() {
     assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
 }
 
+void TestAcceptsNewWorkOnlyWhileIdleOrRunning() {
+    central_server::ProcessStateMachine machine;
+    assert(machine.AcceptsNewWork());
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStop).Applied());
+    assert(!machine.AcceptsNewWork());
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
+    assert(machine.AcceptsNewWork());
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
+    assert(!machine.AcceptsNewWork());
+}
+
 void TestBarcodeFailureStopsAndDiscardsTheWork() {
     central_server::ProcessStateMachine machine;
     assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BARCODE-WORK")).Applied());
@@ -341,6 +352,7 @@ int main() {
     TestCompleteNormalFlow();
     TestStopAndRestartRestoreWork();
     TestStartEnablesAnIdleSystem();
+    TestAcceptsNewWorkOnlyWhileIdleOrRunning();
     TestErrorRecovery();
     TestBarcodeFailureStopsAndDiscardsTheWork();
     TestBarcodeFailureSuspendsOtherActiveWork();

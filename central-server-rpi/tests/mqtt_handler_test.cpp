@@ -214,7 +214,7 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
         std::vector<mqtt::MqttMessage> qt_events;
         handler.SetWorkCreatedHandler([&work_id](std::string_view, std::string_view created_work_id) {
             work_id = created_work_id;
-            return true;
+            return central_server::WorkCreationDisposition::kCreated;
         });
         handler.SetQtEventHandler([&qt_events](const mqtt::MqttMessage& message) {
             qt_events.push_back(message);
@@ -766,7 +766,7 @@ void TestPendingInboxReplaysSideEffectsOnceAfterReopen() {
         central_server::MqttHandler handler(device_manager, {}, &persistence);
         handler.SetWorkCreatedHandler([&original_work_id](std::string_view, std::string_view work_id) {
             original_work_id = work_id;
-            return false;
+            return central_server::WorkCreationDisposition::kFailed;
         });
 
         assert(!handler.Handle(topic, payload, {}, 0, true));
@@ -801,7 +801,7 @@ void TestPendingInboxReplaysSideEffectsOnceAfterReopen() {
         handler.SetWorkCreatedHandler([&](std::string_view, std::string_view work_id) {
             ++successful_routes;
             replayed_work_id = work_id;
-            return true;
+            return central_server::WorkCreationDisposition::kCreated;
         });
 
         assert(handler.ReplayPendingReceivedEvents());
@@ -918,23 +918,78 @@ void TestPoisonInboxRowDoesNotStarveLaterReplay() {
                                    .timestamp = "2026-08-13T01:00:01Z",
                                    .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "later.jpg" } };
     bool replaying = false;
-    handler.SetWorkCreatedHandler(
-        [&replaying](std::string_view source, std::string_view) { return replaying && source != "PI-VISION-POISON"; });
+    handler.SetWorkCreatedHandler([&replaying](std::string_view source, std::string_view) {
+        return replaying && source != "PI-VISION-POISON" ? central_server::WorkCreationDisposition::kCreated
+                                                         : central_server::WorkCreationDisposition::kFailed;
+    });
     assert(!handler.Handle(mqtt::DeviceEventTopic(poison.source_id), Encode(poison)));
     assert(!handler.Handle(mqtt::DeviceEventTopic(later.source_id), Encode(later)));
     replaying = true;
     int routed = 0;
     handler.SetWorkCreatedHandler([&routed](std::string_view source, std::string_view) {
         if (source == "PI-VISION-POISON")
-            return false;
+            return central_server::WorkCreationDisposition::kFailed;
         ++routed;
-        return true;
+        return central_server::WorkCreationDisposition::kCreated;
     });
     assert(handler.ReplayPendingReceivedEvents());
     assert(routed == 1);
     assert(Scalar(database,
                   "SELECT count(*) FROM mqtt_event_log WHERE message_id='LATER-ROW' AND processing_state='STORED'") ==
            1);
+    std::filesystem::remove_all(root);
+}
+
+void TestNonAuthoritativeBoxIsRejectedWithoutCreatingWork() {
+    const auto root =
+        std::filesystem::temp_directory_path() /
+        ("logistics-discarded-box-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    central_server::Database database;
+    const central_server::DatabaseConfig config{ .path = root / "test.db",
+                                                 .migration_dir = LOGISTICS_TEST_MIGRATION_DIR };
+    assert(database.Open(config).ok());
+    assert(central_server::MigrationRunner::Apply(database, config.migration_dir).ok());
+    central_server::StorageConfig storage;
+    storage.image_root = root / "images";
+    central_server::PersistenceService persistence(database, storage);
+    central_server::DeviceManager devices;
+    central_server::MqttHandler handler(devices, {}, &persistence);
+
+    int work_creation_calls = 0;
+    handler.SetWorkCreationSourceGuard([](std::string_view source) { return source == "PI-INPUT-01"; });
+    handler.SetWorkCreatedHandler([&](std::string_view, std::string_view) {
+        ++work_creation_calls;
+        return central_server::WorkCreationDisposition::kCreated;
+    });
+
+    mqtt::MqttMessage box{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "BOX-DISCARDED-WHILE-STOPPED",
+        .message_type = mqtt::MessageType::kBoxDetected,
+        .source_id = "PI-VISION-01",
+        .timestamp = "2026-08-19T01:00:00Z",
+        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "discarded.jpg" },
+    };
+    const auto topic = mqtt::DeviceEventTopic(box.source_id);
+    assert(handler.Handle(topic, Encode(box)));
+    assert(work_creation_calls == 0);
+    assert(Scalar(database,
+                  "SELECT count(*) FROM mqtt_event_log WHERE message_id='BOX-DISCARDED-WHILE-STOPPED' AND "
+                  "processing_state='REJECTED'") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM product") == 0);
+    assert(Scalar(database, "SELECT count(*) FROM work_history") == 0);
+    std::vector<central_server::PendingReceivedEvent> pending;
+    assert(persistence.PendingReceivedEvents(pending).ok() && pending.empty());
+
+    box.message_id = "BOX-CREATED-AFTER-START";
+    box.source_id = "PI-INPUT-01";
+    box.data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "created.jpg" };
+    assert(handler.Handle(mqtt::DeviceEventTopic(box.source_id), Encode(box)));
+    assert(work_creation_calls == 1);
+    assert(Scalar(database, "SELECT count(*) FROM product") == 1);
+    assert(Scalar(database, "SELECT count(*) FROM work_history") == 1);
+
     std::filesystem::remove_all(root);
 }
 
@@ -960,7 +1015,8 @@ void TestProcessEpochRejectsStaleInboxMessagesTerminally() {
         ++process_calls;
         return true;
     });
-    handler.SetWorkCreatedHandler([](std::string_view, std::string_view) { return true; });
+    handler.SetWorkCreatedHandler(
+        [](std::string_view, std::string_view) { return central_server::WorkCreationDisposition::kCreated; });
 
     mqtt::MqttMessage box{
         .message_id = "BOX-CURRENT-EPOCH",
@@ -1019,6 +1075,7 @@ int main() {
     TestPendingInboxReplaysSideEffectsOnceAfterReopen();
     TestSensorTelemetryBypassesInboxAndRoutesImmediately();
     TestPoisonInboxRowDoesNotStarveLaterReplay();
+    TestNonAuthoritativeBoxIsRejectedWithoutCreatingWork();
     TestProcessEpochRejectsStaleInboxMessagesTerminally();
     return 0;
 }

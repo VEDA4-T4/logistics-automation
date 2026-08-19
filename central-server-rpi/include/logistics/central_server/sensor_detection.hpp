@@ -101,7 +101,7 @@ public:
 
     // Consumes one physical DETECTED interval. A stopped process defers the
     // interval so the next reading after START can create the work; an already
-    // occupied input station consumes it because vision won the same-box race.
+    // occupied input station consumes it to prevent a second work for the same box.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
                                         bool input_station_occupied);
     void RequireClear() noexcept;

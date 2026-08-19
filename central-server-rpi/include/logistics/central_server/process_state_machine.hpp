@@ -100,6 +100,7 @@ struct ProcessTransition final {
 class ProcessStateMachine final {
 public:
     [[nodiscard]] ProcessSystemState SystemState() const noexcept;
+    [[nodiscard]] bool AcceptsNewWork() const noexcept;
     [[nodiscard]] ProcessTransition Apply(const ProcessEvent& event);
     [[nodiscard]] ProcessTransition ApplySystemFailure(std::string reason);
     [[nodiscard]] ProcessTransition ClearSystemFailureIfIdle();

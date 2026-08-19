@@ -468,11 +468,18 @@ int Application::Run(int argc, char* argv[]) {
     std::function<bool(const std::vector<ProcessCommandIntent>&)> dispatch_process_commands;
     std::function<bool(bool)> replay_restored_process_commands;
 
+    mqtt_handler.SetWorkCreationSourceGuard([&process_orchestrator](std::string_view device_id) {
+        return process_orchestrator.IsWorkCreationSource(device_id);
+    });
     mqtt_handler.SetWorkCreatedHandler([&publish_enqueued, &process_orchestrator, &process_command_tracker,
                                         &persist_process_state, &process_state_store, &run_runtime_store,
                                         &dispatch_process_commands, &command_manager, &pending_system_commands,
                                         &process_epoch, qt_client_id = server_config.qt_client_id](
                                            std::string_view device_id, std::string_view work_id) {
+        if (!process_orchestrator.IsWorkCreationSource(device_id) ||
+            !process_orchestrator.StateMachine().AcceptsNewWork()) {
+            return WorkCreationDisposition::kDiscarded;
+        }
         const contracts::mqtt::MqttMessage message{
             .protocol_version = std::string(contracts::mqtt::kCurrentProtocolVersion),
             .message_id = "WORK-" + std::string(work_id),
@@ -489,7 +496,7 @@ int Application::Run(int argc, char* argv[]) {
             // active work was already completed/removed; a later stage already
             // has its WORK_CREATED delivery queued or acknowledged.
             if (!existing.has_value() || existing->stage != WorkStage::kInputDetected) {
-                return true;
+                return WorkCreationDisposition::kCreated;
             }
         }
         if (begin.transition.disposition == TransitionDisposition::kRejected) {
@@ -499,15 +506,15 @@ int Application::Run(int argc, char* argv[]) {
             if (existing.has_value() &&
                 (existing->stage == WorkStage::kFailed || existing->stage == WorkStage::kStopped ||
                  existing->stage == WorkStage::kEmergencyStopped)) {
-                return true;
+                return WorkCreationDisposition::kDiscarded;
             }
             std::cerr << "[server][ERROR] WORK_CREATED process transition rejected: " << begin.transition.reason
                       << '\n';
-            return false;
+            return WorkCreationDisposition::kFailed;
         }
         if (!dispatch_process_commands || !dispatch_process_commands(begin.commands)) {
             std::cerr << "[server][ERROR] input conveyor could not be stopped for workId=" << work_id << '\n';
-            return false;
+            return WorkCreationDisposition::kFailed;
         }
         const std::string_view vision_device_id =
             process_orchestrator.Enabled() ? process_orchestrator.VisionDeviceId() : device_id;
@@ -519,7 +526,7 @@ int Application::Run(int argc, char* argv[]) {
         };
         const auto assigned = process_orchestrator.ConfirmVisionAssignment(message.message_id, work_id);
         if (assigned.disposition == TransitionDisposition::kRejected) {
-            return false;
+            return WorkCreationDisposition::kFailed;
         }
         if (!run_runtime_store(
                 [&] {
@@ -531,9 +538,10 @@ int Application::Run(int argc, char* argv[]) {
                         pending_system_commands, process_epoch);
                 },
                 "WORK_CREATED state/outbox persistence")) {
-            return false;
+            return WorkCreationDisposition::kFailed;
         }
-        return publish_enqueued(deliveries[0]) && publish_enqueued(deliveries[1]);
+        return publish_enqueued(deliveries[0]) && publish_enqueued(deliveries[1]) ? WorkCreationDisposition::kCreated
+                                                                                  : WorkCreationDisposition::kFailed;
     });
     mqtt_handler.SetQtEventHandler([&mqtt_client, &publish_durable, qt_client_id = server_config.qt_client_id](
                                        const contracts::mqtt::MqttMessage& message) {
@@ -1060,12 +1068,9 @@ int Application::Run(int argc, char* argv[]) {
             }
         }
         const bool process_accepts_work =
-            process_orchestrator.Enabled() &&
-            (system_state == ProcessSystemState::kIdle || system_state == ProcessSystemState::kRunning);
+            process_orchestrator.Enabled() && process_orchestrator.StateMachine().AcceptsNewWork();
         const bool input_sensor_detected = input_detection_gate.ShouldStopConveyor(message);
-        const auto* box = contracts::mqtt::GetPayload<contracts::mqtt::BoxDetectedPayload>(message);
-        const bool vision_box_detected = box != nullptr && box->detected;
-        if (process_orchestrator.Enabled() && !process_accepts_work && (input_sensor_detected || vision_box_detected)) {
+        if (process_orchestrator.Enabled() && !process_accepts_work && input_sensor_detected) {
             const auto stop = process_orchestrator.MakeInputConveyorSafetyStop(message.message_id, message.timestamp);
             if (!dispatch_command(stop)) {
                 if (input_sensor_detected) {
