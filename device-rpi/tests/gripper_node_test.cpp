@@ -299,6 +299,59 @@ void test_start_homes_without_work_id() {
     assert(status != nullptr && status->current_state == "RUNNING" && !status->job_id.has_value());
 }
 
+void test_startup_home_is_internal_and_reports_ready() {
+    Fixture fixture;
+
+    const GripperCommandResult result = fixture.node->InitializeAtStartup();
+
+    assert(result.status == GripperCommandStatus::kAccepted);
+    assert(fixture.backend->written_commands.size() == 2U);
+    assert(fixture.backend->written_commands[0] == UART_CMD_GRIPPER_RESET);
+    assert(fixture.backend->written_commands[1] == UART_CMD_GRIPPER_HOME);
+    assert(fixture.LastResponse() == nullptr);
+    const auto* homing = fixture.LastStatus();
+    assert(homing != nullptr && homing->current_state == "HOMING" && !homing->job_id.has_value());
+
+    fixture.CompleteCurrentMotion(result.motion_id, UART_GRIPPER_MOTION_HOME);
+
+    assert(fixture.node->IsHomed());
+    assert(!fixture.node->HasActiveCycle());
+    assert(fixture.LastResponse() == nullptr);
+    const auto* ready = fixture.LastStatus();
+    assert(ready != nullptr && ready->current_state == "READY" && !ready->job_id.has_value());
+}
+
+void test_stop_invalidates_home_reference_and_start_rehomes() {
+    Fixture fixture;
+    fixture.Home();
+
+    const GripperCommandResult stop =
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStop, "req-stop"));
+    assert(stop.status == GripperCommandStatus::kSuccess);
+    assert(!fixture.node->IsHomed());
+
+    fixture.reports.clear();
+    fixture.backend->written_commands.clear();
+    const GripperCommandResult start =
+        fixture.node->HandleMqttCommand(MakeControlCommand(mqtt::ControlCommand::kStart, "req-start"));
+    assert(start.status == GripperCommandStatus::kAccepted);
+    assert(fixture.backend->written_commands.size() == 2U);
+    assert(fixture.backend->written_commands[0] == UART_CMD_GRIPPER_RESET);
+    assert(fixture.backend->written_commands[1] == UART_CMD_GRIPPER_HOME);
+    const auto* processing = fixture.LastResponse();
+    assert(processing != nullptr && processing->request_id == "req-start" &&
+           processing->result == mqtt::CommandResult::kProcessing);
+
+    fixture.CompleteCurrentMotion(start.motion_id, UART_GRIPPER_MOTION_HOME);
+
+    assert(fixture.node->IsHomed());
+    const auto* completed = fixture.LastResponse();
+    assert(completed != nullptr && completed->request_id == "req-start" &&
+           completed->result == mqtt::CommandResult::kSuccess);
+    const auto* running = fixture.LastStatus();
+    assert(running != nullptr && running->current_state == "RUNNING" && !running->job_id.has_value());
+}
+
 void test_execute_is_rejected_until_the_arm_is_homed() {
     Fixture fixture;
 
@@ -1133,6 +1186,8 @@ arm_duration_ms=1200
 
 int main() {
     test_start_homes_without_work_id();
+    test_startup_home_is_internal_and_reports_ready();
+    test_stop_invalidates_home_reference_and_start_rehomes();
     test_execute_is_rejected_until_the_arm_is_homed();
     test_initialize_resets_then_homes();
     test_full_cycle_reports_terminal_success_only_after_home();

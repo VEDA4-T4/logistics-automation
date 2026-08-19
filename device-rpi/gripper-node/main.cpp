@@ -286,6 +286,10 @@ int RunGripperDaemon(int argc, char* argv[]) {
                 device_status->SetUartConnected(true);
                 queue_report(MakeUartLinkStatus("UART_CONNECTED", std::nullopt));
                 std::clog << "[gripper][uart][INFO] connected: " << uart_path << '\n';
+                const auto startup_home = gripper_node.InitializeAtStartup();
+                std::clog << "[gripper][startup][" << (startup_home.Succeeded() ? "INFO" : "ERROR")
+                          << "] home requested: accepted=" << (startup_home.Succeeded() ? "true" : "false")
+                          << "; status=" << static_cast<int>(startup_home.status) << '\n';
             } else {
                 next_uart_reconnect = now + kUartReconnectInterval;
             }

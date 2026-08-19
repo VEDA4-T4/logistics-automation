@@ -125,6 +125,7 @@ public:
 
     void SetReportHandler(GripperReportHandler handler);
 
+    [[nodiscard]] GripperCommandResult InitializeAtStartup();
     [[nodiscard]] GripperCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
     void HandleUartFrame(const uart_frame_t& frame);
     void Tick(std::chrono::milliseconds elapsed);
@@ -162,6 +163,7 @@ private:
         std::uint8_t motion_type{};
         std::chrono::milliseconds waited{};
         std::chrono::milliseconds motion_budget{};
+        bool suppress_response{};
     };
 
     /*
@@ -204,7 +206,8 @@ private:
     [[nodiscard]] GripperCommandResult StartCycle(const contracts::mqtt::ControlCommandPayload& command,
                                                   GripperPhase phase);
     [[nodiscard]] GripperCommandResult RunStop(const contracts::mqtt::ControlCommandPayload& command);
-    [[nodiscard]] GripperCommandResult RunInitialize(const contracts::mqtt::ControlCommandPayload& command);
+    [[nodiscard]] GripperCommandResult RunInitialize(const contracts::mqtt::ControlCommandPayload& command,
+                                                     bool suppress_response = false);
     [[nodiscard]] GripperCommandResult RunRecovery(const contracts::mqtt::ControlCommandPayload& command);
     [[nodiscard]] GripperCommandResult RunStatusRequest(const contracts::mqtt::ControlCommandPayload& command);
 

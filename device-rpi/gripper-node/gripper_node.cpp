@@ -238,6 +238,19 @@ void GripperNode::SetReportHandler(GripperReportHandler handler) {
     report_handler_ = std::move(handler);
 }
 
+GripperCommandResult GripperNode::InitializeAtStartup() {
+    running_requested_ = false;
+    return RunInitialize(
+        mqtt::ControlCommandPayload{
+            .request_id = "STARTUP-HOME",
+            .command = mqtt::ControlCommand::kInitialize,
+            .target_device_id = device_id_,
+            .component_id = "home",
+            .params = mqtt::Json::object(),
+        },
+        true);
+}
+
 bool GripperNode::HasActiveCycle() const noexcept {
     return cycle_.active;
 }
@@ -597,6 +610,7 @@ GripperCommandResult GripperNode::RunStop(const mqtt::ControlCommandPayload& com
         // STOP halts interpolation wherever it is, so the pose stops being known
         // whether or not a cycle was driving it.
         angles_known_ = false;
+        homed_ = false;
         if (cycle_.active) {
             AbortCycle("ERR-GRIPPER-STOPPED", "cycle stopped by operator command");
         }
@@ -608,7 +622,7 @@ GripperCommandResult GripperNode::RunStop(const mqtt::ControlCommandPayload& com
     return result;
 }
 
-GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayload& command) {
+GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayload& command, bool suppress_response) {
     GripperCommandResult result{ .status = GripperCommandStatus::kUartError,
                                  .mqtt_command = command.command,
                                  .request_id = command.request_id };
@@ -617,7 +631,9 @@ GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayloa
     // is only actually safe to move again once HOME has completed after it.
     result = Execute(std::move(result), UART_CMD_GRIPPER_RESET, {});
     if (!result.Succeeded()) {
-        EmitCommandResponse(result, "gripper reset was not accepted by the controller");
+        if (!suppress_response) {
+            EmitCommandResponse(result, "gripper reset was not accepted by the controller");
+        }
         return result;
     }
 
@@ -644,6 +660,7 @@ GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayloa
         .motion_type = 0U,
         .waited = {},
         .motion_budget = {},
+        .suppress_response = suppress_response,
     };
 
     if (!DispatchStep(result)) {
@@ -656,8 +673,10 @@ GripperCommandResult GripperNode::RunInitialize(const mqtt::ControlCommandPayloa
     }
 
     result.status = GripperCommandStatus::kAccepted;
-    EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kProcessing, std::nullopt,
-                        "gripper reset accepted; homing in progress");
+    if (!suppress_response) {
+        EmitCommandResponse(result.request_id, command.command, mqtt::CommandResult::kProcessing, std::nullopt,
+                            "gripper reset accepted; homing in progress");
+    }
     EmitDeviceStatus("HOMING");
     return result;
 }
@@ -960,12 +979,15 @@ void GripperNode::FinishCycle() {
     const std::string request_id = cycle_.request_id;
     const mqtt::ControlCommand mqtt_command = cycle_.mqtt_command;
     const bool was_home_only = cycle_.phase == GripperPhase::kHome;
+    const bool suppress_response = cycle_.suppress_response;
 
     cycle_ = ActiveCycle{};
 
     if (was_home_only) {
-        EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kSuccess, std::nullopt,
-                            "gripper returned home");
+        if (!suppress_response) {
+            EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kSuccess, std::nullopt,
+                                "gripper returned home");
+        }
         const bool enters_running =
             mqtt_command == mqtt::ControlCommand::kStart || mqtt_command == mqtt::ControlCommand::kRestart;
         EmitDeviceStatus(enters_running                                    ? "RUNNING"
@@ -995,10 +1017,14 @@ void GripperNode::AbortCycle(std::string error_code, std::string message) {
     const std::string work_id = cycle_.work_id;
     const std::string request_id = cycle_.request_id;
     const mqtt::ControlCommand mqtt_command = cycle_.mqtt_command;
+    const bool suppress_response = cycle_.suppress_response;
     cycle_ = ActiveCycle{};
 
     const std::optional<std::string> job_id = work_id.empty() ? std::nullopt : std::optional{ work_id };
-    EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kFailed, std::optional{ error_code }, message);
+    if (!suppress_response) {
+        EmitCommandResponse(request_id, mqtt_command, mqtt::CommandResult::kFailed, std::optional{ error_code },
+                            message);
+    }
     EmitError(std::move(error_code), "ERROR", std::move(message), job_id);
 }
 
