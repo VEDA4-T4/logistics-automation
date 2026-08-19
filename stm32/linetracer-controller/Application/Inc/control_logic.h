@@ -34,6 +34,7 @@ extern "C" {
 #define CONTROL_TURN_SOURCE_CLEAR_MS 20U
 #define CONTROL_TURN_TARGET_CENTERED_MS 10U
 #define CONTROL_TURN_REACQUIRE_CENTERED_MS 20U
+#define CONTROL_TURN_REACQUIRE_MAX_MS 100U
 #define CONTROL_JUNCTION_EXIT_GUARD_MS 100U
 #define CONTROL_MARKER_APPROACH_HOLD_MS 20U
 
@@ -59,6 +60,10 @@ extern "C" {
 
 #if CONTROL_TURN_REACQUIRE_CENTERED_MS == 0U
 #error "Control turn reacquisition time must be greater than zero"
+#endif
+
+#if CONTROL_TURN_REACQUIRE_MAX_MS < CONTROL_TURN_REACQUIRE_CENTERED_MS
+#error "Control turn reacquisition maximum must cover the centred stability time"
 #endif
 
 typedef enum {

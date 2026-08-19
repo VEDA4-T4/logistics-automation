@@ -1609,7 +1609,15 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
         case CONTROL_JUNCTION_TURN_REACQUIRE:
             target_aligned = ControlLogic_TargetAligned(context, line_left, line_center, line_right);
             if (ControlLogic_ConditionStable(context, target_aligned, now_ms,
-                                             CONTROL_TURN_REACQUIRE_CENTERED_MS) != 0U) {
+                                             CONTROL_TURN_REACQUIRE_CENTERED_MS) != 0U ||
+                (uint32_t)(now_ms - context->junction_phase_started_at_ms) >= CONTROL_TURN_REACQUIRE_MAX_MS) {
+                /*
+                 * Do not block normal line following indefinitely when the
+                 * centre sensor misses the line. The directional edge has
+                 * already proved that the new branch was acquired; after a
+                 * bounded assist interval, let the regular PID finish
+                 * centring from 100/001 instead of stalling at low PWM.
+                 */
                 ControlLogic_ResetJunctionManeuver(context);
                 ControlLogic_StartJunctionGuard(context, now_ms);
                 result.maneuver_completed = 1U;

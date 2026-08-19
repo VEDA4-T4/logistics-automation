@@ -868,6 +868,32 @@ void TestLeftTurnUsesPidReacquisitionAfterTargetEdge() {
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
 }
 
+void TestTurnReacquisitionFallsBackToNormalPidWithoutCenterHit() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_A, 428U, 0U);
+    assert(HandleExpectedMarker(context, 30U) == ROUTE_ACTION_TURN_LEFT);
+    AdvanceToTargetSearch(context, ROUTE_ACTION_TURN_LEFT, 100U);
+    const auto search_at = 100U + (2U * CONTROL_TURN_SOURCE_CLEAR_MS) + 10U;
+
+    /* 100 acquires the new left branch even if the centre sensor never turns black. */
+    const auto target_edge_at = search_at + 20U;
+    auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, target_edge_at);
+    assert(result.maneuver_completed == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
+
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
+                                                      target_edge_at + CONTROL_TURN_REACQUIRE_MAX_MS - 1U);
+    assert(result.maneuver_completed == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE);
+
+    /* The assist stage is bounded; normal PID must take over from the edge sample. */
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
+                                                      target_edge_at + CONTROL_TURN_REACQUIRE_MAX_MS);
+    assert(result.maneuver_completed != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
+}
+
 void TestStraightJunctionCrossingAndGuard() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_C, 408U, 0U);
@@ -1483,6 +1509,7 @@ int main() {
     TestCenteredSampleCannotCompleteTurnWithoutDirectionalEdge();
     TestTurnAroundCompletesOnStableRightTargetSide();
     TestLeftTurnUsesPidReacquisitionAfterTargetEdge();
+    TestTurnReacquisitionFallsBackToNormalPidWithoutCenterHit();
     TestStraightJunctionCrossingAndGuard();
     TestRouteCSecondMarkerIsAcceptedImmediatelyAfterFirstCrossingClears();
     TestRouteCReturnTurnRequiresStableSourceClear();
