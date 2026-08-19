@@ -68,6 +68,11 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
         const auto iterator = works_.find(event.work_id);
         transition =
             iterator == works_.end() ? Reject("workId is not active") : ApplyToExisting(event, iterator->second);
+        if (iterator != works_.end() && event.type == ProcessEventType::kBarcodeFailed && transition.Applied()) {
+            works_.erase(iterator);
+            SuspendActiveWorks(WorkStage::kStopped);
+            system_state_ = ProcessSystemState::kStopped;
+        }
     }
 
     if (!event.message_id.empty()) {
@@ -316,7 +321,19 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             }
             return Move(work, WorkStage::kBarcodeRecognized, event.source_id);
 
-        case ProcessEventType::kBarcodeFailed:
+        case ProcessEventType::kBarcodeFailed: {
+            const auto previous = work.stage;
+            work.stage = WorkStage::kFailed;
+            work.last_source_id = event.source_id;
+            work.failure_reason = event.reason.empty() ? std::string(ToString(event.type)) : event.reason;
+            return {
+                .disposition = TransitionDisposition::kApplied,
+                .previous_stage = previous,
+                .current_stage = work.stage,
+                .reason = {},
+            };
+        }
+
         case ProcessEventType::kProductInfoFailed:
         case ProcessEventType::kWorkFailed: {
             if (!work.suspended_stage.has_value()) {

@@ -169,6 +169,56 @@ void TestErrorRecovery() {
     assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
 }
 
+void TestBarcodeFailureStopsAndDiscardsTheWork() {
+    central_server::ProcessStateMachine machine;
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BARCODE-WORK")).Applied());
+    assert(machine
+               .Apply(Event(central_server::ProcessEventType::kVisionCommandDispatched, "MSG-BARCODE-DISPATCH",
+                            kWorkOne, "central-server"))
+               .Applied());
+    assert(machine
+               .Apply(Event(central_server::ProcessEventType::kPositionDetected, "MSG-BARCODE-POSITION", kWorkOne,
+                            "PI-VISION-01"))
+               .Applied());
+
+    auto failed =
+        Event(central_server::ProcessEventType::kBarcodeFailed, "MSG-BARCODE-FAILED", kWorkOne, "PI-VISION-01");
+    failed.reason = "barcode region was not detected";
+    const auto transition = machine.Apply(failed);
+
+    assert(transition.Applied());
+    assert(transition.current_stage == central_server::WorkStage::kFailed);
+    assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(!machine.FindWork(kWorkOne).has_value());
+    assert(machine.ActiveWorks().empty());
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
+}
+
+void TestBarcodeFailureSuspendsOtherActiveWork() {
+    central_server::ProcessStateMachine machine;
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BARCODE-WORK-ONE")).Applied());
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BARCODE-WORK-TWO", kWorkTwo))
+               .Applied());
+
+    auto failed =
+        Event(central_server::ProcessEventType::kBarcodeFailed, "MSG-BARCODE-FAILED-ONE", kWorkOne, "PI-VISION-01");
+    failed.reason = "barcode region was not detected";
+    assert(machine.Apply(failed).Applied());
+
+    assert(!machine.FindWork(kWorkOne).has_value());
+    const auto remaining = machine.FindWork(kWorkTwo);
+    assert(remaining.has_value());
+    assert(remaining->stage == central_server::WorkStage::kStopped);
+    assert(remaining->suspended_stage == central_server::WorkStage::kInputDetected);
+
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
+    const auto restored = machine.FindWork(kWorkTwo);
+    assert(restored.has_value());
+    assert(restored->stage == central_server::WorkStage::kInputDetected);
+    assert(!restored->suspended_stage.has_value());
+}
+
 void TestRecoveryDiscardsAllActiveWork() {
     central_server::ProcessStateMachine machine;
     std::vector works{
@@ -292,6 +342,8 @@ int main() {
     TestStopAndRestartRestoreWork();
     TestStartEnablesAnIdleSystem();
     TestErrorRecovery();
+    TestBarcodeFailureStopsAndDiscardsTheWork();
+    TestBarcodeFailureSuspendsOtherActiveWork();
     TestServerRestartSuspendsTransportRequest();
     TestRecoveryDiscardsAllActiveWork();
     TestRecoveryCompletionClearsProcessedMessages();
