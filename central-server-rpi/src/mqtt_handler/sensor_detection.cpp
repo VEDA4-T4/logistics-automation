@@ -77,10 +77,9 @@ bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& me
     }
     if (*sensor->detection_status == kDetectionClear) {
         consumed_ = false;
-        clear_observed_ = true;
         return false;
     }
-    if (*sensor->detection_status != kDetectionDetected || !clear_observed_) {
+    if (*sensor->detection_status != kDetectionDetected) {
         return false;
     }
     if (consumed_) {
@@ -100,7 +99,6 @@ bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& me
 void InputDetectionGate::RequireClear() noexcept {
     consumed_ = false;
     stop_consumed_ = false;
-    clear_observed_ = false;
 }
 
 void InputDetectionGate::Retry() noexcept {

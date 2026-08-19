@@ -101,7 +101,9 @@ public:
 
     // Consumes one physical DETECTED interval. A stopped process defers the
     // interval so the next reading after START can create the work; an already
-    // occupied input station consumes it to prevent a second work for the same box.
+    // occupied input station consumes it to prevent a second work for the same
+    // box. A prior CLEAR is not required because CLEAR telemetry can be missed
+    // while the process starts.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
                                         bool input_station_occupied);
     void RequireClear() noexcept;
@@ -113,7 +115,6 @@ private:
     std::int32_t sensor_id_;
     bool consumed_{ false };
     bool stop_consumed_{ false };
-    bool clear_observed_{ false };
 };
 
 class SortingDetectionGate final {

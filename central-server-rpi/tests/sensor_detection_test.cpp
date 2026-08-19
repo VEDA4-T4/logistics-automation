@@ -165,13 +165,14 @@ mqtt::MqttMessage SortingSensorMessage(std::int32_t sensor_id, std::string detec
     return message;
 }
 
-void TestInputDetectionGateHandlesOccupiedStationAndStoppedSystem() {
+void TestInputDetectionGateCreatesWorkWithoutPriorClear() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
 
     assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldCreateWork(detected, false, false));
+    assert(gate.ShouldCreateWork(detected, true, false));
     assert(!gate.ShouldCreateWork(detected, true, false));
 
     const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
@@ -189,9 +190,8 @@ void TestInputDetectionGateHandlesOccupiedStationAndStoppedSystem() {
     assert(gate.ShouldStopConveyor(detected));
 
     gate.RequireClear();
-    assert(!gate.ShouldCreateWork(detected, true, false));
-    assert(!gate.ShouldCreateWork(clear, true, false));
     assert(gate.ShouldCreateWork(detected, true, false));
+    assert(!gate.ShouldCreateWork(detected, true, false));
 
     assert(!gate.ShouldStopConveyor(SensorMessage("PI-LT-01", "DETECTED")));
     assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));
@@ -239,7 +239,7 @@ int main() {
     TestChannelsAreIndependentPerDeviceAndSensor();
     TestThresholdsComeFromConfig();
     TestConfigValidation();
-    TestInputDetectionGateHandlesOccupiedStationAndStoppedSystem();
+    TestInputDetectionGateCreatesWorkWithoutPriorClear();
     TestSortingDetectionGateMatchesDestinationAndConsumesOneInterval();
     std::cout << "sensor_detection_test passed\n";
     return 0;
