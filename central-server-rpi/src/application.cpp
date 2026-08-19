@@ -35,6 +35,7 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 #include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/server_config.hpp"
+#include "logistics/central_server/vision_measurement_buffer.hpp"
 #include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
@@ -211,6 +212,7 @@ int Application::Run(int argc, char* argv[]) {
     ProcessStateStore process_state_store(database);
     // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
     std::mutex process_mutex;
+    VisionMeasurementBuffer pending_vision_measurement;
 
     std::optional<StoredProcessState> stored_process_state;
     std::vector<PendingMqttDelivery> restored_mqtt_deliveries;
@@ -460,19 +462,6 @@ int Application::Run(int argc, char* argv[]) {
                 std::cerr << "[server][ERROR] dropped MQTT delivery from a stale process epoch\n";
                 continue;
             }
-            if (IsVisionWorkCreatedDelivery(delivery, vision_device_id)) {
-                // Legacy vision assignments must never be replayed after the
-                // measurement-only handoff.  The Qt WORK_CREATED event is
-                // retained separately; the device command is obsolete.
-                if (!run_runtime_store(
-                        [&] {
-                            return process_state_store.RemoveMqttDelivery(delivery.topic, delivery.message.message_id);
-                        },
-                        "legacy vision assignment removal")) {
-                    return false;
-                }
-                continue;
-            }
             static_cast<void>(publish_enqueued(delivery));
         }
         return true;
@@ -529,10 +518,11 @@ int Application::Run(int argc, char* argv[]) {
             return WorkCreationDisposition::kFailed;
         }
         const auto qt_topic = contracts::mqtt::QtEventTopic(qt_client_id);
-        // Vision no longer consumes WORK_CREATED/WORK_ASSIGNED.  The input
-        // ultrasonic event owns work creation; vision publishes observations
-        // and the central server binds them to that work.
-        const std::vector deliveries{ PendingMqttDelivery{ .topic = qt_topic, .message = message } };
+        const auto vision_topic = contracts::mqtt::DeviceCommandTopic(process_orchestrator.VisionDeviceId());
+        const std::vector deliveries{
+            PendingMqttDelivery{ .topic = vision_topic, .message = message },
+            PendingMqttDelivery{ .topic = qt_topic, .message = message },
+        };
         const auto assigned = process_orchestrator.ConfirmVisionAssignment(message.message_id, work_id);
         if (assigned.disposition == TransitionDisposition::kRejected) {
             return WorkCreationDisposition::kFailed;
@@ -549,8 +539,11 @@ int Application::Run(int argc, char* argv[]) {
                 "WORK_CREATED state/outbox persistence")) {
             return WorkCreationDisposition::kFailed;
         }
-        return publish_enqueued(deliveries.front()) ? WorkCreationDisposition::kCreated
-                                                    : WorkCreationDisposition::kFailed;
+        bool published = true;
+        for (const auto& delivery : deliveries) {
+            published = publish_enqueued(delivery) && published;
+        }
+        return published ? WorkCreationDisposition::kCreated : WorkCreationDisposition::kFailed;
     });
     mqtt_handler.SetQtEventHandler([&mqtt_client, &publish_durable, qt_client_id = server_config.qt_client_id](
                                        const contracts::mqtt::MqttMessage& message) {
@@ -669,8 +662,9 @@ int Application::Run(int argc, char* argv[]) {
                     .process_epoch = process_epoch,
                     .data = contracts::mqtt::WorkCreatedPayload{ .work_id = work_id },
                 };
-                // Vision observes the conveyor independently; it does not
-                // consume a replayed WORK_CREATED/WORK_ASSIGNED command.
+                restored_deliveries.push_back(
+                    { .topic = contracts::mqtt::DeviceCommandTopic(process_orchestrator.VisionDeviceId()),
+                      .message = created });
                 restored_deliveries.push_back(
                     { .topic = contracts::mqtt::QtEventTopic(qt_client_id), .message = created });
             }
@@ -1072,7 +1066,8 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_command,
                                            &dispatch_process_commands, &input_detection_gate, &sorting_detection_gate,
                                            &process_state_persistence_healthy, &persist_process_state, &persistence,
-                                           &publish_durable, qt_client_id = server_config.qt_client_id,
+                                           &pending_vision_measurement, &publish_durable,
+                                           qt_client_id = server_config.qt_client_id,
                                            default_destination = server_config.process.default_destination,
                                            &process_epoch](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
@@ -1099,7 +1094,8 @@ int Application::Run(int argc, char* argv[]) {
                 return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
             });
             if (work_it == active_works.end()) {
-                std::clog << "[server][INFO] VISION_MEASUREMENT ignored; no ultrasonic work; source="
+                pending_vision_measurement.Store(message);
+                std::clog << "[server][INFO] VISION_MEASUREMENT buffered; no ultrasonic work; source="
                           << message.source_id << "; barcode=" << measurement->barcode
                           << "; position=" << position_summary << '\n';
                 return true;
@@ -1305,6 +1301,23 @@ int Application::Run(int argc, char* argv[]) {
         return result.commands.empty() ? persist_process_state() : dispatch_process_commands(result.commands);
     });
 
+    const auto replay_pending_vision_measurement = [&]() {
+        auto pending = pending_vision_measurement.Take();
+        if (!pending.has_value()) {
+            return true;
+        }
+        const auto encoded = contracts::mqtt::SerializeMessage(*pending);
+        if (!encoded.IsSuccess() || !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(pending->source_id),
+                                                         encoded.payload, {}, 1, false)) {
+            const auto message_id = pending->message_id;
+            pending_vision_measurement.Store(std::move(*pending));
+            std::cerr << "[server][WARN] buffered VISION_MEASUREMENT replay deferred; messageId=" << message_id << '\n';
+            return false;
+        }
+        std::clog << "[server][INFO] buffered VISION_MEASUREMENT replayed; messageId=" << pending->message_id << '\n';
+        return true;
+    };
+
     mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state,
                                    &process_state_persistence_healthy, &process_mutex](
                                       std::string_view topic, std::string_view payload, int qos, bool retained) {
@@ -1389,6 +1402,7 @@ int Application::Run(int argc, char* argv[]) {
         {
             const std::lock_guard process_lock(process_mutex);
             static_cast<void>(pump_durable());
+            static_cast<void>(replay_pending_vision_measurement());
             // A restored input work may have been persisted after its STOP tracker was
             // recorded but before WORK_CREATED was committed.  Restore that interlock
             // before replaying the BOX event, otherwise replay could assign vision first.

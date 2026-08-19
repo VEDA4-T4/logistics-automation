@@ -489,7 +489,23 @@ int main(const int argc, char* argv[]) {
             if (!decision.has_value()) {
                 if (logistics::contracts::mqtt::GetPayload<logistics::contracts::mqtt::WorkCreatedPayload>(message) !=
                     nullptr) {
-                    std::clog << "[vision][control][INFO] ignored legacy WORK_CREATED; measurements are work-free\n";
+                    const bool assigned = mqtt_workflow.AssignWork(message);
+                    if (assigned) {
+                        const auto* work =
+                            logistics::contracts::mqtt::GetPayload<logistics::contracts::mqtt::WorkCreatedPayload>(
+                                message);
+                        device_status->SetJobId(work->work_id);
+                        device_status->SetCurrentState("WORK_ASSIGNED");
+                        device_status->SetErrorCode(std::nullopt);
+                        std::clog << "[vision][control][INFO] WORK_CREATED assigned for image capture; work_id="
+                                  << work->work_id << '\n';
+                    } else {
+                        std::clog << "[vision][control][INFO] WORK_CREATED ignored; another image work is active\n";
+                    }
+                    // WORK_CREATED is an idempotent assignment, not a control
+                    // command requiring a response. Consume it even when a
+                    // newer work is already active so central replay cannot
+                    // poison the node's inbound command journal.
                     ignored_message_result = true;
                 } else {
                     ignored_message_result = false;
@@ -855,26 +871,9 @@ int main(const int argc, char* argv[]) {
         if (work.has_value()) {
             const std::string timestamp = logistics::device::CurrentIso8601Timestamp();
             std::vector<logistics::vision::VisionPublication> publications;
-            if (work->observation.has_value()) {
-                const auto position = logistics::vision::MakePositionDetectedMessage(
-                    device_id, *work,
-                    logistics::device::MakeMessageId(device_id, mqtt_session_id,
-                                                     mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
-                    timestamp);
-                publications.push_back({ logistics::vision::VisionPublicationChannel::kEvent, position });
-            }
             bool result_deferred = false;
             const bool barcode_detected = work->observation.has_value() && work->observation->barcode.has_value();
-            if (barcode_detected) {
-                publications.push_back({
-                    logistics::vision::VisionPublicationChannel::kEvent,
-                    logistics::vision::MakeBarcodeDetectedMessage(
-                        device_id, *work,
-                        logistics::device::MakeMessageId(device_id, mqtt_session_id,
-                                                         mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
-                        timestamp),
-                });
-            } else {
+            if (!barcode_detected) {
                 if (pending_capture.Empty()) {
                     std::cerr << "[vision][WARN] barcode recognition failed without a retained box frame; work_id="
                               << work->work_id << '\n';
@@ -916,18 +915,14 @@ int main(const int argc, char* argv[]) {
                     const bool current = vision_state.PublishIfCurrent(
                         generation, [&control_state] { return control_state.IsOperational(); },
                         [&] {
-                            const bool queued = result_outbox.Enqueue(work->work_id, std::move(publications));
-                            const bool retained =
-                                queued && image_upload_retry.Retain(work->work_id, std::move(upload_intent));
+                            const bool retained = image_upload_retry.Retain(work->work_id, std::move(upload_intent));
                             if (retained) {
-                                static_cast<void>(flush_result_outbox());
                                 device_status->SetCurrentState("RESULT_PENDING");
+                                device_status->SetErrorCode(std::nullopt);
                                 result_deferred = true;
                             } else {
                                 device_status->SetCurrentState("RESULT_PENDING");
-                                device_status->SetErrorCode(
-                                    queued ? std::nullopt
-                                           : std::optional<std::string>{ "ERR-VISION-RESULT-QUEUE-FAILED" });
+                                device_status->SetErrorCode("ERR-VISION-IMAGE-UPLOAD-BUSY");
                             }
                         });
                     if (!current) {
@@ -945,6 +940,13 @@ int main(const int argc, char* argv[]) {
                         logistics::device::CurrentIso8601Timestamp(), "ERR-VISION-IMAGE-CAPTURE-MISSING",
                         "VISION_ERROR", "barcode was detected without a captured frame", work->work_id),
                 });
+            } else if (barcode_detected) {
+                // Central binds the continuously published measurement to the
+                // work. This assignment is only for the optional image upload,
+                // so do not send a second position/barcode pair that could
+                // race the central transition.
+                complete_work();
+                continue;
             }
             if (result_deferred) {
                 continue;

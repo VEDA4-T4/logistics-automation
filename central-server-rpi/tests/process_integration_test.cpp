@@ -21,6 +21,7 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 #include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/sensor_detection.hpp"
+#include "logistics/central_server/vision_measurement_buffer.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/contracts/mqtt_validation.hpp"
@@ -1028,6 +1029,39 @@ void TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold() {
     assert(failed_removal == central_server::Application::PendingDeliveryEpochResult::kError);
 }
 
+void TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly() {
+    central_server::VisionMeasurementBuffer buffer;
+    const auto make_measurement = [](std::string message_id, std::string barcode) {
+        return mqtt::MqttMessage{
+            .message_id = std::move(message_id),
+            .message_type = mqtt::MessageType::kVisionMeasurement,
+            .source_id = std::string(kVisionId),
+            .timestamp = std::string(kTimestamp),
+            .data =
+                mqtt::VisionMeasurementPayload{
+                    .barcode = std::move(barcode),
+                    .box_x = 100,
+                    .box_y = 50,
+                    .box_width = 200,
+                    .box_height = 100,
+                    .frame_width = 640,
+                    .frame_height = 480,
+                },
+        };
+    };
+
+    buffer.Store(make_measurement("VISION-MEASUREMENT-1", "5901234123457"));
+    buffer.Store(make_measurement("VISION-MEASUREMENT-2", "8801234567893"));
+    assert(!buffer.Empty());
+    const auto measurement = buffer.Take();
+    assert(measurement.has_value());
+    assert(measurement->message_id == "VISION-MEASUREMENT-2");
+    const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(*measurement);
+    assert(payload != nullptr && payload->barcode == "8801234567893");
+    assert(buffer.Empty());
+    assert(!buffer.Take().has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -1050,5 +1084,6 @@ int main() {
     TestApplicationRecoveryCommitFailureLeavesAllStateRetryable();
     TestApplicationProcessEpochStamping();
     TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold();
+    TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly();
     return 0;
 }
