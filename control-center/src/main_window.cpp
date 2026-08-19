@@ -1563,6 +1563,11 @@ void MainWindow::completePendingRecoveryFromDeviceState() {
             (state != QStringLiteral("STOPPED") && state != QStringLiteral("RECOVERY_READY"))) {
             continue;
         }
+        const auto recovery_timestamp = QDateTime::currentDateTimeUtc();
+        if (!operations_dashboard_state_.markRecoveryCompleted(pending_target_device_id_, recovery_timestamp)) {
+            return;
+        }
+        refreshOperationsPresentation();
         process_control_panel_->setCommandFinished(pending_command_,
                                                    logistics::contracts::mqtt::CommandResult::kSuccess,
                                                    QStringLiteral("장치 상태에서 복구 완료를 확인했습니다."));

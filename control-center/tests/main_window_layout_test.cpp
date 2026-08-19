@@ -613,7 +613,8 @@ int main(int argc, char* argv[]) {
 
     const auto now = QDateTime::currentDateTimeUtc();
     const auto emit_device_status = [&](const QString& message_id, const QString& source_id,
-                                        const QString& current_state, int timestamp_offset_ms) {
+                                        const QString& current_state, int timestamp_offset_ms,
+                                        const QString& job_id = QStringLiteral("WORK-LAYOUT-LIVE")) {
         mqtt_client->messageReceived(
             QStringLiteral("device/%1/status").arg(source_id),
             { { QStringLiteral("protocolVersion"), QStringLiteral("1.0") },
@@ -624,7 +625,7 @@ int main(int argc, char* argv[]) {
               { QStringLiteral("data"),
                 QJsonObject{ { QStringLiteral("status"), QStringLiteral("ONLINE") },
                              { QStringLiteral("currentState"), current_state },
-                             { QStringLiteral("jobId"), QStringLiteral("WORK-LAYOUT-LIVE") } } } });
+                             { QStringLiteral("jobId"), job_id } } } });
     };
     QFrame* transition_vision_card = nullptr;
     for (auto* card : window.findChildren<QFrame*>(QStringLiteral("processUnitCard"))) {
@@ -796,6 +797,33 @@ int main(int argc, char* argv[]) {
                "sorting node moved after global emergency stop") ||
         !check(factory->boxPosition(QStringLiteral("linetracer")) == stopped_line_position,
                "line-tracer node moved after global emergency stop")) {
+        return 2;
+    }
+
+    mqtt_client->commandPublished(2, QStringLiteral("REQ-SORTING-RECOVERY"),
+                                  logistics::contracts::mqtt::ControlCommand::kRecovery,
+                                  QStringLiteral("PI-SORTING-01"), QString{});
+    emit_device_status(QStringLiteral("LAYOUT-SORTING-RECOVERED"), QStringLiteral("PI-SORTING-01"),
+                       QStringLiteral("STOPPED"), 110, QString{});
+    emit_device_status(QStringLiteral("LAYOUT-INPUT-RECOVERED"), QStringLiteral("PI-INPUT-01"),
+                       QStringLiteral("STOPPED"), 111, QString{});
+    emit_device_status(QStringLiteral("LAYOUT-VISION-RECOVERED"), QStringLiteral("PI-VISION-01"),
+                       QStringLiteral("STOPPED"), 112, QString{});
+    emit_device_status(QStringLiteral("LAYOUT-GRIPPER-RECOVERED"), QStringLiteral("PI-GRIPPER-01"),
+                       QStringLiteral("STOPPED"), 113, QString{});
+    emit_device_status(QStringLiteral("LAYOUT-LINETRACER-RECOVERED"), QStringLiteral("PI-LT-01"),
+                       QStringLiteral("STOPPED"), 114, QString{});
+    application.processEvents();
+    auto* overall_card = window.findChild<QFrame*>(QStringLiteral("overallProcessCard"));
+    bool overall_is_stopped = false;
+    if (overall_card != nullptr) {
+        for (const auto* label : overall_card->findChildren<QLabel*>()) {
+            overall_is_stopped = overall_is_stopped || label->text() == QStringLiteral("정지");
+        }
+    }
+    if (!check(overall_is_stopped, "recovered device states did not clear the emergency-stop screen state") ||
+        !check(factory->nodeColor(QStringLiteral("sorting")) == QColor(QStringLiteral("#cca700")),
+               "sorting node did not leave the emergency-stop visual state after recovery")) {
         return 2;
     }
 
