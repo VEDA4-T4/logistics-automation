@@ -225,6 +225,7 @@ int Application::Run(int argc, char* argv[]) {
     const std::string process_epoch = stored_process_state.has_value() && !stored_process_state->process_epoch.empty()
                                           ? stored_process_state->process_epoch
                                           : GenerateProcessEpoch();
+    process_orchestrator.SetProcessEpoch(process_epoch);
     mqtt_handler.SetProcessEpoch(process_epoch, server_config.database.startup_mode == StartupMode::kFresh);
     if (stored_process_state.has_value()) {
         auto pending_commands = std::move(stored_process_state->pending_commands);

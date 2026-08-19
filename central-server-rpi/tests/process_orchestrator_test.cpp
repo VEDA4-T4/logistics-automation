@@ -86,6 +86,24 @@ void TestOnlyInputNodeCanCreateWork() {
     assert(!orchestrator.IsWorkCreationSource("PI-SORTING-01"));
 }
 
+void TestProcessCommandIdsAreScopedToProcessEpoch() {
+    central_server::ProcessOrchestrator first;
+    first.SetProcessEpoch("11111111-1111-4111-8111-111111111111");
+    const auto first_begin = first.BeginWork("MSG-FIRST", kWorkId, "PI-INPUT-01", kTimestamp);
+    assert(first_begin.transition.Applied() && first_begin.commands.size() == 1);
+    const auto* first_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(first_begin.commands.front().message);
+    assert(first_payload != nullptr);
+    assert(first_payload->request_id == first_begin.commands.front().message.message_id);
+    assert(first_begin.commands.front().message.message_id == "PROCESS-11111111-1111-4111-8111-111111111111-1");
+
+    central_server::ProcessOrchestrator second;
+    second.SetProcessEpoch("22222222-2222-4222-8222-222222222222");
+    const auto second_begin = second.BeginWork("MSG-SECOND", kQueuedWorkId, "PI-INPUT-01", kTimestamp);
+    assert(second_begin.transition.Applied() && second_begin.commands.size() == 1);
+    assert(second_begin.commands.front().message.message_id == "PROCESS-22222222-2222-4222-8222-222222222222-1");
+    assert(first_begin.commands.front().message.message_id != second_begin.commands.front().message.message_id);
+}
+
 void TestEventFlowCreatesCommandsForEachNode() {
     central_server::ProcessOrchestrator orchestrator({
         .enabled = true,
@@ -1145,6 +1163,7 @@ void TestLineTracerBypassRunsGripperAndSortingToCompletion() {
 
 int main() {
     TestOnlyInputNodeCanCreateWork();
+    TestProcessCommandIdsAreScopedToProcessEpoch();
     TestEventFlowCreatesCommandsForEachNode();
     TestInputDetectionSafetyStopDoesNotCreateWork();
     TestInvalidOrderAndDispatchFailureStaysProcessReady();

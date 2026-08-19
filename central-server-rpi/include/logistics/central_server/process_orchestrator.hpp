@@ -72,6 +72,7 @@ class ProcessOrchestrator final {
 public:
     explicit ProcessOrchestrator(ProcessOrchestratorConfig config = {});
 
+    void SetProcessEpoch(std::string process_epoch);
     [[nodiscard]] bool Enabled() const noexcept;
     [[nodiscard]] bool AcceptsNewWork() const noexcept;
     [[nodiscard]] bool IsWorkCreationSource(std::string_view device_id) const noexcept;
@@ -135,6 +136,7 @@ private:
     std::unordered_map<std::string, GripperTarget> gripper_targets_;
     std::unordered_map<std::string, bool> device_health_;
     ProcessStateMachine state_machine_;
+    std::string process_epoch_;
     std::uint64_t message_sequence_{};
     std::uint64_t revision_{};
 };

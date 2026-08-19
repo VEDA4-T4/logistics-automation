@@ -119,7 +119,12 @@ namespace mqtt = contracts::mqtt;
         return std::nullopt;
     }
     std::uint64_t sequence{};
-    const auto first = message_id.data() + prefix.size();
+    const auto sequence_separator = message_id.rfind('-');
+    const auto sequence_offset = sequence_separator == std::string_view::npos ? prefix.size() : sequence_separator + 1;
+    if (sequence_offset >= message_id.size()) {
+        return std::nullopt;
+    }
+    const auto first = message_id.data() + sequence_offset;
     const auto last = message_id.data() + message_id.size();
     const auto parsed = std::from_chars(first, last, sequence);
     return parsed.ec == std::errc{} && parsed.ptr == last ? std::optional{ sequence } : std::nullopt;
@@ -201,6 +206,13 @@ ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config)
     if (!config_.IsValid()) {
         throw std::invalid_argument("invalid process orchestrator device identifier");
     }
+}
+
+void ProcessOrchestrator::SetProcessEpoch(std::string process_epoch) {
+    if (!process_epoch.empty() && !contracts::IsValidUuid(process_epoch)) {
+        throw std::invalid_argument("process epoch must be a valid UUID");
+    }
+    process_epoch_ = std::move(process_epoch);
 }
 
 bool ProcessOrchestrator::Enabled() const noexcept {
@@ -1020,7 +1032,11 @@ ProcessCommandIntent ProcessOrchestrator::MakeDestinationCommand(std::string_vie
 }
 
 std::string ProcessOrchestrator::NextMessageId() {
-    return "PROCESS-" + std::to_string(++message_sequence_);
+    const auto sequence = std::to_string(++message_sequence_);
+    if (process_epoch_.empty()) {
+        return "PROCESS-" + sequence;
+    }
+    return "PROCESS-" + process_epoch_ + "-" + sequence;
 }
 
 }  // namespace logistics::central_server
