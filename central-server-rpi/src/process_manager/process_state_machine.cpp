@@ -169,7 +169,7 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
                      .current_stage = std::nullopt,
                      .reason = {} };
 
-        case ControlCommand::kRecovery:
+        case ControlCommand::kRecovery: {
             if (system_state_ == ProcessSystemState::kRecovery) {
                 return {
                     .disposition = TransitionDisposition::kDuplicate,
@@ -178,7 +178,10 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
                     .reason = "system recovery is already in progress; command may be retried",
                 };
             }
-            if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop) {
+            const bool has_failed_work =
+                std::ranges::any_of(works_, [](const auto& entry) { return entry.second.stage == WorkStage::kFailed; });
+            if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop &&
+                !has_failed_work) {
                 return Reject("RECOVERY is only allowed from ERROR or EMERGENCY_STOP");
             }
             SuspendActiveWorks(WorkStage::kRecovering);
@@ -187,6 +190,7 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
                      .previous_stage = std::nullopt,
                      .current_stage = std::nullopt,
                      .reason = {} };
+        }
 
         case ControlCommand::kInitialize:
             if (system_state_ == ProcessSystemState::kStopped) {
@@ -347,7 +351,6 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             work.stage = WorkStage::kFailed;
             work.last_source_id = event.source_id;
             work.failure_reason = event.reason.empty() ? std::string(ToString(event.type)) : event.reason;
-            system_state_ = ProcessSystemState::kError;
             return {
                 .disposition = TransitionDisposition::kApplied,
                 .previous_stage = previous,

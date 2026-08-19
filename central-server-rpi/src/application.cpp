@@ -1242,8 +1242,7 @@ int Application::Run(int argc, char* argv[]) {
                 return false;
             }
         }
-        const bool process_accepts_work =
-            process_orchestrator.Enabled() && process_orchestrator.StateMachine().AcceptsNewWork();
+        const bool process_accepts_work = process_orchestrator.AcceptsNewWork();
         const bool input_sensor_detected = input_detection_gate.ShouldStopConveyor(message);
         if (input_sensor_detected) {
             const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);

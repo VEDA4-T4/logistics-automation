@@ -150,9 +150,7 @@ void TestStartEnablesAnIdleSystem() {
 void TestErrorRecovery() {
     central_server::ProcessStateMachine machine;
     assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-ERROR-WORK")).Applied());
-    auto failed = Event(central_server::ProcessEventType::kWorkFailed, "MSG-ERROR");
-    failed.reason = "gripper timeout";
-    assert(machine.Apply(failed).Applied());
+    assert(machine.ApplySystemFailure("gripper timeout").Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kError);
     assert(machine.FindWork(kWorkOne)->failure_reason == "gripper timeout");
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
@@ -167,6 +165,21 @@ void TestErrorRecovery() {
            central_server::TransitionDisposition::kDuplicate);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
+}
+
+void TestWorkFailureKeepsProcessRunning() {
+    central_server::ProcessStateMachine machine;
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-WORK-FAILURE")).Applied());
+
+    auto failed = Event(central_server::ProcessEventType::kWorkFailed, "MSG-WORK-FAILURE-EVENT");
+    failed.reason = "input conveyor stop timed out";
+    assert(machine.Apply(failed).Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(machine.AcceptsNewWork());
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kFailed);
+    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+    assert(machine.SystemState() == central_server::ProcessSystemState::kRecovery);
 }
 
 void TestAcceptsNewWorkOnlyWhileIdleOrRunning() {
@@ -354,6 +367,7 @@ int main() {
     TestStartEnablesAnIdleSystem();
     TestAcceptsNewWorkOnlyWhileIdleOrRunning();
     TestErrorRecovery();
+    TestWorkFailureKeepsProcessRunning();
     TestBarcodeFailureStopsAndDiscardsTheWork();
     TestBarcodeFailureSuspendsOtherActiveWork();
     TestServerRestartSuspendsTransportRequest();

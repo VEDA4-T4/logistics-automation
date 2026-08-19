@@ -73,6 +73,7 @@ public:
     explicit ProcessOrchestrator(ProcessOrchestratorConfig config = {});
 
     [[nodiscard]] bool Enabled() const noexcept;
+    [[nodiscard]] bool AcceptsNewWork() const noexcept;
     [[nodiscard]] bool IsWorkCreationSource(std::string_view device_id) const noexcept;
     [[nodiscard]] std::string_view VisionDeviceId() const noexcept;
     [[nodiscard]] const ProcessStateMachine& StateMachine() const noexcept;

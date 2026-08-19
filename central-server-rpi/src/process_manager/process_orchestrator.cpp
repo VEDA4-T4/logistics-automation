@@ -207,6 +207,32 @@ bool ProcessOrchestrator::Enabled() const noexcept {
     return config_.enabled;
 }
 
+bool ProcessOrchestrator::AcceptsNewWork() const noexcept {
+    if (!config_.enabled || !state_machine_.AcceptsNewWork()) {
+        return false;
+    }
+
+    const std::array process_devices{
+        std::string_view(config_.input_device_id),
+        std::string_view(config_.vision_device_id),
+        std::string_view(config_.gripper_device_id),
+        std::string_view(config_.sorting_device_id),
+    };
+    for (const auto device_id : process_devices) {
+        const auto health = device_health_.find(std::string(device_id));
+        if (health != device_health_.end() && !health->second) {
+            return false;
+        }
+    }
+    if (config_.line_tracer_enabled) {
+        const auto health = device_health_.find(config_.line_tracer_device_id);
+        if (health != device_health_.end() && !health->second) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool ProcessOrchestrator::IsWorkCreationSource(std::string_view device_id) const noexcept {
     return config_.enabled && device_id == config_.input_device_id;
 }
@@ -450,6 +476,21 @@ ProcessTransition ProcessOrchestrator::ConfirmDispatch(const ProcessCommandInten
 }
 
 ProcessTransition ProcessOrchestrator::FailDispatch(const ProcessCommandIntent& intent, std::string reason) {
+    std::string target_device_id;
+    if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(intent.message)) {
+        target_device_id = command->target_device_id;
+    } else if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(intent.message)) {
+        target_device_id = destination->target_device_id;
+    }
+    if (!target_device_id.empty() && target_device_id != "SYSTEM") {
+        const std::array process_devices{
+            config_.input_device_id,   config_.vision_device_id,      config_.gripper_device_id,
+            config_.sorting_device_id, config_.line_tracer_device_id,
+        };
+        if (std::ranges::find(process_devices, target_device_id) != process_devices.end()) {
+            device_health_.insert_or_assign(std::move(target_device_id), false);
+        }
+    }
     auto transition = state_machine_.Apply({
         .type = ProcessEventType::kWorkFailed,
         .message_id = intent.message.message_id + "-FAILED",

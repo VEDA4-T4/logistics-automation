@@ -339,7 +339,7 @@ void TestInputDetectionSafetyStopDoesNotCreateWork() {
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-INPUT-01"), stop).IsSuccess());
 }
 
-void TestInvalidOrderAndDispatchFailureEnterError() {
+void TestInvalidOrderAndDispatchFailureStaysProcessReady() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-BOX-2", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
     assert(orchestrator.ConfirmVisionAssignment("MSG-BOX-2", kWorkId).Applied());
@@ -371,7 +371,8 @@ void TestInvalidOrderAndDispatchFailureEnterError() {
     const auto product_result = orchestrator.Handle(product);
     assert(product_result.commands.size() == 2);
     assert(orchestrator.FailDispatch(product_result.commands.back(), "gripper is offline").Applied());
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(!orchestrator.AcceptsNewWork());
 }
 
 void TestInputFailureWithoutWorkIdStopsTheProcess() {
@@ -631,6 +632,21 @@ void TestSystemCommandTimeoutDoesNotMutateActiveWorks() {
     assert(orchestrator.StateMachine().FindWork(kWorkId)->failure_reason.empty());
     assert(orchestrator.StateMachine().FindWork(other_work_id)->stage == central_server::WorkStage::kInputDetected);
     assert(orchestrator.StateMachine().FindWork(other_work_id)->failure_reason.empty());
+}
+
+void TestFailedDeviceBlocksNewWorkUntilHealthy() {
+    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
+    const auto begin = orchestrator.BeginWork("MSG-INPUT-FAULT", kWorkId, "PI-INPUT-01", kTimestamp);
+    assert(begin.transition.Applied() && begin.commands.size() == 1);
+    assert(orchestrator.FailDispatch(begin.commands.front(), "input conveyor stop timed out").Applied());
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(!orchestrator.AcceptsNewWork());
+
+    assert(!orchestrator
+                .Handle(
+                    Status("MSG-INPUT-HEALTHY", "PI-INPUT-01", "STOPPED", mqtt::ConnectionState::kOnline, std::nullopt))
+                .handled);
+    assert(orchestrator.AcceptsNewWork());
 }
 
 void TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands() {
@@ -1131,7 +1147,7 @@ int main() {
     TestOnlyInputNodeCanCreateWork();
     TestEventFlowCreatesCommandsForEachNode();
     TestInputDetectionSafetyStopDoesNotCreateWork();
-    TestInvalidOrderAndDispatchFailureEnterError();
+    TestInvalidOrderAndDispatchFailureStaysProcessReady();
     TestInputFailureWithoutWorkIdStopsTheProcess();
     TestOfflineStatusPreservesTheProcess();
     TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess();
@@ -1144,6 +1160,7 @@ int main() {
     TestFailedSystemCommandsEnterSafeProcessStates();
     TestCommandTimeoutOnlyFailsIdentifiableWork();
     TestSystemCommandTimeoutDoesNotMutateActiveWorks();
+    TestFailedDeviceBlocksNewWorkUntilHealthy();
     TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands();
     TestRecoveryRestartStaysRecovering();
     TestRestoredHomographyTargetCreatesGripperCommand();
