@@ -942,6 +942,10 @@ ProcessCommandIntent ProcessOrchestrator::MakeSortingControlCommand(std::string_
                                                                     std::string_view component_id,
                                                                     std::string_view timestamp) {
     const std::string request_id = NextMessageId();
+    mqtt::Json params{ { "workId", work_id } };
+    if (command == mqtt::ControlCommand::kStart && component_id == "sorting_conveyor") {
+        params["speed"] = 40;
+    }
     return {
         .message =
             {
@@ -952,12 +956,12 @@ ProcessCommandIntent ProcessOrchestrator::MakeSortingControlCommand(std::string_
                 .timestamp = std::string(timestamp),
                 .data =
                     mqtt::ControlCommandPayload{
-                        .request_id = request_id,
-                        .command = command,
-                        .target_device_id = config_.sorting_device_id,
-                        .component_id = std::string(component_id),
-                        .params = mqtt::Json{ { "workId", work_id } },
-                    },
+                         .request_id = request_id,
+                         .command = command,
+                         .target_device_id = config_.sorting_device_id,
+                         .component_id = std::string(component_id),
+                         .params = std::move(params),
+                     },
             },
         .dispatched_event = std::nullopt,
         .work_id = std::string(work_id),

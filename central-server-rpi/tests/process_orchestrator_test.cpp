@@ -272,6 +272,7 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(sorting_start_payload->command == mqtt::ControlCommand::kStart);
     assert(sorting_start_payload->target_device_id == "PI-SORTING-01");
     assert(sorting_start_payload->component_id == "sorting_conveyor");
+    assert(sorting_start_payload->params.at("speed") == 40);
     const auto premature_before_start =
         orchestrator.Handle(Status("MSG-SORTING-PREMATURE-BEFORE-START", "PI-SORTING-01", "CYCLE_COMPLETE"));
     assert(!premature_before_start.transition.Applied());
@@ -297,6 +298,7 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(input_start_payload->target_device_id == "PI-INPUT-01");
     assert(input_start_payload->component_id == "input_conveyor");
     assert(input_start_payload->params.at("workId") == kWorkId);
+    assert(!input_start_payload->params.contains("speed"));
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-INPUT-01"), input_start.message).IsSuccess());
     assert(orchestrator.ConfirmDispatch(input_start).Applied());
 
@@ -1084,15 +1086,14 @@ void TestProcessCommandTrackerRestoresPendingCommand() {
     central_server::ProcessCommandTracker restored;
     assert(restored.Restore(saved));
     assert(restored.PendingCount() == 2);
-    const auto processing = Message(
-        "MSG-TRACKER-PROCESSING", mqtt::MessageType::kCommandResponse, "PI-INPUT-01",
-        mqtt::CommandResponsePayload{
-            .request_id = first.message.message_id,
-            .command = mqtt::ControlCommand::kStop,
-            .result = mqtt::CommandResult::kProcessing,
-            .error_code = std::nullopt,
-            .message = "input stop accepted",
-        });
+    const auto processing = Message("MSG-TRACKER-PROCESSING", mqtt::MessageType::kCommandResponse, "PI-INPUT-01",
+                                    mqtt::CommandResponsePayload{
+                                        .request_id = first.message.message_id,
+                                        .command = mqtt::ControlCommand::kStop,
+                                        .result = mqtt::CommandResult::kProcessing,
+                                        .error_code = std::nullopt,
+                                        .message = "input stop accepted",
+                                    });
     assert(!restored.HandleResponse(processing).has_value());
     assert(restored.PendingCount() == 2);
     const auto response = Message("MSG-TRACKER-RESPONSE", mqtt::MessageType::kCommandResponse, "PI-INPUT-01",
