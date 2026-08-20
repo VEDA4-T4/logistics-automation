@@ -71,11 +71,11 @@ void TestDifferentialForward() {
     assert(MotorControlLogic_ComputeDifferentialForward(350U, 355U, 100, &output) != 0U);
     AssertForward(
         output, MotorControlLogic_ClampPwm(250 + MOTOR_CONTROL_LEFT_TRIM),
-        MotorControlLogic_ClampPwm(355 + MOTOR_CONTROL_RIGHT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+        MotorControlLogic_ClampPwm(355 + 100 + MOTOR_CONTROL_RIGHT_TRIM));
 
     assert(MotorControlLogic_ComputeDifferentialForward(350U, 355U, -100, &output) != 0U);
     AssertForward(
-        output, MotorControlLogic_ClampPwm(350 + MOTOR_CONTROL_LEFT_TRACKING_FAST_BOOST_PWM + MOTOR_CONTROL_LEFT_TRIM),
+        output, MotorControlLogic_ClampPwm(350 + 100 + MOTOR_CONTROL_LEFT_TRIM),
         MotorControlLogic_ClampPwm(255 + MOTOR_CONTROL_RIGHT_TRIM));
 }
 

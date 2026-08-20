@@ -1,6 +1,7 @@
 #include "control_task.h"
 
 #include <stdint.h>
+#include <stdio.h>
 
 #include "app_queues.h"
 #include "cmsis_os2.h"
@@ -13,12 +14,19 @@
 #include "sensor_task.h"
 #include "unload_hw.h"
 #include "unload_task.h"
+#include "usart.h"
+
+#define CONTROL_TASK_PID_TRACE_PERIOD_MS 100U
 
 static control_context_t controlTaskContext;
 static line_follow_pid_t controlTaskLinePid;
 static uart_linetracer_load_state_t controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
 static linetracer_line_state_t controlTaskLineState = LINETRACER_LINE_UNKNOWN;
 static int16_t controlTaskLineError;
+static uint16_t controlTaskLineLeftRaw;
+static uint16_t controlTaskLineCenterRaw;
+static uint16_t controlTaskLineRightRaw;
+static uint32_t controlTaskNextPidTraceMs;
 static uint8_t controlTaskMotorReady;
 static uint32_t controlTaskStartBoostUntilMs;
 static volatile uint8_t controlTaskInitialized;
@@ -136,6 +144,30 @@ static uint8_t ControlTask_TimeReached(uint32_t now_ms, uint32_t deadline_ms) {
 
 static uint8_t ControlTask_TimeAfter(uint32_t value_ms, uint32_t reference_ms) {
     return ((int32_t)(value_ms - reference_ms) > 0) ? 1U : 0U;
+}
+
+static void ControlTask_TracePid(char mode, int16_t correction, uint32_t now_ms) {
+    char line[128];
+    int length;
+    motor_output_t output;
+
+    if (controlTaskContext.route_active == 0U ||
+        (controlTaskNextPidTraceMs != 0U && ControlTask_TimeReached(now_ms, controlTaskNextPidTraceMs) == 0U)) {
+        return;
+    }
+
+    controlTaskNextPidTraceMs = now_ms + CONTROL_TASK_PID_TRACE_PERIOD_MS;
+    MotorControl_GetLastOutput(&output);
+    length = snprintf(
+        line, sizeof(line), "P %lu %c c%u a%u j%u s%u e%d k%d r%u/%u/%u m%u/%u\r\n", (unsigned long)now_ms, mode,
+        (unsigned int)controlTaskContext.state, (unsigned int)controlTaskContext.pending_route_action,
+        (unsigned int)controlTaskContext.junction_phase, (unsigned int)controlTaskLineState, (int)controlTaskLineError,
+        (int)correction, (unsigned int)controlTaskLineLeftRaw, (unsigned int)controlTaskLineCenterRaw,
+        (unsigned int)controlTaskLineRightRaw, (unsigned int)output.left_pwm, (unsigned int)output.right_pwm);
+    if (length > 0) {
+        uint16_t transmit_length = (length < (int)sizeof(line)) ? (uint16_t)length : (uint16_t)(sizeof(line) - 1U);
+        (void)HAL_UART_Transmit(&huart2, (uint8_t*)line, transmit_length, 10U);
+    }
 }
 
 static void ControlTask_ResetRouteSensorPipeline(uint32_t now_ms) {
@@ -455,17 +487,6 @@ static uint8_t ControlTask_RouteMotionEnabled(void) {
     return 1U;
 }
 
-static int16_t ControlTask_LimitMarkerApproachCorrection(int16_t correction) {
-    if (correction > (int16_t)CONTROL_MARKER_APPROACH_PID_CORRECTION_LIMIT) {
-        return (int16_t)CONTROL_MARKER_APPROACH_PID_CORRECTION_LIMIT;
-    }
-    if (correction < -(int16_t)CONTROL_MARKER_APPROACH_PID_CORRECTION_LIMIT) {
-        return -(int16_t)CONTROL_MARKER_APPROACH_PID_CORRECTION_LIMIT;
-    }
-
-    return correction;
-}
-
 static int16_t ControlTask_LimitTurnReacquireCorrection(int16_t correction) {
     if (correction > (int16_t)CONTROL_TURN_REACQUIRE_PID_CORRECTION_LIMIT) {
         return (int16_t)CONTROL_TURN_REACQUIRE_PID_CORRECTION_LIMIT;
@@ -475,6 +496,31 @@ static int16_t ControlTask_LimitTurnReacquireCorrection(int16_t correction) {
     }
 
     return correction;
+}
+
+static uint8_t ControlTask_CToBOrBToARouteActive(void) {
+    return ((controlTaskContext.current_position == UART_LINETRACER_POSITION_DEST_C &&
+             controlTaskContext.active_route == UART_LINETRACER_ROUTE_B) ||
+            (controlTaskContext.current_position == UART_LINETRACER_POSITION_DEST_B &&
+             controlTaskContext.active_route == UART_LINETRACER_ROUTE_A))
+               ? 1U
+               : 0U;
+}
+
+static uint8_t ControlTask_CToBOrBToACommonLinePidActive(void) {
+    return (ControlTask_CToBOrBToARouteActive() != 0U &&
+            controlTaskContext.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE &&
+            controlTaskContext.route_plan.phase == ROUTE_PHASE_ON_COMMON_LINE)
+               ? 1U
+               : 0U;
+}
+
+static uint8_t ControlTask_CToBOrBToARightTurnApproachActive(void) {
+    return (ControlTask_CToBOrBToARouteActive() != 0U &&
+            controlTaskContext.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER &&
+            controlTaskContext.junction_action == ROUTE_ACTION_TURN_RIGHT)
+               ? 1U
+               : 0U;
 }
 
 static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
@@ -494,8 +540,7 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
         int16_t correction = 0;
         uint16_t reacquire_base_pwm = CONTROL_TURN_REACQUIRE_BASE_PWM;
 
-        if ((uint32_t)(now_ms - controlTaskContext.junction_phase_started_at_ms) <
-            CONTROL_TURN_REACQUIRE_START_MS) {
+        if ((uint32_t)(now_ms - controlTaskContext.junction_phase_started_at_ms) < CONTROL_TURN_REACQUIRE_START_MS) {
             reacquire_base_pwm = CONTROL_TURN_REACQUIRE_START_PWM;
         }
 
@@ -519,36 +564,21 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
             0U) {
             ControlTask_ApplyMotorOutput(&output, now_ms);
         }
+        ControlTask_TracePid('R', correction, now_ms);
         return;
     }
     if (ControlTask_RouteMotionEnabled() != 0U && ControlLogic_JunctionManeuverActive(&controlTaskContext) != 0U) {
         LineFollowPid_Reset(&controlTaskLinePid);
         maneuver_action = ControlLogic_JunctionMotorAction(&controlTaskContext);
-        if (MotorControlLogic_ComputeRouteAction(maneuver_action, &output) != 0U) {
+        if (maneuver_action == ROUTE_ACTION_GO_STRAIGHT &&
+            ControlTask_CToBOrBToARightTurnApproachActive() != 0U) {
+            (void)MotorControlLogic_ComputeDifferentialForward(MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM,
+                                                               MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM, 0, &output);
+            ControlTask_ApplyMotorOutput(&output, now_ms);
+        } else if (MotorControlLogic_ComputeRouteAction(maneuver_action, &output) != 0U) {
             ControlTask_ApplyMotorOutput(&output, now_ms);
         }
-        return;
-    }
-
-    if (ControlTask_RouteMotionEnabled() != 0U && ControlLogic_MarkerApproachHoldActive(&controlTaskContext) != 0U) {
-        /* A one-sided hit may be a line error or marker edge. Keep PID active with limited correction. */
-#if SENSOR_LINE_USE_ANALOG_PID
-        int16_t correction = LineFollowPid_Update(&controlTaskLinePid, controlTaskLineError, now_ms);
-#else
-        int16_t correction = 0;
-
-        if (controlTaskLineState == LINETRACER_LINE_LEFT_ONLY) {
-            correction = (int16_t)CONTROL_MARKER_APPROACH_PID_CORRECTION_LIMIT;
-        } else if (controlTaskLineState == LINETRACER_LINE_RIGHT_ONLY) {
-            correction = -(int16_t)CONTROL_MARKER_APPROACH_PID_CORRECTION_LIMIT;
-        }
-#endif
-
-        correction = ControlTask_LimitMarkerApproachCorrection(correction);
-        if (MotorControlLogic_ComputeDifferentialForward(LINE_FOLLOW_PID_LEFT_BASE_PWM, LINE_FOLLOW_PID_RIGHT_BASE_PWM,
-                                                         correction, &output) != 0U) {
-            ControlTask_ApplyMotorOutput(&output, now_ms);
-        }
+        ControlTask_TracePid('T', 0, now_ms);
         return;
     }
 
@@ -557,17 +587,25 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
          controlTaskLineState == LINETRACER_LINE_RIGHT_ONLY || controlTaskLineState == LINETRACER_LINE_WHITE_GAP)) {
 #if SENSOR_LINE_USE_ANALOG_PID
         int16_t correction = LineFollowPid_Update(&controlTaskLinePid, controlTaskLineError, now_ms);
+        uint16_t left_base_pwm = LINE_FOLLOW_PID_LEFT_BASE_PWM;
+        uint16_t right_base_pwm = LINE_FOLLOW_PID_RIGHT_BASE_PWM;
 
-        if (MotorControlLogic_ComputeDifferentialForward(LINE_FOLLOW_PID_LEFT_BASE_PWM, LINE_FOLLOW_PID_RIGHT_BASE_PWM,
-                                                         correction, &output) != 0U) {
+        if (ControlTask_CToBOrBToACommonLinePidActive() != 0U) {
+            left_base_pwm = MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM;
+            right_base_pwm = MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM;
+        }
+
+        if (MotorControlLogic_ComputeDifferentialForward(left_base_pwm, right_base_pwm, correction, &output) != 0U) {
             ControlTask_ApplyMotorOutput(&output, now_ms);
         }
+        ControlTask_TracePid('F', correction, now_ms);
 #else
         /* Optional fallback for a digital-only calibration. */
         LineFollowPid_Reset(&controlTaskLinePid);
         if (MotorControlLogic_ComputeLineFollow(controlTaskLineState, &output) != 0U) {
             ControlTask_ApplyMotorOutput(&output, now_ms);
         }
+        ControlTask_TracePid('D', 0, now_ms);
 #endif
         return;
     }
@@ -578,6 +616,7 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
                                                controlTaskContext.safety_latched, &output) != 0U) {
         ControlTask_ApplyMotorOutput(&output, now_ms);
     }
+    ControlTask_TracePid('X', 0, now_ms);
 }
 
 static uint8_t ControlTask_RouteSensorEventsEnabled(void) {
@@ -919,6 +958,9 @@ static void ControlTask_ProcessSensorSnapshots(void) {
             controlTaskLineState = snapshot.line_state;
         }
         controlTaskLineError = snapshot.line_error;
+        controlTaskLineLeftRaw = snapshot.line_left_raw;
+        controlTaskLineCenterRaw = snapshot.line_center_raw;
+        controlTaskLineRightRaw = snapshot.line_right_raw;
 
         if (uart_linetracer_load_state_is_valid(snapshot.load_state) != 0U) {
             controlTaskLoadState = snapshot.load_state;
@@ -1091,6 +1133,10 @@ void StartControlTask(void* argument) {
     controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
     controlTaskLineState = LINETRACER_LINE_UNKNOWN;
     controlTaskLineError = 0;
+    controlTaskLineLeftRaw = 0U;
+    controlTaskLineCenterRaw = 0U;
+    controlTaskLineRightRaw = 0U;
+    controlTaskNextPidTraceMs = 0U;
     controlTaskMotorReady = MotorControl_Init();
     if (controlTaskMotorReady == 0U) {
         app_control_safety_event_t motor_fault = { 0 };
