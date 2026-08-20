@@ -61,6 +61,9 @@ line_tracer_enabled=true
 line_tracer_initial_position=A
 # Product-catalog misses are routed here instead of stalling the work.
 default_destination=3
+# Conveyor start speeds are percentages (1..100) and are sent explicitly to the nodes.
+input_conveyor_speed_percent=25
+sorting_conveyor_speed_percent=60
 
 [sensor_detection]
 # Box presence is decided here, from the distanceCm the STM32 reports.

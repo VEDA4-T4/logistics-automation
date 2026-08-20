@@ -272,7 +272,7 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(sorting_start_payload->command == mqtt::ControlCommand::kStart);
     assert(sorting_start_payload->target_device_id == "PI-SORTING-01");
     assert(sorting_start_payload->component_id == "sorting_conveyor");
-    assert(sorting_start_payload->params.at("speed") == 40);
+    assert(sorting_start_payload->params.at("speed") == 60);
     const auto premature_before_start =
         orchestrator.Handle(Status("MSG-SORTING-PREMATURE-BEFORE-START", "PI-SORTING-01", "CYCLE_COMPLETE"));
     assert(!premature_before_start.transition.Applied());
@@ -298,7 +298,7 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(input_start_payload->target_device_id == "PI-INPUT-01");
     assert(input_start_payload->component_id == "input_conveyor");
     assert(input_start_payload->params.at("workId") == kWorkId);
-    assert(!input_start_payload->params.contains("speed"));
+    assert(input_start_payload->params.at("speed") == 25);
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-INPUT-01"), input_start.message).IsSuccess());
     assert(orchestrator.ConfirmDispatch(input_start).Applied());
 

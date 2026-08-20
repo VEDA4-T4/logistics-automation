@@ -25,6 +25,8 @@ struct ProcessOrchestratorConfig final {
     bool line_tracer_enabled{ true };
     std::string line_tracer_initial_position;
     std::string default_destination{ "3" };
+    std::uint8_t input_conveyor_speed_percent{ 25 };
+    std::uint8_t sorting_conveyor_speed_percent{ 60 };
     HomographyConfig homography;
 
     [[nodiscard]] bool IsValid() const noexcept;

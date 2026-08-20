@@ -139,7 +139,9 @@ bool ProcessOrchestratorConfig::IsValid() const noexcept {
     return mqtt::IsValidTopicLevel(server_id) && mqtt::IsValidTopicLevel(input_device_id) &&
            mqtt::IsValidTopicLevel(vision_device_id) && mqtt::IsValidTopicLevel(gripper_device_id) &&
            mqtt::IsValidTopicLevel(sorting_device_id) && mqtt::IsValidTopicLevel(line_tracer_device_id) &&
-           mqtt::IsValidTopicLevel(default_destination) && initial_position_valid &&
+           mqtt::IsValidTopicLevel(default_destination) && input_conveyor_speed_percent > 0U &&
+           input_conveyor_speed_percent <= 100U && sorting_conveyor_speed_percent > 0U &&
+           sorting_conveyor_speed_percent <= 100U && initial_position_valid &&
            (!homography.enabled || homography.IsValid());
 }
 
@@ -915,6 +917,10 @@ ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_v
                                                                    mqtt::ControlCommand command,
                                                                    std::string_view timestamp) {
     const std::string request_id = NextMessageId();
+    mqtt::Json params{ { "workId", work_id } };
+    if (command == mqtt::ControlCommand::kStart) {
+        params["speed"] = config_.input_conveyor_speed_percent;
+    }
     return {
         .message =
             {
@@ -929,7 +935,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_v
                         .command = command,
                         .target_device_id = config_.input_device_id,
                         .component_id = "input_conveyor",
-                        .params = mqtt::Json{ { "workId", work_id } },
+                        .params = std::move(params),
                     },
             },
         .dispatched_event = std::nullopt,
@@ -944,7 +950,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeSortingControlCommand(std::string_
     const std::string request_id = NextMessageId();
     mqtt::Json params{ { "workId", work_id } };
     if (command == mqtt::ControlCommand::kStart && component_id == "sorting_conveyor") {
-        params["speed"] = 40;
+        params["speed"] = config_.sorting_conveyor_speed_percent;
     }
     return {
         .message =
