@@ -109,16 +109,6 @@ void TestMqttDeliveryOutboxSurvivesRestartAndDeduplicates() {
     std::filesystem::remove(path.string() + "-shm", error);
 }
 
-void TestVisionWorkCreatedDeliveryClassification() {
-    const auto message = WorkCreated();
-    assert(central_server::IsVisionWorkCreatedDelivery(
-        { .topic = mqtt::DeviceCommandTopic("PI-VISION-01"), .message = message }, "PI-VISION-01"));
-    assert(!central_server::IsVisionWorkCreatedDelivery(
-        { .topic = mqtt::QtEventTopic("control-center"), .message = message }, "PI-VISION-01"));
-    assert(!central_server::IsVisionWorkCreatedDelivery(
-        { .topic = mqtt::DeviceCommandTopic("PI-INPUT-01"), .message = message }, "PI-VISION-01"));
-}
-
 std::int64_t Scalar(central_server::Database& database, std::string_view sql) {
     central_server::Statement statement;
     assert(database.Prepare(sql, statement).ok());
@@ -208,27 +198,6 @@ void TestMqttDeliveryOutboxPreservesInsertionOrderForEqualTimestamps() {
     std::filesystem::remove(path, error);
     std::filesystem::remove(path.string() + "-wal", error);
     std::filesystem::remove(path.string() + "-shm", error);
-}
-
-void TestVisionAssignmentAcknowledgementClassification() {
-    const mqtt::MqttMessage acknowledged{
-        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = "STATUS-WORK-ASSIGNED-01",
-        .message_type = mqtt::MessageType::kDeviceStatus,
-        .source_id = "PI-VISION-01",
-        .timestamp = "2026-08-13T01:00:00Z",
-        .data =
-            mqtt::DeviceStatusPayload{
-                .status = mqtt::ConnectionState::kOnline,
-                .current_state = "WORK_ASSIGNED",
-                .job_id = std::string(kWorkId),
-            },
-    };
-    assert(central_server::AcknowledgedVisionWorkId(acknowledged, "PI-VISION-01") == kWorkId);
-    assert(!central_server::AcknowledgedVisionWorkId(acknowledged, "PI-VISION-02").has_value());
-    auto not_assigned = acknowledged;
-    mqtt::GetPayload<mqtt::DeviceStatusPayload>(not_assigned)->current_state = "ONLINE";
-    assert(!central_server::AcknowledgedVisionWorkId(not_assigned, "PI-VISION-01").has_value());
 }
 
 void TestSnapshotAndDeliveryBatchRollbackTogether() {
@@ -566,8 +535,6 @@ int main() {
     TestSnapshotSurvivesRestartAndIsSafelySuspended();
     TestMqttDeliveryOutboxSurvivesRestartAndDeduplicates();
     TestMqttDeliveryOutboxPreservesInsertionOrderForEqualTimestamps();
-    TestVisionWorkCreatedDeliveryClassification();
-    TestVisionAssignmentAcknowledgementClassification();
     TestCommandManagerAndSystemCommandSnapshotRoundTrip();
     TestSnapshotAndDeliveryBatchRollbackTogether();
     TestRecoveryCommitReplacesRuntimeAndOutboxAtomically();

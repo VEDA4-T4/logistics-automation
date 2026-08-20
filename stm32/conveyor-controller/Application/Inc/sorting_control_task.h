@@ -6,9 +6,6 @@
 #include "app_messages.h"
 #include "sorting_control.h"
 
-/* 1 ms task backoff 기준 약 100 ms 동안 CommTx urgent queue 재등록을 시도한다. */
-#define SORTING_CONTROL_TX_RETRY_LIMIT 100U
-
 typedef enum {
     SORTING_CONTROL_SAFETY_RELEASED = 0,
     SORTING_CONTROL_SAFETY_STOP_REQUESTED,
@@ -19,7 +16,6 @@ typedef enum {
 typedef struct {
     uint32_t txQueueDrops;
     uint32_t txRetryAttempts;
-    uint32_t txRetryExhausted;
     uint32_t txPendingOverruns;
     uint32_t duplicateCommands;
     uint32_t sequenceConflicts;

@@ -7,7 +7,6 @@
 #include "app_queues.h"
 #include "cmsis_os2.h"
 #include "health_task.h"
-#include "safety_task.h"
 #include "sorting_gate_mg90s.h"
 #include "sorting_motor_tb6612.h"
 
@@ -45,8 +44,7 @@ typedef struct {
 static sorting_control_task_response_t sortingPendingResponse;
 static sorting_control_task_transaction_t sortingTransactionCache;
 static uint8_t sortingPendingResponseValid;
-static uint8_t sortingPendingResponseEscalated;
-static uint32_t sortingPendingResponseAttempts;
+static uint8_t sortingPendingResponseAttempted;
 
 static sorting_control_safety_sync_state_t sorting_control_task_safety_state(void) {
     return atomic_load_explicit(&sortingSafetySyncState, memory_order_acquire);
@@ -173,28 +171,18 @@ uint8_t sorting_control_task_service_tx(void) {
         return 1U;
     }
 
-    if (sortingPendingResponseEscalated != 0U) {
-        return 0U;
-    }
-
-    if (sortingPendingResponseAttempts != 0U) {
+    if (sortingPendingResponseAttempted != 0U) {
         sortingControlTaskStats.txRetryAttempts++;
     }
 
-    sortingPendingResponseAttempts++;
+    sortingPendingResponseAttempted = 1U;
 
     if (sorting_control_task_send_tx(&sortingPendingResponse) == 0U) {
-        if (sortingPendingResponseAttempts >= SORTING_CONTROL_TX_RETRY_LIMIT) {
-            sortingControlTaskStats.txRetryExhausted++;
-            sortingPendingResponseEscalated = 1U;
-            Safety_TriggerEmergencyStop(SAFETY_CAUSE_FATAL_ERROR);
-        }
         return 0U;
     }
 
     sortingPendingResponseValid = 0U;
-    sortingPendingResponseEscalated = 0U;
-    sortingPendingResponseAttempts = 0U;
+    sortingPendingResponseAttempted = 0U;
     return 1U;
 }
 
@@ -211,8 +199,7 @@ static uint8_t sorting_control_task_schedule_response(const sorting_control_task
 
     sortingPendingResponse = *response;
     sortingPendingResponseValid = 1U;
-    sortingPendingResponseEscalated = 0U;
-    sortingPendingResponseAttempts = 0U;
+    sortingPendingResponseAttempted = 0U;
     return sorting_control_task_service_tx();
 }
 
@@ -311,8 +298,7 @@ static sorting_control_result_t sorting_control_task_apply_requested_stop(sortin
 
     sortingTransactionCache.valid = 0U;
     sortingPendingResponseValid = 0U;
-    sortingPendingResponseEscalated = 0U;
-    sortingPendingResponseAttempts = 0U;
+    sortingPendingResponseAttempted = 0U;
     result = sorting_control_handle_safety_stop(controller);
 
     if (result == SORTING_CONTROL_OK) {
@@ -351,8 +337,7 @@ sorting_control_result_t sorting_control_task_initialize_controller(sorting_cont
     memset(&sortingTransactionCache, 0, sizeof(sortingTransactionCache));
     memset(&sortingPendingResponse, 0, sizeof(sortingPendingResponse));
     sortingPendingResponseValid = 0U;
-    sortingPendingResponseEscalated = 0U;
-    sortingPendingResponseAttempts = 0U;
+    sortingPendingResponseAttempted = 0U;
     result = sorting_control_init(controller, motor, gate);
     (void)sorting_control_task_apply_requested_stop(controller);
     return result;

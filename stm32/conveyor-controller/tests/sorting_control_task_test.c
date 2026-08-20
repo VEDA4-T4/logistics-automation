@@ -12,7 +12,6 @@
 #include "app_comm_tx.h"
 #include "app_queues.h"
 #include "health_task.h"
-#include "safety_task.h"
 #include "sorting_gate_mg90s.h"
 #include "sorting_motor_tb6612.h"
 
@@ -65,14 +64,6 @@ static sorting_motor_port_t productionMotorPort;
 static sorting_gate_port_t productionGatePort;
 static uint8_t lastDeviceState;
 static uint8_t lastDeviceError;
-static uint32_t safetyTriggerCalls;
-static safety_cause_t lastSafetyCause;
-
-void Safety_TriggerEmergencyStop(safety_cause_t cause) {
-    safetyTriggerCalls++;
-    lastSafetyCause = cause;
-}
-
 static sorting_motor_result_t fake_motor_initialize(void* context) {
     fake_motor_t* motor = (fake_motor_t*)context;
     motor->initializeCalls++;
@@ -255,8 +246,6 @@ static void initialize(sorting_control_t* controller, fake_motor_t* motor, fake_
     fake_queue_reset(&txQueue, sizeof(tx_request_t));
     lastDeviceState = UART_DEVICE_READY;
     lastDeviceError = UART_ERROR_NONE;
-    safetyTriggerCalls = 0U;
-    lastSafetyCause = SAFETY_CAUSE_NONE;
     sortingControlQueueHandle = &sortingQueue;
     memset(motor, 0, sizeof(*motor));
     memset(gate, 0, sizeof(*gate));
@@ -318,33 +307,30 @@ static void test_response_cache_and_retry(void) {
     assert(lastDeviceState == UART_DEVICE_RUNNING);
 }
 
-static void test_persistent_tx_busy_escalates_once(void) {
+static void test_persistent_tx_busy_retries_until_queue_recovers(void) {
     sorting_control_t controller;
     fake_motor_t motor;
     fake_gate_t gate;
     control_command_t message;
-    sorting_control_task_stats_t before;
-    sorting_control_task_stats_t after;
+    tx_request_t response;
     const uint8_t speed[] = { 45U };
 
     initialize(&controller, &motor, &gate);
-    sorting_control_task_get_stats(&before);
     txQueue.failPut = 1U;
 
     message = command(14U, UART_CMD_SORTING_CONVEYOR_SET_SPEED, speed, sizeof(speed));
     assert(sorting_control_task_process_message(&controller, &message) == SORTING_CONTROL_OK);
 
-    for (uint32_t attempt = 1U; attempt < SORTING_CONTROL_TX_RETRY_LIMIT; attempt++) {
+    for (uint32_t attempt = 0U; attempt < 150U; attempt++) {
         assert(sorting_control_task_service_tx() == 0U);
     }
 
-    sorting_control_task_get_stats(&after);
-    assert(after.txRetryExhausted == (before.txRetryExhausted + 1U));
-    assert(safetyTriggerCalls == 1U);
-    assert(lastSafetyCause == SAFETY_CAUSE_FATAL_ERROR);
-
-    assert(sorting_control_task_service_tx() == 0U);
-    assert(safetyTriggerCalls == 1U);
+    txQueue.failPut = 0U;
+    assert(sorting_control_task_service_tx() == 1U);
+    response = pop_tx();
+    assert(response.sequence == 14U);
+    assert(response.command == UART_CMD_OPERATION_RESULT);
+    assert(response.payload[UART_OPERATION_RESULT_STATUS_INDEX] == UART_STATUS_SUCCESS);
 }
 
 static void test_speed_errors_are_distinct(void) {
@@ -433,7 +419,7 @@ static void test_safety_epoch_rejects_old_command(void) {
 
 int main(void) {
     test_response_cache_and_retry();
-    test_persistent_tx_busy_escalates_once();
+    test_persistent_tx_busy_retries_until_queue_recovers();
     test_speed_errors_are_distinct();
     test_route_return_home_emits_event();
     test_safety_epoch_rejects_old_command();

@@ -35,6 +35,14 @@ Application::PendingDeliveryEpochResult Application::PreparePendingMqttDeliveryE
     return PendingDeliveryEpochResult::kReady;
 }
 
+void Application::AcknowledgeMqttDelivery(
+    const PendingMqttDelivery& delivery, const std::string& key,
+    std::unordered_set<std::string>& mqtt_deliveries_in_flight,
+    std::unordered_map<std::string, PendingMqttDelivery>& mqtt_deliveries_acknowledged) {
+    mqtt_deliveries_in_flight.erase(key);
+    mqtt_deliveries_acknowledged.insert_or_assign(key, delivery);
+}
+
 bool Application::CommitRecoveryResponse(
     ProcessOrchestrator& process_orchestrator, ProcessCommandTracker& process_command_tracker,
     CommandManager& command_manager,

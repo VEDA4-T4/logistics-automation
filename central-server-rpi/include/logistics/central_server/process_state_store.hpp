@@ -31,10 +31,6 @@ struct PendingMqttDelivery final {
     contracts::mqtt::MqttMessage message;
 };
 
-[[nodiscard]] bool IsVisionWorkCreatedDelivery(const PendingMqttDelivery& delivery, std::string_view vision_device_id);
-[[nodiscard]] std::optional<std::string> AcknowledgedVisionWorkId(const contracts::mqtt::MqttMessage& message,
-                                                                  std::string_view vision_device_id);
-
 class ProcessStateStore final {
 public:
     explicit ProcessStateStore(Database& database) : database_(database) {}

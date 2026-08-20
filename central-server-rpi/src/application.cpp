@@ -373,41 +373,36 @@ int Application::Run(int argc, char* argv[]) {
     const auto delivery_key = [](std::string_view topic, std::string_view message_id) {
         return std::string(topic) + "\n" + std::string(message_id);
     };
-    const auto publish_enqueued =
-        [&mqtt_client, &mqtt_delivery_mutex, &mqtt_deliveries_in_flight, &mqtt_deliveries_acknowledged, &delivery_key,
-         vision_device_id = server_config.process.vision_device_id](const PendingMqttDelivery& delivery) {
-            if (!mqtt_client.IsReady()) {
-                std::clog << "[server][MQTT][INFO] publish deferred; topic=" << delivery.topic
-                          << "; messageId=" << delivery.message.message_id
-                          << "; messageType=" << contracts::mqtt::ToString(delivery.message.message_type)
-                          << "; reason=client-not-ready\n";
+    const auto publish_enqueued = [&mqtt_client, &mqtt_delivery_mutex, &mqtt_deliveries_in_flight,
+                                   &mqtt_deliveries_acknowledged, &delivery_key](const PendingMqttDelivery& delivery) {
+        if (!mqtt_client.IsReady()) {
+            std::clog << "[server][MQTT][INFO] publish deferred; topic=" << delivery.topic
+                      << "; messageId=" << delivery.message.message_id
+                      << "; messageType=" << contracts::mqtt::ToString(delivery.message.message_type)
+                      << "; reason=client-not-ready\n";
+            return true;
+        }
+        const auto key = delivery_key(delivery.topic, delivery.message.message_id);
+        {
+            const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+            if (!mqtt_deliveries_in_flight.insert(key).second) {
+                std::clog << "[server][MQTT][INFO] publish already in flight; topic=" << delivery.topic
+                          << "; messageId=" << delivery.message.message_id << '\n';
                 return true;
             }
-            const auto key = delivery_key(delivery.topic, delivery.message.message_id);
-            {
+        }
+        const bool accepted = mqtt_client.PublishMessageAcknowledged(
+            delivery.topic, delivery.message, contracts::mqtt::Qos::kAtLeastOnce,
+            [&mqtt_delivery_mutex, &mqtt_deliveries_in_flight, &mqtt_deliveries_acknowledged, key, delivery](int) {
                 const std::lock_guard delivery_lock(mqtt_delivery_mutex);
-                if (!mqtt_deliveries_in_flight.insert(key).second) {
-                    std::clog << "[server][MQTT][INFO] publish already in flight; topic=" << delivery.topic
-                              << "; messageId=" << delivery.message.message_id << '\n';
-                    return true;
-                }
-            }
-            const bool accepted = mqtt_client.PublishMessageAcknowledged(
-                delivery.topic, delivery.message, contracts::mqtt::Qos::kAtLeastOnce,
-                [&mqtt_delivery_mutex, &mqtt_deliveries_in_flight, &mqtt_deliveries_acknowledged, key, delivery,
-                 vision_device_id](int) {
-                    const std::lock_guard delivery_lock(mqtt_delivery_mutex);
-                    if (!IsVisionWorkCreatedDelivery(delivery, vision_device_id)) {
-                        mqtt_deliveries_in_flight.erase(key);
-                        mqtt_deliveries_acknowledged.insert_or_assign(key, delivery);
-                    }
-                });
-            if (!accepted) {
-                const std::lock_guard delivery_lock(mqtt_delivery_mutex);
-                mqtt_deliveries_in_flight.erase(key);
-            }
-            return true;
-        };
+                AcknowledgeMqttDelivery(delivery, key, mqtt_deliveries_in_flight, mqtt_deliveries_acknowledged);
+            });
+        if (!accepted) {
+            const std::lock_guard delivery_lock(mqtt_delivery_mutex);
+            mqtt_deliveries_in_flight.erase(key);
+        }
+        return true;
+    };
     const auto publish_durable = [&publish_enqueued, &process_state_store, &run_runtime_store, &process_epoch](
                                      std::string_view topic, const contracts::mqtt::MqttMessage& message) {
         const auto stamped = StampProcessEpoch(message, process_epoch);
@@ -767,21 +762,7 @@ int Application::Run(int argc, char* argv[]) {
         return false;
     });
     mqtt_handler.SetQtStatusHandler(
-        [&mqtt_client, &process_state_store, &run_runtime_store, &mqtt_delivery_mutex, &mqtt_deliveries_in_flight,
-         &mqtt_deliveries_acknowledged, &delivery_key, qt_client_id = server_config.qt_client_id,
-         vision_device_id = server_config.process.vision_device_id](const contracts::mqtt::MqttMessage& message) {
-            if (const auto work_id = AcknowledgedVisionWorkId(message, vision_device_id)) {
-                const auto device_topic = contracts::mqtt::DeviceCommandTopic(vision_device_id);
-                const auto message_id = "WORK-" + *work_id;
-                if (!run_runtime_store([&] { return process_state_store.RemoveMqttDelivery(device_topic, message_id); },
-                                       "vision WORK_CREATED device acknowledgement")) {
-                    return false;
-                }
-                const auto key = delivery_key(device_topic, message_id);
-                const std::lock_guard delivery_lock(mqtt_delivery_mutex);
-                mqtt_deliveries_in_flight.erase(key);
-                mqtt_deliveries_acknowledged.erase(key);
-            }
+        [&mqtt_client, qt_client_id = server_config.qt_client_id](const contracts::mqtt::MqttMessage& message) {
             return mqtt_client.PublishMessage(contracts::mqtt::QtStatusTopic(qt_client_id), message,
                                               contracts::mqtt::Qos::kAtLeastOnce);
         });
