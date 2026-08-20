@@ -222,29 +222,7 @@ bool ProcessOrchestrator::Enabled() const noexcept {
 }
 
 bool ProcessOrchestrator::AcceptsNewWork() const noexcept {
-    if (!config_.enabled || !state_machine_.AcceptsNewWork()) {
-        return false;
-    }
-
-    const std::array process_devices{
-        std::string_view(config_.input_device_id),
-        std::string_view(config_.vision_device_id),
-        std::string_view(config_.gripper_device_id),
-        std::string_view(config_.sorting_device_id),
-    };
-    for (const auto device_id : process_devices) {
-        const auto health = device_health_.find(std::string(device_id));
-        if (health != device_health_.end() && !health->second) {
-            return false;
-        }
-    }
-    if (config_.line_tracer_enabled) {
-        const auto health = device_health_.find(config_.line_tracer_device_id);
-        if (health != device_health_.end() && !health->second) {
-            return false;
-        }
-    }
-    return true;
+    return config_.enabled && state_machine_.AcceptsNewWork();
 }
 
 bool ProcessOrchestrator::IsWorkCreationSource(std::string_view device_id) const noexcept {

@@ -392,7 +392,7 @@ void TestInvalidOrderAndDispatchFailureStaysProcessReady() {
     assert(product_result.commands.size() == 2);
     assert(orchestrator.FailDispatch(product_result.commands.back(), "gripper is offline").Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
-    assert(!orchestrator.AcceptsNewWork());
+    assert(orchestrator.AcceptsNewWork());
 }
 
 void TestInputFailureWithoutWorkIdStopsTheProcess() {
@@ -654,19 +654,27 @@ void TestSystemCommandTimeoutDoesNotMutateActiveWorks() {
     assert(orchestrator.StateMachine().FindWork(other_work_id)->failure_reason.empty());
 }
 
-void TestFailedDeviceBlocksNewWorkUntilHealthy() {
+void TestDeviceHealthDoesNotBlockIndependentWork() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     const auto begin = orchestrator.BeginWork("MSG-INPUT-FAULT", kWorkId, "PI-INPUT-01", kTimestamp);
     assert(begin.transition.Applied() && begin.commands.size() == 1);
     assert(orchestrator.FailDispatch(begin.commands.front(), "input conveyor stop timed out").Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
-    assert(!orchestrator.AcceptsNewWork());
+    assert(orchestrator.AcceptsNewWork());
 
     assert(!orchestrator
                 .Handle(
                     Status("MSG-INPUT-HEALTHY", "PI-INPUT-01", "STOPPED", mqtt::ConnectionState::kOnline, std::nullopt))
                 .handled);
     assert(orchestrator.AcceptsNewWork());
+
+    assert(!orchestrator.Handle(Heartbeat("MSG-GRIPPER-HOMING", "PI-GRIPPER-01", "HOMING")).handled);
+    assert(orchestrator.AcceptsNewWork());
+
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
+    assert(!orchestrator.AcceptsNewWork());
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+    assert(!orchestrator.AcceptsNewWork());
 }
 
 void TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands() {
@@ -1191,7 +1199,7 @@ int main() {
     TestFailedSystemCommandsEnterSafeProcessStates();
     TestCommandTimeoutOnlyFailsIdentifiableWork();
     TestSystemCommandTimeoutDoesNotMutateActiveWorks();
-    TestFailedDeviceBlocksNewWorkUntilHealthy();
+    TestDeviceHealthDoesNotBlockIndependentWork();
     TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands();
     TestRecoveryRestartStaysRecovering();
     TestRestoredHomographyTargetCreatesGripperCommand();
