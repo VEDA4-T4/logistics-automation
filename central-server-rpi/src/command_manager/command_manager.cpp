@@ -288,6 +288,15 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
     }
 
     if (!mqtt::IsTerminal(response->result)) {
+        // A PROCESSING response from a single target proves that it accepted the
+        // request but may still be waiting on its serial controller. Restart the
+        // command-specific completion window without completing the process intent.
+        // Broadcast commands keep their original deadline so one chatty device
+        // cannot hide another target that never responds.
+        if (pending.expected_devices.size() == 1U) {
+            pending.started_at = now_provider_();
+            pending.deadline_at_ms = UnixMilliseconds() + pending.timeout.count();
+        }
         return {
             .disposition = CommandResponseDisposition::kForward,
             .message = message,

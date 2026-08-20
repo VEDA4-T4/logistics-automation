@@ -116,9 +116,15 @@ void UpdateDeviceStatus(const SortingReport& report, const std::shared_ptr<Devic
         report.message_type, mqtt_client != nullptr && report.channel != SortingReportChannel::kStatus,
         [&] { return PublishOutbound(*mqtt_client, outbound); },
         [&] {
-            if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
-                    return queued.channel == SortingReportChannel::kStatus;
-                })) {
+            bool has_room = MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
+                return queued.channel == SortingReportChannel::kStatus;
+            });
+            if (!has_room && report.channel == SortingReportChannel::kResponse) {
+                has_room = MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
+                    return queued.channel != SortingReportChannel::kResponse;
+                });
+            }
+            if (!has_room) {
                 std::cerr << "[sorting][mqtt][ERROR] outbound queue full; preserving queued messages\n";
                 return false;
             }
@@ -214,6 +220,8 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
 
 [[nodiscard]] std::string LocalCommandMessage(SortingCommandStatus status) {
     switch (status) {
+        case SortingCommandStatus::kSent:
+            return "sorting command accepted; waiting for controller completion";
         case SortingCommandStatus::kDuplicate:
             return "sorting command already applied; motor action was not repeated";
         case SortingCommandStatus::kAcknowledged:
@@ -235,8 +243,7 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
 }
 
 [[nodiscard]] std::optional<SortingReport> MakeLocalCommandResponse(const SortingCommandResult& result) {
-    if (result.status == SortingCommandStatus::kSent || result.request_id.empty() ||
-        result.mqtt_command == mqtt::ControlCommand::kUnknown) {
+    if (result.request_id.empty() || result.mqtt_command == mqtt::ControlCommand::kUnknown) {
         return std::nullopt;
     }
 
@@ -307,8 +314,22 @@ int RunSortingDaemon(int argc, char* argv[]) {
     bool uart_resync_pending = false;
 
     const auto queue_report = [&](const SortingReport& report) {
-        static_cast<void>(EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence,
-                                          device_status, &mqtt_client));
+        if (const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data); response != nullptr) {
+            std::clog << "[sorting][command][INFO] response queued; requestId=" << response->request_id
+                      << "; command=" << mqtt::ToString(response->command)
+                      << "; result=" << mqtt::ToString(response->result) << '\n';
+        }
+        if (!EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence, device_status,
+                             &mqtt_client)) {
+            std::cerr << "[sorting][mqtt][ERROR] unable to preserve outbound report; messageType="
+                      << mqtt::ToString(report.message_type);
+            if (const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
+                response != nullptr) {
+                std::cerr << "; requestId=" << response->request_id
+                          << "; result=" << mqtt::ToString(response->result);
+            }
+            std::cerr << '\n';
+        }
     };
     sorting_node.SetReportHandler(queue_report);
     uart_session.SetEventHandler([&](const UartSessionEvent& event) {
@@ -326,6 +347,25 @@ int RunSortingDaemon(int argc, char* argv[]) {
         }
     });
     mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
+        std::clog << "[sorting][mqtt][INFO] command received; messageId=" << message.message_id
+                  << "; messageType=" << mqtt::ToString(message.message_type)
+                  << "; queueSizeBefore=" << command_inbox.Size();
+        if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message); command != nullptr) {
+            std::clog << "; requestId=" << command->request_id << "; command=" << mqtt::ToString(command->command)
+                      << "; target=" << command->target_device_id << "; component=" << command->component_id;
+        } else if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(message);
+                   destination != nullptr) {
+            std::clog << "; requestId=" << destination->request_id
+                      << "; command=" << mqtt::ToString(destination->command)
+                      << "; target=" << destination->target_device_id << "; workId=" << destination->work_id
+                      << "; destination=" << destination->destination;
+        } else if (const auto* emergency = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message);
+                   emergency != nullptr) {
+            std::clog << "; requestId=" << emergency->request_id
+                      << "; command=" << mqtt::ToString(emergency->command)
+                      << "; target=" << emergency->target_device_id;
+        }
+        std::clog << '\n';
         std::deque<mqtt::MqttMessage> preempted;
         bool handled = command_inbox.Push(message, &preempted);
         if (!handled) {
@@ -351,6 +391,9 @@ int RunSortingDaemon(int argc, char* argv[]) {
                           << command.message_id << '\n';
             }
         }
+        std::clog << "[sorting][mqtt][INFO] command queue result; messageId=" << message.message_id
+                  << "; accepted=" << (handled ? "true" : "false") << "; queueSize=" << command_inbox.Size()
+                  << "; preempted=" << preempted.size() << '\n';
         return handled;
     });
 

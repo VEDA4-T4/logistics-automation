@@ -390,6 +390,42 @@ void TestInputStopAcceptsSlowProcessingAndSuccess() {
     assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*success.message)->result == mqtt::CommandResult::kSuccess);
 }
 
+void TestSortingProcessingRefreshesDeadlineUntilTerminalResponse() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    assert(manager.TrackCommand(
+        MakeCommand("REQ-SORTING-START", "PI-SORTING-01", mqtt::ControlCommand::kStart, "sorting_conveyor"),
+        { "PI-SORTING-01" }));
+
+    now += mqtt::kSortingCommandCompletionTimeout - std::chrono::seconds(1);
+    const auto processing = manager.HandleResponse(
+        MakeResponse("PI-SORTING-01", "RESP-SORTING-PROCESSING", "REQ-SORTING-START",
+                     mqtt::CommandResult::kProcessing, mqtt::ControlCommand::kStart));
+    assert(processing.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(manager.PendingCount() == 1);
+
+    now += mqtt::kSortingCommandCompletionTimeout - std::chrono::seconds(1);
+    assert(manager.CheckTimeouts("2026-08-20T00:00:08Z").empty());
+    const auto success = manager.HandleResponse(
+        MakeResponse("PI-SORTING-01", "RESP-SORTING-SUCCESS", "REQ-SORTING-START",
+                     mqtt::CommandResult::kSuccess, mqtt::ControlCommand::kStart));
+    assert(success.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(success.message.has_value());
+    assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*success.message)->result == mqtt::CommandResult::kSuccess);
+    assert(manager.PendingCount() == 0);
+
+    central_server::CommandManager::Clock::time_point broadcast_now{};
+    central_server::CommandManager broadcast_manager([&broadcast_now] { return broadcast_now; });
+    assert(broadcast_manager.TrackCommand(MakeCommand("REQ-BROADCAST", "SYSTEM"), { "PI-01", "PI-02" }));
+    broadcast_now += mqtt::kGripperHomeCompletionTimeout - std::chrono::seconds(1);
+    assert(broadcast_manager
+               .HandleResponse(MakeResponse("PI-01", "RESP-BROADCAST-PROCESSING", "REQ-BROADCAST",
+                                            mqtt::CommandResult::kProcessing, mqtt::ControlCommand::kStart))
+               .disposition == central_server::CommandResponseDisposition::kForward);
+    broadcast_now += std::chrono::seconds(1);
+    assert(broadcast_manager.CheckTimeouts("2026-08-20T00:00:15Z").size() == 1);
+}
+
 void TestSystemCommandsUseLongestResolvedTargetDeadline() {
     auto destination = MakeCommand("REQ-SYSTEM-DESTINATION", "SYSTEM", mqtt::ControlCommand::kDestinationSet);
     destination.message_type = mqtt::MessageType::kDestinationSet;
@@ -523,6 +559,7 @@ int main() {
     TestRecoveryUsesExtendedCompletionTimeout();
     TestExecuteUsesFullCompletionTimeout();
     TestInputStopAcceptsSlowProcessingAndSuccess();
+    TestSortingProcessingRefreshesDeadlineUntilTerminalResponse();
     TestRestorePreservesSubsecondDeadlinePrecision();
     TestSystemCommandsUseLongestResolvedTargetDeadline();
     TestTimeoutNamesCommandAndMissingDevicesDeterministically();

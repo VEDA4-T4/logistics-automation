@@ -627,6 +627,18 @@ void TestSafetyAndHeartbeatTimeoutsAreReported() {
     assert(timeout.result == mqtt::CommandResult::kTimeout);
 
     fixture.reports.clear();
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery)).Succeeded());
+    fixture.node->Tick(mqtt::kEmergencyStopConfirmationTimeout);
+    assert(fixture.node->HasPendingSafetyCommand());
+    assert(fixture.reports.empty());
+    fixture.node->Tick(mqtt::kRecoveryCompletionTimeout - mqtt::kEmergencyStopConfirmationTimeout);
+    assert(!fixture.node->HasPendingSafetyCommand());
+    const auto& recovery_timeout = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(recovery_timeout.command == mqtt::ControlCommand::kRecovery);
+    assert(recovery_timeout.result == mqtt::CommandResult::kTimeout);
+    assert(recovery_timeout.error_code == "ERR-RECOVERY-CONFIRMATION-TIMEOUT");
+
+    fixture.reports.clear();
     fixture.node->ResetControllerHeartbeatMonitor();
     fixture.node->Tick(std::chrono::seconds{ 3 });
     assert(fixture.reports.size() == 2U);
@@ -805,7 +817,7 @@ void TestHealthSensorStaleIncludesSensorId() {
     assert(fixture.reports.size() == 2U);
 }
 
-void TestCommandTimeoutReportsTimeout() {
+void TestCommandTimeoutReportsOnceAndReconcilesCycle() {
     Fixture fixture;
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
 
@@ -816,14 +828,23 @@ void TestCommandTimeoutReportsTimeout() {
     fixture.session->Tick(std::chrono::milliseconds{ UART_ACK_TIMEOUT_MS });
 
     assert(!fixture.session->HasPendingCommand());
-    assert(fixture.node->HasActiveCycle());
-    assert(fixture.node->ActiveWorkId() == kWorkId);
+    assert(!fixture.node->HasActiveCycle());
+    assert(fixture.node->ActiveWorkId().empty());
     assert(fixture.reports.size() == 2U);
     const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
     assert(response.result == mqtt::CommandResult::kTimeout);
     assert(response.error_code == "ERR-UART-RESPONSE-TIMEOUT");
     const auto& error = ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.back());
     assert(error.error_code == "ERR-UART-RESPONSE-TIMEOUT");
+
+    fixture.reports.clear();
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    fixture.PushSortingStatus(UART_SORTING_GATE_WAIT_ITEM, 1U, UART_SORTING_DESTINATION_2);
+    assert(fixture.node->HasActiveCycle());
+    assert(fixture.node->ActiveWorkId() == kWorkId);
+    assert(fixture.node->ActiveCycleId() == 1U);
+    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.front().message_type == mqtt::MessageType::kDeviceStatus);
 
     fixture.reports.clear();
     assert(fixture.node->RequestControllerStatus().Succeeded());
@@ -863,6 +884,6 @@ int main() {
     TestSafetyAndHealthEventsAreDecodedAndDeduplicated();
     TestOppositeUartChannelTimeoutIsIgnored();
     TestHealthSensorStaleIncludesSensorId();
-    TestCommandTimeoutReportsTimeout();
+    TestCommandTimeoutReportsOnceAndReconcilesCycle();
     return 0;
 }

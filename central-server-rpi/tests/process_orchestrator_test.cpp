@@ -1084,6 +1084,17 @@ void TestProcessCommandTrackerRestoresPendingCommand() {
     central_server::ProcessCommandTracker restored;
     assert(restored.Restore(saved));
     assert(restored.PendingCount() == 2);
+    const auto processing = Message(
+        "MSG-TRACKER-PROCESSING", mqtt::MessageType::kCommandResponse, "PI-INPUT-01",
+        mqtt::CommandResponsePayload{
+            .request_id = first.message.message_id,
+            .command = mqtt::ControlCommand::kStop,
+            .result = mqtt::CommandResult::kProcessing,
+            .error_code = std::nullopt,
+            .message = "input stop accepted",
+        });
+    assert(!restored.HandleResponse(processing).has_value());
+    assert(restored.PendingCount() == 2);
     const auto response = Message("MSG-TRACKER-RESPONSE", mqtt::MessageType::kCommandResponse, "PI-INPUT-01",
                                   mqtt::CommandResponsePayload{
                                       .request_id = first.message.message_id,

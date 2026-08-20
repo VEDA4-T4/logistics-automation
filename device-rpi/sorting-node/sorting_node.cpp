@@ -254,11 +254,7 @@ void SortingNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
         return;
     }
     if (event.type == UartSessionEventType::kAckTimeout) {
-        if (pending_.effect == PendingEffect::kActivateCycle) {
-            active_work_id_ = pending_.work_id;
-            active_cycle_id_ = pending_.uart_cycle_id;
-            active_destination_ = pending_.uart_destination;
-        }
+        RememberUncertainCycle();
         EmitPendingResponse(mqtt::CommandResult::kTimeout, std::string("ERR-UART-RESPONSE-TIMEOUT"),
                             "sorting controller response timed out after retries");
         EmitError("ERR-UART-RESPONSE-TIMEOUT", "ERROR", "UART_TIMEOUT",
@@ -268,6 +264,7 @@ void SortingNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
     }
     if (event.type == UartSessionEventType::kTransportDisconnected ||
         event.type == UartSessionEventType::kTransportError) {
+        RememberUncertainCycle();
         EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
                             "UART transport disconnected before the sorting response");
         ClearPending();
@@ -328,7 +325,7 @@ SortingCommandResult SortingNode::HandleDestinationSet(const mqtt::DestinationSe
         result.status = SortingCommandStatus::kInvalidDestination;
         return result;
     }
-    if (HasActiveCycle()) {
+    if (HasActiveCycle() || uncertain_cycle_.active) {
         if (active_work_id_ == command.work_id && active_destination_ == *destination) {
             result.status = SortingCommandStatus::kDuplicate;
             result.uart_cycle_id = active_cycle_id_;
@@ -425,7 +422,10 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
                 pending_safety_ = { .active = true,
                                     .expected = PendingSafetyEvent::kResetComplete,
                                     .command = result.mqtt_command,
-                                    .request_id = result.request_id };
+                                    .request_id = result.request_id,
+                                    .elapsed = std::chrono::milliseconds::zero(),
+                                    .timeout = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        mqtt::kRecoveryCompletionTimeout) };
             }
             return result;
         case DeviceControlAction::kComponentRecovery:
@@ -485,7 +485,10 @@ SortingCommandResult SortingNode::HandleEmergencyStop(const mqtt::EmergencyStopP
         pending_safety_ = { .active = true,
                             .expected = PendingSafetyEvent::kEstopLatched,
                             .command = result.mqtt_command,
-                            .request_id = result.request_id };
+                            .request_id = result.request_id,
+                            .elapsed = std::chrono::milliseconds::zero(),
+                            .timeout = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                mqtt::kEmergencyStopConfirmationTimeout) };
     }
     return result;
 }
@@ -503,9 +506,14 @@ void SortingNode::Tick(std::chrono::milliseconds elapsed) noexcept {
     }
     if (pending_safety_.active) {
         pending_safety_.elapsed += elapsed;
-        if (pending_safety_.elapsed >= mqtt::kEmergencyStopConfirmationTimeout) {
-            EmitSafetyResponse(mqtt::CommandResult::kTimeout, std::string("ERR-SAFETY-CONFIRMATION-TIMEOUT"),
-                               "sorting controller did not confirm the safety command");
+        if (pending_safety_.timeout > std::chrono::milliseconds::zero() &&
+            pending_safety_.elapsed >= pending_safety_.timeout) {
+            const bool recovery = pending_safety_.command == mqtt::ControlCommand::kRecovery;
+            EmitSafetyResponse(
+                mqtt::CommandResult::kTimeout,
+                std::string(recovery ? "ERR-RECOVERY-CONFIRMATION-TIMEOUT" : "ERR-SAFETY-CONFIRMATION-TIMEOUT"),
+                recovery ? "sorting controller did not complete recovery before the deadline"
+                         : "sorting controller did not confirm the emergency stop before the deadline");
             pending_safety_ = {};
         }
     }
@@ -582,10 +590,22 @@ void SortingNode::ClearPending() noexcept {
     pending_ = {};
 }
 
+void SortingNode::RememberUncertainCycle() noexcept {
+    if (pending_.active && pending_.effect == PendingEffect::kActivateCycle) {
+        uncertain_cycle_ = {
+            .active = true,
+            .work_id = std::move(pending_.work_id),
+            .uart_cycle_id = pending_.uart_cycle_id,
+            .uart_destination = pending_.uart_destination,
+        };
+    }
+}
+
 void SortingNode::ClearActiveCycle() noexcept {
     active_work_id_.clear();
     active_cycle_id_ = UART_SORTING_CYCLE_ID_NONE;
     active_destination_ = UART_SORTING_DESTINATION_NONE;
+    uncertain_cycle_ = {};
 }
 
 void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept {
@@ -631,6 +651,7 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
         active_work_id_ = pending_.work_id;
         active_cycle_id_ = pending_.uart_cycle_id;
         active_destination_ = pending_.uart_destination;
+        uncertain_cycle_ = {};
     } else if (accepted && pending_.effect == PendingEffect::kClearCycle) {
         ClearActiveCycle();
     }
@@ -712,13 +733,23 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
         if (cycle_id == UART_SORTING_CYCLE_ID_NONE) {
             ClearActiveCycle();
         } else if (!HasActiveCycle() || cycle_id != active_cycle_id_ || destination != active_destination_) {
-            active_work_id_.clear();
-            active_cycle_id_ = cycle_id;
-            active_destination_ = destination;
-            EmitError("ERR-CYCLE-MAPPING-UNKNOWN", "WARNING", GateStateName(gate_state, destination),
-                      "STM32 has an active cycle that is not mapped to a server work ID");
+            if (uncertain_cycle_.active && cycle_id == uncertain_cycle_.uart_cycle_id &&
+                destination == uncertain_cycle_.uart_destination) {
+                active_work_id_ = std::move(uncertain_cycle_.work_id);
+                active_cycle_id_ = cycle_id;
+                active_destination_ = destination;
+                uncertain_cycle_ = {};
+            } else {
+                active_work_id_.clear();
+                active_cycle_id_ = cycle_id;
+                active_destination_ = destination;
+                uncertain_cycle_ = {};
+                EmitError("ERR-CYCLE-MAPPING-UNKNOWN", "WARNING", GateStateName(gate_state, destination),
+                          "STM32 has an active cycle that is not mapped to a server work ID");
+            }
         } else {
             active_destination_ = destination;
+            uncertain_cycle_ = {};
         }
         const auto current_state = idle_cycle && gate_state == UART_SORTING_GATE_HOME
                                        ? ConveyorStateName(last_device_state_)

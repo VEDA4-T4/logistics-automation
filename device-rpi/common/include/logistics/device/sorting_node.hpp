@@ -120,6 +120,14 @@ private:
         contracts::mqtt::ControlCommand command{ contracts::mqtt::ControlCommand::kUnknown };
         std::string request_id;
         std::chrono::milliseconds elapsed{};
+        std::chrono::milliseconds timeout{};
+    };
+
+    struct UncertainCycleContext {
+        bool active{};
+        std::string work_id;
+        std::uint16_t uart_cycle_id{};
+        std::uint8_t uart_destination{};
     };
 
     [[nodiscard]] SortingCommandResult HandleDestinationSet(const contracts::mqtt::DestinationSetPayload& command);
@@ -132,6 +140,7 @@ private:
     [[nodiscard]] bool IsTargetedToThisNode(std::string_view target_device_id) const noexcept;
     [[nodiscard]] std::uint16_t AllocateCycleId() noexcept;
     void RememberPending(PendingEffect effect, const SortingCommandResult& result, std::uint8_t requested_speed = 0U);
+    void RememberUncertainCycle() noexcept;
     void ClearPending() noexcept;
     void ClearActiveCycle() noexcept;
     void HandleCommandResponse(const UartSessionEvent& event) noexcept;
@@ -163,6 +172,7 @@ private:
     std::uint16_t next_cycle_id_{ UART_SORTING_CYCLE_ID_MIN };
     PendingContext pending_{};
     PendingSafetyContext pending_safety_{};
+    UncertainCycleContext uncertain_cycle_{};
     std::array<std::uint8_t, 3U> sensor_states_{ 0xffU, 0xffU, 0xffU };
     std::uint8_t last_device_state_{ UART_DEVICE_STOPPED };
     std::uint8_t last_device_error_{ 0xffU };

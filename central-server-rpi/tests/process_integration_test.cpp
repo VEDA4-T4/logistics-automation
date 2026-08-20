@@ -264,17 +264,21 @@ public:
             request_id = destination->request_id;
             command = destination->command;
         }
+        const bool accepted = result == mqtt::CommandResult::kSuccess || result == mqtt::CommandResult::kProcessing;
+        const std::string response_message = result == mqtt::CommandResult::kSuccess
+                                                 ? "integration command completed"
+                                             : result == mqtt::CommandResult::kProcessing
+                                                 ? "integration command accepted"
+                                                 : "integration command failure";
         return Handle(mqtt::DeviceResponseTopic(target),
                       Message(mqtt::MessageType::kCommandResponse, target,
                               mqtt::CommandResponsePayload{
                                   .request_id = std::move(request_id),
                                   .command = command,
                                   .result = result,
-                                  .error_code = result == mqtt::CommandResult::kSuccess
-                                                    ? std::nullopt
-                                                    : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
-                                  .message = result == mqtt::CommandResult::kSuccess ? "integration command completed"
-                                                                                     : "integration command failure",
+                                  .error_code = accepted ? std::nullopt
+                                                         : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
+                                  .message = response_message,
                               }));
     }
 
@@ -544,10 +548,19 @@ void TestAutomaticProcessCompletes(bool line_tracer_enabled) {
     assert(!harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
     assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
            central_server::WorkStage::kSortingRequested);
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kProcessing));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 0);
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kSortingRequested);
     assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 1);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
     assert(!harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kSortingRequested);
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kProcessing));
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
     assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
            central_server::WorkStage::kSortingRequested);
     assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
