@@ -323,10 +323,8 @@ int RunSortingDaemon(int argc, char* argv[]) {
                              &mqtt_client)) {
             std::cerr << "[sorting][mqtt][ERROR] unable to preserve outbound report; messageType="
                       << mqtt::ToString(report.message_type);
-            if (const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
-                response != nullptr) {
-                std::cerr << "; requestId=" << response->request_id
-                          << "; result=" << mqtt::ToString(response->result);
+            if (const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data); response != nullptr) {
+                std::cerr << "; requestId=" << response->request_id << "; result=" << mqtt::ToString(response->result);
             }
             std::cerr << '\n';
         }
@@ -361,8 +359,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
                       << "; destination=" << destination->destination;
         } else if (const auto* emergency = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message);
                    emergency != nullptr) {
-            std::clog << "; requestId=" << emergency->request_id
-                      << "; command=" << mqtt::ToString(emergency->command)
+            std::clog << "; requestId=" << emergency->request_id << "; command=" << mqtt::ToString(emergency->command)
                       << "; target=" << emergency->target_device_id;
         }
         std::clog << '\n';

@@ -398,17 +398,17 @@ void TestSortingProcessingRefreshesDeadlineUntilTerminalResponse() {
         { "PI-SORTING-01" }));
 
     now += mqtt::kSortingCommandCompletionTimeout - std::chrono::seconds(1);
-    const auto processing = manager.HandleResponse(
-        MakeResponse("PI-SORTING-01", "RESP-SORTING-PROCESSING", "REQ-SORTING-START",
-                     mqtt::CommandResult::kProcessing, mqtt::ControlCommand::kStart));
+    const auto processing =
+        manager.HandleResponse(MakeResponse("PI-SORTING-01", "RESP-SORTING-PROCESSING", "REQ-SORTING-START",
+                                            mqtt::CommandResult::kProcessing, mqtt::ControlCommand::kStart));
     assert(processing.disposition == central_server::CommandResponseDisposition::kForward);
     assert(manager.PendingCount() == 1);
 
     now += mqtt::kSortingCommandCompletionTimeout - std::chrono::seconds(1);
     assert(manager.CheckTimeouts("2026-08-20T00:00:08Z").empty());
-    const auto success = manager.HandleResponse(
-        MakeResponse("PI-SORTING-01", "RESP-SORTING-SUCCESS", "REQ-SORTING-START",
-                     mqtt::CommandResult::kSuccess, mqtt::ControlCommand::kStart));
+    const auto success =
+        manager.HandleResponse(MakeResponse("PI-SORTING-01", "RESP-SORTING-SUCCESS", "REQ-SORTING-START",
+                                            mqtt::CommandResult::kSuccess, mqtt::ControlCommand::kStart));
     assert(success.disposition == central_server::CommandResponseDisposition::kForward);
     assert(success.message.has_value());
     assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*success.message)->result == mqtt::CommandResult::kSuccess);

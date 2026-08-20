@@ -265,21 +265,20 @@ public:
             command = destination->command;
         }
         const bool accepted = result == mqtt::CommandResult::kSuccess || result == mqtt::CommandResult::kProcessing;
-        const std::string response_message = result == mqtt::CommandResult::kSuccess
-                                                 ? "integration command completed"
+        const std::string response_message = result == mqtt::CommandResult::kSuccess ? "integration command completed"
                                              : result == mqtt::CommandResult::kProcessing
                                                  ? "integration command accepted"
                                                  : "integration command failure";
-        return Handle(mqtt::DeviceResponseTopic(target),
-                      Message(mqtt::MessageType::kCommandResponse, target,
-                              mqtt::CommandResponsePayload{
-                                  .request_id = std::move(request_id),
-                                  .command = command,
-                                  .result = result,
-                                  .error_code = accepted ? std::nullopt
-                                                         : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
-                                  .message = response_message,
-                              }));
+        return Handle(
+            mqtt::DeviceResponseTopic(target),
+            Message(mqtt::MessageType::kCommandResponse, target,
+                    mqtt::CommandResponsePayload{
+                        .request_id = std::move(request_id),
+                        .command = command,
+                        .result = result,
+                        .error_code = accepted ? std::nullopt : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
+                        .message = response_message,
+                    }));
     }
 
 private:
