@@ -74,8 +74,8 @@ public:
 
     void SetReportHandler(SortingReportHandler handler);
     [[nodiscard]] SortingCommandResult HandleMqttCommand(const contracts::mqtt::MqttMessage& message);
-    [[nodiscard]] SortingCommandResult RequestControllerStatus();
-    void HandleUartEvent(const UartSessionEvent& event) noexcept;
+    [[nodiscard]] SortingCommandResult RequestControllerStatus(bool emit_status = true);
+    [[nodiscard]] bool HandleUartEvent(const UartSessionEvent& event) noexcept;
     void Tick(std::chrono::milliseconds elapsed) noexcept;
     void ResetControllerHeartbeatMonitor() noexcept;
 
@@ -106,6 +106,7 @@ private:
         std::uint16_t uart_cycle_id{};
         std::uint8_t uart_destination{};
         std::uint8_t requested_speed{};
+        bool emit_status{ true };
     };
 
     enum class PendingSafetyEvent {
@@ -139,11 +140,12 @@ private:
                                                   const std::uint8_t* payload, std::size_t payload_length);
     [[nodiscard]] bool IsTargetedToThisNode(std::string_view target_device_id) const noexcept;
     [[nodiscard]] std::uint16_t AllocateCycleId() noexcept;
-    void RememberPending(PendingEffect effect, const SortingCommandResult& result, std::uint8_t requested_speed = 0U);
+    void RememberPending(PendingEffect effect, const SortingCommandResult& result, std::uint8_t requested_speed = 0U,
+                         bool emit_status = true);
     void RememberUncertainCycle() noexcept;
     void ClearPending() noexcept;
     void ClearActiveCycle() noexcept;
-    void HandleCommandResponse(const UartSessionEvent& event) noexcept;
+    [[nodiscard]] bool HandleCommandResponse(const UartSessionEvent& event) noexcept;
     void HandleSortingFrame(const uart_frame_t& frame) noexcept;
     [[nodiscard]] bool HandleStatusResponse(const uart_frame_t& frame) noexcept;
     void HandleCycleComplete(const uart_frame_t& frame) noexcept;

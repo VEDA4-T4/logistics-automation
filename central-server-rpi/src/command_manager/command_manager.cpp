@@ -59,7 +59,8 @@ constexpr std::size_t kCompletedRequestLimit = 256;
     return deadline;
 }
 
-[[nodiscard]] std::string MissingDeviceMessage(const auto& pending) {
+[[nodiscard]] std::string MissingDeviceMessage(std::string_view request_id, const auto& pending,
+                                               const CommandManager::Clock::time_point now) {
     std::vector<std::string> missing;
     for (const auto& device_id : pending.expected_devices) {
         if (!pending.completed_devices.contains(device_id)) {
@@ -67,7 +68,14 @@ constexpr std::size_t kCompletedRequestLimit = 256;
         }
     }
     std::ranges::sort(missing);
-    std::string message = std::string(mqtt::ToString(pending.command)) + " command timed out waiting for devices: ";
+    std::string message = "requestId=" + std::string(request_id) + "; ";
+    if (pending.original_message.process_epoch) {
+        message += "processEpoch=" + *pending.original_message.process_epoch + "; ";
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - pending.started_at).count();
+    const auto deadline = std::chrono::duration_cast<std::chrono::seconds>(pending.timeout).count();
+    message += "command=" + std::string(mqtt::ToString(pending.command)) + "; elapsed=" + std::to_string(elapsed) +
+               "s; deadline=" + std::to_string(deadline) + "s; missingDevices=";
     for (std::size_t index = 0; index < missing.size(); ++index) {
         if (index != 0) {
             message += ", ";
@@ -431,7 +439,7 @@ std::vector<mqtt::MqttMessage> CommandManager::CheckTimeouts(std::string_view ch
             continue;
         }
 
-        const auto message = MissingDeviceMessage(pending);
+        const auto message = MissingDeviceMessage(iterator->first, pending, now);
         timed_out.push_back(MakeAggregateResponse(iterator->first, pending, mqtt::CommandResult::kTimeout,
                                                   std::string(checked_at), std::string("ERR-COMMAND-TIMEOUT"),
                                                   message));

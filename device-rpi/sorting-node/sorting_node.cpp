@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cctype>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -222,53 +223,69 @@ SortingCommandResult SortingNode::HandleMqttCommand(const mqtt::MqttMessage& mes
     return { .status = SortingCommandStatus::kUnsupportedMessage };
 }
 
-SortingCommandResult SortingNode::RequestControllerStatus() {
+SortingCommandResult SortingNode::RequestControllerStatus(bool emit_status) {
     SortingCommandResult result{
         .mqtt_command = mqtt::ControlCommand::kUnknown,
         .uart_command = UART_CMD_SORTING_GET_STATUS,
     };
     result = Send(std::move(result), UART_CMD_SORTING_GET_STATUS, nullptr, UART_SORTING_GET_STATUS_PAYLOAD_SIZE);
     if (result.Succeeded()) {
-        RememberPending(PendingEffect::kNone, result);
+        RememberPending(PendingEffect::kNone, result, 0U, emit_status);
     }
     return result;
 }
 
-void SortingNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
+bool SortingNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
     if (event.type == UartSessionEventType::kFrameReceived) {
         HandleSortingFrame(event.frame);
-        return;
+        return false;
     }
     if (event.type == UartSessionEventType::kParserError) {
         const bool crc_error = event.parser_result == UART_PARSER_CRC_ERROR;
         EmitError(crc_error ? "ERR-UART-CRC" : "ERR-UART-PARSER", "ERROR", "UART_ERROR",
                   "sorting UART parser rejected a frame");
-        return;
+        return false;
     }
     if (!pending_.active || event.pending_sequence != pending_.sequence) {
-        return;
+        return false;
+    }
+    if (event.type == UartSessionEventType::kCommandRetried) {
+        std::clog << "[sorting][uart][WARN] retry; requestId=" << pending_.request_id
+                  << "; sequence=" << static_cast<int>(event.pending_sequence)
+                  << "; uartCommand=" << static_cast<int>(event.pending_command)
+                  << "; retry=" << static_cast<int>(event.retry_count) << '\n';
+        return false;
     }
     if (event.type == UartSessionEventType::kCommandResponseReceived ||
         event.type == UartSessionEventType::kAckReceived) {
-        HandleCommandResponse(event);
-        return;
+        return HandleCommandResponse(event);
     }
     if (event.type == UartSessionEventType::kAckTimeout) {
+        std::cerr << "[sorting][uart][ERROR] ack timeout; requestId=" << pending_.request_id
+                  << "; sequence=" << static_cast<int>(event.pending_sequence)
+                  << "; uartCommand=" << static_cast<int>(event.pending_command)
+                  << "; retries=" << static_cast<int>(event.retry_count) << '\n';
         RememberUncertainCycle();
         EmitPendingResponse(mqtt::CommandResult::kTimeout, std::string("ERR-UART-RESPONSE-TIMEOUT"),
                             "sorting controller response timed out after retries");
         EmitError("ERR-UART-RESPONSE-TIMEOUT", "ERROR", "UART_TIMEOUT",
                   "sorting controller did not respond after UART retries");
         ClearPending();
-        return;
+        return false;
     }
     if (event.type == UartSessionEventType::kTransportDisconnected ||
         event.type == UartSessionEventType::kTransportError) {
+        std::cerr << "[sorting][uart][ERROR] transport failure; requestId=" << pending_.request_id
+                  << "; sequence=" << static_cast<int>(event.pending_sequence)
+                  << "; uartCommand=" << static_cast<int>(event.pending_command)
+                  << "; ioStatus=" << static_cast<int>(event.io_result.status)
+                  << "; retries=" << static_cast<int>(event.retry_count) << '\n';
         RememberUncertainCycle();
         EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
                             "UART transport disconnected before the sorting response");
         ClearPending();
     }
+    return false;
 }
 
 bool SortingNode::HasActiveCycle() const noexcept {
@@ -540,6 +557,12 @@ SortingCommandResult SortingNode::Send(SortingCommandResult result, std::uint8_t
     result.uart_result = uart_session_.SendCommand(command, payload_view);
     result.uart_sequence = result.uart_result.sequence;
     result.status = ToCommandStatus(result.uart_result.status);
+    if (!result.request_id.empty()) {
+        std::clog << "[sorting][uart][INFO] submission; requestId=" << result.request_id
+                  << "; sequence=" << static_cast<int>(result.uart_sequence)
+                  << "; uartCommand=" << static_cast<int>(command) << "; status=" << static_cast<int>(result.status)
+                  << '\n';
+    }
     return result;
 }
 
@@ -551,6 +574,12 @@ SortingCommandResult SortingNode::SendOneWay(SortingCommandResult result, std::u
     result.uart_sequence = result.uart_result.sequence;
     result.status = result.uart_result.Succeeded() ? SortingCommandStatus::kSentNoReply
                                                    : ToCommandStatus(result.uart_result.status);
+    if (!result.request_id.empty()) {
+        std::clog << "[sorting][uart][INFO] submission; requestId=" << result.request_id
+                  << "; sequence=" << static_cast<int>(result.uart_sequence)
+                  << "; uartCommand=" << static_cast<int>(command) << "; status=" << static_cast<int>(result.status)
+                  << '\n';
+    }
     return result;
 }
 
@@ -571,7 +600,7 @@ std::uint16_t SortingNode::AllocateCycleId() noexcept {
 }
 
 void SortingNode::RememberPending(PendingEffect effect, const SortingCommandResult& result,
-                                  std::uint8_t requested_speed) {
+                                  std::uint8_t requested_speed, bool emit_status) {
     pending_ = {
         .active = true,
         .effect = effect,
@@ -583,6 +612,7 @@ void SortingNode::RememberPending(PendingEffect effect, const SortingCommandResu
         .uart_cycle_id = result.uart_cycle_id,
         .uart_destination = result.uart_destination,
         .requested_speed = requested_speed,
+        .emit_status = emit_status,
     };
 }
 
@@ -608,7 +638,7 @@ void SortingNode::ClearActiveCycle() noexcept {
     uncertain_cycle_ = {};
 }
 
-void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept {
+bool SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept {
     std::uint8_t status = UART_STATUS_ERROR;
     std::uint8_t error = UART_ERROR_INTERNAL;
     if (event.frame.command == UART_CMD_ACK && event.frame.length == UART_ACK_PAYLOAD_SIZE) {
@@ -625,11 +655,15 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
 
     mqtt::CommandResult command_result = CommandResultFromUartStatus(status, error);
     bool accepted = command_result == mqtt::CommandResult::kSuccess;
-    if (accepted && event.frame.command == UART_CMD_RESPONSE && !HandleStatusResponse(event.frame)) {
-        accepted = false;
-        command_result = mqtt::CommandResult::kFailed;
-        error = UART_ERROR_INVALID_PAYLOAD;
-        EmitError("ERR-UART-PAYLOAD", "ERROR", "UART_ERROR", "invalid sorting status response payload");
+    bool status_reconciled = false;
+    if (accepted && event.frame.command == UART_CMD_RESPONSE) {
+        status_reconciled = HandleStatusResponse(event.frame);
+        if (!status_reconciled) {
+            accepted = false;
+            command_result = mqtt::CommandResult::kFailed;
+            error = UART_ERROR_INVALID_PAYLOAD;
+            EmitError("ERR-UART-PAYLOAD", "ERROR", "UART_ERROR", "invalid sorting status response payload");
+        }
     }
     if (accepted && pending_.effect == PendingEffect::kStartAfterSpeed) {
         configured_speed_ = pending_.requested_speed;
@@ -639,13 +673,18 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
             pending_.sequence = start_result.sequence;
             pending_.uart_command = UART_CMD_SORTING_CONVEYOR_START;
             pending_.requested_speed = 0U;
-            return;
+            return false;
         }
 
         EmitPendingResponse(mqtt::CommandResult::kFailed, UartSendErrorCode(start_result.status),
                             "sorting speed was configured but conveyor start could not be sent");
+        std::cerr << "[sorting][command][ERROR] terminal result; requestId=" << pending_.request_id
+                  << "; sequence=" << static_cast<int>(event.pending_sequence)
+                  << "; uartCommand=" << static_cast<int>(UART_CMD_SORTING_CONVEYOR_START)
+                  << "; result=" << mqtt::ToString(mqtt::CommandResult::kFailed)
+                  << "; retries=" << static_cast<int>(event.retry_count) << '\n';
         ClearPending();
-        return;
+        return false;
     }
     if (accepted && pending_.effect == PendingEffect::kActivateCycle) {
         active_work_id_ = pending_.work_id;
@@ -689,9 +728,18 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
                                    : command_result == mqtt::CommandResult::kRejected
                                        ? "sorting controller rejected the command"
                                        : "sorting controller failed the command";
+    if (!pending_.request_id.empty()) {
+        std::clog << "[sorting][command][INFO] terminal result; requestId=" << pending_.request_id
+                  << "; sequence=" << static_cast<int>(event.pending_sequence)
+                  << "; uartCommand=" << static_cast<int>(event.pending_command)
+                  << "; result=" << mqtt::ToString(command_result) << "; uartStatus=" << static_cast<int>(status)
+                  << "; uartError=" << static_cast<int>(error) << "; retries=" << static_cast<int>(event.retry_count)
+                  << '\n';
+    }
     EmitPendingResponse(command_result, error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code },
                         response_message);
     ClearPending();
+    return status_reconciled;
 }
 
 void SortingNode::HandleSortingFrame(const uart_frame_t& frame) noexcept {
@@ -754,8 +802,10 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
         const auto current_state = idle_cycle && gate_state == UART_SORTING_GATE_HOME
                                        ? ConveyorStateName(last_device_state_)
                                        : GateStateName(gate_state, destination);
-        EmitStatus(current_state,
-                   gate_state == UART_SORTING_GATE_FAULT ? std::optional<std::string>{ "ERR-SERVO" } : std::nullopt);
+        if (pending_.emit_status) {
+            EmitStatus(current_state, gate_state == UART_SORTING_GATE_FAULT ? std::optional<std::string>{ "ERR-SERVO" }
+                                                                            : std::nullopt);
+        }
         return true;
     }
 
@@ -773,8 +823,10 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
         const std::string current_state = state == UART_SORTING_CONVEYOR_RUNNING   ? "RUNNING"
                                           : state == UART_SORTING_CONVEYOR_STOPPED ? "STOPPED"
                                                                                    : "ERROR";
-        EmitStatus(std::move(current_state),
-                   state == UART_SORTING_CONVEYOR_FAULT ? std::optional<std::string>{ "ERR-MOTOR" } : std::nullopt);
+        if (pending_.emit_status) {
+            EmitStatus(std::move(current_state),
+                       state == UART_SORTING_CONVEYOR_FAULT ? std::optional<std::string>{ "ERR-MOTOR" } : std::nullopt);
+        }
         return true;
     }
     return false;

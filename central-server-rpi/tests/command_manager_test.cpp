@@ -493,8 +493,27 @@ void TestTimeoutNamesCommandAndMissingDevicesDeterministically() {
     assert(timeout != nullptr);
     assert(timeout->command == mqtt::ControlCommand::kStop);
     assert(timeout->error_code == std::optional<std::string>{ "ERR-COMMAND-TIMEOUT" });
-    assert(timeout->message == "STOP command timed out waiting for devices: PI-INPUT-01, PI-INPUT-03");
+    assert(timeout->message ==
+           "requestId=REQ-MISSING; processEpoch=123e4567-e89b-42d3-a456-426614174000; "
+           "command=STOP; elapsed=15s; deadline=15s; missingDevices=PI-INPUT-01, PI-INPUT-03");
     assert(timed_out.front().process_epoch == command.process_epoch);
+}
+
+void TestSortingTerminalResponsePreventsLaterAggregateTimeout() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    assert(manager.TrackCommand(
+        MakeCommand("REQ-SORTING-TERMINAL", "PI-SORTING-01", mqtt::ControlCommand::kStop, "sorting_conveyor"),
+        { "PI-SORTING-01" }));
+
+    const auto completed =
+        manager.HandleResponse(MakeResponse("PI-SORTING-01", "RESP-SORTING-TERMINAL", "REQ-SORTING-TERMINAL",
+                                            mqtt::CommandResult::kSuccess, mqtt::ControlCommand::kStop));
+    assert(completed.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(manager.PendingCount() == 0);
+
+    now += std::chrono::seconds(15);
+    assert(manager.CheckTimeouts("2026-08-20T00:00:15Z").empty());
 }
 
 void TestLateSuccessIsClassifiedAcrossSnapshotRestore() {
@@ -563,6 +582,7 @@ int main() {
     TestRestorePreservesSubsecondDeadlinePrecision();
     TestSystemCommandsUseLongestResolvedTargetDeadline();
     TestTimeoutNamesCommandAndMissingDevicesDeterministically();
+    TestSortingTerminalResponsePreventsLaterAggregateTimeout();
     TestLateSuccessIsClassifiedAcrossSnapshotRestore();
     TestCompletedRequestMemoryIsBounded();
     return 0;

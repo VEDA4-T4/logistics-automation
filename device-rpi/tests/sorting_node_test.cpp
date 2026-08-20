@@ -16,6 +16,8 @@
 
 #include "logistics/contracts/uart/conveyor_events.h"
 #include "logistics/contracts/uart_codec.h"
+#include "logistics/contracts/uart_crc16.h"
+#include "logistics/device/sorting_command_scheduler.hpp"
 
 namespace {
 
@@ -24,6 +26,8 @@ using logistics::device::SortingCommandStatus;
 using logistics::device::SortingNode;
 using logistics::device::SortingReport;
 using logistics::device::SortingReportChannel;
+using logistics::device::SortingUartWork;
+using logistics::device::SortingUartWorkState;
 using logistics::device::UartIoBackend;
 using logistics::device::UartIoResult;
 using logistics::device::UartIoStatus;
@@ -81,6 +85,10 @@ public:
         reads.push_back({ { UartIoStatus::kSuccess, bytes.size(), 0 }, std::move(bytes) });
     }
 
+    void PushReadFailure(UartIoStatus status) {
+        reads.push_back({ { status, 0U, 5 }, {} });
+    }
+
     bool open{};
     std::deque<ReadAction> reads;
     std::vector<std::vector<std::uint8_t>> writes;
@@ -101,8 +109,9 @@ struct Fixture {
         assert(session->Open());
         node = std::make_unique<SortingNode>("PI-SORT-01", *session);
         node->SetReportHandler([this](const SortingReport& report) { reports.push_back(report); });
-        session->SetEventHandler(
-            [this](const logistics::device::UartSessionEvent& event) { node->HandleUartEvent(event); });
+        session->SetEventHandler([this](const logistics::device::UartSessionEvent& event) {
+            last_status_reconciled = node->HandleUartEvent(event);
+        });
     }
 
     [[nodiscard]] uart_frame_t LastCommand() const {
@@ -126,20 +135,39 @@ struct Fixture {
         assert(session->PollOnce().Succeeded());
     }
 
-    void PushSortingStatus(std::uint8_t gate_state, std::uint16_t cycle_id, std::uint8_t destination) {
+    void PushSortingStatus(std::uint8_t gate_state, std::uint16_t cycle_id, std::uint8_t destination,
+                           std::uint8_t status = UART_STATUS_SUCCESS,
+                           std::uint8_t length = UART_SORTING_STATUS_PAYLOAD_SIZE) {
         const uart_frame_t command = LastCommand();
         uart_frame_t response{};
         response.version = UART_PROTOCOL_VERSION;
         response.sequence = command.sequence;
         response.command = UART_CMD_RESPONSE;
-        response.length = UART_SORTING_STATUS_PAYLOAD_SIZE;
-        response.payload[UART_RESPONSE_STATUS_INDEX] = UART_STATUS_SUCCESS;
+        response.length = length;
+        response.payload[UART_RESPONSE_STATUS_INDEX] = status;
         response.payload[UART_RESPONSE_COMMAND_INDEX] = UART_CMD_SORTING_GET_STATUS;
         response.payload[UART_RESPONSE_ERROR_INDEX] = UART_ERROR_NONE;
         response.payload[UART_SORTING_STATUS_GATE_STATE_INDEX] = gate_state;
         response.payload[UART_SORTING_STATUS_CYCLE_ID_LOW_INDEX] = static_cast<std::uint8_t>(cycle_id & 0xffU);
         response.payload[UART_SORTING_STATUS_CYCLE_ID_HIGH_INDEX] = static_cast<std::uint8_t>((cycle_id >> 8U) & 0xffU);
         response.payload[UART_SORTING_STATUS_DESTINATION_INDEX] = destination;
+        backend->PushRead(Encode(response));
+        assert(session->PollOnce().Succeeded());
+    }
+
+    void PushStatusAck() {
+        const uart_frame_t command = LastCommand();
+        uart_frame_t response{};
+        response.version = UART_PROTOCOL_VERSION;
+        response.sequence = command.sequence;
+        response.command = UART_CMD_ACK;
+        response.length = UART_ACK_PAYLOAD_SIZE;
+        response.payload[UART_ACK_STATUS_INDEX] = UART_STATUS_ACK;
+        response.payload[UART_ACK_COMMAND_INDEX] = command.command;
+        response.payload[UART_ACK_LENGTH_INDEX] = command.length;
+        const std::uint16_t payload_crc = uart_crc16_ccitt(command.payload, command.length);
+        response.payload[UART_ACK_CRC_LOW_INDEX] = UART_CRC_LOW_BYTE(payload_crc);
+        response.payload[UART_ACK_CRC_HIGH_INDEX] = UART_CRC_HIGH_BYTE(payload_crc);
         backend->PushRead(Encode(response));
         assert(session->PollOnce().Succeeded());
     }
@@ -225,6 +253,7 @@ struct Fixture {
     std::unique_ptr<SortingNode> node;
     std::vector<SortingReport> reports;
     std::uint8_t next_event_sequence{ 100U };
+    bool last_status_reconciled{};
 };
 
 template <typename Payload>
@@ -288,6 +317,36 @@ mqtt::MqttMessage MakeEmergencyStop() {
     };
 }
 
+std::size_t CommandResponseCount(const std::vector<SortingReport>& reports, std::string_view request_id) {
+    return static_cast<std::size_t>(std::count_if(reports.begin(), reports.end(), [request_id](const auto& report) {
+        const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data);
+        return response != nullptr && response->request_id == request_id;
+    }));
+}
+
+void TestUncertainCycleResyncOutranksQueuedStart() {
+    const SortingUartWorkState state{
+        .uart_open = true,
+        .resync_pending = true,
+        .command_queued = true,
+        .keepalive_due = true,
+    };
+
+    const auto decision = logistics::device::ChooseSortingUartWork(state);
+
+    assert(decision.work == SortingUartWork::kResync);
+}
+
+void TestQueuedCommandOutranksKeepalive() {
+    const auto decision = logistics::device::ChooseSortingUartWork({
+        .uart_open = true,
+        .command_queued = true,
+        .keepalive_due = true,
+    });
+
+    assert(decision.work == SortingUartWork::kCommand);
+}
+
 void ActivateCycle(Fixture& fixture) {
     assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
     fixture.PushOperationResult();
@@ -314,6 +373,7 @@ void TestDestinationMapsToRouteItemAndActivatesAfterSuccess() {
     assert(fixture.node->HasActiveCycle());
     assert(fixture.node->ActiveWorkId() == kWorkId);
     assert(fixture.reports.size() == 2U);
+    assert(CommandResponseCount(fixture.reports, "REQ-DEST-01") == 1U);
     const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.back());
     assert(response.result == mqtt::CommandResult::kSuccess);
 }
@@ -695,11 +755,23 @@ void TestReconnectStatusQueryPublishesControllerState() {
     assert(fixture.LastCommand().command == UART_CMD_SORTING_GET_STATUS);
     fixture.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE, UART_SORTING_DESTINATION_NONE);
 
+    assert(fixture.last_status_reconciled);
     assert(!fixture.session->HasPendingCommand());
     assert(fixture.reports.size() == 1U);
     const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
     assert(status.current_state == "STOPPED");
     assert(!status.job_id.has_value());
+}
+
+void TestSilentKeepaliveReconcilesWithoutStatusReport() {
+    Fixture fixture;
+
+    const auto result = fixture.node->RequestControllerStatus(false);
+    assert(result.Succeeded());
+    fixture.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE, UART_SORTING_DESTINATION_NONE);
+
+    assert(fixture.last_status_reconciled);
+    assert(fixture.reports.empty());
 }
 
 void TestGateHomeStatusDoesNotOverwriteRunningConveyor() {
@@ -831,6 +903,7 @@ void TestCommandTimeoutReportsOnceAndReconcilesCycle() {
     assert(!fixture.node->HasActiveCycle());
     assert(fixture.node->ActiveWorkId().empty());
     assert(fixture.reports.size() == 2U);
+    assert(CommandResponseCount(fixture.reports, "REQ-DEST-01") == 1U);
     const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
     assert(response.result == mqtt::CommandResult::kTimeout);
     assert(response.error_code == "ERR-UART-RESPONSE-TIMEOUT");
@@ -852,9 +925,59 @@ void TestCommandTimeoutReportsOnceAndReconcilesCycle() {
     assert(!fixture.node->HasActiveCycle());
 }
 
+void TestStatusAckAloneDoesNotConfirmReconciliation() {
+    Fixture fixture;
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+
+    fixture.PushStatusAck();
+
+    assert(!fixture.last_status_reconciled);
+}
+
+void TestRejectedOrMalformedStatusDoesNotConfirmReconciliation() {
+    Fixture rejected;
+    assert(rejected.node->RequestControllerStatus().Succeeded());
+    rejected.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE, UART_SORTING_DESTINATION_NONE,
+                               UART_STATUS_NACK);
+    assert(!rejected.last_status_reconciled);
+
+    Fixture malformed;
+    assert(malformed.node->RequestControllerStatus().Succeeded());
+    malformed.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE, UART_SORTING_DESTINATION_NONE,
+                                UART_STATUS_SUCCESS, UART_RESPONSE_HEADER_SIZE);
+    assert(!malformed.last_status_reconciled);
+}
+
+void TestValidStatusConfirmsReconciliation() {
+    Fixture fixture;
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+
+    fixture.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE, UART_SORTING_DESTINATION_NONE);
+
+    assert(fixture.last_status_reconciled);
+}
+
+void TestTransportFailureReportsCommandTerminalOnce() {
+    Fixture fixture;
+    assert(fixture.node->HandleMqttCommand(MakeDestination()).Succeeded());
+
+    fixture.backend->PushReadFailure(UartIoStatus::kDisconnected);
+    assert(fixture.session->PollOnce().status == UartIoStatus::kDisconnected);
+
+    assert(CommandResponseCount(fixture.reports, "REQ-DEST-01") == 1U);
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(fixture.reports.front());
+    assert(response.result == mqtt::CommandResult::kFailed);
+    assert(response.error_code == "ERR-UART-DISCONNECTED");
+
+    fixture.session->Tick(std::chrono::milliseconds{ UART_ACK_TIMEOUT_MS * 4U });
+    assert(CommandResponseCount(fixture.reports, "REQ-DEST-01") == 1U);
+}
+
 }  // namespace
 
 int main() {
+    TestUncertainCycleResyncOutranksQueuedStart();
+    TestQueuedCommandOutranksKeepalive();
     TestDestinationMapsToRouteItemAndActivatesAfterSuccess();
     TestInvalidDestinationAndWrongTargetDoNotWrite();
     TestDuplicateAndConflictingWorkAreRejectedWithoutSecondMotion();
@@ -877,6 +1000,10 @@ int main() {
     TestEmergencyHeartbeatIsSafetyStateNotError();
     TestReturnHomeAndCycleCompletePublishCompletion();
     TestReconnectStatusQueryPublishesControllerState();
+    TestSilentKeepaliveReconcilesWithoutStatusReport();
+    TestStatusAckAloneDoesNotConfirmReconciliation();
+    TestRejectedOrMalformedStatusDoesNotConfirmReconciliation();
+    TestValidStatusConfirmsReconciliation();
     TestGateHomeStatusDoesNotOverwriteRunningConveyor();
     TestReconnectStatusRejectsDestinationMappingMismatch();
     TestConveyorStatusUsesHeartbeatStateNames();
@@ -885,5 +1012,6 @@ int main() {
     TestOppositeUartChannelTimeoutIsIgnored();
     TestHealthSensorStaleIncludesSensorId();
     TestCommandTimeoutReportsOnceAndReconcilesCycle();
+    TestTransportFailureReportsCommandTerminalOnce();
     return 0;
 }

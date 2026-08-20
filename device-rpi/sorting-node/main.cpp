@@ -24,6 +24,7 @@
 #include "logistics/device/mqtt_time.hpp"
 #include "logistics/device/node_command_queue.hpp"
 #include "logistics/device/outbound_delivery.hpp"
+#include "logistics/device/sorting_command_scheduler.hpp"
 #include "logistics/device/sorting_node.hpp"
 #include "logistics/device/uart_session.hpp"
 #include "logistics/device/uart_transport.hpp"
@@ -282,6 +283,24 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
                : std::nullopt;
 }
 
+[[nodiscard]] std::string_view BlockerName(SortingCommandBlocker blocker) noexcept {
+    switch (blocker) {
+        case SortingCommandBlocker::kEmergency:
+            return "emergency";
+        case SortingCommandBlocker::kSafety:
+            return "safety";
+        case SortingCommandBlocker::kFailure:
+            return "failure";
+        case SortingCommandBlocker::kResync:
+            return "resync";
+        case SortingCommandBlocker::kPendingUart:
+            return "pending_uart";
+        case SortingCommandBlocker::kNone:
+            return "none";
+    }
+    return "unknown";
+}
+
 int RunSortingDaemon(int argc, char* argv[]) {
     if (argc > 3) {
         std::cerr << "usage: logistics_sorting_node [node.ini] [/dev/vedauart]\n";
@@ -312,6 +331,7 @@ int RunSortingDaemon(int argc, char* argv[]) {
     bool uart_failure_pending = false;
     bool uart_disconnected_reported = false;
     bool uart_resync_pending = false;
+    SortingCommandBlocker last_command_blocker = SortingCommandBlocker::kNone;
 
     const auto queue_report = [&](const SortingReport& report) {
         if (const auto* response = std::get_if<mqtt::CommandResponsePayload>(&report.data); response != nullptr) {
@@ -331,16 +351,39 @@ int RunSortingDaemon(int argc, char* argv[]) {
     };
     sorting_node.SetReportHandler(queue_report);
     uart_session.SetEventHandler([&](const UartSessionEvent& event) {
-        sorting_node.HandleUartEvent(event);
+        const bool status_reconciled = sorting_node.HandleUartEvent(event);
         if (event.type == UartSessionEventType::kTransportDisconnected ||
             event.type == UartSessionEventType::kTransportError) {
+            if (uart_resync_pending && event.pending_command == UART_CMD_SORTING_GET_STATUS) {
+                std::cerr << "[sorting][uart][ERROR] resync terminal; sequence="
+                          << static_cast<int>(event.pending_sequence) << "; result=transport_failure\n";
+            }
             uart_failure_pending = true;
         } else if (event.type == UartSessionEventType::kAckTimeout) {
             if (event.pending_command == UART_CMD_SORTING_GET_STATUS) {
-                uart_resync_pending = false;
+                if (uart_resync_pending) {
+                    std::cerr << "[sorting][uart][ERROR] resync terminal; sequence="
+                              << static_cast<int>(event.pending_sequence) << "; result=timeout\n";
+                }
                 uart_failure_pending = true;
             } else {
                 uart_resync_pending = true;
+            }
+        } else if ((event.type == UartSessionEventType::kCommandResponseReceived ||
+                    event.type == UartSessionEventType::kAckReceived) &&
+                   event.pending_command == UART_CMD_SORTING_GET_STATUS) {
+            if (status_reconciled) {
+                if (uart_resync_pending) {
+                    std::clog << "[sorting][uart][INFO] resync terminal; sequence="
+                              << static_cast<int>(event.pending_sequence) << "; result=success\n";
+                }
+                uart_resync_pending = false;
+            } else {
+                if (uart_resync_pending) {
+                    std::cerr << "[sorting][uart][ERROR] resync terminal; sequence="
+                              << static_cast<int>(event.pending_sequence) << "; result=invalid\n";
+                }
+                uart_failure_pending = true;
             }
         }
     });
@@ -424,11 +467,13 @@ int RunSortingDaemon(int argc, char* argv[]) {
                 uart_disconnected_reported = false;
                 uart_failure_pending = false;
                 queue_report(MakeUartStatus("UART_RECONNECTED", ActiveWorkId(sorting_node), std::nullopt));
+                uart_resync_pending = true;
                 const SortingCommandResult status_result = sorting_node.RequestControllerStatus();
+                std::clog << "[sorting][uart][INFO] resync submission; sequence="
+                          << static_cast<int>(status_result.uart_sequence)
+                          << "; status=" << static_cast<int>(status_result.status) << '\n';
                 if (!status_result.Succeeded()) {
                     uart_failure_pending = status_result.status != SortingCommandStatus::kUartBusy;
-                } else {
-                    uart_resync_pending = false;
                 }
                 std::clog << "[sorting][uart][INFO] connected: " << uart_path << '\n';
             } else {
@@ -475,33 +520,61 @@ int RunSortingDaemon(int argc, char* argv[]) {
             }
         }
 
-        if (!emergency_processed && !sorting_node.HasPendingSafetyCommand() && !uart_failure_pending &&
-            uart_session.IsOpen() && !uart_session.HasPendingCommand() && uart_resync_pending) {
-            const SortingCommandResult status_result = sorting_node.RequestControllerStatus();
-            if (status_result.Succeeded()) {
-                uart_resync_pending = false;
-            } else if (status_result.status != SortingCommandStatus::kUartBusy) {
-                uart_failure_pending = true;
+        const SortingUartWorkDecision uart_work = ChooseSortingUartWork({
+            .emergency_processed = emergency_processed,
+            .safety_pending = sorting_node.HasPendingSafetyCommand(),
+            .uart_failure_pending = uart_failure_pending,
+            .uart_open = uart_session.IsOpen(),
+            .uart_command_pending = uart_session.HasPendingCommand(),
+            .resync_pending = uart_resync_pending,
+            .command_queued = command_inbox.Size() != 0U,
+            .keepalive_due = now >= next_uart_keepalive,
+        });
+        const SortingCommandBlocker current_blocker =
+            command_inbox.Size() == 0U ? SortingCommandBlocker::kNone : uart_work.blocker;
+        if (current_blocker != last_command_blocker) {
+            if (current_blocker == SortingCommandBlocker::kNone) {
+                std::clog << "[sorting][scheduler][INFO] command unblocked; previousReason="
+                          << BlockerName(last_command_blocker) << "; queueSize=" << command_inbox.Size() << '\n';
+            } else {
+                std::clog << "[sorting][scheduler][INFO] command blocked; reason=" << BlockerName(current_blocker)
+                          << "; queueSize=" << command_inbox.Size() << '\n';
             }
+            last_command_blocker = current_blocker;
         }
 
-        if (!emergency_processed && !sorting_node.HasPendingSafetyCommand() && !uart_failure_pending &&
-            uart_session.IsOpen() && !uart_session.HasPendingCommand() && !uart_resync_pending) {
-            if (auto command = command_inbox.TryPop(); command.has_value()) {
-                const SortingCommandResult result = sorting_node.HandleMqttCommand(*command);
-                if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
-                    queue_report(*response);
+        switch (uart_work.work) {
+            case SortingUartWork::kCommand:
+                if (auto command = command_inbox.TryPop(); command.has_value()) {
+                    const SortingCommandResult result = sorting_node.HandleMqttCommand(*command);
+                    if (const auto response = MakeLocalCommandResponse(result); response.has_value()) {
+                        queue_report(*response);
+                    }
                 }
+                break;
+            case SortingUartWork::kResync: {
+                const SortingCommandResult status_result = sorting_node.RequestControllerStatus();
+                std::clog << "[sorting][uart][INFO] resync submission; sequence="
+                          << static_cast<int>(status_result.uart_sequence)
+                          << "; status=" << static_cast<int>(status_result.status) << '\n';
+                if (!status_result.Succeeded() && status_result.status != SortingCommandStatus::kUartBusy) {
+                    uart_failure_pending = true;
+                }
+                break;
             }
-        }
-
-        if (!sorting_node.HasPendingSafetyCommand() && !uart_failure_pending && uart_session.IsOpen() &&
-            !uart_session.HasPendingCommand() && !uart_resync_pending && now >= next_uart_keepalive) {
-            const UartSessionSendResult keepalive = uart_session.SendCommand(UART_CMD_SORTING_GET_STATUS);
-            next_uart_keepalive = now + kUartKeepAliveInterval;
-            if (!keepalive.Succeeded() && keepalive.status != UartSessionSendStatus::kBusy) {
-                uart_failure_pending = true;
+            case SortingUartWork::kKeepalive: {
+                const SortingCommandResult keepalive = sorting_node.RequestControllerStatus(false);
+                next_uart_keepalive = now + kUartKeepAliveInterval;
+                if (!keepalive.Succeeded() && keepalive.status != SortingCommandStatus::kUartBusy) {
+                    std::cerr << "[sorting][uart][WARN] keepalive submission failed; sequence="
+                              << static_cast<int>(keepalive.uart_sequence)
+                              << "; status=" << static_cast<int>(keepalive.status) << '\n';
+                    uart_failure_pending = true;
+                }
+                break;
             }
+            case SortingUartWork::kNone:
+                break;
         }
 
         if (uart_failure_pending && !uart_disconnected_reported) {
