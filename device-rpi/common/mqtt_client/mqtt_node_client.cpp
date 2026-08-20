@@ -740,6 +740,7 @@ private:
     static void OnPublished(mosquitto*, void* object, const int mid) {
         auto* self = static_cast<Impl*>(object);
         std::string record_id;
+        bool acknowledged = false;
         {
             std::lock_guard lock(self->publish_mutex_);
             const auto it = self->inflight_publishes_.find(mid);
@@ -747,15 +748,21 @@ private:
                 return;
             }
             record_id = it->second;
+            /*
+             * Keep the record marked in-flight until its durable file has been
+             * removed. Otherwise a concurrent PumpPublishSpool() can observe an
+             * empty in-flight map, read the same pending file, and publish it a
+             * second time between this callback and Acknowledge().
+             */
+            acknowledged = self->publish_spool_.Acknowledge(record_id);
+            self->spool_blocked_ = !acknowledged;
             self->inflight_publishes_.erase(it);
         }
-        if (!self->publish_spool_.Acknowledge(record_id)) {
-            self->spool_blocked_ = true;
+        if (!acknowledged) {
             std::cerr << "[device][mqtt][ERROR] unable to remove PUBACKed MQTT record " << record_id
                       << "; durable spool pump is halted\n";
             return;
         }
-        self->spool_blocked_ = false;
         bool lifecycle_acknowledged = false;
         {
             std::lock_guard lifecycle_lock(self->lifecycle_mutex_);

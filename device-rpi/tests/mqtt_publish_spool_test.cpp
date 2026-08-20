@@ -63,6 +63,21 @@ void TestRestartDoesNotOverwriteUnacknowledgedRecord() {
     std::filesystem::remove_all(directory, error);
 }
 
+void TestAcknowledgementIsIdempotent() {
+    const auto directory = TemporaryDirectory();
+    logistics::device::MqttPublishSpool spool(directory, 4096);
+    assert(spool.Start());
+    const auto record = spool.Enqueue("device/PI-01/status", "online", 1, false);
+    assert(record.has_value());
+
+    assert(spool.Acknowledge(record->id));
+    assert(spool.Acknowledge(record->id));
+    assert(spool.PendingCount() == 0U);
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
 void TestNumericOrderAndCorruptQuarantine() {
     const auto directory = TemporaryDirectory();
     logistics::device::MqttPublishSpool spool(directory, 65536);
@@ -160,6 +175,7 @@ void TestDroppedSensorIsNotReplayedAndNextSamplePublishes() {
 int main() {
     TestPubackControlsRemovalAndRestartReplay();
     TestRestartDoesNotOverwriteUnacknowledgedRecord();
+    TestAcknowledgementIsIdempotent();
     TestNumericOrderAndCorruptQuarantine();
     TestSensorTelemetryNeverEntersDurableSpool();
     TestDroppedSensorIsNotReplayedAndNextSamplePublishes();

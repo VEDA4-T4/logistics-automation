@@ -181,7 +181,16 @@ bool MqttPublishSpool::Acknowledge(std::string_view id) {
         return false;
     }
     std::error_code error;
-    return std::filesystem::remove(directory_ / (std::string(id) + std::string(kPendingSuffix)), error) && !error;
+    /*
+     * PUBACK is authoritative: the broker has accepted the QoS1 publication.
+     * A repeated callback may observe that another acknowledgement path already
+     * removed the durable record. std::filesystem::remove() reports that case
+     * as `false` without setting an error, so keep acknowledgement idempotent
+     * and fail only for an actual filesystem error.
+     */
+    static_cast<void>(
+        std::filesystem::remove(directory_ / (std::string(id) + std::string(kPendingSuffix)), error));
+    return !error;
 }
 
 bool MqttPublishSpool::Quarantine(std::string_view id) {

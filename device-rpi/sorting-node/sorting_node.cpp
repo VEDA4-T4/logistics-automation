@@ -656,7 +656,7 @@ bool SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
     mqtt::CommandResult command_result = CommandResultFromUartStatus(status, error);
     bool accepted = command_result == mqtt::CommandResult::kSuccess;
     bool status_reconciled = false;
-    if (accepted && event.frame.command == UART_CMD_RESPONSE) {
+    if (event.frame.command == UART_CMD_RESPONSE) {
         status_reconciled = HandleStatusResponse(event.frame);
         if (!status_reconciled) {
             accepted = false;
@@ -768,6 +768,17 @@ void SortingNode::HandleSortingFrame(const uart_frame_t& frame) noexcept {
 }
 
 bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
+    if (frame.length < UART_RESPONSE_HEADER_SIZE) {
+        return false;
+    }
+
+    const std::uint8_t response_status = frame.payload[UART_RESPONSE_STATUS_INDEX];
+    const std::uint8_t response_error = frame.payload[UART_RESPONSE_ERROR_INDEX];
+    if ((response_status != UART_STATUS_SUCCESS && response_status != UART_STATUS_ERROR) ||
+        uart_app_error_is_valid(response_error) == 0U) {
+        return false;
+    }
+
     if (pending_.uart_command == UART_CMD_SORTING_GET_STATUS && frame.length == UART_SORTING_STATUS_PAYLOAD_SIZE) {
         const std::uint8_t gate_state = frame.payload[UART_SORTING_STATUS_GATE_STATE_INDEX];
         const std::uint16_t cycle_id = ReadLittleEndianU16(frame.payload, UART_SORTING_STATUS_CYCLE_ID_LOW_INDEX);
@@ -799,12 +810,14 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
             active_destination_ = destination;
             uncertain_cycle_ = {};
         }
-        const auto current_state = idle_cycle && gate_state == UART_SORTING_GATE_HOME
+        const auto current_state = response_error == UART_ERROR_EMERGENCY_STOP
+                                       ? std::string{ "EMERGENCY_STOP" }
+                                   : idle_cycle && gate_state == UART_SORTING_GATE_HOME
                                        ? ConveyorStateName(last_device_state_)
                                        : GateStateName(gate_state, destination);
         if (pending_.emit_status) {
-            EmitStatus(current_state, gate_state == UART_SORTING_GATE_FAULT ? std::optional<std::string>{ "ERR-SERVO" }
-                                                                            : std::nullopt);
+            const std::string error_code = UartErrorCode(response_error);
+            EmitStatus(current_state, error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code });
         }
         return true;
     }
@@ -824,8 +837,9 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
                                           : state == UART_SORTING_CONVEYOR_STOPPED ? "STOPPED"
                                                                                    : "ERROR";
         if (pending_.emit_status) {
-            EmitStatus(std::move(current_state),
-                       state == UART_SORTING_CONVEYOR_FAULT ? std::optional<std::string>{ "ERR-MOTOR" } : std::nullopt);
+            const std::string error_code = UartErrorCode(response_error);
+            EmitStatus(response_error == UART_ERROR_EMERGENCY_STOP ? "EMERGENCY_STOP" : std::move(current_state),
+                       error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code });
         }
         return true;
     }

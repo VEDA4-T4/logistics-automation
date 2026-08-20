@@ -137,6 +137,7 @@ struct Fixture {
 
     void PushSortingStatus(std::uint8_t gate_state, std::uint16_t cycle_id, std::uint8_t destination,
                            std::uint8_t status = UART_STATUS_SUCCESS,
+                           std::uint8_t error = UART_ERROR_NONE,
                            std::uint8_t length = UART_SORTING_STATUS_PAYLOAD_SIZE) {
         const uart_frame_t command = LastCommand();
         uart_frame_t response{};
@@ -146,7 +147,7 @@ struct Fixture {
         response.length = length;
         response.payload[UART_RESPONSE_STATUS_INDEX] = status;
         response.payload[UART_RESPONSE_COMMAND_INDEX] = UART_CMD_SORTING_GET_STATUS;
-        response.payload[UART_RESPONSE_ERROR_INDEX] = UART_ERROR_NONE;
+        response.payload[UART_RESPONSE_ERROR_INDEX] = error;
         response.payload[UART_SORTING_STATUS_GATE_STATE_INDEX] = gate_state;
         response.payload[UART_SORTING_STATUS_CYCLE_ID_LOW_INDEX] = static_cast<std::uint8_t>(cycle_id & 0xffU);
         response.payload[UART_SORTING_STATUS_CYCLE_ID_HIGH_INDEX] = static_cast<std::uint8_t>((cycle_id >> 8U) & 0xffU);
@@ -944,8 +945,23 @@ void TestRejectedOrMalformedStatusDoesNotConfirmReconciliation() {
     Fixture malformed;
     assert(malformed.node->RequestControllerStatus().Succeeded());
     malformed.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE, UART_SORTING_DESTINATION_NONE,
-                                UART_STATUS_SUCCESS, UART_RESPONSE_HEADER_SIZE);
+                                UART_STATUS_SUCCESS, UART_ERROR_NONE, UART_RESPONSE_HEADER_SIZE);
     assert(!malformed.last_status_reconciled);
+}
+
+void TestFaultStatusConfirmsReconciliation() {
+    Fixture fixture;
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+
+    fixture.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE,
+                              UART_SORTING_DESTINATION_NONE, UART_STATUS_ERROR, UART_ERROR_EMERGENCY_STOP);
+
+    assert(fixture.last_status_reconciled);
+    assert(!fixture.session->HasPendingCommand());
+    assert(fixture.reports.size() == 1U);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
+    assert(status.current_state == "EMERGENCY_STOP");
+    assert(status.error_code == "ERR-EMERGENCY-STOP");
 }
 
 void TestValidStatusConfirmsReconciliation() {
@@ -1003,6 +1019,7 @@ int main() {
     TestSilentKeepaliveReconcilesWithoutStatusReport();
     TestStatusAckAloneDoesNotConfirmReconciliation();
     TestRejectedOrMalformedStatusDoesNotConfirmReconciliation();
+    TestFaultStatusConfirmsReconciliation();
     TestValidStatusConfirmsReconciliation();
     TestGateHomeStatusDoesNotOverwriteRunningConveyor();
     TestReconnectStatusRejectsDestinationMappingMismatch();
