@@ -276,12 +276,6 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
                 ThrowLineError(path, line_number, "default_destination must be a valid MQTT topic level");
             }
             config.process.default_destination = value;
-        } else if (key == "input_conveyor_speed_percent") {
-            config.process.input_conveyor_speed_percent =
-                static_cast<std::uint8_t>(ParseInteger(path, line_number, key, value, 1, 100));
-        } else if (key == "sorting_conveyor_speed_percent") {
-            config.process.sorting_conveyor_speed_percent =
-                static_cast<std::uint8_t>(ParseInteger(path, line_number, key, value, 1, 100));
         } else if (key == "server_id" || key == "input_device_id" || key == "vision_device_id" ||
                    key == "gripper_device_id" || key == "sorting_device_id" || key == "line_tracer_device_id") {
             AssignProcessId(config, path, line_number, key, value);

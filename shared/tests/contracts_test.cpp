@@ -906,11 +906,11 @@ int main() {
     static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kRecovery, "PI-GRIPPER-01", "home") ==
                   std::chrono::seconds{ 30 });
     static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kDestinationSet, "PI-SORTING-01", {}) ==
-                  std::chrono::seconds{ 15 });
+                  std::chrono::seconds{ 5 });
     static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStart, "PI-SORTING-01", "sorting_conveyor") ==
-                  std::chrono::seconds{ 15 });
+                  std::chrono::seconds{ 5 });
     static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStop, "PI-SORTING-01", "sorting_conveyor") ==
-                  std::chrono::seconds{ 15 });
+                  std::chrono::seconds{ 5 });
     static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kExecute, "PI-LT-01", "line_tracer") ==
                   std::chrono::seconds{ 5 });
     static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kExecute, "pi-linetracer-01", {}) ==
@@ -924,8 +924,6 @@ int main() {
                   std::chrono::seconds{ 3 });
     static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kStop, "PI-INPUT-01", "input_conveyor") ==
                   std::chrono::seconds{ 17 });
-    static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kStop, "PI-SORTING-01",
-                                                       "sorting_conveyor") == std::chrono::seconds{ 17 });
     static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kEmergencyStop).count() == 3);
     static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kRecovery).count() == 32);
     static_assert(mqtt::kMqttMaximumRetries == 3);

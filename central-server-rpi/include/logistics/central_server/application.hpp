@@ -6,7 +6,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "logistics/central_server/process_state_store.hpp"
@@ -38,10 +37,6 @@ public:
     [[nodiscard]] static PendingDeliveryEpochResult PreparePendingMqttDeliveryEpoch(PendingMqttDelivery& delivery,
                                                                                     std::string_view process_epoch,
                                                                                     const MqttDeliveryRemoval& remove);
-    static void AcknowledgeMqttDelivery(
-        const PendingMqttDelivery& delivery, const std::string& key,
-        std::unordered_set<std::string>& mqtt_deliveries_in_flight,
-        std::unordered_map<std::string, PendingMqttDelivery>& mqtt_deliveries_acknowledged);
     [[nodiscard]] static int Run(int argc, char* argv[]);
 };
 

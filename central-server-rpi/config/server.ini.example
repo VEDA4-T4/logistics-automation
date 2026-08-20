@@ -61,9 +61,6 @@ line_tracer_enabled=true
 line_tracer_initial_position=A
 # Product-catalog misses are routed here instead of stalling the work.
 default_destination=3
-# Conveyor start speeds are percentages (1..100) and are sent explicitly to the nodes.
-input_conveyor_speed_percent=25
-sorting_conveyor_speed_percent=60
 
 [sensor_detection]
 # Box presence is decided here, from the distanceCm the STM32 reports.
@@ -71,11 +68,11 @@ sorting_conveyor_speed_percent=60
 # the only place detection is tuned - no firmware rebuild required.
 enabled=true
 # A reading at or below enter_threshold_cm starts a box.
-enter_threshold_cm=15
+enter_threshold_cm=10
 # The box is only released once the reading climbs above exit_threshold_cm.
 # Must be >= enter_threshold_cm; the gap is the hysteresis band that stops
 # DETECTED/CLEAR from chattering when a box parks near the limit.
-exit_threshold_cm=15
+exit_threshold_cm=12
 # Consecutive agreeing readings required before the state flips.
 debounce_count=3
 

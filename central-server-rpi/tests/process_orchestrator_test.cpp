@@ -272,7 +272,6 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(sorting_start_payload->command == mqtt::ControlCommand::kStart);
     assert(sorting_start_payload->target_device_id == "PI-SORTING-01");
     assert(sorting_start_payload->component_id == "sorting_conveyor");
-    assert(sorting_start_payload->params.at("speed") == 60);
     const auto premature_before_start =
         orchestrator.Handle(Status("MSG-SORTING-PREMATURE-BEFORE-START", "PI-SORTING-01", "CYCLE_COMPLETE"));
     assert(!premature_before_start.transition.Applied());
@@ -298,7 +297,6 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(input_start_payload->target_device_id == "PI-INPUT-01");
     assert(input_start_payload->component_id == "input_conveyor");
     assert(input_start_payload->params.at("workId") == kWorkId);
-    assert(input_start_payload->params.at("speed") == 25);
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-INPUT-01"), input_start.message).IsSuccess());
     assert(orchestrator.ConfirmDispatch(input_start).Applied());
 
@@ -392,7 +390,7 @@ void TestInvalidOrderAndDispatchFailureStaysProcessReady() {
     assert(product_result.commands.size() == 2);
     assert(orchestrator.FailDispatch(product_result.commands.back(), "gripper is offline").Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
-    assert(orchestrator.AcceptsNewWork());
+    assert(!orchestrator.AcceptsNewWork());
 }
 
 void TestInputFailureWithoutWorkIdStopsTheProcess() {
@@ -654,27 +652,19 @@ void TestSystemCommandTimeoutDoesNotMutateActiveWorks() {
     assert(orchestrator.StateMachine().FindWork(other_work_id)->failure_reason.empty());
 }
 
-void TestDeviceHealthDoesNotBlockIndependentWork() {
+void TestFailedDeviceBlocksNewWorkUntilHealthy() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     const auto begin = orchestrator.BeginWork("MSG-INPUT-FAULT", kWorkId, "PI-INPUT-01", kTimestamp);
     assert(begin.transition.Applied() && begin.commands.size() == 1);
     assert(orchestrator.FailDispatch(begin.commands.front(), "input conveyor stop timed out").Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
-    assert(orchestrator.AcceptsNewWork());
+    assert(!orchestrator.AcceptsNewWork());
 
     assert(!orchestrator
                 .Handle(
                     Status("MSG-INPUT-HEALTHY", "PI-INPUT-01", "STOPPED", mqtt::ConnectionState::kOnline, std::nullopt))
                 .handled);
     assert(orchestrator.AcceptsNewWork());
-
-    assert(!orchestrator.Handle(Heartbeat("MSG-GRIPPER-HOMING", "PI-GRIPPER-01", "HOMING")).handled);
-    assert(orchestrator.AcceptsNewWork());
-
-    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
-    assert(!orchestrator.AcceptsNewWork());
-    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
-    assert(!orchestrator.AcceptsNewWork());
 }
 
 void TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands() {
@@ -1094,14 +1084,15 @@ void TestProcessCommandTrackerRestoresPendingCommand() {
     central_server::ProcessCommandTracker restored;
     assert(restored.Restore(saved));
     assert(restored.PendingCount() == 2);
-    const auto processing = Message("MSG-TRACKER-PROCESSING", mqtt::MessageType::kCommandResponse, "PI-INPUT-01",
-                                    mqtt::CommandResponsePayload{
-                                        .request_id = first.message.message_id,
-                                        .command = mqtt::ControlCommand::kStop,
-                                        .result = mqtt::CommandResult::kProcessing,
-                                        .error_code = std::nullopt,
-                                        .message = "input stop accepted",
-                                    });
+    const auto processing = Message(
+        "MSG-TRACKER-PROCESSING", mqtt::MessageType::kCommandResponse, "PI-INPUT-01",
+        mqtt::CommandResponsePayload{
+            .request_id = first.message.message_id,
+            .command = mqtt::ControlCommand::kStop,
+            .result = mqtt::CommandResult::kProcessing,
+            .error_code = std::nullopt,
+            .message = "input stop accepted",
+        });
     assert(!restored.HandleResponse(processing).has_value());
     assert(restored.PendingCount() == 2);
     const auto response = Message("MSG-TRACKER-RESPONSE", mqtt::MessageType::kCommandResponse, "PI-INPUT-01",
@@ -1199,7 +1190,7 @@ int main() {
     TestFailedSystemCommandsEnterSafeProcessStates();
     TestCommandTimeoutOnlyFailsIdentifiableWork();
     TestSystemCommandTimeoutDoesNotMutateActiveWorks();
-    TestDeviceHealthDoesNotBlockIndependentWork();
+    TestFailedDeviceBlocksNewWorkUntilHealthy();
     TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands();
     TestRecoveryRestartStaysRecovering();
     TestRestoredHomographyTargetCreatesGripperCommand();

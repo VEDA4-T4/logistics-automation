@@ -9,7 +9,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -266,20 +265,21 @@ public:
             command = destination->command;
         }
         const bool accepted = result == mqtt::CommandResult::kSuccess || result == mqtt::CommandResult::kProcessing;
-        const std::string response_message = result == mqtt::CommandResult::kSuccess ? "integration command completed"
+        const std::string response_message = result == mqtt::CommandResult::kSuccess
+                                                 ? "integration command completed"
                                              : result == mqtt::CommandResult::kProcessing
                                                  ? "integration command accepted"
                                                  : "integration command failure";
-        return Handle(
-            mqtt::DeviceResponseTopic(target),
-            Message(mqtt::MessageType::kCommandResponse, target,
-                    mqtt::CommandResponsePayload{
-                        .request_id = std::move(request_id),
-                        .command = command,
-                        .result = result,
-                        .error_code = accepted ? std::nullopt : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
-                        .message = response_message,
-                    }));
+        return Handle(mqtt::DeviceResponseTopic(target),
+                      Message(mqtt::MessageType::kCommandResponse, target,
+                              mqtt::CommandResponsePayload{
+                                  .request_id = std::move(request_id),
+                                  .command = command,
+                                  .result = result,
+                                  .error_code = accepted ? std::nullopt
+                                                         : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
+                                  .message = response_message,
+                              }));
     }
 
 private:
@@ -1042,30 +1042,6 @@ void TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold() {
     assert(failed_removal == central_server::Application::PendingDeliveryEpochResult::kError);
 }
 
-void TestVisionWorkCreatedBrokerAckCompletesDurableDelivery() {
-    const central_server::PendingMqttDelivery delivery{
-        .topic = mqtt::DeviceCommandTopic(kVisionId),
-        .message =
-            mqtt::MqttMessage{
-                .message_id = "WORK-d8e9b2be-bfc0-471c-9000-590123412345",
-                .message_type = mqtt::MessageType::kWorkCreated,
-                .source_id = "central-server",
-                .timestamp = std::string(kTimestamp),
-                .data = mqtt::WorkCreatedPayload{ .work_id = "d8e9b2be-bfc0-471c-9000-590123412345" },
-            },
-    };
-    const std::string key = delivery.topic + "\n" + delivery.message.message_id;
-    std::unordered_set<std::string> in_flight{ key };
-    std::unordered_map<std::string, central_server::PendingMqttDelivery> acknowledged;
-
-    central_server::Application::AcknowledgeMqttDelivery(delivery, key, in_flight, acknowledged);
-
-    assert(in_flight.empty());
-    assert(acknowledged.size() == 1);
-    assert(acknowledged.at(key).topic == delivery.topic);
-    assert(acknowledged.at(key).message.message_id == delivery.message.message_id);
-}
-
 void TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly() {
     central_server::VisionMeasurementBuffer buffer;
     const auto make_measurement = [](std::string message_id, std::string barcode) {
@@ -1121,7 +1097,6 @@ int main() {
     TestApplicationRecoveryCommitFailureLeavesAllStateRetryable();
     TestApplicationProcessEpochStamping();
     TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold();
-    TestVisionWorkCreatedBrokerAckCompletesDurableDelivery();
     TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly();
     return 0;
 }

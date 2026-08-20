@@ -139,9 +139,7 @@ bool ProcessOrchestratorConfig::IsValid() const noexcept {
     return mqtt::IsValidTopicLevel(server_id) && mqtt::IsValidTopicLevel(input_device_id) &&
            mqtt::IsValidTopicLevel(vision_device_id) && mqtt::IsValidTopicLevel(gripper_device_id) &&
            mqtt::IsValidTopicLevel(sorting_device_id) && mqtt::IsValidTopicLevel(line_tracer_device_id) &&
-           mqtt::IsValidTopicLevel(default_destination) && input_conveyor_speed_percent > 0U &&
-           input_conveyor_speed_percent <= 100U && sorting_conveyor_speed_percent > 0U &&
-           sorting_conveyor_speed_percent <= 100U && initial_position_valid &&
+           mqtt::IsValidTopicLevel(default_destination) && initial_position_valid &&
            (!homography.enabled || homography.IsValid());
 }
 
@@ -222,7 +220,29 @@ bool ProcessOrchestrator::Enabled() const noexcept {
 }
 
 bool ProcessOrchestrator::AcceptsNewWork() const noexcept {
-    return config_.enabled && state_machine_.AcceptsNewWork();
+    if (!config_.enabled || !state_machine_.AcceptsNewWork()) {
+        return false;
+    }
+
+    const std::array process_devices{
+        std::string_view(config_.input_device_id),
+        std::string_view(config_.vision_device_id),
+        std::string_view(config_.gripper_device_id),
+        std::string_view(config_.sorting_device_id),
+    };
+    for (const auto device_id : process_devices) {
+        const auto health = device_health_.find(std::string(device_id));
+        if (health != device_health_.end() && !health->second) {
+            return false;
+        }
+    }
+    if (config_.line_tracer_enabled) {
+        const auto health = device_health_.find(config_.line_tracer_device_id);
+        if (health != device_health_.end() && !health->second) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool ProcessOrchestrator::IsWorkCreationSource(std::string_view device_id) const noexcept {
@@ -895,10 +915,6 @@ ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_v
                                                                    mqtt::ControlCommand command,
                                                                    std::string_view timestamp) {
     const std::string request_id = NextMessageId();
-    mqtt::Json params{ { "workId", work_id } };
-    if (command == mqtt::ControlCommand::kStart) {
-        params["speed"] = config_.input_conveyor_speed_percent;
-    }
     return {
         .message =
             {
@@ -913,7 +929,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_v
                         .command = command,
                         .target_device_id = config_.input_device_id,
                         .component_id = "input_conveyor",
-                        .params = std::move(params),
+                        .params = mqtt::Json{ { "workId", work_id } },
                     },
             },
         .dispatched_event = std::nullopt,
@@ -926,10 +942,6 @@ ProcessCommandIntent ProcessOrchestrator::MakeSortingControlCommand(std::string_
                                                                     std::string_view component_id,
                                                                     std::string_view timestamp) {
     const std::string request_id = NextMessageId();
-    mqtt::Json params{ { "workId", work_id } };
-    if (command == mqtt::ControlCommand::kStart && component_id == "sorting_conveyor") {
-        params["speed"] = config_.sorting_conveyor_speed_percent;
-    }
     return {
         .message =
             {
@@ -940,12 +952,12 @@ ProcessCommandIntent ProcessOrchestrator::MakeSortingControlCommand(std::string_
                 .timestamp = std::string(timestamp),
                 .data =
                     mqtt::ControlCommandPayload{
-                         .request_id = request_id,
-                         .command = command,
-                         .target_device_id = config_.sorting_device_id,
-                         .component_id = std::string(component_id),
-                         .params = std::move(params),
-                     },
+                        .request_id = request_id,
+                        .command = command,
+                        .target_device_id = config_.sorting_device_id,
+                        .component_id = std::string(component_id),
+                        .params = mqtt::Json{ { "workId", work_id } },
+                    },
             },
         .dispatched_event = std::nullopt,
         .work_id = std::string(work_id),
