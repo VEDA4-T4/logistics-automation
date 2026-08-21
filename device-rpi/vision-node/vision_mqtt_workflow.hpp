@@ -46,6 +46,7 @@ public:
 
     void Observe(std::optional<VisionObservation> observation);
     [[nodiscard]] bool AssignWork(const contracts::mqtt::MqttMessage& message);
+    [[nodiscard]] bool CanAcceptWork() const;
     [[nodiscard]] bool HasPendingBarcode() const;
     [[nodiscard]] bool NeedsBarcodeFallback() const;
     [[nodiscard]] std::optional<AssignedVisionWork> TakeAssignedWork();

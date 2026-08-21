@@ -111,6 +111,11 @@ bool VisionMqttWorkflow::AssignWork(const mqtt::MqttMessage& message) {
     return true;
 }
 
+bool VisionMqttWorkflow::CanAcceptWork() const {
+    std::lock_guard lock(mutex_);
+    return !work_id_.has_value() && (phase_ == Phase::kIdle || phase_ == Phase::kAwaitingWork);
+}
+
 bool VisionMqttWorkflow::HasPendingBarcode() const {
     std::lock_guard lock(mutex_);
     return (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && confirmed_box_observation_.has_value() &&

@@ -321,7 +321,7 @@ void TestProcessEpochOwnershipAndPropagation() {
     assert(!processor.PrepareOutboundMessage(mismatched).has_value());
 }
 
-void TestWorkCreatedEstablishesEpochAndRejectsConflict() {
+void TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval() {
     device::MqttMessageProcessor processor("PI-01");
     mqtt::MqttMessage created{
         .message_id = "WORK-22a194c3-3e3c-410c-a329-7e8c4ebcac83",
@@ -359,6 +359,10 @@ void TestWorkCreatedEstablishesEpochAndRejectsConflict() {
     assert(!conflict.IsSuccess());
     assert(conflict.error.find("processEpoch") != std::string::npos);
     assert(processor.PrepareOutboundMessage(event)->process_epoch == kProcessEpoch);
+
+    processor.SetWorkCreatedEpochReassignmentGuard([] { return true; });
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(created)).IsSuccess());
+    assert(processor.PrepareOutboundMessage(event)->process_epoch == kOtherProcessEpoch);
 }
 
 }  // namespace
@@ -372,6 +376,6 @@ int main() {
     TestRegistrationAndOnlineStatusEncoding();
     TestDeviceEventAndErrorEncoding();
     TestProcessEpochOwnershipAndPropagation();
-    TestWorkCreatedEstablishesEpochAndRejectsConflict();
+    TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval();
     return 0;
 }

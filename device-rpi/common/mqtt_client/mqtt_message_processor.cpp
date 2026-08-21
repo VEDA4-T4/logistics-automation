@@ -61,6 +61,11 @@ MqttMessageProcessor::MqttMessageProcessor(std::string device_id) : device_id_(s
     }
 }
 
+void MqttMessageProcessor::SetWorkCreatedEpochReassignmentGuard(WorkCreatedEpochReassignmentGuard guard) {
+    std::lock_guard lock(epoch_mutex_);
+    work_created_epoch_reassignment_guard_ = std::move(guard);
+}
+
 IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, std::string_view payload) {
     auto decoded = mqtt::DeserializeMessage(payload);
     if (!decoded.IsSuccess()) {
@@ -117,10 +122,13 @@ IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, 
             std::lock_guard epoch_lock(epoch_mutex_);
             if (decoded.value.message_type == mqtt::MessageType::kWorkCreated) {
                 if (active_process_epoch_.has_value() && *active_process_epoch_ != *decoded.value.process_epoch) {
-                    return {
-                        .message = {},
-                        .error = "WORK_CREATED processEpoch conflicts with the active process",
-                    };
+                    if (work_created_epoch_reassignment_guard_ == nullptr ||
+                        !work_created_epoch_reassignment_guard_()) {
+                        return {
+                            .message = {},
+                            .error = "WORK_CREATED processEpoch conflicts with the active process",
+                        };
+                    }
                 }
                 active_process_epoch_ = decoded.value.process_epoch;
             } else if (EstablishesProcessEpoch(decoded.value)) {

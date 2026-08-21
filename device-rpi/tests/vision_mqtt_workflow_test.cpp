@@ -219,7 +219,9 @@ void TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork() {
 
 void TestSensorWorkCanBeAssignedBeforeVisionDetection() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
+    assert(workflow.CanAcceptWork());
     assert(workflow.AssignWork(WorkCreated()));
+    assert(!workflow.CanAcceptWork());
     assert(!workflow.TakeAssignedWork().has_value());
 
     workflow.Observe(Observation());

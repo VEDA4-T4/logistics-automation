@@ -24,6 +24,7 @@ public:
     MqttNodeClient& operator=(MqttNodeClient&&) = delete;
 
     void SetCommandHandler(CommandHandler handler);
+    void SetWorkCreatedEpochReassignmentGuard(std::function<bool()> guard);
 
     [[nodiscard]] bool Start();
     void Stop() noexcept;

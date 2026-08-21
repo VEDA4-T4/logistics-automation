@@ -410,6 +410,7 @@ int main(const int argc, char* argv[]) {
         .not_ready_error_code = "ERR-CAMERA-UNAVAILABLE",
     });
     logistics::device::MqttNodeClient mqtt_client(std::move(mqtt_config), "vision", device_status);
+    mqtt_client.SetWorkCreatedEpochReassignmentGuard([&mqtt_workflow] { return mqtt_workflow.CanAcceptWork(); });
     const std::string mqtt_session_id = logistics::device::GenerateMessageSessionId();
     std::atomic_uint64_t mqtt_sequence{ 1 };
     const auto flush_result_outbox = [&mqtt_client, &result_outbox]() {

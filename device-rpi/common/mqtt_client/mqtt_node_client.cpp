@@ -103,6 +103,10 @@ public:
         command_handler_ = std::move(handler);
     }
 
+    void SetWorkCreatedEpochReassignmentGuard(std::function<bool()> guard) {
+        processor_.SetWorkCreatedEpochReassignmentGuard(std::move(guard));
+    }
+
     [[nodiscard]] bool Start() {
         if (running_.exchange(true)) {
             return true;
@@ -876,6 +880,10 @@ MqttNodeClient::~MqttNodeClient() = default;
 
 void MqttNodeClient::SetCommandHandler(CommandHandler handler) {
     impl_->SetCommandHandler(std::move(handler));
+}
+
+void MqttNodeClient::SetWorkCreatedEpochReassignmentGuard(std::function<bool()> guard) {
+    impl_->SetWorkCreatedEpochReassignmentGuard(std::move(guard));
 }
 
 bool MqttNodeClient::Start() {
