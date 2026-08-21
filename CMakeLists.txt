@@ -26,6 +26,7 @@ if(BUILD_TESTING)
     add_subdirectory(stm32/gripper-controller/tests)
     add_subdirectory(stm32/linetracer-controller/Tests/CommRx)
     add_subdirectory(stm32/linetracer-controller/Tests/CommTx)
+    add_subdirectory(stm32/linetracer-controller/Tests/Health)
     add_subdirectory(stm32/linetracer-controller/Tests/Host)
 endif()
 

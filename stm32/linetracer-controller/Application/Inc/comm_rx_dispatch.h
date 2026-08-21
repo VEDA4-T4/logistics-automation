@@ -15,7 +15,6 @@ extern "C" {
 
 typedef uint8_t (*comm_rx_put_control_fn)(void* context, const app_control_command_t* command);
 typedef uint8_t (*comm_rx_put_safety_fn)(void* context, const app_safety_event_t* event, uint8_t priority);
-typedef uint8_t (*comm_rx_notify_emergency_fn)(void* context);
 typedef uint8_t (*comm_rx_put_response_fn)(void* context, const app_tx_event_t* event);
 typedef void (*comm_rx_report_health_fn)(void* context, app_health_event_type_t type, uint32_t detail, uint32_t now_ms);
 
@@ -23,7 +22,6 @@ typedef struct {
     void* context;
     comm_rx_put_control_fn put_control;
     comm_rx_put_safety_fn put_safety;
-    comm_rx_notify_emergency_fn notify_emergency;
     comm_rx_put_response_fn put_response;
     comm_rx_report_health_fn report_health;
 } comm_rx_dispatch_port_t;

@@ -265,6 +265,22 @@ void FlushOutbox(MqttNodeClient& mqtt_client, std::deque<OutboundMessage>& outbo
     return std::string(node.ActiveWorkId());
 }
 
+[[nodiscard]] bool IsHealthyStatusResponse(const UartSessionEvent& event) noexcept {
+    if (event.type != UartSessionEventType::kCommandResponseReceived ||
+        event.pending_command != UART_CMD_LINETRACER_GET_STATUS || event.frame.command != UART_CMD_RESPONSE ||
+        event.frame.length != UART_LINETRACER_STATUS_PAYLOAD_SIZE ||
+        event.frame.payload[UART_RESPONSE_COMMAND_INDEX] != UART_CMD_LINETRACER_GET_STATUS ||
+        (event.frame.payload[UART_RESPONSE_STATUS_INDEX] != UART_STATUS_ACK &&
+         event.frame.payload[UART_RESPONSE_STATUS_INDEX] != UART_STATUS_SUCCESS) ||
+        event.frame.payload[UART_RESPONSE_ERROR_INDEX] != UART_ERROR_NONE) {
+        return false;
+    }
+
+    const std::uint8_t state = event.frame.payload[UART_LINETRACER_STATUS_STATE_INDEX];
+    return uart_linetracer_state_is_valid(state) != 0U && state != UART_LINETRACER_STATE_FAULT &&
+           state != UART_LINETRACER_STATE_EMERGENCY_STOP;
+}
+
 int RunLineTracerDaemon(int argc, char* argv[]) {
     if (argc > 3) {
         std::cerr << "usage: logistics_linetracer_node [node.ini] [/dev/vedauart]\n";
@@ -293,18 +309,35 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
     std::uint64_t message_sequence = 1U;
     bool uart_failure_pending = false;
     bool uart_disconnected_reported = false;
+    bool uart_link_confirmed = false;
+    std::uint64_t status_report_generation = 0U;
 
     const auto queue_report = [&](const LineTracerReport& report) {
+        if (report.channel == LineTracerReportChannel::kStatus) {
+            ++status_report_generation;
+        }
         static_cast<void>(EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence,
                                           device_status, &mqtt_client));
     };
     line_tracer.SetReportHandler(queue_report);
     uart_session.SetEventHandler([&](const UartSessionEvent& event) {
+        const std::uint64_t status_generation_before_event = status_report_generation;
         line_tracer.HandleUartEvent(event);
+
+        if (IsHealthyStatusResponse(event) && !uart_link_confirmed) {
+            uart_link_confirmed = true;
+            uart_failure_pending = false;
+            device_status->SetUartConnected(true);
+            if (status_report_generation == status_generation_before_event) {
+                queue_report(MakeUartStatus(line_tracer, line_tracer.HasActiveJob() ? "UART_RECONNECTED" : "IDLE",
+                                            ActiveWorkId(line_tracer), std::nullopt));
+            }
+            uart_disconnected_reported = false;
+            std::clog << "[linetracer][uart][INFO] controller link confirmed\n";
+        }
+
         if (event.type == UartSessionEventType::kTransportDisconnected ||
-            event.type == UartSessionEventType::kTransportError ||
-            (event.type == UartSessionEventType::kAckTimeout &&
-             event.pending_command == UART_CMD_LINETRACER_GET_STATUS)) {
+            event.type == UartSessionEventType::kTransportError) {
             uart_failure_pending = true;
         }
     });
@@ -363,12 +396,10 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
 
         if (!uart_session.IsOpen() && now >= next_uart_reconnect) {
             if (uart_session.Open(uart_path)) {
-                device_status->SetUartConnected(true);
-                uart_disconnected_reported = false;
+                uart_link_confirmed = false;
                 uart_failure_pending = false;
-                queue_report(MakeUartStatus(line_tracer, line_tracer.HasActiveJob() ? "UART_RECONNECTED" : "IDLE",
-                                            ActiveWorkId(line_tracer), std::nullopt));
-                std::clog << "[linetracer][uart][INFO] connected: " << uart_path << '\n';
+                std::clog << "[linetracer][uart][INFO] transport opened; awaiting controller response: " << uart_path
+                          << '\n';
             } else {
                 uart_failure_pending = true;
                 next_uart_reconnect = now + kUartReconnectInterval;
@@ -428,15 +459,18 @@ int RunLineTracerDaemon(int argc, char* argv[]) {
             static_cast<void>(line_tracer.TrySendStatusKeepalive());
         }
 
-        if (uart_failure_pending && !uart_disconnected_reported) {
+        if (uart_failure_pending) {
             uart_session.Close();
+            uart_link_confirmed = false;
             device_status->SetUartConnected(false);
-            queue_report(MakeUartStatus(line_tracer, "UART_DISCONNECTED", ActiveWorkId(line_tracer),
-                                        std::string("ERR-UART-DISCONNECTED")));
-            uart_disconnected_reported = true;
+            if (!uart_disconnected_reported) {
+                queue_report(MakeUartStatus(line_tracer, "UART_DISCONNECTED", ActiveWorkId(line_tracer),
+                                            std::string("ERR-UART-DISCONNECTED")));
+                uart_disconnected_reported = true;
+                std::cerr << "[linetracer][uart][WARN] disconnected; reconnect scheduled\n";
+            }
             uart_failure_pending = false;
             next_uart_reconnect = Clock::now() + kUartReconnectInterval;
-            std::cerr << "[linetracer][uart][WARN] disconnected; reconnect scheduled\n";
         }
 
         device_status->SetJobId(ActiveWorkId(line_tracer));
