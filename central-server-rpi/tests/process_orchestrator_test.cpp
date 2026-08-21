@@ -331,7 +331,8 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(sorting_done.transition.Applied() && sorting_done.commands.empty());
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kTransporting);
 
-    assert(orchestrator.Handle(Status("MSG-LT-START", "PI-LT-01", "FOLLOWING_LINE")).transition.Applied());
+    assert(!orchestrator.Handle(Status("MSG-LT-START", "PI-LT-01", "FOLLOWING_LINE")).handled);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kTransporting);
     const auto completed = Message("MSG-COMPLETED", mqtt::MessageType::kWorkCompleted, "PI-LT-01",
                                    mqtt::WorkCompletedPayload{
                                        .work_id = kWorkId,
@@ -1036,10 +1037,10 @@ void TestDownstreamDevicesServeOneWorkAtATime() {
                .Handle(Status("MSG-SORTING-FIRST-DONE", "PI-SORTING-01", "CYCLE_COMPLETE",
                               mqtt::ConnectionState::kOnline, std::string(kWorkId)))
                .transition.Applied());
-    assert(orchestrator
-               .Handle(Status("MSG-LT-FIRST-START", "PI-LT-01", "FOLLOWING_LINE", mqtt::ConnectionState::kOnline,
-                              std::string(kWorkId)))
-               .transition.Applied());
+    assert(!orchestrator
+                .Handle(Status("MSG-LT-FIRST-START", "PI-LT-01", "FOLLOWING_LINE", mqtt::ConnectionState::kOnline,
+                               std::string(kWorkId)))
+                .handled);
 
     const auto completed =
         orchestrator.Handle(Message("MSG-FIRST-COMPLETED", mqtt::MessageType::kWorkCompleted, "PI-LT-01",
@@ -1108,6 +1109,37 @@ void TestProcessCommandTrackerRestoresPendingCommand() {
     assert(completed.has_value());
     assert(completed->message.message_id == first.message.message_id);
     assert(restored.PendingCount() == 1);
+}
+
+void TestLineTracerLoadOnStartsTransportOnlyFromSorting() {
+    for (const auto state : { "load_on_a", "LOAD_ON_B", "LOAD_ON_C" }) {
+        central_server::ProcessOrchestrator orchestrator;
+        const auto restored =
+            orchestrator.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning,
+                                                   { central_server::WorkProcessSnapshot{
+                                                       .work_id = kWorkId,
+                                                       .stage = central_server::WorkStage::kSorting,
+                                                       .last_source_id = "PI-SORTING-01",
+                                                   } },
+                                                   {}, 0, {});
+        assert(restored.restored);
+        assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
+
+        const auto following_line = orchestrator.Handle(Status("MSG-LT-FOLLOWING-LINE", "PI-LT-01", "FOLLOWING_LINE"));
+        assert(!following_line.handled);
+        assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kSorting);
+
+        const auto load_on =
+            orchestrator.Handle(Status("MSG-LT-LOAD-ON-" + std::string(state), "PI-LT-01", std::string(state)));
+        assert(load_on.transition.Applied());
+        assert(load_on.transition.previous_stage == central_server::WorkStage::kSorting);
+        assert(load_on.transition.current_stage == central_server::WorkStage::kTransporting);
+
+        const auto delayed_sorting =
+            orchestrator.Handle(Status("MSG-SORTING-DELAYED-" + std::string(state), "PI-SORTING-01", "CYCLE_COMPLETE"));
+        assert(delayed_sorting.transition.disposition == central_server::TransitionDisposition::kDuplicate);
+        assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kTransporting);
+    }
 }
 
 void TestLineTracerBypassRunsGripperAndSortingToCompletion() {
@@ -1199,6 +1231,7 @@ int main() {
     TestChangedCalibrationDiscardsRestoredTarget();
     TestDownstreamDevicesServeOneWorkAtATime();
     TestProcessCommandTrackerRestoresPendingCommand();
+    TestLineTracerLoadOnStartsTransportOnlyFromSorting();
     TestLineTracerBypassRunsGripperAndSortingToCompletion();
     return 0;
 }

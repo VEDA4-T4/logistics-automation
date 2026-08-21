@@ -795,12 +795,13 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                                                                                : ProcessEventType::kSortingStarted,
                           message, *status->job_id);
         } else if (message.source_id == config_.line_tracer_device_id) {
-            if (meaning != contracts::DeviceStateMeaning::kWorking) {
+            if (!IsOneOf(current_state, { "LOAD_ON_A", "LOAD_ON_B", "LOAD_ON_C" })) {
                 return NotHandled();
             }
             const auto work = machine.FindWork(*status->job_id);
             if (!work.has_value() ||
-                (work->stage != WorkStage::kTransportRequested && work->stage != WorkStage::kTransporting)) {
+                (work->stage != WorkStage::kSorting && work->stage != WorkStage::kTransportRequested &&
+                 work->stage != WorkStage::kTransporting)) {
                 return NotHandled();
             }
             event = Event(ProcessEventType::kTransportStarted, message, *status->job_id);

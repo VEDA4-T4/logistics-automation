@@ -400,6 +400,14 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             return Move(work, WorkStage::kSorting, event.source_id);
 
         case ProcessEventType::kSortingCompleted:
+            if (work.stage == WorkStage::kTransporting) {
+                return {
+                    .disposition = TransitionDisposition::kDuplicate,
+                    .previous_stage = work.stage,
+                    .current_stage = work.stage,
+                    .reason = "sorting completion was already superseded by line-tracer load-on",
+                };
+            }
             if (work.stage != WorkStage::kSorting) {
                 return Reject("sorting completion is not allowed in the current work stage");
             }
@@ -412,7 +420,7 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             return Move(work, WorkStage::kTransporting, event.source_id);
 
         case ProcessEventType::kTransportStarted:
-            if (!IsOneOf(work.stage, { WorkStage::kTransportRequested, WorkStage::kTransporting })) {
+            if (!IsOneOf(work.stage, { WorkStage::kSorting, WorkStage::kTransportRequested, WorkStage::kTransporting })) {
                 return Reject("line-tracer status is not allowed in the current work stage");
             }
             return Move(work, WorkStage::kTransporting, event.source_id);
