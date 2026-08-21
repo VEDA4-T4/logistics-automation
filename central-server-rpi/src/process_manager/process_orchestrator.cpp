@@ -374,49 +374,6 @@ ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view 
     return transition;
 }
 
-std::optional<std::string> ProcessOrchestrator::FindResumableLineTracerWork() const {
-    if (!config_.enabled || !config_.line_tracer_enabled) {
-        return std::nullopt;
-    }
-    std::optional<std::string> work_id;
-    for (const auto& work : state_machine_.ActiveWorks()) {
-        if (work.stage != WorkStage::kRecovering || work.suspended_stage != WorkStage::kTransporting ||
-            work.last_source_id != config_.line_tracer_device_id) {
-            continue;
-        }
-        if (work_id.has_value()) {
-            return std::nullopt;
-        }
-        work_id = work.work_id;
-    }
-    return work_id;
-}
-
-ProcessCommandIntent ProcessOrchestrator::MakeLineTracerResumeCommand(std::string_view work_id,
-                                                                       std::string_view timestamp) {
-    const std::string request_id = NextMessageId();
-    return {
-        .message =
-            {
-                .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-                .message_id = request_id,
-                .message_type = mqtt::MessageType::kControlCommand,
-                .source_id = config_.server_id,
-                .timestamp = std::string(timestamp),
-                .data =
-                    mqtt::ControlCommandPayload{
-                        .request_id = request_id,
-                        .command = mqtt::ControlCommand::kStart,
-                        .target_device_id = config_.line_tracer_device_id,
-                        .component_id = {},
-                        .params = mqtt::Json{ { "workId", work_id } },
-                    },
-            },
-        .dispatched_event = std::nullopt,
-        .work_id = std::string(work_id),
-    };
-}
-
 ProcessOrchestrationResult ProcessOrchestrator::HandleCommandCompletion(const ProcessCommandIntent& intent,
                                                                         const mqtt::MqttMessage& response) {
     const auto* result = mqtt::GetPayload<mqtt::CommandResponsePayload>(response);

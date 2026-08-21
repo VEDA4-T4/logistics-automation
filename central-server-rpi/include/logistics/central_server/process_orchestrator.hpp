@@ -88,9 +88,6 @@ public:
     [[nodiscard]] std::vector<ProcessCommandIntent> SortingDetectionCommands(std::string_view work_id,
                                                                              std::string_view timestamp);
     [[nodiscard]] ProcessTransition ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id);
-    [[nodiscard]] std::optional<std::string> FindResumableLineTracerWork() const;
-    [[nodiscard]] ProcessCommandIntent MakeLineTracerResumeCommand(std::string_view work_id,
-                                                                   std::string_view timestamp);
     [[nodiscard]] ProcessOrchestrationResult HandleCommandCompletion(const ProcessCommandIntent& intent,
                                                                      const contracts::mqtt::MqttMessage& response);
     [[nodiscard]] ProcessTransition ConfirmDispatch(const ProcessCommandIntent& intent);

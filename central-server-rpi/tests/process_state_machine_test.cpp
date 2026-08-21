@@ -267,27 +267,6 @@ void TestRecoveryDiscardsAllActiveWork() {
     assert(machine.ActiveWorks().empty());
 }
 
-void TestEmergencyRecoveryRetainsSelectedTransportWork() {
-    central_server::ProcessStateMachine machine;
-    std::vector works{
-        WorkAtStage(kWorkOne, central_server::WorkStage::kInputDetected),
-        WorkAtStage(kWorkSix, central_server::WorkStage::kTransporting),
-    };
-
-    assert(machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, std::move(works)));
-    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
-    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
-    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
-
-    assert(machine.CompleteSystemRecovery(kWorkSix).Applied());
-    assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
-    assert(!machine.FindWork(kWorkOne).has_value());
-    const auto retained = machine.FindWork(kWorkSix);
-    assert(retained.has_value());
-    assert(retained->stage == central_server::WorkStage::kTransporting);
-    assert(!retained->suspended_stage.has_value());
-}
-
 void TestRecoveryCompletionClearsProcessedMessages() {
     central_server::ProcessStateMachine machine;
     assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BEFORE-RECOVERY")).Applied());
@@ -393,7 +372,6 @@ int main() {
     TestBarcodeFailureSuspendsOtherActiveWork();
     TestServerRestartSuspendsTransportRequest();
     TestRecoveryDiscardsAllActiveWork();
-    TestEmergencyRecoveryRetainsSelectedTransportWork();
     TestRecoveryCompletionClearsProcessedMessages();
     TestParallelWorksRemainIndependent();
     TestNodeFailureWithoutWorkStopsTheProcess();

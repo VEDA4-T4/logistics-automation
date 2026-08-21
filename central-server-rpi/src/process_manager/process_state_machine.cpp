@@ -216,31 +216,9 @@ ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::Contr
     return Reject("unsupported system command");
 }
 
-ProcessTransition ProcessStateMachine::CompleteSystemRecovery(const std::optional<std::string_view> retained_work_id) {
+ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
     if (system_state_ != ProcessSystemState::kRecovery) {
         return Reject("system recovery is not in progress");
-    }
-    if (retained_work_id.has_value()) {
-        const auto retained_iterator = works_.find(std::string(*retained_work_id));
-        if (retained_iterator == works_.end() || retained_iterator->second.stage != WorkStage::kRecovering ||
-            retained_iterator->second.suspended_stage != WorkStage::kTransporting) {
-            return Reject("retained recovery work is not a suspended transport");
-        }
-        auto retained = std::move(retained_iterator->second);
-        retained.stage = WorkStage::kTransporting;
-        retained.suspended_stage.reset();
-        retained.failure_reason.clear();
-        works_.clear();
-        works_.emplace(retained.work_id, std::move(retained));
-        processed_message_ids_.clear();
-        processed_message_order_.clear();
-        system_state_ = ProcessSystemState::kRunning;
-        return {
-            .disposition = TransitionDisposition::kApplied,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = {},
-        };
     }
     works_.clear();
     processed_message_ids_.clear();
