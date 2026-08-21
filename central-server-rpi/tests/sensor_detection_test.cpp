@@ -181,7 +181,7 @@ void TestInputDetectionGateCreatesWorkWithoutPriorClear() {
     assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldCreateWork(clear, true, false));
     assert(!gate.ShouldCreateWork(detected, true, true));
-    assert(!gate.ShouldCreateWork(detected, true, false));
+    assert(gate.ShouldCreateWork(detected, true, false));
 
     assert(!gate.ShouldCreateWork(clear, true, false));
     assert(gate.ShouldCreateWork(detected, true, false));

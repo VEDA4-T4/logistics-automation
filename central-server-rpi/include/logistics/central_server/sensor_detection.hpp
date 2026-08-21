@@ -99,11 +99,10 @@ public:
     // timed out.
     [[nodiscard]] bool ShouldStopConveyor(const contracts::mqtt::MqttMessage& message);
 
-    // Consumes one physical DETECTED interval. A stopped process defers the
-    // interval so the next reading after START can create the work; an already
-    // occupied input station consumes it to prevent a second work for the same
-    // box. A prior CLEAR is not required because CLEAR telemetry can be missed
-    // while the process starts.
+    // Consumes one physical DETECTED interval. A stopped process or occupied
+    // input station defers the interval so the next reading after it is ready
+    // can create the work. A prior CLEAR is not required because CLEAR
+    // telemetry can be missed while the process starts.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
                                         bool input_station_occupied);
     void RequireClear() noexcept;

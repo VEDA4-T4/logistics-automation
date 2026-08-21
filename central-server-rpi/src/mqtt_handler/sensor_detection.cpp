@@ -91,7 +91,6 @@ bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& me
         return false;
     }
     if (input_station_occupied) {
-        consumed_ = true;
         return false;
     }
     if (!process_accepts_work) {
