@@ -169,6 +169,14 @@ OperationalLogUpdateResult OperationalLogState::applyEnvelope(const QString& top
             } else {
                 entry.category = QStringLiteral("장치 오류");
             }
+
+            const auto alert_key = entry.code.toUpper();
+            auto& active_alerts = active_device_alerts_[source_id];
+            if (active_alerts.contains(alert_key)) {
+                should_append = false;
+                break;
+            }
+            active_alerts.insert(alert_key);
             break;
         }
         case mqtt::MessageType::kEmergencyStop:
@@ -191,9 +199,22 @@ OperationalLogUpdateResult OperationalLogState::applyEnvelope(const QString& top
                 return result;
             }
             if (state == mqtt::ConnectionState::kOnline && !process_error && !sensor_stale) {
+                active_device_alerts_.remove(source_id);
                 should_append = false;
                 break;
             }
+
+            const auto normalized_error_code = error_code.toUpper();
+            const auto alert_key = !normalized_error_code.isEmpty()
+                                       ? normalized_error_code
+                                       : QStringLiteral("%1|%2").arg(status_text.toUpper(), current_state);
+            auto& active_alerts = active_device_alerts_[source_id];
+            if (active_alerts.contains(alert_key)) {
+                should_append = false;
+                break;
+            }
+            active_alerts.insert(alert_key);
+
             entry.severity = sensor_stale
                                  ? OperationalLogSeverity::Warning
                                  : (process_error ? OperationalLogSeverity::Error : DeviceStatusSeverity(state));

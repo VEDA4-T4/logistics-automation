@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDateTime>
+#include <QHash>
 #include <QList>
 #include <QQueue>
 #include <QSet>
@@ -72,6 +73,7 @@ private:
     QSet<QString> processed_message_ids_;
     QQueue<QString> processed_message_id_order_;
     qsizetype maximum_entries_{ kDefaultMaximumEntries };
+    QHash<QString, QSet<QString>> active_device_alerts_;
     quint64 local_sequence_{ 0 };
 };
 

@@ -13,6 +13,8 @@ extern "C" {
 
 void StartControlTask(void* argument);
 bool ControlTask_GetLatest(app_control_snapshot_t* snapshot);
+bool ControlTask_IsTurning(void);
+bool ControlTask_ShouldMonitorUltrasonic(void);
 
 #ifdef __cplusplus
 }

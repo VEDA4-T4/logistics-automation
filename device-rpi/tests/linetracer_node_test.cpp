@@ -129,7 +129,8 @@ struct Fixture {
     }
 
     void RespondToLastStatus(std::uint8_t state = UART_LINETRACER_STATE_FOLLOWING_LINE,
-                             std::uint8_t load_state = UART_LINETRACER_LOAD_EMPTY) {
+                             std::uint8_t load_state = UART_LINETRACER_LOAD_EMPTY,
+                             std::uint8_t error = UART_ERROR_NONE) {
         const uart_frame_t command = LastFrame();
         assert(command.command == UART_CMD_LINETRACER_GET_STATUS);
 
@@ -140,7 +141,7 @@ struct Fixture {
         response.length = UART_LINETRACER_STATUS_PAYLOAD_SIZE;
         response.payload[UART_RESPONSE_STATUS_INDEX] = UART_STATUS_SUCCESS;
         response.payload[UART_RESPONSE_COMMAND_INDEX] = command.command;
-        response.payload[UART_RESPONSE_ERROR_INDEX] = UART_ERROR_NONE;
+        response.payload[UART_RESPONSE_ERROR_INDEX] = error;
         response.payload[UART_LINETRACER_STATUS_STATE_INDEX] = state;
         response.payload[UART_LINETRACER_STATUS_JOB_ID_LOW_INDEX] =
             static_cast<std::uint8_t>(node->ActiveUartJobId() & 0xffU);
@@ -785,6 +786,55 @@ void TestRemovedRearSensorStatusIsIgnored() {
     assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[1]).sensor_id == UART_LINETRACER_SENSOR_RIGHT);
 }
 
+void TestDuplicateFaultIsSuppressedUntilStatusRecovery() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_TIMEOUT);
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_TIMEOUT);
+
+    assert(fixture.reports.size() == 1U);
+    assert(ReportPayload<mqtt::ErrorOccurredPayload>(fixture.reports.front()).error_code == "ERR-UART-TIMEOUT");
+
+    fixture.node->HandleUartEvent({
+        .type = logistics::device::UartSessionEventType::kTransportDisconnected,
+    });
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_TIMEOUT);
+    assert(fixture.reports.size() == 1U);
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+    assert(fixture.node->TrySendStatusKeepalive());
+    fixture.RespondToLastStatus(UART_LINETRACER_STATE_STOPPED);
+
+    assert(fixture.reports.size() == 2U);
+    assert(fixture.reports.back().message_type == mqtt::MessageType::kDeviceStatus);
+    const auto& recovered = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.back());
+    assert(recovered.current_state == "STOPPED");
+    assert(!recovered.error_code.has_value());
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+    assert(fixture.node->TrySendStatusKeepalive());
+    fixture.RespondToLastStatus(UART_LINETRACER_STATE_STOPPED);
+    assert(fixture.reports.size() == 2U);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_TIMEOUT);
+    assert(fixture.reports.size() == 3U);
+    assert(fixture.reports.back().message_type == mqtt::MessageType::kErrorOccurred);
+}
+
+void TestHealthyKeepaliveDoesNotClearNonTimeoutFault() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+
+    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_SENSOR);
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+    assert(fixture.node->TrySendStatusKeepalive());
+    fixture.RespondToLastStatus(UART_LINETRACER_STATE_STOPPED);
+
+    assert(fixture.reports.size() == 1U);
+    assert(fixture.reports.front().message_type == mqtt::MessageType::kErrorOccurred);
+}
+
 void TestStaleJobEventIsIgnored() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
@@ -840,6 +890,20 @@ void TestKeepaliveDefersWhileAnotherCommandIsPending() {
 
     assert(!fixture.node->TrySendStatusKeepalive());
     assert(fixture.backend->writes.size() == writes_before);
+}
+
+void TestKeepaliveContinuesAfterStopAck() {
+    Fixture fixture;
+    AssignAndAcknowledge(fixture);
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStop)).Succeeded());
+    fixture.AcknowledgeLastFrame();
+    const std::size_t writes_before = fixture.backend->writes.size();
+
+    fixture.node->Tick(std::chrono::milliseconds{ 1000 });
+
+    assert(fixture.node->TrySendStatusKeepalive());
+    assert(fixture.backend->writes.size() == writes_before + 1U);
+    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_GET_STATUS);
 }
 
 void TestKeepaliveResponseClearsPendingWithoutMqttResponse() {
@@ -928,10 +992,13 @@ int main() {
     TestFaultReportsMappedError();
     TestObstacleTransitionsPublishSensorStatusOnlyWhenReceived();
     TestRemovedRearSensorStatusIsIgnored();
+    TestDuplicateFaultIsSuppressedUntilStatusRecovery();
+    TestHealthyKeepaliveDoesNotClearNonTimeoutFault();
     TestStaleJobEventIsIgnored();
     TestKeepaliveRunsWithoutActiveJob();
     TestKeepaliveWaitsForOneSecondAndSendsStatusRequest();
     TestKeepaliveDefersWhileAnotherCommandIsPending();
+    TestKeepaliveContinuesAfterStopAck();
     TestKeepaliveResponseClearsPendingWithoutMqttResponse();
     TestResetKeepsConnectionAliveWithoutActiveJob();
     TestUnloadCompleteKeepsConnectionAliveWithoutActiveJob();

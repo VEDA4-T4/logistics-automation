@@ -1,0 +1,326 @@
+#include "health_logic.h"
+
+#include <stddef.h>
+#include <string.h>
+
+#define HEALTH_TASK_BIT(task) (1UL << (uint32_t)(task))
+#define HEALTH_EVENT_BIT(type) (1UL << (uint32_t)(type))
+
+static uint8_t HealthLogic_TaskIsValid(app_task_id_t task) {
+    return ((uint32_t)task < (uint32_t)APP_TASK_COUNT) ? 1U : 0U;
+}
+
+static uint8_t HealthLogic_EventIsValid(app_health_event_type_t type) {
+    return ((uint32_t)type < (uint32_t)APP_HEALTH_EVENT_COUNT) ? 1U : 0U;
+}
+
+static uint8_t HealthLogic_FaultAttributes(app_health_event_type_t type, health_fault_reason_t* reason,
+                                           uint8_t* error_code, uint8_t* watchdog_blocking) {
+    if ((reason == NULL) || (error_code == NULL) || (watchdog_blocking == NULL)) {
+        return 0U;
+    }
+
+    *reason = HEALTH_FAULT_NONE;
+    *error_code = (uint8_t)UART_ERROR_NONE;
+    *watchdog_blocking = 0U;
+
+    switch (type) {
+        case APP_HEALTH_EVENT_QUEUE_FULL:
+            *reason = HEALTH_FAULT_QUEUE_OVERFLOW;
+            *error_code = (uint8_t)UART_ERROR_BUSY;
+            return 1U;
+
+        case APP_HEALTH_EVENT_UART_RX_TIMEOUT:
+            *reason = HEALTH_FAULT_UART_RX_TIMEOUT;
+            *error_code = (uint8_t)UART_ERROR_TIMEOUT;
+            return 1U;
+
+        case APP_HEALTH_EVENT_UART_TX_TIMEOUT:
+            *reason = HEALTH_FAULT_UART_TX_TIMEOUT;
+            *error_code = (uint8_t)UART_ERROR_TIMEOUT;
+            return 1U;
+
+        case APP_HEALTH_EVENT_UART_RX_ERROR:
+            *reason = HEALTH_FAULT_UART_RX_ERROR;
+            *error_code = (uint8_t)UART_ERROR_INTERNAL;
+            return 1U;
+
+        case APP_HEALTH_EVENT_UART_TX_ERROR:
+            *reason = HEALTH_FAULT_UART_TX_ERROR;
+            *error_code = (uint8_t)UART_ERROR_INTERNAL;
+            return 1U;
+
+        case APP_HEALTH_EVENT_INTERNAL_ERROR:
+            *reason = HEALTH_FAULT_INTERNAL_ERROR;
+            *error_code = (uint8_t)UART_ERROR_INTERNAL;
+            *watchdog_blocking = 1U;
+            return 1U;
+
+        case APP_HEALTH_EVENT_NONE:
+        case APP_HEALTH_EVENT_TASK_ALIVE:
+        case APP_HEALTH_EVENT_UART_RX_RECOVERED:
+        case APP_HEALTH_EVENT_UART_TX_RECOVERED:
+        case APP_HEALTH_EVENT_COUNT:
+        default:
+            return 0U;
+    }
+}
+
+static app_health_event_type_t HealthLogic_RecoveryTarget(app_health_event_type_t type) {
+    switch (type) {
+        case APP_HEALTH_EVENT_UART_RX_RECOVERED:
+            return APP_HEALTH_EVENT_UART_RX_TIMEOUT;
+
+        case APP_HEALTH_EVENT_UART_TX_RECOVERED:
+            return APP_HEALTH_EVENT_UART_TX_TIMEOUT;
+
+        default:
+            return APP_HEALTH_EVENT_NONE;
+    }
+}
+
+static uint8_t HealthLogic_ClearEventFault(health_logic_context_t* context, app_task_id_t task,
+                                           app_health_event_type_t type) {
+    uint32_t event_bit;
+
+    if ((context == NULL) || (HealthLogic_TaskIsValid(task) == 0U) || (HealthLogic_EventIsValid(type) == 0U) ||
+        (type == APP_HEALTH_EVENT_NONE)) {
+        return 0U;
+    }
+
+    event_bit = HEALTH_EVENT_BIT(type);
+    if ((context->event_fault_latch[task] & event_bit) == 0U) {
+        return 0U;
+    }
+
+    context->event_fault_latch[task] &= ~event_bit;
+    return 1U;
+}
+
+static void HealthLogic_FillFault(health_fault_record_t* fault, health_fault_reason_t reason, app_task_id_t source_task,
+                                  uint32_t occurred_at_ms, uint32_t detail, uint8_t error_code,
+                                  uint8_t watchdog_blocking) {
+    (void)memset(fault, 0, sizeof(*fault));
+    fault->reason = reason;
+    fault->source_task = source_task;
+    fault->occurred_at_ms = occurred_at_ms;
+    fault->detail = detail;
+    fault->error_code = error_code;
+    fault->watchdog_blocking = watchdog_blocking;
+}
+
+void HealthLogic_Init(health_logic_context_t* context, uint32_t required_task_mask, uint32_t now_ms) {
+    uint32_t task;
+
+    if (context == NULL) {
+        return;
+    }
+
+    (void)memset(context, 0, sizeof(*context));
+    context->required_task_mask = required_task_mask;
+    context->started_at_ms = now_ms;
+    for (task = 0U; task < (uint32_t)APP_TASK_COUNT; ++task) {
+        context->stack_high_water_words[task] = HEALTH_STACK_WATERMARK_UNKNOWN;
+    }
+}
+
+uint8_t HealthLogic_HandleEvent(health_logic_context_t* context, const app_health_event_t* event,
+                                health_fault_record_t* fault) {
+    uint32_t task_bit;
+    uint32_t event_bit;
+    app_health_event_type_t recovery_target;
+    health_fault_reason_t reason;
+    uint8_t error_code;
+    uint8_t watchdog_blocking;
+
+    if ((context == NULL) || (event == NULL) || (fault == NULL) ||
+        (HealthLogic_TaskIsValid(event->source_task) == 0U) || (HealthLogic_EventIsValid(event->type) == 0U)) {
+        return 0U;
+    }
+
+    task_bit = HEALTH_TASK_BIT(event->source_task);
+    if (event->type == APP_HEALTH_EVENT_TASK_ALIVE) {
+        context->last_alive_ms[event->source_task] = event->occurred_at_ms;
+        context->last_alive_detail[event->source_task] = event->detail;
+        context->seen_alive_mask |= task_bit;
+        return 0U;
+    }
+
+    recovery_target = HealthLogic_RecoveryTarget(event->type);
+    if (recovery_target != APP_HEALTH_EVENT_NONE) {
+        (void)HealthLogic_ClearEventFault(context, event->source_task, recovery_target);
+        if (event->type == APP_HEALTH_EVENT_UART_RX_RECOVERED) {
+            (void)HealthLogic_ClearEventFault(context, event->source_task, APP_HEALTH_EVENT_UART_RX_ERROR);
+        } else if (event->type == APP_HEALTH_EVENT_UART_TX_RECOVERED) {
+            (void)HealthLogic_ClearEventFault(context, event->source_task, APP_HEALTH_EVENT_UART_TX_ERROR);
+        }
+        return 0U;
+    }
+
+    if (HealthLogic_FaultAttributes(event->type, &reason, &error_code, &watchdog_blocking) == 0U) {
+        return 0U;
+    }
+
+    event_bit = HEALTH_EVENT_BIT(event->type);
+    context->last_event_ms[event->source_task][event->type] = event->occurred_at_ms;
+    if ((context->event_fault_latch[event->source_task] & event_bit) != 0U) {
+        return 0U;
+    }
+    context->event_fault_latch[event->source_task] |= event_bit;
+    if (watchdog_blocking != 0U) {
+        context->critical_fault_latched = 1U;
+    }
+
+    HealthLogic_FillFault(fault, reason, event->source_task, event->occurred_at_ms, event->detail, error_code,
+                          watchdog_blocking);
+    return 1U;
+}
+
+void HealthLogic_UpdateStack(health_logic_context_t* context, app_task_id_t task, uint32_t high_water_words) {
+    if ((context == NULL) || (HealthLogic_TaskIsValid(task) == 0U)) {
+        return;
+    }
+
+    context->stack_high_water_words[task] = high_water_words;
+}
+
+uint8_t HealthLogic_Evaluate(health_logic_context_t* context, uint32_t now_ms, uint32_t startup_grace_ms,
+                             uint32_t alive_timeout_ms, uint32_t stack_min_words, health_fault_record_t* fault) {
+    uint32_t task;
+
+    if ((context == NULL) || (fault == NULL)) {
+        return 0U;
+    }
+
+    if ((uint32_t)(now_ms - context->started_at_ms) < startup_grace_ms) {
+        return 0U;
+    }
+
+    for (task = 0U; task < (uint32_t)APP_TASK_COUNT; ++task) {
+        uint32_t task_bit = HEALTH_TASK_BIT(task);
+        uint32_t elapsed_ms;
+
+        if ((context->required_task_mask & task_bit) == 0U) {
+            continue;
+        }
+
+        elapsed_ms = ((context->seen_alive_mask & task_bit) != 0U) ? (uint32_t)(now_ms - context->last_alive_ms[task])
+                                                                   : (uint32_t)(now_ms - context->started_at_ms);
+
+        if (((context->seen_alive_mask & task_bit) == 0U) || (elapsed_ms >= alive_timeout_ms)) {
+            context->stalled_task_mask |= task_bit;
+            context->critical_fault_latched = 1U;
+            if ((context->reported_stalled_mask & task_bit) == 0U) {
+                context->reported_stalled_mask |= task_bit;
+                HealthLogic_FillFault(fault, HEALTH_FAULT_TASK_STALLED, (app_task_id_t)task, now_ms, elapsed_ms,
+                                      (uint8_t)UART_ERROR_INTERNAL, 1U);
+                return 1U;
+            }
+        }
+
+        if ((context->stack_high_water_words[task] != HEALTH_STACK_WATERMARK_UNKNOWN) &&
+            (context->stack_high_water_words[task] < stack_min_words)) {
+            context->stack_low_task_mask |= task_bit;
+            context->critical_fault_latched = 1U;
+            if ((context->reported_stack_low_mask & task_bit) == 0U) {
+                context->reported_stack_low_mask |= task_bit;
+                HealthLogic_FillFault(fault, HEALTH_FAULT_STACK_LOW, (app_task_id_t)task, now_ms,
+                                      context->stack_high_water_words[task], (uint8_t)UART_ERROR_INTERNAL, 1U);
+                return 1U;
+            }
+        }
+    }
+
+    return 0U;
+}
+
+uint32_t HealthLogic_ClearExpiredTransientFaults(health_logic_context_t* context, uint32_t now_ms,
+                                                 uint32_t clear_timeout_ms) {
+    const app_health_event_type_t transient_types[] = {
+        APP_HEALTH_EVENT_QUEUE_FULL,
+        APP_HEALTH_EVENT_UART_TX_TIMEOUT,
+        APP_HEALTH_EVENT_UART_RX_ERROR,
+        APP_HEALTH_EVENT_UART_TX_ERROR,
+    };
+    uint32_t cleared = 0U;
+    uint32_t task;
+    uint32_t type_index;
+
+    if ((context == NULL) || (clear_timeout_ms == 0U)) {
+        return 0U;
+    }
+
+    for (task = 0U; task < (uint32_t)APP_TASK_COUNT; ++task) {
+        for (type_index = 0U; type_index < (sizeof(transient_types) / sizeof(transient_types[0])); ++type_index) {
+            const app_health_event_type_t type = transient_types[type_index];
+            const uint32_t event_bit = HEALTH_EVENT_BIT(type);
+
+            if ((context->event_fault_latch[task] & event_bit) == 0U) {
+                continue;
+            }
+            if ((uint32_t)(now_ms - context->last_event_ms[task][type]) < clear_timeout_ms) {
+                continue;
+            }
+
+            context->event_fault_latch[task] &= ~event_bit;
+            ++cleared;
+        }
+    }
+
+    return cleared;
+}
+
+uint8_t HealthLogic_HasActiveFaults(const health_logic_context_t* context) {
+    uint32_t task;
+
+    if (context == NULL) {
+        return 0U;
+    }
+    if ((context->critical_fault_latched != 0U) || (context->stalled_task_mask != 0U) ||
+        (context->stack_low_task_mask != 0U)) {
+        return 1U;
+    }
+
+    for (task = 0U; task < (uint32_t)APP_TASK_COUNT; ++task) {
+        if (context->event_fault_latch[task] != 0U) {
+            return 1U;
+        }
+    }
+
+    return 0U;
+}
+
+uint8_t HealthLogic_WatchdogAllowed(const health_logic_context_t* context, uint32_t now_ms, uint32_t startup_grace_ms,
+                                    uint32_t alive_timeout_ms, uint32_t stack_min_words) {
+    uint32_t task;
+
+    if (context == NULL) {
+        return 0U;
+    }
+    if (context->critical_fault_latched != 0U) {
+        return 0U;
+    }
+    if ((uint32_t)(now_ms - context->started_at_ms) < startup_grace_ms) {
+        return 1U;
+    }
+
+    for (task = 0U; task < (uint32_t)APP_TASK_COUNT; ++task) {
+        uint32_t task_bit = HEALTH_TASK_BIT(task);
+
+        if ((context->required_task_mask & task_bit) == 0U) {
+            continue;
+        }
+        if ((context->seen_alive_mask & task_bit) == 0U) {
+            return 0U;
+        }
+        if ((uint32_t)(now_ms - context->last_alive_ms[task]) >= alive_timeout_ms) {
+            return 0U;
+        }
+        if ((context->stack_high_water_words[task] != HEALTH_STACK_WATERMARK_UNKNOWN) &&
+            (context->stack_high_water_words[task] < stack_min_words)) {
+            return 0U;
+        }
+    }
+
+    return 1U;
+}
