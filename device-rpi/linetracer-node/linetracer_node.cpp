@@ -188,12 +188,25 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
     if (keepalive_pending_ && event.pending_sequence == keepalive_sequence_ &&
         event.pending_command == UART_CMD_LINETRACER_GET_STATUS) {
         if (event.type == UartSessionEventType::kCommandResponseReceived) {
-            if (event.frame.command == UART_CMD_RESPONSE && event.frame.length == UART_LINETRACER_STATUS_PAYLOAD_SIZE &&
+            const bool valid_status =
+                event.frame.command == UART_CMD_RESPONSE && event.frame.length == UART_LINETRACER_STATUS_PAYLOAD_SIZE &&
                 event.frame.payload[UART_RESPONSE_COMMAND_INDEX] == UART_CMD_LINETRACER_GET_STATUS &&
                 (event.frame.payload[UART_RESPONSE_STATUS_INDEX] == UART_STATUS_ACK ||
                  event.frame.payload[UART_RESPONSE_STATUS_INDEX] == UART_STATUS_SUCCESS) &&
-                uart_linetracer_state_is_valid(event.frame.payload[UART_LINETRACER_STATUS_STATE_INDEX]) != 0U) {
-                last_uart_state_ = event.frame.payload[UART_LINETRACER_STATUS_STATE_INDEX];
+                uart_linetracer_state_is_valid(event.frame.payload[UART_LINETRACER_STATUS_STATE_INDEX]) != 0U;
+            if (valid_status) {
+                const std::uint8_t state = event.frame.payload[UART_LINETRACER_STATUS_STATE_INDEX];
+                const std::uint8_t error = event.frame.payload[UART_RESPONSE_ERROR_INDEX];
+                const std::uint8_t route_id = event.frame.payload[UART_LINETRACER_STATUS_ROUTE_ID_INDEX];
+                last_uart_state_ = state;
+
+                if (reported_fault_error_ == UART_ERROR_TIMEOUT && error == UART_ERROR_NONE &&
+                    state != UART_LINETRACER_STATE_FAULT && state != UART_LINETRACER_STATE_EMERGENCY_STOP) {
+                    reported_fault_error_.reset();
+                    const auto active_job =
+                        HasActiveJob() ? std::optional<std::string>{ active_work_id_ } : std::optional<std::string>{};
+                    EmitDeviceStatus(StateConnection(state), UartStateName(state, route_id), active_job, std::nullopt);
+                }
             }
             ResetStatusKeepalive();
             return;
@@ -265,6 +278,7 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             target_position_.reset();
             confirmed_position_.reset();
             movement_state_ = "IDLE";
+            reported_fault_error_.reset();
             ResetStatusKeepalive();
         }
         if (accepted && pending_.stage == PendingStage::kSetPosition) {
@@ -273,6 +287,7 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             departure_position_ = confirmed_position_;
             target_position_ = confirmed_position_;
             movement_state_ = "IDLE";
+            reported_fault_error_.reset();
         }
         if (accepted) {
             EmitPendingResponse(mqtt::CommandResult::kSuccess, std::nullopt,
@@ -729,6 +744,10 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
 
     if (event_id == UART_LINETRACER_EVENT_STATE_CHANGED) {
         last_uart_state_ = frame.payload[UART_LINETRACER_STATE_EVENT_STATE_INDEX];
+        if (last_uart_state_ != UART_LINETRACER_STATE_FAULT &&
+            last_uart_state_ != UART_LINETRACER_STATE_EMERGENCY_STOP) {
+            reported_fault_error_.reset();
+        }
         if (last_uart_state_ == UART_LINETRACER_STATE_FOLLOWING_LINE ||
             last_uart_state_ == UART_LINETRACER_STATE_CORRECTING ||
             last_uart_state_ == UART_LINETRACER_STATE_LOAD_WAIT ||
@@ -800,6 +819,7 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
         active_route_id_ = UART_LINETRACER_ROUTE_NONE;
         last_uart_state_ = UART_LINETRACER_STATE_IDLE;
         movement_state_ = "IDLE";
+        reported_fault_error_.reset();
         ClearPending();
         ResetStatusKeepalive();
 
@@ -814,6 +834,10 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
 
     if (event_id == UART_LINETRACER_EVENT_FAULT) {
         const std::uint8_t error = frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX];
+        if (reported_fault_error_ == error) {
+            return;
+        }
+        reported_fault_error_ = error;
         const std::string error_code = UartErrorCode(error);
         EmitReport({
             .channel = LineTracerReportChannel::kError,

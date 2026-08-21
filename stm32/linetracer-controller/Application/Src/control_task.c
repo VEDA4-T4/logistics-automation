@@ -1,19 +1,46 @@
 #include "control_task.h"
 
 #include <stdint.h>
+#include <stdio.h>
 
 #include "app_queues.h"
 #include "cmsis_os2.h"
 #include "control_config.h"
 #include "control_logic.h"
+#include "line_follow_pid.h"
 #include "main.h"
 #include "motor_control.h"
+#include "sensor_config.h"
+#include "sensor_task.h"
+#include "unload_hw.h"
+#include "unload_task.h"
+#include "usart.h"
+
+#define CONTROL_TASK_PID_TRACE_PERIOD_MS 100U
 
 static control_context_t controlTaskContext;
+static line_follow_pid_t controlTaskLinePid;
 static uart_linetracer_load_state_t controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
 static linetracer_line_state_t controlTaskLineState = LINETRACER_LINE_UNKNOWN;
+static int16_t controlTaskLineError;
+static uint16_t controlTaskLineLeftRaw;
+static uint16_t controlTaskLineCenterRaw;
+static uint16_t controlTaskLineRightRaw;
+static uint32_t controlTaskNextPidTraceMs;
 static uint8_t controlTaskMotorReady;
+static uint32_t controlTaskStartBoostUntilMs;
 static volatile uint8_t controlTaskInitialized;
+static app_control_safety_event_t controlTaskPendingUnloadReset;
+static uint8_t controlTaskPendingUnloadResetActive;
+static uint32_t controlTaskPendingUnloadResetDeadlineMs;
+static uint32_t controlTaskPendingUnloadResetRequestId;
+static uint32_t controlTaskNextUnloadRequestId;
+static uint32_t controlTaskRouteSensorEpochMs;
+static uint32_t controlTaskRouteMarkerClearSinceMs;
+static uint8_t controlTaskRouteMarkerClearActive;
+static uint8_t controlTaskRouteMarkerArmed;
+
+static void ControlTask_PublishStateChanged(uint32_t now_ms);
 
 typedef struct {
     app_tx_event_t event;
@@ -22,6 +49,7 @@ typedef struct {
 } control_pending_response_t;
 
 static control_pending_response_t controlPendingResponses[CONTROL_TASK_PENDING_RESPONSE_CAPACITY];
+static uint8_t ControlTask_RequestUnloadReset(uint32_t now_ms, uint32_t inhibit_generation, uint32_t* request_id);
 
 static void ControlTask_PublishStateChanged(uint32_t now_ms);
 
@@ -58,6 +86,50 @@ bool ControlTask_GetLatest(app_control_snapshot_t* snapshot) {
     return true;
 }
 
+bool ControlTask_IsTurning(void) {
+    uint32_t primask;
+    bool turning;
+
+    primask = ControlTask_EnterShortCriticalSection();
+    turning = (controlTaskInitialized != 0U) && (ControlLogic_IsTurning(&controlTaskContext) != 0U);
+    ControlTask_ExitShortCriticalSection(primask);
+    return turning;
+}
+
+static bool ControlTask_StateRequiresUltrasonic(linetracer_control_state_t state) {
+    switch (state) {
+        case LINETRACER_CONTROL_TURNING_FROM_DEST:
+        case LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION:
+        case LINETRACER_CONTROL_MOVING_ON_COMMON_LINE:
+        case LINETRACER_CONTROL_TURNING_TO_PICKUP:
+        case LINETRACER_CONTROL_MOVING_TO_PICKUP:
+        case LINETRACER_CONTROL_TURNING_AT_PICKUP:
+        case LINETRACER_CONTROL_MOVING_TO_DEST:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+bool ControlTask_ShouldMonitorUltrasonic(void) {
+    bool enabled = false;
+    uint32_t primask = ControlTask_EnterShortCriticalSection();
+
+    /* A pivoting U-turn points the sensors across the floor and chassis; stop the triggers until line reacquisition. */
+    if ((controlTaskInitialized != 0U) && (controlTaskContext.safety_latched == 0U) &&
+        (ControlLogic_IsTurnAroundActive(&controlTaskContext) == 0U)) {
+        enabled = ControlTask_StateRequiresUltrasonic(controlTaskContext.state);
+        if (controlTaskContext.state == LINETRACER_CONTROL_OBSTACLE_STOP) {
+            enabled = (controlTaskContext.resume_valid != 0U) &&
+                      ControlTask_StateRequiresUltrasonic(controlTaskContext.resume_state);
+        }
+    }
+
+    ControlTask_ExitShortCriticalSection(primask);
+    return enabled;
+}
+
 static void ControlTask_PublishHealthEvent(app_health_event_type_t type, uint32_t detail, uint32_t now_ms) {
     app_health_event_t event = { 0 };
 
@@ -65,11 +137,95 @@ static void ControlTask_PublishHealthEvent(app_health_event_type_t type, uint32_
     event.occurred_at_ms = now_ms;
     event.detail = detail;
     event.source_task = APP_TASK_CONTROL;
-    (void)osMessageQueuePut(healthEventQueue, &event, 0U, 0U);
+    (void)AppQueues_TryPutHealth(&event);
 }
 
 static uint8_t ControlTask_TimeReached(uint32_t now_ms, uint32_t deadline_ms) {
     return ((int32_t)(now_ms - deadline_ms) >= 0) ? 1U : 0U;
+}
+
+static uint8_t ControlTask_TimeAfter(uint32_t value_ms, uint32_t reference_ms) {
+    return ((int32_t)(value_ms - reference_ms) > 0) ? 1U : 0U;
+}
+
+static void ControlTask_TracePid(char mode, int16_t correction, uint32_t now_ms) {
+    char line[128];
+    int length;
+    motor_output_t output;
+
+    if (controlTaskContext.route_active == 0U ||
+        (controlTaskNextPidTraceMs != 0U && ControlTask_TimeReached(now_ms, controlTaskNextPidTraceMs) == 0U)) {
+        return;
+    }
+
+    controlTaskNextPidTraceMs = now_ms + CONTROL_TASK_PID_TRACE_PERIOD_MS;
+    MotorControl_GetLastOutput(&output);
+    length = snprintf(
+        line, sizeof(line), "P %lu %c c%u a%u j%u s%u e%d k%d r%u/%u/%u m%u/%u\r\n", (unsigned long)now_ms, mode,
+        (unsigned int)controlTaskContext.state, (unsigned int)controlTaskContext.pending_route_action,
+        (unsigned int)controlTaskContext.junction_phase, (unsigned int)controlTaskLineState, (int)controlTaskLineError,
+        (int)correction, (unsigned int)controlTaskLineLeftRaw, (unsigned int)controlTaskLineCenterRaw,
+        (unsigned int)controlTaskLineRightRaw, (unsigned int)output.left_pwm, (unsigned int)output.right_pwm);
+    if (length > 0) {
+        uint16_t transmit_length = (length < (int)sizeof(line)) ? (uint16_t)length : (uint16_t)(sizeof(line) - 1U);
+        (void)HAL_UART_Transmit(&huart2, (uint8_t*)line, transmit_length, 10U);
+    }
+}
+
+static void ControlTask_ResetRouteSensorPipeline(uint32_t now_ms) {
+    /*
+     * INITIALIZE and route assignment establish a new route epoch. Drop queued
+     * samples and reject any
+     * delayed marker event measured before this point.
+     */
+    if (sensorSnapshotQueue != NULL) {
+        (void)osMessageQueueReset(sensorSnapshotQueue);
+    }
+
+    controlTaskRouteSensorEpochMs = now_ms;
+    controlTaskRouteMarkerClearSinceMs = 0U;
+    controlTaskRouteMarkerClearActive = 0U;
+    controlTaskRouteMarkerArmed = 0U;
+    LineFollowPid_Reset(&controlTaskLinePid);
+}
+
+static uint8_t ControlTask_UpdateRouteMarkerArm(const app_sensor_snapshot_t* snapshot, uint32_t sampled_at_ms) {
+    if (snapshot == NULL || ControlTask_TimeAfter(sampled_at_ms, controlTaskRouteSensorEpochMs) == 0U) {
+        return 0U;
+    }
+
+    if (controlTaskRouteMarkerArmed != 0U) {
+        return 1U;
+    }
+
+    /* Do not let a marker still under the vehicle at route start become the next route marker. */
+    if (snapshot->line_left != 0U && snapshot->line_right != 0U) {
+        controlTaskRouteMarkerClearSinceMs = 0U;
+        controlTaskRouteMarkerClearActive = 0U;
+        return 0U;
+    }
+
+    if (controlTaskRouteMarkerClearActive == 0U) {
+        controlTaskRouteMarkerClearSinceMs = sampled_at_ms;
+        controlTaskRouteMarkerClearActive = 1U;
+        return 0U;
+    }
+
+    if ((uint32_t)(sampled_at_ms - controlTaskRouteMarkerClearSinceMs) < CONTROL_ROUTE_MARKER_REARM_MS) {
+        return 0U;
+    }
+
+    controlTaskRouteMarkerArmed = 1U;
+    /* Also reject a delayed SensorTask marker event produced during the clear interval. */
+    controlTaskRouteSensorEpochMs = sampled_at_ms;
+    return 1U;
+}
+
+static uint8_t ControlTask_MarkerEventIsCurrent(uint32_t marker_detected_at_ms) {
+    return (controlTaskRouteMarkerArmed != 0U && marker_detected_at_ms != 0U &&
+            ControlTask_TimeAfter(marker_detected_at_ms, controlTaskRouteSensorEpochMs) != 0U)
+               ? 1U
+               : 0U;
 }
 
 static uint8_t ControlTask_ScheduleResponseRetry(const app_tx_event_t* event, uint32_t now_ms) {
@@ -189,15 +345,42 @@ static void ControlTask_ProcessSafetyEvents(void) {
            osMessageQueueGet(controlSafetyQueue, &event, NULL, 0U) == osOK) {
         uint32_t now_ms = osKernelGetTickCount();
 
+        LineFollowPid_Reset(&controlTaskLinePid);
+        controlTaskStartBoostUntilMs = 0U;
         MotorControl_ForceStop();
-        if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
-            app_tx_event_t fault_event;
+        if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
+            uint32_t request_id = 0U;
 
-            if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
-                                                   &fault_event) != 0U) {
-                ControlTask_PublishTxEvent(&fault_event, now_ms);
+            if (event.reason == LINETRACER_STOP_REASON_NONE) {
+                event.reason = controlTaskContext.stop_reason;
             }
-            if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
+            if (controlTaskPendingUnloadResetActive != 0U ||
+                ControlTask_RequestUnloadReset(now_ms, event.unload_inhibit_generation, &request_id) == 0U) {
+                event.type = APP_CONTROL_SAFETY_RESET_REJECTED;
+                event.error_code = UART_ERROR_BUSY;
+            } else {
+                /* Keep ControlTask latched until UnloadTask confirms the same request and generation. */
+                controlTaskPendingUnloadReset = event;
+                controlTaskPendingUnloadResetRequestId = request_id;
+                controlTaskPendingUnloadResetDeadlineMs = now_ms + CONTROL_TASK_UNLOAD_RESET_TIMEOUT_MS;
+                controlTaskPendingUnloadResetActive = 1U;
+                ++processed;
+                continue;
+            }
+        }
+
+        if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &event, now_ms) != 0U) {
+            if (event.type == APP_CONTROL_SAFETY_LATCHED || event.type == APP_CONTROL_SAFETY_RESET_REJECTED) {
+                app_tx_event_t fault_event;
+
+                if (ControlLogic_BuildSafetyFaultEvent(&controlTaskContext, &event, controlTaskLoadState, now_ms,
+                                                       &fault_event) != 0U) {
+                    ControlTask_PublishTxEvent(&fault_event, now_ms);
+                }
+            } else if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
+                ControlTask_PublishStateChanged(now_ms);
+            } else if (event.type == APP_CONTROL_SAFETY_OBSTACLE_ACTIVE ||
+                       event.type == APP_CONTROL_SAFETY_OBSTACLE_CLEARED) {
                 ControlTask_PublishStateChanged(now_ms);
             }
             ControlTask_PublishSafetyResetResult(&event, now_ms);
@@ -206,44 +389,97 @@ static void ControlTask_ProcessSafetyEvents(void) {
     }
 }
 
-static void ControlTask_ApplyMotorOutput(const motor_output_t* output, uint32_t now_ms) {
-    if (controlTaskMotorReady == 0U) {
-        MotorControl_ForceStop();
+static void ControlTask_ApplyStartBoost(motor_output_t* output, uint32_t now_ms) {
+    motor_output_t previous_output;
+    uint16_t faster_pwm;
+    uint16_t boost_delta;
+
+    if (output == NULL) {
         return;
     }
 
-    if (MotorControl_Apply(output) == 0U) {
+    if (output->standby == 0U || output->left_direction != MOTOR_DIRECTION_FORWARD ||
+        output->right_direction != MOTOR_DIRECTION_FORWARD || (output->left_pwm == 0U && output->right_pwm == 0U)) {
+        controlTaskStartBoostUntilMs = 0U;
+        return;
+    }
+
+    MotorControl_GetLastOutput(&previous_output);
+    if (previous_output.standby == 0U || (previous_output.left_pwm == 0U && previous_output.right_pwm == 0U)) {
+        controlTaskStartBoostUntilMs = now_ms + MOTOR_CONTROL_START_BOOST_MS;
+    }
+
+    if (controlTaskStartBoostUntilMs != 0U && ControlTask_TimeReached(now_ms, controlTaskStartBoostUntilMs) == 0U) {
+        faster_pwm = (output->left_pwm > output->right_pwm) ? output->left_pwm : output->right_pwm;
+        if (faster_pwm < MOTOR_CONTROL_START_BOOST_PWM) {
+            /* Raise both wheels by the same amount so the PID steering difference survives startup. */
+            boost_delta = MOTOR_CONTROL_START_BOOST_PWM - faster_pwm;
+            output->left_pwm = MotorControlLogic_ClampPwm((int32_t)output->left_pwm + boost_delta);
+            output->right_pwm = MotorControlLogic_ClampPwm((int32_t)output->right_pwm + boost_delta);
+        }
+    }
+}
+
+static uint8_t ControlTask_ApplyMotorOutput(const motor_output_t* output, uint32_t now_ms) {
+    motor_output_t adjusted_output;
+
+    if (controlTaskMotorReady == 0U) {
+        MotorControl_ForceStop();
+        return 0U;
+    }
+
+    if (output == NULL) {
+        MotorControl_ForceStop();
+        return 0U;
+    }
+
+    adjusted_output = *output;
+    ControlTask_ApplyStartBoost(&adjusted_output, now_ms);
+    if (MotorControl_Apply(&adjusted_output) == 0U) {
         controlTaskMotorReady = 0U;
         MotorControl_ForceStop();
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR, CONTROL_HEALTH_MOTOR_OUTPUT_FAILED, now_ms);
+        return 0U;
     }
+
+    return 1U;
 }
 
-static void ControlTask_ApplyRouteActionMotor(route_action_t action, uint32_t now_ms) {
+static uint8_t ControlTask_ApplyRouteActionMotor(route_action_t action, uint32_t now_ms) {
     motor_output_t output;
 
     if (MotorControlLogic_ComputeRouteAction(action, &output) != 0U) {
-        ControlTask_ApplyMotorOutput(&output, now_ms);
+        return ControlTask_ApplyMotorOutput(&output, now_ms);
+    }
+
+    return 0U;
+}
+
+static uint8_t ControlTask_PidLineFollowEnabled(void) {
+    if (controlTaskContext.safety_latched != 0U || controlTaskContext.route_active == 0U) {
+        return 0U;
+    }
+
+    switch (controlTaskContext.state) {
+        case LINETRACER_CONTROL_MOVING_TO_SOURCE_JUNCTION:
+        case LINETRACER_CONTROL_MOVING_TO_PICKUP:
+        case LINETRACER_CONTROL_MOVING_TO_DEST:
+            return 1U;
+
+        case LINETRACER_CONTROL_MOVING_ON_COMMON_LINE:
+            return (controlTaskContext.pending_route_action != ROUTE_ACTION_TURN_LEFT &&
+                    controlTaskContext.pending_route_action != ROUTE_ACTION_TURN_RIGHT)
+                       ? 1U
+                       : 0U;
+
+        default:
+            return 0U;
     }
 }
 
-static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
-    motor_output_t output;
-
-    if (controlTaskMotorReady == 0U) {
-        MotorControl_ForceStop();
-        return;
-    }
-
-    if (MotorControlLogic_ComputeControlOutput(controlTaskContext.state, controlTaskContext.pending_route_action,
-                                               controlTaskLineState, controlTaskContext.route_active,
-                                               controlTaskContext.safety_latched, &output) != 0U) {
-        ControlTask_ApplyMotorOutput(&output, now_ms);
-    }
-}
-
-static uint8_t ControlTask_RouteSensorEventsEnabled(void) {
-    if (controlTaskContext.safety_latched != 0U || controlTaskContext.state == LINETRACER_CONTROL_STOPPED ||
+static uint8_t ControlTask_RouteMotionEnabled(void) {
+    if (controlTaskContext.safety_latched != 0U || controlTaskContext.route_active == 0U ||
+        controlTaskContext.state == LINETRACER_CONTROL_STOPPED ||
         controlTaskContext.state == LINETRACER_CONTROL_OBSTACLE_STOP ||
         controlTaskContext.state == LINETRACER_CONTROL_ERROR ||
         controlTaskContext.state == LINETRACER_CONTROL_EMERGENCY_STOPPED) {
@@ -251,6 +487,142 @@ static uint8_t ControlTask_RouteSensorEventsEnabled(void) {
     }
 
     return 1U;
+}
+
+static int16_t ControlTask_LimitTurnReacquireCorrection(int16_t correction) {
+    if (correction > (int16_t)CONTROL_TURN_REACQUIRE_PID_CORRECTION_LIMIT) {
+        return (int16_t)CONTROL_TURN_REACQUIRE_PID_CORRECTION_LIMIT;
+    }
+    if (correction < -(int16_t)CONTROL_TURN_REACQUIRE_PID_CORRECTION_LIMIT) {
+        return -(int16_t)CONTROL_TURN_REACQUIRE_PID_CORRECTION_LIMIT;
+    }
+
+    return correction;
+}
+
+static uint8_t ControlTask_CToBOrBToARouteActive(void) {
+    return ((controlTaskContext.current_position == UART_LINETRACER_POSITION_DEST_C &&
+             controlTaskContext.active_route == UART_LINETRACER_ROUTE_B) ||
+            (controlTaskContext.current_position == UART_LINETRACER_POSITION_DEST_B &&
+             controlTaskContext.active_route == UART_LINETRACER_ROUTE_A))
+               ? 1U
+               : 0U;
+}
+
+static uint8_t ControlTask_CToBOrBToACommonLinePidActive(void) {
+    return (ControlTask_CToBOrBToARouteActive() != 0U &&
+            controlTaskContext.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE &&
+            controlTaskContext.route_plan.phase == ROUTE_PHASE_ON_COMMON_LINE)
+               ? 1U
+               : 0U;
+}
+
+static uint8_t ControlTask_CToBOrBToARightTurnApproachActive(void) {
+    return (ControlTask_CToBOrBToARouteActive() != 0U &&
+            controlTaskContext.junction_phase == CONTROL_JUNCTION_APPROACH_CENTER &&
+            controlTaskContext.junction_action == ROUTE_ACTION_TURN_RIGHT)
+               ? 1U
+               : 0U;
+}
+
+static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
+    motor_output_t output;
+    route_action_t maneuver_action;
+
+    if (controlTaskMotorReady == 0U) {
+        LineFollowPid_Reset(&controlTaskLinePid);
+        MotorControl_ForceStop();
+        return;
+    }
+
+    if (ControlTask_RouteMotionEnabled() != 0U) {
+        (void)ControlLogic_StartPendingManeuver(&controlTaskContext, now_ms);
+    }
+    if (ControlTask_RouteMotionEnabled() != 0U && ControlLogic_JunctionReacquireActive(&controlTaskContext) != 0U) {
+        int16_t correction = 0;
+        uint16_t reacquire_base_pwm = CONTROL_TURN_REACQUIRE_BASE_PWM;
+
+        if ((uint32_t)(now_ms - controlTaskContext.junction_phase_started_at_ms) < CONTROL_TURN_REACQUIRE_START_MS) {
+            reacquire_base_pwm = CONTROL_TURN_REACQUIRE_START_PWM;
+        }
+
+        /* Do not carry the old pivot direction through an all-white gap. */
+        if (controlTaskLineState == LINETRACER_LINE_WHITE_GAP) {
+            LineFollowPid_Reset(&controlTaskLinePid);
+        } else {
+#if SENSOR_LINE_USE_ANALOG_PID
+            correction = LineFollowPid_Update(&controlTaskLinePid, controlTaskLineError, now_ms);
+#else
+            if (controlTaskLineState == LINETRACER_LINE_LEFT_ONLY) {
+                correction = (int16_t)CONTROL_TURN_REACQUIRE_PID_CORRECTION_LIMIT;
+            } else if (controlTaskLineState == LINETRACER_LINE_RIGHT_ONLY) {
+                correction = -(int16_t)CONTROL_TURN_REACQUIRE_PID_CORRECTION_LIMIT;
+            }
+#endif
+        }
+
+        correction = ControlTask_LimitTurnReacquireCorrection(correction);
+        if (MotorControlLogic_ComputeDifferentialForward(reacquire_base_pwm, reacquire_base_pwm, correction, &output) !=
+            0U) {
+            ControlTask_ApplyMotorOutput(&output, now_ms);
+        }
+        ControlTask_TracePid('R', correction, now_ms);
+        return;
+    }
+    if (ControlTask_RouteMotionEnabled() != 0U && ControlLogic_JunctionManeuverActive(&controlTaskContext) != 0U) {
+        LineFollowPid_Reset(&controlTaskLinePid);
+        maneuver_action = ControlLogic_JunctionMotorAction(&controlTaskContext);
+        if (maneuver_action == ROUTE_ACTION_GO_STRAIGHT &&
+            ControlTask_CToBOrBToARightTurnApproachActive() != 0U) {
+            (void)MotorControlLogic_ComputeDifferentialForward(MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM,
+                                                               MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM, 0, &output);
+            ControlTask_ApplyMotorOutput(&output, now_ms);
+        } else if (MotorControlLogic_ComputeRouteAction(maneuver_action, &output) != 0U) {
+            ControlTask_ApplyMotorOutput(&output, now_ms);
+        }
+        ControlTask_TracePid('T', 0, now_ms);
+        return;
+    }
+
+    if (ControlTask_PidLineFollowEnabled() != 0U &&
+        (controlTaskLineState == LINETRACER_LINE_CENTERED || controlTaskLineState == LINETRACER_LINE_LEFT_ONLY ||
+         controlTaskLineState == LINETRACER_LINE_RIGHT_ONLY || controlTaskLineState == LINETRACER_LINE_WHITE_GAP)) {
+#if SENSOR_LINE_USE_ANALOG_PID
+        int16_t correction = LineFollowPid_Update(&controlTaskLinePid, controlTaskLineError, now_ms);
+        uint16_t left_base_pwm = LINE_FOLLOW_PID_LEFT_BASE_PWM;
+        uint16_t right_base_pwm = LINE_FOLLOW_PID_RIGHT_BASE_PWM;
+
+        if (ControlTask_CToBOrBToACommonLinePidActive() != 0U) {
+            left_base_pwm = MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM;
+            right_base_pwm = MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM;
+        }
+
+        if (MotorControlLogic_ComputeDifferentialForward(left_base_pwm, right_base_pwm, correction, &output) != 0U) {
+            ControlTask_ApplyMotorOutput(&output, now_ms);
+        }
+        ControlTask_TracePid('F', correction, now_ms);
+#else
+        /* Optional fallback for a digital-only calibration. */
+        LineFollowPid_Reset(&controlTaskLinePid);
+        if (MotorControlLogic_ComputeLineFollow(controlTaskLineState, &output) != 0U) {
+            ControlTask_ApplyMotorOutput(&output, now_ms);
+        }
+        ControlTask_TracePid('D', 0, now_ms);
+#endif
+        return;
+    }
+
+    LineFollowPid_Reset(&controlTaskLinePid);
+    if (MotorControlLogic_ComputeControlOutput(controlTaskContext.state, controlTaskContext.pending_route_action,
+                                               controlTaskLineState, controlTaskContext.route_active,
+                                               controlTaskContext.safety_latched, &output) != 0U) {
+        ControlTask_ApplyMotorOutput(&output, now_ms);
+    }
+    ControlTask_TracePid('X', 0, now_ms);
+}
+
+static uint8_t ControlTask_RouteSensorEventsEnabled(void) {
+    return ControlTask_RouteMotionEnabled();
 }
 
 static void ControlTask_PublishLifecycleEvent(app_tx_event_type_t type, uint16_t job_id,
@@ -282,25 +654,60 @@ static void ControlTask_PublishStateChanged(uint32_t now_ms) {
 static void ControlTask_PublishSafetyFault(linetracer_stop_reason_t reason, uint32_t now_ms) {
     app_safety_event_t safety_event = { 0 };
     app_safety_event_type_t type;
+    uart_error_t error_code;
 
     if (reason == LINETRACER_STOP_REASON_LOAD_LOST) {
         type = APP_SAFETY_EVENT_LOAD_LOST;
+        error_code = UART_ERROR_SENSOR;
+    } else if (reason == LINETRACER_STOP_REASON_TURN_TIMEOUT) {
+        type = APP_SAFETY_EVENT_TURN_TIMEOUT;
+        error_code = UART_ERROR_TIMEOUT;
     } else {
         type = APP_SAFETY_EVENT_MARKER_SEQUENCE;
+        error_code = UART_ERROR_SENSOR;
     }
 
     safety_event.type = type;
     safety_event.occurred_at_ms = now_ms;
     safety_event.reason = reason;
     safety_event.source_task = APP_TASK_CONTROL;
-    safety_event.error_code = UART_ERROR_SENSOR;
+    safety_event.error_code = error_code;
     safety_event.active = 1U;
     if (osMessageQueuePut(safetyEventQueue, &safety_event, 0U, 0U) != osOK) {
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)type, now_ms);
     }
 
     ControlTask_PublishLifecycleEvent(APP_TX_EVENT_FAULT, controlTaskContext.active_job_id,
-                                      controlTaskContext.active_route, UART_STATUS_ERROR, UART_ERROR_SENSOR, now_ms);
+                                      controlTaskContext.active_route, UART_STATUS_ERROR, error_code, now_ms);
+}
+
+static void ControlTask_PublishUnloadFailure(const app_unload_result_t* result, uint32_t now_ms) {
+    app_safety_event_t safety_event = { 0 };
+    uart_error_t error_code;
+
+    if (result == NULL) {
+        return;
+    }
+
+    error_code = (uart_error_t)result->error_code;
+    if (error_code != UART_ERROR_TIMEOUT && error_code != UART_ERROR_SERVO && error_code != UART_ERROR_BUSY &&
+        error_code != UART_ERROR_INTERNAL) {
+        error_code = UART_ERROR_INTERNAL;
+    }
+
+    /* Existing safety policy has no unload-specific reason; keep the precise error code. */
+    safety_event.type = APP_SAFETY_EVENT_HEALTH_FAULT;
+    safety_event.occurred_at_ms = now_ms;
+    safety_event.reason = LINETRACER_STOP_REASON_HEALTH_FAULT;
+    safety_event.source_task = APP_TASK_UNLOAD;
+    safety_event.error_code = (uint8_t)error_code;
+    safety_event.active = 1U;
+    if (safetyEventQueue == NULL || osMessageQueuePut(safetyEventQueue, &safety_event, 0U, 0U) != osOK) {
+        ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)APP_SAFETY_EVENT_HEALTH_FAULT, now_ms);
+    }
+
+    ControlTask_PublishLifecycleEvent(APP_TX_EVENT_FAULT, result->job_id, result->route_id, UART_STATUS_ERROR,
+                                      error_code, now_ms);
 }
 
 static void ControlTask_StartUnload(uint32_t now_ms) {
@@ -308,16 +715,151 @@ static void ControlTask_StartUnload(uint32_t now_ms) {
 
     command.type = APP_UNLOAD_COMMAND_START;
     command.requested_at_ms = now_ms;
+    command.inhibit_generation = UnloadHw_GetSafetyInhibitGeneration();
     command.job_id = controlTaskContext.active_job_id;
     command.route_id = controlTaskContext.active_route;
-    if (osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+    if (unloadCommandQueue == NULL || osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+        app_unload_result_t failure = { 0 };
+
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)command.type, now_ms);
+        failure.type = APP_UNLOAD_RESULT_FAILED;
+        failure.job_id = command.job_id;
+        failure.route_id = command.route_id;
+        failure.error_code = (uint8_t)UART_ERROR_BUSY;
+        ControlTask_PublishUnloadFailure(&failure, now_ms);
+    }
+}
+
+static uint8_t ControlTask_RequestUnloadReset(uint32_t now_ms, uint32_t inhibit_generation, uint32_t* request_id) {
+    app_unload_command_t command = { 0 };
+
+    if (request_id == NULL) {
+        return 0U;
+    }
+
+    ++controlTaskNextUnloadRequestId;
+    if (controlTaskNextUnloadRequestId == 0U) {
+        ++controlTaskNextUnloadRequestId;
+    }
+    command.type = APP_UNLOAD_COMMAND_RESET;
+    command.requested_at_ms = now_ms;
+    command.inhibit_generation = inhibit_generation;
+    command.request_id = controlTaskNextUnloadRequestId;
+    command.route_id = UART_LINETRACER_ROUTE_NONE;
+    if (unloadCommandQueue == NULL || osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+        ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)command.type, now_ms);
+        return 0U;
+    }
+
+    *request_id = command.request_id;
+    return 1U;
+}
+
+static void ControlTask_ClearPendingUnloadReset(void) {
+    controlTaskPendingUnloadReset = (app_control_safety_event_t){ 0 };
+    controlTaskPendingUnloadResetDeadlineMs = 0U;
+    controlTaskPendingUnloadResetRequestId = 0U;
+    controlTaskPendingUnloadResetActive = 0U;
+}
+
+static void ControlTask_RejectPendingUnloadReset(uint8_t error_code, uint32_t now_ms) {
+    app_control_safety_event_t reset_event;
+
+    if (controlTaskPendingUnloadResetActive == 0U) {
+        return;
+    }
+
+    reset_event = controlTaskPendingUnloadReset;
+    reset_event.type = APP_CONTROL_SAFETY_RESET_REJECTED;
+    reset_event.error_code = (error_code != UART_ERROR_NONE) ? error_code : (uint8_t)UART_ERROR_BUSY;
+    MotorControl_ForceStop();
+    (void)ControlLogic_ApplySafetyEvent(&controlTaskContext, &reset_event, now_ms);
+    ControlTask_PublishSafetyResetResult(&reset_event, now_ms);
+    ControlTask_ClearPendingUnloadReset();
+}
+
+static void ControlTask_CheckPendingUnloadResetTimeout(uint32_t now_ms) {
+    if (controlTaskPendingUnloadResetActive == 0U ||
+        ControlTask_TimeReached(now_ms, controlTaskPendingUnloadResetDeadlineMs) == 0U) {
+        return;
+    }
+
+    ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR, CONTROL_HEALTH_UNLOAD_RESET_TIMEOUT, now_ms);
+    ControlTask_RejectPendingUnloadReset((uint8_t)UART_ERROR_TIMEOUT, now_ms);
+}
+
+static void ControlTask_ProcessUnloadResults(void) {
+    app_unload_result_t result;
+    uint32_t processed = 0U;
+
+    if (unloadResultQueue == NULL) {
+        return;
+    }
+
+    while (processed < APP_UNLOAD_RESULT_QUEUE_DEPTH &&
+           osMessageQueueGet(unloadResultQueue, &result, NULL, 0U) == osOK) {
+        uint32_t now_ms = osKernelGetTickCount();
+        uint8_t matches_active_unload =
+            (controlTaskContext.state == LINETRACER_CONTROL_UNLOADING &&
+             controlTaskContext.active_job_id == result.job_id && controlTaskContext.active_route == result.route_id)
+                ? 1U
+                : 0U;
+
+        if (result.type == APP_UNLOAD_RESULT_RESET_COMPLETE || result.type == APP_UNLOAD_RESULT_RESET_FAILED) {
+            if (controlTaskPendingUnloadResetActive != 0U &&
+                result.request_id == controlTaskPendingUnloadResetRequestId &&
+                result.inhibit_generation == controlTaskPendingUnloadReset.unload_inhibit_generation) {
+                app_control_safety_event_t reset_event = controlTaskPendingUnloadReset;
+
+                if (result.type == APP_UNLOAD_RESULT_RESET_FAILED) {
+                    ControlTask_RejectPendingUnloadReset(result.error_code, now_ms);
+                } else {
+                    if (ControlLogic_ApplySafetyEvent(&controlTaskContext, &reset_event, now_ms) != 0U) {
+                        ControlTask_PublishStateChanged(now_ms);
+                    }
+                    ControlTask_PublishSafetyResetResult(&reset_event, now_ms);
+                    ControlTask_ClearPendingUnloadReset();
+                }
+            } else {
+                ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_INTERNAL_ERROR,
+                                               CONTROL_HEALTH_UNLOAD_RESET_RESULT_MISMATCH, now_ms);
+            }
+            ++processed;
+            continue;
+        }
+
+        if (matches_active_unload != 0U) {
+            if (result.type == APP_UNLOAD_RESULT_COMPLETE) {
+                control_job_completion_t completion =
+                    ControlLogic_HandleUnloadResult(&controlTaskContext, &result, now_ms);
+
+                if (completion.completed != 0U) {
+                    controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
+                    ControlTask_PublishLifecycleEvent(APP_TX_EVENT_UNLOAD_COMPLETE, completion.job_id,
+                                                      completion.route_id, UART_STATUS_SUCCESS, UART_ERROR_NONE,
+                                                      now_ms);
+                }
+            } else if (result.type == APP_UNLOAD_RESULT_FAILED || result.type == APP_UNLOAD_RESULT_TIMEOUT) {
+                ControlTask_PublishUnloadFailure(&result, now_ms);
+            }
+        }
+        ++processed;
     }
 }
 
 static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_control_state_t previous_state,
                                            const control_job_completion_t* completion, uint32_t now_ms) {
-    ControlTask_ApplyRouteActionMotor(action, now_ms);
+    uint8_t motor_action_applied = 1U;
+
+    if (action == ROUTE_ACTION_TURN_LEFT || action == ROUTE_ACTION_TURN_RIGHT || action == ROUTE_ACTION_TURN_AROUND) {
+        (void)ControlLogic_StartPendingManeuver(&controlTaskContext, now_ms);
+    }
+
+    if (ControlLogic_JunctionManeuverActive(&controlTaskContext) == 0U || action == ROUTE_ACTION_STOP_AT_PICKUP ||
+        action == ROUTE_ACTION_STOP_AT_DEST || action == ROUTE_ACTION_JOB_COMPLETE ||
+        action == ROUTE_ACTION_LOAD_LOST || action == ROUTE_ACTION_ERROR) {
+        motor_action_applied = ControlTask_ApplyRouteActionMotor(action, now_ms);
+    }
 
     if (previous_state != controlTaskContext.state && action != ROUTE_ACTION_JOB_COMPLETE) {
         ControlTask_PublishStateChanged(now_ms);
@@ -328,6 +870,7 @@ static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_con
             ControlTask_PublishLifecycleEvent(APP_TX_EVENT_ARRIVED, controlTaskContext.active_job_id,
                                               controlTaskContext.active_route, UART_STATUS_SUCCESS, UART_ERROR_NONE,
                                               now_ms);
+            SensorTask_RequestFsrBaselineCapture(SENSOR_TASK_FSR_BASELINE_FOR_LOAD_ON);
             break;
 
         case ROUTE_ACTION_TURN_AROUND:
@@ -340,6 +883,17 @@ static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_con
             ControlTask_PublishLifecycleEvent(APP_TX_EVENT_ARRIVED, controlTaskContext.active_job_id,
                                               controlTaskContext.active_route, UART_STATUS_SUCCESS, UART_ERROR_NONE,
                                               now_ms);
+            if (motor_action_applied == 0U) {
+                app_unload_result_t failure = { 0 };
+
+                failure.type = APP_UNLOAD_RESULT_FAILED;
+                failure.job_id = controlTaskContext.active_job_id;
+                failure.route_id = controlTaskContext.active_route;
+                failure.error_code = (uint8_t)UART_ERROR_INTERNAL;
+                ControlTask_PublishUnloadFailure(&failure, now_ms);
+                break;
+            }
+            /* Destination-marker arrival starts the deterministic servo cycle immediately. */
             ControlTask_StartUnload(now_ms);
             break;
 
@@ -355,7 +909,10 @@ static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_con
             break;
 
         case ROUTE_ACTION_ERROR:
-            ControlTask_PublishSafetyFault(LINETRACER_STOP_REASON_MARKER_SEQUENCE, now_ms);
+            ControlTask_PublishSafetyFault((controlTaskContext.stop_reason != LINETRACER_STOP_REASON_NONE)
+                                               ? controlTaskContext.stop_reason
+                                               : LINETRACER_STOP_REASON_MARKER_SEQUENCE,
+                                           now_ms);
             break;
 
         case ROUTE_ACTION_NONE:
@@ -367,6 +924,29 @@ static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_con
     }
 }
 
+static void ControlTask_ProcessLineInput(uint8_t line_left, uint8_t line_center, uint8_t line_right,
+                                         uint32_t sampled_at_ms, uint32_t now_ms) {
+    linetracer_control_state_t previous_state = controlTaskContext.state;
+    control_junction_phase_t previous_junction_phase = controlTaskContext.junction_phase;
+    control_line_result_t line_result = ControlLogic_ProcessLineSampleWithCenter(
+        &controlTaskContext, line_left, line_center, line_right, sampled_at_ms);
+
+    if (previous_junction_phase != CONTROL_JUNCTION_TURN_REACQUIRE &&
+        controlTaskContext.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE) {
+        LineFollowPid_Reset(&controlTaskLinePid);
+        SensorTask_RequestLineTrackingReset();
+    }
+    if (line_result.maneuver_completed != 0U) {
+        LineFollowPid_Reset(&controlTaskLinePid);
+    }
+    if (line_result.action_valid != 0U) {
+        LineFollowPid_Reset(&controlTaskLinePid);
+        ControlTask_ProcessRouteAction(line_result.action, previous_state, NULL, now_ms);
+    } else if (line_result.state_changed != 0U) {
+        ControlTask_PublishStateChanged(now_ms);
+    }
+}
+
 static void ControlTask_ProcessSensorSnapshots(void) {
     app_sensor_snapshot_t snapshot;
     uint32_t processed = 0U;
@@ -374,10 +954,15 @@ static void ControlTask_ProcessSensorSnapshots(void) {
     while (processed < APP_SENSOR_SNAPSHOT_QUEUE_DEPTH &&
            osMessageQueueGet(sensorSnapshotQueue, &snapshot, NULL, 0U) == osOK) {
         uint32_t now_ms = osKernelGetTickCount();
+        uint32_t sampled_at_ms = (snapshot.sampled_at_ms != 0U) ? snapshot.sampled_at_ms : now_ms;
 
         if (snapshot.line_state <= LINETRACER_LINE_WHITE_GAP) {
             controlTaskLineState = snapshot.line_state;
         }
+        controlTaskLineError = snapshot.line_error;
+        controlTaskLineLeftRaw = snapshot.line_left_raw;
+        controlTaskLineCenterRaw = snapshot.line_center_raw;
+        controlTaskLineRightRaw = snapshot.line_right_raw;
 
         if (uart_linetracer_load_state_is_valid(snapshot.load_state) != 0U) {
             controlTaskLoadState = snapshot.load_state;
@@ -388,33 +973,56 @@ static void ControlTask_ProcessSensorSnapshots(void) {
             continue;
         }
 
-        if ((snapshot.event_flags & APP_SENSOR_EVENT_LINE_CHANGED) != 0U &&
-            snapshot.line_state == LINETRACER_LINE_CENTERED) {
-            linetracer_control_state_t previous_state = controlTaskContext.state;
+        if (ControlTask_TimeAfter(sampled_at_ms, controlTaskRouteSensorEpochMs) == 0U) {
+            ++processed;
+            continue;
+        }
 
-            if (ControlLogic_CompleteTurn(&controlTaskContext, now_ms) != 0U &&
-                previous_state != controlTaskContext.state) {
-                ControlTask_PublishStateChanged(now_ms);
+        if (ControlTask_UpdateRouteMarkerArm(&snapshot, sampled_at_ms) == 0U &&
+            ControlLogic_JunctionManeuverActive(&controlTaskContext) == 0U) {
+            ++processed;
+            continue;
+        }
+
+        /* Recover a marker-clear edge coalesced into the newest 101/111 snapshot. */
+        if (controlTaskContext.junction_phase == CONTROL_JUNCTION_CROSS_STRAIGHT &&
+            (snapshot.event_flags & APP_SENSOR_EVENT_MARKER_CLEARED) != 0U && snapshot.marker_cleared_at_ms != 0U &&
+            snapshot.line_left != 0U && snapshot.line_right != 0U &&
+            (int32_t)(snapshot.marker_cleared_at_ms - controlTaskContext.junction_phase_started_at_ms) >= 0 &&
+            (int32_t)(sampled_at_ms - snapshot.marker_cleared_at_ms) >= 0) {
+            /* This synthetic edge updates only route sequencing; PID still uses the real latest snapshot above. */
+            ControlTask_ProcessLineInput(0U, 0U, 0U, snapshot.marker_cleared_at_ms, now_ms);
+        }
+
+        ControlTask_ProcessLineInput(snapshot.line_left, snapshot.line_center, snapshot.line_right, sampled_at_ms,
+                                     now_ms);
+
+        if ((snapshot.event_flags & APP_SENSOR_EVENT_MARKER) != 0U && controlTaskContext.route_active != 0U &&
+            ControlTask_MarkerEventIsCurrent(snapshot.marker_detected_at_ms) != 0U &&
+            ControlLogic_ShouldIgnoreMarker(&controlTaskContext, snapshot.marker_code, snapshot.marker_detected_at_ms,
+                                            now_ms) == 0U) {
+            linetracer_control_state_t previous_state = controlTaskContext.state;
+            LineFollowPid_Reset(&controlTaskLinePid);
+            route_action_t action = ControlLogic_HandleMarker(&controlTaskContext, snapshot.marker_code,
+                                                              snapshot.marker_detected_at_ms, now_ms);
+
+            ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
+        }
+
+        if (controlTaskContext.state == LINETRACER_CONTROL_WAITING_LOAD) {
+            if (snapshot.load_state == UART_LINETRACER_LOAD_EMPTY) {
+                /* Require an empty pickup tray after arrival before accepting a new load. */
+                controlTaskContext.load_wait_armed = 1U;
+            } else if (snapshot.load_state == UART_LINETRACER_LOAD_PRESENT &&
+                       controlTaskContext.load_wait_armed != 0U) {
+                linetracer_control_state_t previous_state = controlTaskContext.state;
+                route_action_t action = ControlLogic_HandleLoadOn(&controlTaskContext, now_ms);
+
+                ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
             }
         }
 
-        if ((snapshot.event_flags & APP_SENSOR_EVENT_MARKER) != 0U && controlTaskContext.route_active != 0U) {
-            linetracer_control_state_t previous_state = controlTaskContext.state;
-            route_action_t action = ControlLogic_HandleMarker(&controlTaskContext, now_ms);
-
-            ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
-        }
-
-        if (controlTaskContext.state == LINETRACER_CONTROL_WAITING_LOAD &&
-            snapshot.load_state == UART_LINETRACER_LOAD_PRESENT) {
-            linetracer_control_state_t previous_state = controlTaskContext.state;
-            route_action_t action = ControlLogic_HandleLoadOn(&controlTaskContext, now_ms);
-
-            ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
-        }
-
-        if ((controlTaskContext.state == LINETRACER_CONTROL_MOVING_TO_DEST ||
-             controlTaskContext.state == LINETRACER_CONTROL_UNLOADING) &&
+        if (controlTaskContext.state == LINETRACER_CONTROL_MOVING_TO_DEST &&
             snapshot.load_state == UART_LINETRACER_LOAD_EMPTY) {
             control_job_completion_t completion;
             linetracer_control_state_t previous_state = controlTaskContext.state;
@@ -426,21 +1034,30 @@ static void ControlTask_ProcessSensorSnapshots(void) {
     }
 }
 
+static void ControlTask_CheckRouteTimeout(uint32_t now_ms) {
+    linetracer_control_state_t previous_state = controlTaskContext.state;
+    linetracer_stop_reason_t reason = ControlLogic_CheckRouteTimeout(&controlTaskContext, now_ms);
+
+    if (reason != LINETRACER_STOP_REASON_NONE) {
+        ControlTask_ProcessRouteAction(ROUTE_ACTION_ERROR, previous_state, NULL, now_ms);
+    }
+}
+
 static void ControlTask_PublishCommandResult(const app_control_command_t* command,
                                              const control_command_result_t* result, uint32_t now_ms) {
-    app_tx_event_t event = ControlTask_MakeTxEvent(APP_TX_EVENT_COMMAND_ACK, command, result, now_ms);
+    app_tx_event_type_t response_type = ControlLogic_CommandResponseEventType(result);
+    app_tx_event_t event = ControlTask_MakeTxEvent(response_type, command, result, now_ms);
     app_tx_event_t started_event;
 
     ControlTask_PublishTxEvent(&event, now_ms);
 
+    if (response_type == APP_TX_EVENT_STATUS) {
+        return;
+    }
+
     if (ControlLogic_BuildStartedEvent(&controlTaskContext, command, result, controlTaskLoadState, now_ms,
                                        &started_event) != 0U) {
         ControlTask_PublishTxEvent(&started_event, now_ms);
-    }
-
-    if (result->status_requested != 0U && result->accepted != 0U) {
-        event.type = APP_TX_EVENT_STATUS;
-        ControlTask_PublishTxEvent(&event, now_ms);
     }
 
     if (result->state_changed != 0U && uart_linetracer_job_id_is_valid(controlTaskContext.active_job_id) != 0U &&
@@ -460,10 +1077,11 @@ static void ControlTask_PublishUnloadCommand(const control_command_result_t* res
 
     command.type = result->unload_command;
     command.requested_at_ms = now_ms;
+    command.inhibit_generation = UnloadHw_GetSafetyInhibitGeneration();
     command.job_id = result->action_job_id;
     command.route_id = result->action_route_id;
 
-    if (osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
+    if (unloadCommandQueue == NULL || osMessageQueuePut(unloadCommandQueue, &command, 0U, 0U) != osOK) {
         ControlTask_PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, (uint32_t)result->unload_command, now_ms);
     }
 }
@@ -477,6 +1095,18 @@ static void ControlTask_ProcessCommands(void) {
         uint32_t now_ms = osKernelGetTickCount();
         control_command_result_t result = ControlLogic_HandleCommand(&controlTaskContext, &command, now_ms);
 
+        if (result.accepted != 0U &&
+            (command.type == APP_CONTROL_COMMAND_SET_CURRENT_POSITION ||
+             command.type == APP_CONTROL_COMMAND_ASSIGN_ROUTE || command.type == APP_CONTROL_COMMAND_RESET_SYSTEM)) {
+            ControlTask_ResetRouteSensorPipeline(now_ms);
+        }
+
+        if (command.type == APP_CONTROL_COMMAND_STOP_DRIVE && result.accepted != 0U &&
+            result.unload_command == APP_UNLOAD_COMMAND_ABORT) {
+            MotorControl_ForceStop();
+            (void)UnloadTask_RequestAbort();
+        }
+
         ControlTask_PublishCommandResult(&command, &result, now_ms);
         ControlTask_PublishUnloadCommand(&result, now_ms);
         processed_commands++;
@@ -489,11 +1119,26 @@ void StartControlTask(void* argument) {
 
     (void)argument;
     controlTaskInitialized = 0U;
+    controlTaskPendingUnloadReset = (app_control_safety_event_t){ 0 };
+    controlTaskPendingUnloadResetActive = 0U;
+    controlTaskPendingUnloadResetDeadlineMs = 0U;
+    controlTaskPendingUnloadResetRequestId = 0U;
+    controlTaskNextUnloadRequestId = 0U;
+    controlTaskRouteSensorEpochMs = 0U;
+    controlTaskRouteMarkerClearSinceMs = 0U;
+    controlTaskRouteMarkerClearActive = 0U;
+    controlTaskRouteMarkerArmed = 0U;
     next_wake_tick = osKernelGetTickCount();
     last_alive_tick = next_wake_tick;
     ControlLogic_Init(&controlTaskContext, next_wake_tick);
+    LineFollowPid_Init(&controlTaskLinePid);
     controlTaskLoadState = UART_LINETRACER_LOAD_EMPTY;
     controlTaskLineState = LINETRACER_LINE_UNKNOWN;
+    controlTaskLineError = 0;
+    controlTaskLineLeftRaw = 0U;
+    controlTaskLineCenterRaw = 0U;
+    controlTaskLineRightRaw = 0U;
+    controlTaskNextPidTraceMs = 0U;
     controlTaskMotorReady = MotorControl_Init();
     if (controlTaskMotorReady == 0U) {
         app_control_safety_event_t motor_fault = { 0 };
@@ -514,9 +1159,12 @@ void StartControlTask(void* argument) {
         ControlTask_ProcessSafetyEvents();
         now_ms = osKernelGetTickCount();
         ControlTask_ProcessPendingResponses(now_ms);
+        ControlTask_ProcessUnloadResults();
+        ControlTask_CheckPendingUnloadResetTimeout(osKernelGetTickCount());
         ControlTask_ProcessSensorSnapshots();
         ControlTask_ProcessCommands();
         now_ms = osKernelGetTickCount();
+        ControlTask_CheckRouteTimeout(now_ms);
         ControlTask_UpdateMotorOutput(now_ms);
 
         if ((uint32_t)(now_ms - last_alive_tick) >= CONTROL_TASK_ALIVE_INTERVAL_MS) {
