@@ -21,9 +21,15 @@ static const uint8_t s_ultrasonic_direction_flags[SENSOR_LOGIC_ULTRASONIC_COUNT]
     SENSOR_LOGIC_DIRECTION_RIGHT,
 };
 
-#define SENSOR_LOGIC_ALL_ULTRASONIC_VALID_FLAGS                                                                     \
+static const uint8_t s_ultrasonic_sensor_ids[SENSOR_LOGIC_ULTRASONIC_COUNT] = {
+    UART_LINETRACER_SENSOR_FRONT,
+    UART_LINETRACER_SENSOR_LEFT,
+    UART_LINETRACER_SENSOR_RIGHT,
+};
+
+#define SENSOR_LOGIC_ALL_ULTRASONIC_VALID_FLAGS \
     (SENSOR_LOGIC_VALID_ULTRASONIC_FRONT | SENSOR_LOGIC_VALID_ULTRASONIC_LEFT | SENSOR_LOGIC_VALID_ULTRASONIC_RIGHT)
-#define SENSOR_LOGIC_ALL_ULTRASONIC_ERROR_FLAGS                                                                     \
+#define SENSOR_LOGIC_ALL_ULTRASONIC_ERROR_FLAGS \
     (SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT)
 #define SENSOR_LOGIC_ENABLED_ULTRASONIC_ERROR_FLAGS SENSOR_LOGIC_ALL_ULTRASONIC_ERROR_FLAGS
 
@@ -660,8 +666,8 @@ void SensorLogic_MarkAllUltrasonicUnavailable(sensor_logic_context_t* context, u
 
     context->diagnostics.valid_flags &= ~SENSOR_LOGIC_ALL_ULTRASONIC_VALID_FLAGS;
     SensorLogic_SetErrorFlags(context,
-                               (context->diagnostics.error_flags & ~SENSOR_LOGIC_ALL_ULTRASONIC_ERROR_FLAGS) |
-                                   SENSOR_LOGIC_ENABLED_ULTRASONIC_ERROR_FLAGS,
+                              (context->diagnostics.error_flags & ~SENSOR_LOGIC_ALL_ULTRASONIC_ERROR_FLAGS) |
+                                  SENSOR_LOGIC_ENABLED_ULTRASONIC_ERROR_FLAGS,
                               now_ms);
 }
 
@@ -828,18 +834,28 @@ void SensorLogic_CheckStaleness(sensor_logic_context_t* context, uint32_t now_ms
     SensorLogic_SetErrorFlags(context, error_flags, now_ms);
 }
 
+uint8_t SensorLogic_GetUltrasonicSensorId(uint8_t sensor_index) {
+    return (sensor_index < SENSOR_LOGIC_ULTRASONIC_COUNT) ? s_ultrasonic_sensor_ids[sensor_index] : 0U;
+}
+
+uint8_t SensorLogic_GetUltrasonicDirectionFlag(uint8_t sensor_index) {
+    return (sensor_index < SENSOR_LOGIC_ULTRASONIC_COUNT) ? s_ultrasonic_direction_flags[sensor_index] : 0U;
+}
+
+uint32_t SensorLogic_GetUltrasonicErrorFlag(uint8_t sensor_index) {
+    return (sensor_index < SENSOR_LOGIC_ULTRASONIC_COUNT) ? s_ultrasonic_error_flags[sensor_index] : 0U;
+}
+
 uint32_t SensorLogic_GetEffectiveSafetyErrorFlags(uint32_t raw_error_flags) {
     uint32_t effective_flags = raw_error_flags & ~((uint32_t)SENSOR_ROUTE_TEST_IGNORED_ERROR_FLAGS);
 
 #if !SENSOR_ULTRASONIC_TIMEOUT_SAFETY_FAULT
-    effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT |
-                         (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT |
+    effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT |
                          (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
 #endif
 
 #if SENSOR_ULTRASONIC_FRONT_SAFETY_ONLY
-    effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT |
-                         (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
+    effective_flags &= ~((uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | (uint32_t)SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
 #endif
 
     return effective_flags;

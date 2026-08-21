@@ -173,6 +173,9 @@ void SensorLogic_SuspendUltrasonic(sensor_logic_context_t* context, uint32_t now
 void SensorLogic_UpdateUltrasonic(sensor_logic_context_t* context, uint8_t sensor_index, uint16_t distance_mm,
                                   uint8_t valid, uint32_t now_ms, sensor_logic_update_t* update);
 void SensorLogic_CheckStaleness(sensor_logic_context_t* context, uint32_t now_ms);
+uint8_t SensorLogic_GetUltrasonicSensorId(uint8_t sensor_index);
+uint8_t SensorLogic_GetUltrasonicDirectionFlag(uint8_t sensor_index);
+uint32_t SensorLogic_GetUltrasonicErrorFlag(uint8_t sensor_index);
 uint32_t SensorLogic_GetEffectiveSafetyErrorFlags(uint32_t raw_error_flags);
 uint8_t SensorLogic_GetEffectiveSafetyObstacleMask(uint8_t raw_obstacle_mask);
 

@@ -15,18 +15,15 @@ extern "C" {
 namespace {
 
 enum class PortCall : std::uint8_t {
-    NotifyEmergency = 1U,
-    PutSafety = 2U,
+    PutSafety = 1U,
 };
 
 struct FakePort {
     bool control_ok{ true };
     bool safety_ok{ true };
-    bool emergency_notify_ok{ true };
     bool response_ok{ true };
     std::uint32_t control_calls{};
     std::uint32_t safety_calls{};
-    std::uint32_t emergency_notify_calls{};
     std::uint32_t response_calls{};
     std::uint32_t health_calls{};
     std::uint8_t last_safety_priority{};
@@ -55,13 +52,6 @@ std::uint8_t PutSafety(void* context, const app_safety_event_t* event, std::uint
     return fake.safety_ok ? 1U : 0U;
 }
 
-std::uint8_t NotifyEmergency(void* context) {
-    auto& fake = *static_cast<FakePort*>(context);
-    ++fake.emergency_notify_calls;
-    fake.call_order[fake.call_order_size++] = PortCall::NotifyEmergency;
-    return fake.emergency_notify_ok ? 1U : 0U;
-}
-
 std::uint8_t PutResponse(void* context, const app_tx_event_t* event) {
     auto& fake = *static_cast<FakePort*>(context);
     ++fake.response_calls;
@@ -78,7 +68,7 @@ void ReportHealth(void* context, app_health_event_type_t type, std::uint32_t det
 
 comm_rx_dispatch_port_t MakePort(FakePort& fake) {
     return {
-        &fake, PutControl, PutSafety, NotifyEmergency, PutResponse, ReportHealth,
+        &fake, PutControl, PutSafety, PutResponse, ReportHealth,
     };
 }
 
@@ -340,7 +330,7 @@ void TestPartialFrameTimesOutAt100Ms() {
     assert(parser.state == UART_PARSER_WAIT_SOF);
 }
 
-void TestEmergencyNotificationUsesOneLowLatencyPath() {
+void TestEmergencyStopUsesPrioritySafetyQueue() {
     comm_rx_dispatch_t dispatcher{};
     comm_rx_dispatch_effects_t effects{};
     FakePort fake{};
@@ -351,13 +341,14 @@ void TestEmergencyNotificationUsesOneLowLatencyPath() {
     CommRxDispatch_Frame(&dispatcher, &port, &frame, 500U, &effects);
 
     assert(effects.safety_commands == 1U);
-    assert(fake.emergency_notify_calls == 1U);
-    assert(fake.safety_calls == 0U);
+    assert(fake.safety_calls == 1U);
     assert(fake.call_order_size == 1U);
-    assert(fake.call_order[0] == PortCall::NotifyEmergency);
+    assert(fake.call_order[0] == PortCall::PutSafety);
+    assert(fake.last_safety_priority == APP_TX_PRIORITY_SAFETY);
+    assert(fake.last_safety.type == APP_SAFETY_EVENT_EMERGENCY_STOP);
 }
 
-void TestEmergencyNotificationBypassesFullSafetyQueue() {
+void TestEmergencyStopReportsFullSafetyQueue() {
     comm_rx_dispatch_t dispatcher{};
     comm_rx_dispatch_effects_t effects{};
     FakePort fake{};
@@ -368,35 +359,14 @@ void TestEmergencyNotificationBypassesFullSafetyQueue() {
     CommRxDispatch_Init(&dispatcher);
     CommRxDispatch_Frame(&dispatcher, &port, &frame, 600U, &effects);
 
-    assert(fake.emergency_notify_calls == 1U);
-    assert(fake.safety_calls == 0U);
-    assert(effects.safety_commands == 1U);
-    assert(effects.queue_drops == 0U);
-    assert(fake.response_calls == 0U);
-
-    CommRxDispatch_Frame(&dispatcher, &port, &frame, 601U, &effects);
-    assert(effects.duplicate_sequences == 1U);
-    assert(fake.emergency_notify_calls == 1U);
-}
-
-void TestEmergencyFallsBackToPrioritySafetyQueue() {
-    comm_rx_dispatch_t dispatcher{};
-    comm_rx_dispatch_effects_t effects{};
-    FakePort fake{};
-    fake.emergency_notify_ok = false;
-    const auto port = MakePort(fake);
-    const auto frame = MakeEmptyCommand(0x62U, UART_CMD_EMERGENCY_STOP);
-
-    CommRxDispatch_Init(&dispatcher);
-    CommRxDispatch_Frame(&dispatcher, &port, &frame, 700U, &effects);
-
-    assert(fake.emergency_notify_calls == 1U);
     assert(fake.safety_calls == 1U);
-    assert(effects.safety_commands == 1U);
-    assert(effects.queue_drops == 0U);
-    assert(fake.last_safety_priority == APP_TX_PRIORITY_SAFETY);
-    assert(fake.last_safety.type == APP_SAFETY_EVENT_EMERGENCY_STOP);
-    assert(fake.health_calls == 0U);
+    assert(effects.safety_commands == 0U);
+    assert(effects.queue_drops == 1U);
+    assert(fake.response_calls == 1U);
+    assert(fake.last_response.status == UART_STATUS_BUSY);
+    assert(fake.last_response.error_code == UART_ERROR_BUSY);
+    assert(fake.last_health_type == APP_HEALTH_EVENT_QUEUE_FULL);
+    assert(fake.last_health_detail == COMM_RX_HEALTH_SAFETY_QUEUE_FULL);
 }
 
 void TestPartialAndContinuousFrames() {
@@ -454,9 +424,8 @@ int main() {
     TestLinkMonitoringOnlyAppliesWhileVehicleIsMoving();
     TestDisablingLinkMonitoringClearsTimeout();
     TestPartialFrameTimesOutAt100Ms();
-    TestEmergencyNotificationUsesOneLowLatencyPath();
-    TestEmergencyNotificationBypassesFullSafetyQueue();
-    TestEmergencyFallsBackToPrioritySafetyQueue();
+    TestEmergencyStopUsesPrioritySafetyQueue();
+    TestEmergencyStopReportsFullSafetyQueue();
     TestPartialAndContinuousFrames();
     return 0;
 }

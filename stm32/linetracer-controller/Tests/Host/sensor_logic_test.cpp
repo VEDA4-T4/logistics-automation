@@ -604,6 +604,18 @@ void TestThreeUltrasonicSensorMapping() {
 
     SensorLogic_Init(&context, 0U);
     CHECK_TRUE(SENSOR_LOGIC_ULTRASONIC_COUNT == 3U);
+    CHECK_TRUE(SensorLogic_GetUltrasonicSensorId(0U) == UART_LINETRACER_SENSOR_FRONT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicSensorId(1U) == UART_LINETRACER_SENSOR_LEFT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicSensorId(2U) == UART_LINETRACER_SENSOR_RIGHT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicSensorId(3U) == 0U);
+    CHECK_TRUE(SensorLogic_GetUltrasonicDirectionFlag(0U) == SENSOR_LOGIC_DIRECTION_FRONT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicDirectionFlag(1U) == SENSOR_LOGIC_DIRECTION_LEFT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicDirectionFlag(2U) == SENSOR_LOGIC_DIRECTION_RIGHT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicDirectionFlag(3U) == SENSOR_LOGIC_DIRECTION_NONE);
+    CHECK_TRUE(SensorLogic_GetUltrasonicErrorFlag(0U) == SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicErrorFlag(1U) == SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicErrorFlag(2U) == SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
+    CHECK_TRUE(SensorLogic_GetUltrasonicErrorFlag(3U) == SENSOR_LOGIC_ERROR_NONE);
 
     SensorLogic_UpdateUltrasonic(&context, 0U, 300U, 1U, 10U, &update);
     SensorLogic_UpdateUltrasonic(&context, 1U, 400U, 1U, 20U, &update);
@@ -614,6 +626,18 @@ void TestThreeUltrasonicSensorMapping() {
 
     SensorLogic_UpdateUltrasonic(&context, 3U, 600U, 1U, 40U, &update);
     CHECK_TRUE(context.snapshot.ultrasonic_right_mm == 500U);
+
+    SensorLogic_Init(&context, 0U);
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 1U, SENSOR_OBSTACLE_ON_MM, 1U, 50U, &update);
+    CHECK_TRUE((context.diagnostics.obstacle_mask & SENSOR_LOGIC_DIRECTION_LEFT) != 0U);
+    CHECK_TRUE((context.diagnostics.obstacle_mask & SENSOR_LOGIC_DIRECTION_RIGHT) == 0U);
+
+    SensorLogic_Init(&context, 0U);
+    update = {};
+    SensorLogic_UpdateUltrasonic(&context, 2U, SENSOR_OBSTACLE_ON_MM, 1U, 60U, &update);
+    CHECK_TRUE((context.diagnostics.obstacle_mask & SENSOR_LOGIC_DIRECTION_LEFT) == 0U);
+    CHECK_TRUE((context.diagnostics.obstacle_mask & SENSOR_LOGIC_DIRECTION_RIGHT) != 0U);
 }
 
 void TestUltrasonicSuspendClearsObstacleAndStaleness() {
@@ -713,8 +737,7 @@ void TestRouteTestSafetyFiltering() {
     constexpr auto kLeftObstacle = static_cast<std::uint8_t>(SENSOR_LOGIC_DIRECTION_LEFT);
     constexpr auto kRightObstacle = static_cast<std::uint8_t>(SENSOR_LOGIC_DIRECTION_RIGHT);
     constexpr auto kAllUltrasonicErrors = kFrontError | kLeftError | kRightError;
-    constexpr auto kAllUltrasonicObstacles =
-        static_cast<std::uint8_t>(kFrontObstacle | kLeftObstacle | kRightObstacle);
+    constexpr auto kAllUltrasonicObstacles = static_cast<std::uint8_t>(kFrontObstacle | kLeftObstacle | kRightObstacle);
     sensor_logic_context_t context{};
     sensor_logic_update_t update{};
 

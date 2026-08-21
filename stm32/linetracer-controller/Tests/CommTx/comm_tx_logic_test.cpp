@@ -138,6 +138,23 @@ void TestSensorStatusUsesAsyncSequenceAndDistance() {
         static_cast<std::uint16_t>(static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX]) << 8U);
     assert(distance_cm == 4U);
     assert(logic.next_sequence == 1U);
+
+    event.sensor_id = UART_LINETRACER_SENSOR_RIGHT;
+    event.sensor_state = UART_SENSOR_FAULT;
+    event.sensor_distance_cm = UINT16_MAX;
+    assert(CommTxLogic_EncodeEvent(&logic, &event, encoded.data(), encoded.size(), &length) == UART_CODEC_OK);
+    const auto fault_frame = Decode(encoded, length);
+    assert(fault_frame.payload[UART_SENSOR_ID_INDEX] == UART_LINETRACER_SENSOR_RIGHT);
+    assert(fault_frame.payload[UART_SENSOR_STATE_INDEX] == UART_SENSOR_FAULT);
+    const std::uint16_t fault_distance_cm =
+        static_cast<std::uint16_t>(fault_frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
+        static_cast<std::uint16_t>(static_cast<std::uint16_t>(fault_frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX])
+                                   << 8U);
+    assert(fault_distance_cm == UINT16_MAX);
+
+    event.sensor_state = 0x01U;
+    assert(CommTxLogic_EncodeEvent(&logic, &event, encoded.data(), encoded.size(), &length) ==
+           UART_CODEC_INVALID_ARGUMENT);
 }
 
 void TestHeartbeatContainsUptimeStateSensorsAndError() {

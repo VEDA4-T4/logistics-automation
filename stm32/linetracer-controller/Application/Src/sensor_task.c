@@ -56,16 +56,13 @@ typedef struct {
     sensor_event_latch_t event_latch;
     uint32_t last_ultrasonic_start_ms;
     uint32_t reported_safety_error_flags;
+    uint32_t reported_ultrasonic_error_flags;
     uint8_t reported_safety_obstacle_mask;
     uint8_t next_ultrasonic_slot;
     uint8_t ultrasonic_monitoring;
 } sensor_task_context_t;
 
-enum {
-    SENSOR_ULTRASONIC_FRONT_INDEX = 0U,
-    SENSOR_ULTRASONIC_LEFT_INDEX,
-    SENSOR_ULTRASONIC_RIGHT_INDEX
-};
+enum { SENSOR_ULTRASONIC_FRONT_INDEX = 0U, SENSOR_ULTRASONIC_LEFT_INDEX, SENSOR_ULTRASONIC_RIGHT_INDEX };
 
 /* Keep one transmitter active at a time to prevent echo cross-talk. */
 static const uint8_t s_ultrasonic_measurement_schedule[] = {
@@ -273,21 +270,51 @@ static void PublishLogicSafetyChanges(sensor_task_context_t* context, const sens
     }
 }
 
-static void PublishObstacleTelemetry(uint8_t sensor_index, uint8_t active, uint16_t distance_mm, uint32_t now_ms) {
+static void PublishUltrasonicTelemetry(uint8_t sensor_index, uint8_t sensor_state, uint16_t distance_mm,
+                                       uint32_t now_ms) {
     app_tx_event_t event = { 0 };
+    uint8_t sensor_id;
 
-    if (sensor_index >= SENSOR_LOGIC_ULTRASONIC_COUNT) {
+    sensor_id = SensorLogic_GetUltrasonicSensorId(sensor_index);
+    if ((sensor_id == 0U) || (uart_sensor_state_is_valid(sensor_state) == 0U)) {
         return;
     }
 
     event.type = APP_TX_EVENT_SENSOR_STATUS;
     event.created_at_ms = now_ms;
-    event.sensor_id = (uint8_t)(sensor_index + 1U);
-    event.sensor_state = (active != 0U) ? UART_SENSOR_DETECTED : UART_SENSOR_CLEAR;
-    event.sensor_distance_cm = (uint16_t)((distance_mm + 5U) / 10U);
+    event.sensor_id = sensor_id;
+    event.sensor_state = sensor_state;
+    event.sensor_distance_cm = (sensor_state == UART_SENSOR_FAULT) ? UINT16_MAX : (uint16_t)((distance_mm + 5U) / 10U);
     if (AppQueues_TryPutTx(&event) != osOK) {
         PublishHealthEvent(APP_HEALTH_EVENT_QUEUE_FULL, now_ms, (uint32_t)APP_TASK_SENSOR);
     }
+}
+
+static void PublishUltrasonicFaultChanges(sensor_task_context_t* context, uint32_t now_ms) {
+    const sensor_logic_diagnostics_t* diagnostics;
+    uint32_t current_error_flags = 0U;
+    uint8_t sensor_index;
+
+    if (context == NULL) {
+        return;
+    }
+
+    diagnostics = SensorLogic_GetDiagnostics(&context->logic);
+    if (diagnostics == NULL) {
+        return;
+    }
+
+    for (sensor_index = 0U; sensor_index < SENSOR_LOGIC_ULTRASONIC_COUNT; ++sensor_index) {
+        const uint32_t error_flag = SensorLogic_GetUltrasonicErrorFlag(sensor_index);
+
+        current_error_flags |= diagnostics->error_flags & error_flag;
+        if (((diagnostics->error_flags & error_flag) != 0U) &&
+            ((context->reported_ultrasonic_error_flags & error_flag) == 0U)) {
+            PublishUltrasonicTelemetry(sensor_index, UART_SENSOR_FAULT, 0U, now_ms);
+        }
+    }
+
+    context->reported_ultrasonic_error_flags = current_error_flags;
 }
 
 static void PublishSnapshot(sensor_task_context_t* context, uint32_t new_event_flags, uint32_t now_ms) {
@@ -647,18 +674,20 @@ void StartSensorTask(void* argument) {
             CheckUltrasonicCaptureTimeout(now_ms);
             if (TakeUltrasonicResult(&ultrasonic_result) != 0U) {
                 const sensor_logic_diagnostics_t* diagnostics = SensorLogic_GetDiagnostics(&context.logic);
-                const uint8_t previous_obstacle_mask = (diagnostics != NULL) ? diagnostics->obstacle_mask : 0U;
                 const uint16_t distance_mm = PulseWidthToMillimeters(ultrasonic_result.pulse_width_us);
-                const uint8_t direction_mask = (uint8_t)(1U << ultrasonic_result.sensor_index);
+                const uint32_t error_flag = SensorLogic_GetUltrasonicErrorFlag(ultrasonic_result.sensor_index);
+                const uint8_t measurement_valid =
+                    ((ultrasonic_result.valid != 0U) && (distance_mm >= SENSOR_ULTRASONIC_MIN_MM) &&
+                     (distance_mm <= SENSOR_ULTRASONIC_MAX_MM))
+                        ? 1U
+                        : 0U;
 
                 SensorLogic_UpdateUltrasonic(&context.logic, ultrasonic_result.sensor_index, distance_mm,
                                              ultrasonic_result.valid, now_ms, &update);
                 diagnostics = SensorLogic_GetDiagnostics(&context.logic);
-                if ((diagnostics != NULL) &&
-                    (((previous_obstacle_mask ^ diagnostics->obstacle_mask) & direction_mask) != 0U)) {
-                    PublishObstacleTelemetry(ultrasonic_result.sensor_index,
-                                             (uint8_t)(diagnostics->obstacle_mask & direction_mask), distance_mm,
-                                             now_ms);
+                if ((diagnostics != NULL) && (measurement_valid != 0U) &&
+                    ((diagnostics->error_flags & error_flag) == 0U)) {
+                    PublishUltrasonicTelemetry(ultrasonic_result.sensor_index, UART_SENSOR_OK, distance_mm, now_ms);
                 }
                 context.next_ultrasonic_slot =
                     (uint8_t)((context.next_ultrasonic_slot + 1U) % sizeof(s_ultrasonic_measurement_schedule));
@@ -680,6 +709,7 @@ void StartSensorTask(void* argument) {
         }
 
         SensorLogic_CheckStaleness(&context.logic, now_ms);
+        PublishUltrasonicFaultChanges(&context, now_ms);
         UpdateCommonSensorError(&context, now_ms);
         PublishLogicSafetyChanges(&context, &update, now_ms);
 
