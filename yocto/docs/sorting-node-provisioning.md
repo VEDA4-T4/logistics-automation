@@ -211,7 +211,7 @@ ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
-clean_session=true
+clean_session=false
 
 [sorting]
 default_speed=50

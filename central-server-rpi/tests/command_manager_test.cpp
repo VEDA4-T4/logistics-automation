@@ -172,6 +172,43 @@ void TestResponsesAreAggregatedAndDuplicatesIgnored() {
     assert(manager.LastError() == "requestId was already received");
 }
 
+void TestPreviewDoesNotConsumeResponse() {
+    central_server::CommandManager manager;
+    assert(manager.TrackCommand(MakeCommand("REQ-PREVIEW", "PI-01"), { "PI-01" }));
+    const auto preview = manager.PreviewResponse(MakeResponse("PI-01", "RESP-PREVIEW", "REQ-PREVIEW"));
+    assert(preview.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(preview.message.has_value());
+    assert(manager.PendingCount() == 1);
+    const auto committed = manager.HandleResponse(MakeResponse("PI-01", "RESP-PREVIEW", "REQ-PREVIEW"));
+    assert(committed.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(manager.PendingCount() == 0);
+}
+
+void TestSnapshotRestoresAggregateProgress() {
+    central_server::CommandManager original;
+    assert(original.TrackCommand(MakeCommand("REQ-RESTORE", "SYSTEM"), { "PI-01", "PI-02" }));
+    assert(original.HandleResponse(MakeResponse("PI-01", "RESP-RESTORE-1", "REQ-RESTORE")).message.has_value());
+    const auto snapshot = original.Snapshot();
+    central_server::CommandManager restored;
+    assert(restored.Restore(snapshot));
+    const auto final = restored.HandleResponse(MakeResponse("PI-02", "RESP-RESTORE-2", "REQ-RESTORE"));
+    assert(final.disposition == central_server::CommandResponseDisposition::kForward);
+    assert(final.message.has_value());
+    assert(mqtt::GetPayload<mqtt::CommandResponsePayload>(*final.message)->result == mqtt::CommandResult::kSuccess);
+}
+
+void TestPreviewTimeoutDoesNotConsumePendingCommand() {
+    central_server::CommandManager::Clock::time_point now{};
+    central_server::CommandManager manager([&now] { return now; });
+    assert(manager.TrackCommand(MakeCommand("REQ-TIMEOUT-PREVIEW", "PI-01"), { "PI-01" }));
+    now += mqtt::kMqttResponseTimeout;
+    const auto preview = manager.PreviewTimeouts("2026-08-13T00:00:00Z");
+    assert(preview.size() == 1);
+    assert(manager.PendingCount() == 1);  // A failed durable enqueue leaves the request retryable.
+    assert(manager.CheckTimeouts("2026-08-13T00:00:00Z").size() == 1);
+    assert(manager.PendingCount() == 0);
+}
+
 void TestDeviceDuplicatedResultIsAggregatedAsSuccess() {
     central_server::CommandManager manager;
     assert(manager.TrackCommand(MakeCommand("REQ-DEVICE-DUPLICATE", "SYSTEM"), { "PI-01", "PI-02" }));
@@ -279,6 +316,9 @@ void TestRecoveryUsesExtendedCompletionTimeout() {
 }  // namespace
 
 int main() {
+    TestPreviewDoesNotConsumeResponse();
+    TestSnapshotRestoresAggregateProgress();
+    TestPreviewTimeoutDoesNotConsumePendingCommand();
     TestCommandTargetsAreResolvedByDeviceAndRole();
     TestLineTracerInitializeIncludesConfiguredPosition();
     TestResponsesAreAggregatedAndDuplicatesIgnored();

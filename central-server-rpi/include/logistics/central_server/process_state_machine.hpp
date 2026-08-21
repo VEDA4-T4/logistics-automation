@@ -106,9 +106,11 @@ public:
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
     [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                 std::vector<WorkProcessSnapshot> works);
+                                                 std::vector<WorkProcessSnapshot> works,
+                                                 std::vector<std::string> processed_message_ids = {});
     [[nodiscard]] std::optional<WorkProcessSnapshot> FindWork(std::string_view work_id) const;
     [[nodiscard]] std::vector<WorkProcessSnapshot> ActiveWorks() const;
+    [[nodiscard]] std::vector<std::string> ProcessedMessageIds() const;
 
 private:
     static constexpr std::size_t kRememberedMessageLimit = 2048;

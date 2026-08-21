@@ -135,6 +135,7 @@ add_library(
     device_mqtt_core
     common/config/mqtt_node_config.cpp
     common/mqtt_client/mqtt_message_processor.cpp
+    common/mqtt_client/mqtt_publish_spool.cpp
     common/mqtt_client/mqtt_time.cpp
 )
 add_library(logistics::device_mqtt_core ALIAS device_mqtt_core)
@@ -375,6 +376,11 @@ if(BUILD_TESTING)
     target_link_libraries(device_mqtt_node_config_test PRIVATE logistics::device_mqtt_core)
     logistics_enable_warnings(device_mqtt_node_config_test)
     add_test(NAME device_mqtt_node_config_test COMMAND device_mqtt_node_config_test)
+
+    add_executable(device_mqtt_publish_spool_test tests/mqtt_publish_spool_test.cpp)
+    target_link_libraries(device_mqtt_publish_spool_test PRIVATE logistics::device_mqtt_core)
+    logistics_enable_warnings(device_mqtt_publish_spool_test)
+    add_test(NAME device_mqtt_publish_spool_test COMMAND device_mqtt_publish_spool_test)
 
     add_executable(device_status_test tests/device_status_test.cpp)
     target_link_libraries(device_status_test PRIVATE logistics::device_status)

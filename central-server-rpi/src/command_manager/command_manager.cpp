@@ -1,6 +1,7 @@
 #include "logistics/central_server/command_manager.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 namespace logistics::central_server {
@@ -8,6 +9,11 @@ namespace {
 
 namespace mqtt = contracts::mqtt;
 constexpr std::size_t kCompletedRequestLimit = 256;
+
+[[nodiscard]] std::int64_t UnixMilliseconds() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
 
 [[nodiscard]] bool IsReachable(const DeviceSnapshot& device) noexcept {
     return device.registered && device.connection_state != mqtt::ConnectionState::kOffline;
@@ -97,12 +103,16 @@ bool CommandManager::TrackCommand(const mqtt::MqttMessage& message, const std::v
 
     PendingCommand pending{
         .command = identity->second,
+        .original_message = message,
         .started_at = now_provider_(),
         .timeout = mqtt::CommandResponseTimeout(identity->second),
         .expected_devices = {},
         .completed_devices = {},
         .response_message_ids = {},
         .failure = std::nullopt,
+        .deadline_at_ms = UnixMilliseconds() + std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                   mqtt::CommandResponseTimeout(identity->second))
+                                                   .count(),
     };
     pending.expected_devices.insert(target_device_ids.begin(), target_device_ids.end());
     if (pending.expected_devices.empty()) {
@@ -175,6 +185,7 @@ std::optional<mqtt::MqttMessage> CommandManager::MakeImmediateResult(const mqtt:
     std::lock_guard lock(mutex_);
     PendingCommand immediate{
         .command = identity->second,
+        .original_message = command,
         .started_at = now_provider_(),
         .timeout = {},
         .expected_devices = {},
@@ -262,6 +273,83 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
     };
 }
 
+CommandManagerSnapshot CommandManager::Snapshot() const {
+    std::lock_guard lock(mutex_);
+    CommandManagerSnapshot snapshot{ .pending = {}, .completed_requests = {}, .message_sequence = message_sequence_ };
+    snapshot.completed_requests.assign(completed_request_order_.begin(), completed_request_order_.end());
+    snapshot.pending.reserve(pending_.size());
+    for (const auto& [request_id, pending] : pending_) {
+        PendingCommandSnapshot stored{
+            .request_id = request_id,
+            .original_message = pending.original_message,
+            .expected_devices = { pending.expected_devices.begin(), pending.expected_devices.end() },
+            .completed_devices = { pending.completed_devices.begin(), pending.completed_devices.end() },
+            .response_message_ids = { pending.response_message_ids.begin(), pending.response_message_ids.end() },
+            .failure = pending.failure,
+            .deadline_at_ms = pending.deadline_at_ms,
+        };
+        std::ranges::sort(stored.expected_devices);
+        std::ranges::sort(stored.completed_devices);
+        std::ranges::sort(stored.response_message_ids);
+        snapshot.pending.push_back(std::move(stored));
+    }
+    std::ranges::sort(snapshot.pending, {}, &PendingCommandSnapshot::request_id);
+    return snapshot;
+}
+
+bool CommandManager::Restore(CommandManagerSnapshot snapshot) {
+    std::unordered_map<std::string, PendingCommand> pending;
+    const auto now_wall = UnixMilliseconds();
+    for (auto& stored : snapshot.pending) {
+        const auto identity = CommandIdentity(stored.original_message);
+        if (!identity || identity->first != stored.request_id || stored.expected_devices.empty() ||
+            stored.deadline_at_ms < 0) {
+            return false;
+        }
+        PendingCommand restored{
+            .command = identity->second,
+            .original_message = std::move(stored.original_message),
+            .started_at = now_provider_(),
+            .timeout = std::chrono::seconds((std::max<std::int64_t>(0, stored.deadline_at_ms - now_wall) + 999) / 1000),
+            .expected_devices = { stored.expected_devices.begin(), stored.expected_devices.end() },
+            .completed_devices = { stored.completed_devices.begin(), stored.completed_devices.end() },
+            .response_message_ids = { stored.response_message_ids.begin(), stored.response_message_ids.end() },
+            .failure = std::move(stored.failure),
+            .deadline_at_ms = stored.deadline_at_ms,
+        };
+        if (restored.completed_devices.size() > restored.expected_devices.size() ||
+            !std::ranges::all_of(
+                restored.completed_devices,
+                [&restored](const std::string& id) { return restored.expected_devices.contains(id); }) ||
+            !pending.emplace(stored.request_id, std::move(restored)).second) {
+            return false;
+        }
+    }
+    std::lock_guard lock(mutex_);
+    pending_ = std::move(pending);
+    completed_requests_.clear();
+    completed_request_order_.clear();
+    for (auto& request_id : snapshot.completed_requests) {
+        RememberCompletedRequest(std::move(request_id));
+    }
+    message_sequence_ = snapshot.message_sequence;
+    last_error_.clear();
+    return true;
+}
+
+CommandResponseDecision CommandManager::PreviewResponse(const mqtt::MqttMessage& message) const {
+    CommandManager preview(now_provider_);
+    {
+        std::lock_guard lock(mutex_);
+        preview.pending_ = pending_;
+        preview.completed_requests_ = completed_requests_;
+        preview.completed_request_order_ = completed_request_order_;
+        preview.message_sequence_ = message_sequence_;
+        preview.last_error_ = last_error_;
+    }
+    return preview.HandleResponse(message);
+}
+
 std::vector<mqtt::MqttMessage> CommandManager::CheckTimeouts(std::string_view checked_at) {
     std::lock_guard lock(mutex_);
     std::vector<mqtt::MqttMessage> timed_out;
@@ -281,6 +369,18 @@ std::vector<mqtt::MqttMessage> CommandManager::CheckTimeouts(std::string_view ch
         iterator = pending_.erase(iterator);
     }
     return timed_out;
+}
+
+std::vector<mqtt::MqttMessage> CommandManager::PreviewTimeouts(std::string_view checked_at) const {
+    CommandManager preview(now_provider_);
+    {
+        std::lock_guard lock(mutex_);
+        preview.pending_ = pending_;
+        preview.completed_requests_ = completed_requests_;
+        preview.completed_request_order_ = completed_request_order_;
+        preview.message_sequence_ = message_sequence_;
+    }
+    return preview.CheckTimeouts(checked_at);
 }
 
 std::size_t CommandManager::PendingCount() const {

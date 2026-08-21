@@ -46,19 +46,38 @@ public:
         return start_result;
     }
 
-    void Stop() noexcept override {
+    void Stop(bool graceful = true) noexcept override {
         ++stop_count;
+        last_stop_graceful = graceful;
+    }
+
+    [[nodiscard]] central_server::MqttOperationResult RequestReconnect() override {
+        ++reconnect_request_count;
+        return reconnect_result;
     }
 
     [[nodiscard]] central_server::MqttOperationResult Publish(std::string_view topic, std::string_view payload, int qos,
                                                               bool retain) override {
         publications.push_back({ std::string(topic), std::string(payload), qos, retain });
-        return publish_result;
+        auto result = publish_result;
+        result.packet_id = result.packet_id == 0 ? next_packet_id_++ : result.packet_id;
+        if (disconnect_during_publish) {
+            callbacks_.disconnected(7, "connection lost during publish");
+        } else if (acknowledge_during_publish ||
+                   (acknowledge_offline_during_publish && payload.find("OFFLINE") != std::string_view::npos)) {
+            callbacks_.publish_acknowledged(result.packet_id);
+        }
+        return result;
     }
 
     [[nodiscard]] central_server::MqttOperationResult Subscribe(std::string_view topic_filter, int qos) override {
         subscriptions.push_back({ std::string(topic_filter), qos });
-        return subscribe_result;
+        auto result = subscribe_result;
+        result.packet_id = result.packet_id == 0 ? next_packet_id_++ : result.packet_id;
+        if (acknowledge_during_subscribe) {
+            callbacks_.subscribe_acknowledged(result.packet_id, { qos });
+        }
+        return result;
     }
 
     void SimulateConnected(int reason_code = 0, std::string_view reason = "connection accepted") const {
@@ -69,19 +88,41 @@ public:
         callbacks_.disconnected(reason_code, reason);
     }
 
-    void SimulateMessage(std::string_view topic, std::string_view payload) const {
-        callbacks_.message_received(topic, payload);
+    void SimulateMessage(std::string_view topic, std::string_view payload, int qos = 1, bool retained = false) const {
+        callbacks_.message_received(topic, payload, qos, retained);
+    }
+
+    void SimulatePublishAcknowledged(int packet_id) const {
+        callbacks_.publish_acknowledged(packet_id);
+    }
+
+    void SimulateSubscribeAcknowledged(int packet_id, std::vector<int> granted_qos) const {
+        callbacks_.subscribe_acknowledged(packet_id, granted_qos);
+    }
+
+    [[nodiscard]] int LastPacketId() const noexcept {
+        return next_packet_id_ - 1;
     }
 
     central_server::MqttTransportCallbacks callbacks_;
     central_server::MqttOperationResult start_result{};
     central_server::MqttOperationResult publish_result{};
     central_server::MqttOperationResult subscribe_result{};
+    central_server::MqttOperationResult reconnect_result{};
     central_server::MqttTransportOptions last_options;
     std::vector<Subscription> subscriptions;
     std::vector<Publication> publications;
     int start_count{};
     int stop_count{};
+    int reconnect_request_count{};
+    bool acknowledge_during_publish{};
+    bool acknowledge_offline_during_publish{ true };
+    bool disconnect_during_publish{};
+    bool acknowledge_during_subscribe{};
+    bool last_stop_graceful{ true };
+
+private:
+    int next_packet_id_{ 1 };
 };
 
 [[nodiscard]] std::filesystem::path MakeTemporaryConfigPath(std::string_view suffix) {
@@ -251,15 +292,28 @@ void TestConnectReconnectAndPublish() {
 
     fake->SimulateConnected();
     assert(client.IsConnected());
+    assert(!client.IsReady());
     assert(fake->subscriptions.size() == 7);
     assert(fake->subscriptions.front().topic == mqtt::kServerRequestSubscription);
     assert(fake->subscriptions.back().topic == mqtt::kDeviceHeartbeatSubscription);
 
+    for (int packet_id = 1; packet_id <= 7; ++packet_id) {
+        fake->SimulateSubscribeAcknowledged(packet_id, { 1 });
+    }
+    assert(client.IsReady());
+    assert(fake->publications.size() == 2);
+    assert(fake->publications[0].topic == mqtt::kServerStatusTopic);
+    assert(fake->publications[0].qos == 1);
+    assert(fake->publications[0].retain);
+    assert(fake->publications[1].topic == mqtt::kServerHeartbeatTopic);
+    assert(fake->publications[1].qos == 0);
+    assert(!fake->publications[1].retain);
+
     assert(client.Publish(mqtt::kServerStatusTopic, R"json({"status":"ONLINE"})json", 1, true));
-    assert(fake->publications.size() == 1);
-    assert(fake->publications.front().topic == mqtt::kServerStatusTopic);
-    assert(fake->publications.front().qos == 1);
-    assert(fake->publications.front().retain);
+    assert(fake->publications.size() == 3);
+    assert(fake->publications.back().topic == mqtt::kServerStatusTopic);
+    assert(fake->publications.back().qos == 1);
+    assert(fake->publications.back().retain);
     assert(!client.Publish("server/+/status", "{}"));
 
     fake->SimulateDisconnected(7, "connection lost");
@@ -280,6 +334,118 @@ void TestConnectReconnectAndPublish() {
     assert(fake->stop_count == 1);
 }
 
+void TestSubscribeRejectionKeepsClientUnreadyUntilReconnect() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+
+    assert(client.Start());
+    fake->SimulateConnected();
+    fake->SimulateSubscribeAcknowledged(1, { 0x80 });
+    assert(fake->reconnect_request_count == 1);
+    for (int packet_id = 2; packet_id <= 7; ++packet_id) {
+        fake->SimulateSubscribeAcknowledged(packet_id, { 1 });
+    }
+    assert(!client.IsReady());
+    assert(fake->publications.empty());
+
+    fake->SimulateDisconnected(7, "connection lost");
+    fake->SimulateConnected();
+    for (int packet_id = 8; packet_id <= 14; ++packet_id) {
+        fake->SimulateSubscribeAcknowledged(packet_id, { 1 });
+    }
+    assert(client.IsReady());
+    client.Stop();
+}
+
+void TestDowngradedSubscriptionQosRequestsReconnect() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+
+    assert(client.Start());
+    fake->SimulateConnected();
+    fake->SimulateSubscribeAcknowledged(1, { 0 });
+    assert(!client.IsReady());
+    assert(fake->reconnect_request_count == 1);
+
+    fake->SimulateDisconnected(0, "required QoS was downgraded");
+    fake->SimulateConnected();
+    for (int packet_id = 8; packet_id <= 14; ++packet_id) {
+        fake->SimulateSubscribeAcknowledged(packet_id, { 1 });
+    }
+    assert(client.IsReady());
+    client.Stop();
+}
+
+void TestStopWaitsForOfflineAcknowledgement() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+
+    assert(client.Start());
+    fake->SimulateConnected();
+    client.Stop();
+
+    assert(fake->last_stop_graceful);
+    assert(!fake->publications.empty());
+    assert(fake->publications.back().topic == mqtt::kServerStatusTopic);
+    assert(fake->publications.back().qos == 1);
+    assert(fake->publications.back().retain);
+    assert(fake->publications.back().payload.find("OFFLINE") != std::string::npos);
+}
+
+void TestStopFallsBackToLastWillWhenOfflineIsNotAcknowledged() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    fake->acknowledge_offline_during_publish = false;
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+
+    assert(client.Start());
+    fake->SimulateConnected();
+    client.Stop();
+
+    assert(!fake->last_stop_graceful);
+}
+
+void TestLocalSubscribeFailureRequestsReconnect() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    fake->subscribe_result = { .code = 4, .message = "subscription request failed" };
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+
+    assert(client.Start());
+    fake->SimulateConnected();
+    assert(!client.IsReady());
+    assert(fake->reconnect_request_count == 1);
+
+    fake->subscribe_result = {};
+    fake->SimulateDisconnected(7, "connection lost");
+    fake->SimulateConnected();
+    for (int packet_id = 8; packet_id <= 14; ++packet_id) {
+        fake->SimulateSubscribeAcknowledged(packet_id, { 1 });
+    }
+    assert(client.IsReady());
+    assert(fake->publications.size() == 2);
+    assert(fake->publications[0].topic == mqtt::kServerStatusTopic);
+    client.Stop();
+}
+
+void TestSynchronousSubscribeAcknowledgementsAreNotLost() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    fake->acknowledge_during_subscribe = true;
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+
+    assert(client.Start());
+    fake->SimulateConnected();
+
+    assert(client.IsReady());
+    assert(fake->subscriptions.size() == 7);
+    assert(fake->publications.size() == 2);
+    client.Stop();
+}
+
 void TestMessagesAreForwarded() {
     auto transport = std::make_unique<FakeTransport>();
     auto* fake = transport.get();
@@ -287,15 +453,96 @@ void TestMessagesAreForwarded() {
 
     std::string received_topic;
     std::string received_payload;
-    client.SetMessageHandler([&](std::string_view topic, std::string_view payload) {
+    int received_qos = -1;
+    bool received_retained = false;
+    client.SetMessageHandler([&](std::string_view topic, std::string_view payload, int qos, bool retained) {
         received_topic = topic;
         received_payload = payload;
+        received_qos = qos;
+        received_retained = retained;
     });
 
     assert(client.Start());
-    fake->SimulateMessage("device/PI-01/status", "payload");
+    fake->SimulateMessage("device/PI-01/status", "payload", 0, true);
     assert(received_topic == "device/PI-01/status");
     assert(received_payload == "payload");
+    assert(received_qos == 0);
+    assert(received_retained);
+}
+
+void TestPublishReceiptAndAcknowledgementAreForwarded() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+
+    int acknowledged_packet_id = 0;
+    assert(client.Start());
+    fake->SimulateConnected();
+    assert(client.PublishMessageAcknowledged(
+        mqtt::kServerStatusTopic,
+        mqtt::MqttMessage{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-PUBLISH-ACK-01",
+            .message_type = mqtt::MessageType::kDeviceStatus,
+            .source_id = "SERVER-01",
+            .timestamp = "2026-07-15T17:30:00+09:00",
+            .data = mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline, .current_state = "ONLINE" },
+        },
+        mqtt::Qos::kAtLeastOnce, [&acknowledged_packet_id](int packet_id) { acknowledged_packet_id = packet_id; },
+        true));
+    const int receipt = fake->LastPacketId();
+    fake->SimulatePublishAcknowledged(receipt);
+    assert(acknowledged_packet_id == receipt);
+    client.Stop();
+}
+
+void TestSynchronousPublishAcknowledgementIsNotLost() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    fake->acknowledge_during_publish = true;
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+    int acknowledged_packet_id = 0;
+
+    assert(client.Start());
+    fake->SimulateConnected();
+    const mqtt::MqttMessage message{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-SYNC-PUBLISH-ACK-01",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "SERVER-01",
+        .timestamp = "2026-07-15T17:30:00+09:00",
+        .data = mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline, .current_state = "ONLINE" },
+    };
+    assert(client.PublishMessageAcknowledged(
+        mqtt::kServerStatusTopic, message, mqtt::Qos::kAtLeastOnce,
+        [&acknowledged_packet_id](int packet_id) { acknowledged_packet_id = packet_id; }, true));
+    assert(acknowledged_packet_id == fake->LastPacketId());
+    client.Stop();
+}
+
+void TestDisconnectDuringAcknowledgedPublishDoesNotRetainCallback() {
+    auto transport = std::make_unique<FakeTransport>();
+    auto* fake = transport.get();
+    fake->disconnect_during_publish = true;
+    central_server::MqttClient client(MakeConfig(), std::move(transport));
+    int acknowledgements = 0;
+
+    assert(client.Start());
+    fake->SimulateConnected();
+    const mqtt::MqttMessage message{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-DISCONNECT-PUBLISH-ACK-01",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "SERVER-01",
+        .timestamp = "2026-07-15T17:30:00+09:00",
+        .data = mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline, .current_state = "ONLINE" },
+    };
+    assert(!client.PublishMessageAcknowledged(
+        mqtt::kServerStatusTopic, message, mqtt::Qos::kAtLeastOnce, [&acknowledgements](int) { ++acknowledgements; },
+        true));
+    fake->SimulatePublishAcknowledged(fake->LastPacketId());
+    assert(acknowledgements == 0);
+    client.Stop();
 }
 
 void TestTypedMessagePublishing() {
@@ -382,7 +629,16 @@ int main() {
     TestInvalidConfigIsRejected();
     TestPersistentSessionIsDefault();
     TestConnectReconnectAndPublish();
+    TestSubscribeRejectionKeepsClientUnreadyUntilReconnect();
+    TestDowngradedSubscriptionQosRequestsReconnect();
+    TestLocalSubscribeFailureRequestsReconnect();
+    TestSynchronousSubscribeAcknowledgementsAreNotLost();
+    TestStopWaitsForOfflineAcknowledgement();
+    TestStopFallsBackToLastWillWhenOfflineIsNotAcknowledged();
     TestMessagesAreForwarded();
+    TestPublishReceiptAndAcknowledgementAreForwarded();
+    TestSynchronousPublishAcknowledgementIsNotLost();
+    TestDisconnectDuringAcknowledgedPublishDoesNotRetainCallback();
     TestTypedMessagePublishing();
     TestStartFailureIsLogged();
     TestConnectionRejectionIsLogged();

@@ -1,5 +1,6 @@
 #include "logistics/device/mqtt_message_processor.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -123,6 +124,13 @@ IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, 
     };
 }
 
+void MqttMessageProcessor::ForgetCommand(std::string_view message_id) {
+    std::lock_guard lock(recent_messages_mutex_);
+    recent_messages_.erase(std::string(message_id));
+    recent_message_order_.erase(std::remove(recent_message_order_.begin(), recent_message_order_.end(), message_id),
+                                recent_message_order_.end());
+}
+
 mqtt::EncodeResult MqttMessageProcessor::EncodeHeartbeat(std::string message_id, std::string timestamp,
                                                          std::string current_state, std::uint64_t uptime,
                                                          std::optional<std::string> job_id,
@@ -182,6 +190,11 @@ mqtt::EncodeResult MqttMessageProcessor::EncodeOnlineStatus(std::string message_
                 .current_state = std::move(current_state),
                 .job_id = std::nullopt,
                 .error_code = std::nullopt,
+                .departure_position = std::nullopt,
+                .target_position = std::nullopt,
+                .confirmed_position = std::nullopt,
+                .movement_state = std::nullopt,
+                .position_reset = false,
             },
     };
 
@@ -201,6 +214,11 @@ mqtt::EncodeResult MqttMessageProcessor::EncodeOfflineStatus(std::string message
                 .current_state = "DISCONNECTED",
                 .job_id = std::nullopt,
                 .error_code = std::string("ERR-MQTT-DISCONNECTED"),
+                .departure_position = std::nullopt,
+                .target_position = std::nullopt,
+                .confirmed_position = std::nullopt,
+                .movement_state = std::nullopt,
+                .position_reset = false,
             },
     };
 

@@ -234,18 +234,24 @@ ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
 }
 
 bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                    std::vector<WorkProcessSnapshot> works) {
+                                                    std::vector<WorkProcessSnapshot> works,
+                                                    std::vector<std::string> processed_message_ids) {
     std::unordered_map<std::string, WorkProcessSnapshot> restored;
     for (auto& work : works) {
         if (!contracts::IsValidUuid(work.work_id) || IsTerminal(work.stage) || restored.contains(work.work_id)) {
             return false;
         }
 
+        const bool resumed_transport_after_recovery =
+            stored_state == ProcessSystemState::kStopped && !work.suspended_stage.has_value() &&
+            IsOneOf(work.stage, { WorkStage::kTransportRequested, WorkStage::kTransporting });
         const WorkStage resumable_stage = work.suspended_stage.value_or(work.stage);
         if (IsTerminal(resumable_stage) || IsSuspended(resumable_stage)) {
             return false;
         }
-        work.suspended_stage = resumable_stage;
+        if (!resumed_transport_after_recovery) {
+            work.suspended_stage = resumable_stage;
+        }
         if (stored_state == ProcessSystemState::kEmergencyStop) {
             work.stage = WorkStage::kEmergencyStopped;
         } else if (stored_state == ProcessSystemState::kError) {
@@ -253,7 +259,7 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
         } else if (stored_state == ProcessSystemState::kRecovery) {
             work.stage = WorkStage::kFailed;
             work.failure_reason = "server restarted while recovery was in progress";
-        } else {
+        } else if (!resumed_transport_after_recovery) {
             work.stage = WorkStage::kStopped;
         }
         restored.emplace(work.work_id, std::move(work));
@@ -263,6 +269,12 @@ bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_st
     resume_transport_after_recovery_ = false;
     processed_message_ids_.clear();
     processed_message_order_.clear();
+    for (auto& message_id : processed_message_ids) {
+        if (message_id.empty()) {
+            return false;
+        }
+        RememberMessage(std::move(message_id));
+    }
     if (stored_state == ProcessSystemState::kEmergencyStop) {
         system_state_ = ProcessSystemState::kEmergencyStop;
     } else if (stored_state == ProcessSystemState::kError || stored_state == ProcessSystemState::kRecovery) {
@@ -290,6 +302,10 @@ std::vector<WorkProcessSnapshot> ProcessStateMachine::ActiveWorks() const {
     }
     std::ranges::sort(result, {}, &WorkProcessSnapshot::work_id);
     return result;
+}
+
+std::vector<std::string> ProcessStateMachine::ProcessedMessageIds() const {
+    return { processed_message_order_.begin(), processed_message_order_.end() };
 }
 
 ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event, WorkProcessSnapshot& work) {

@@ -76,6 +76,10 @@ public:
     [[nodiscard]] ProcessOrchestrationResult Handle(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] ProcessOrchestrationResult BeginWork(std::string_view message_id, std::string_view work_id,
                                                        std::string_view input_device_id, std::string_view timestamp);
+    [[nodiscard]] contracts::mqtt::MqttMessage MakeInputConveyorSafetyStop(std::string_view trigger_message_id,
+                                                                           std::string_view timestamp) const;
+    [[nodiscard]] std::vector<ProcessCommandIntent> SortingDetectionCommands(std::string_view work_id,
+                                                                             std::string_view timestamp);
     [[nodiscard]] ProcessTransition ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id);
     [[nodiscard]] ProcessTransition ConfirmDispatch(const ProcessCommandIntent& intent);
     [[nodiscard]] ProcessTransition FailDispatch(const ProcessCommandIntent& intent, std::string reason);
@@ -85,7 +89,8 @@ public:
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
     [[nodiscard]] ProcessRestoreResult RestoreAfterServerRestart(
         ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
-        std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence);
+        std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence,
+        std::vector<std::string> processed_message_ids = {});
     [[nodiscard]] const std::unordered_map<std::string, GripperTarget>& GripperTargets() const noexcept;
     [[nodiscard]] std::uint64_t MessageSequence() const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
@@ -97,6 +102,10 @@ private:
     [[nodiscard]] ProcessCommandIntent MakeInputConveyorCommand(std::string_view work_id,
                                                                 contracts::mqtt::ControlCommand command,
                                                                 std::string_view timestamp);
+    [[nodiscard]] ProcessCommandIntent MakeSortingControlCommand(std::string_view work_id,
+                                                                 contracts::mqtt::ControlCommand command,
+                                                                 std::string_view component_id,
+                                                                 std::string_view timestamp);
     [[nodiscard]] ProcessCommandIntent MakeGripperCommand(std::string_view work_id, std::string_view destination,
                                                           const GripperTarget* target, std::string_view timestamp);
     [[nodiscard]] ProcessCommandIntent MakeDestinationCommand(std::string_view work_id, std::string_view destination,

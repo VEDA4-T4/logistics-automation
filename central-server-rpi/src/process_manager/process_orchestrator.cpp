@@ -273,6 +273,39 @@ ProcessOrchestrationResult ProcessOrchestrator::BeginWork(std::string_view messa
     return result;
 }
 
+contracts::mqtt::MqttMessage ProcessOrchestrator::MakeInputConveyorSafetyStop(std::string_view trigger_message_id,
+                                                                              std::string_view timestamp) const {
+    const std::string request_id = "INPUT-DETECTION-STOP-" + std::string(trigger_message_id);
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = request_id,
+        .message_type = mqtt::MessageType::kControlCommand,
+        .source_id = config_.server_id,
+        .timestamp = std::string(timestamp),
+        .data =
+            mqtt::ControlCommandPayload{
+                .request_id = request_id,
+                .command = mqtt::ControlCommand::kStop,
+                .target_device_id = config_.input_device_id,
+                .component_id = "input_conveyor",
+                .params = mqtt::Json{ { "reason", "BOX_DETECTED" } },
+            },
+    };
+}
+
+std::vector<ProcessCommandIntent> ProcessOrchestrator::SortingDetectionCommands(std::string_view work_id,
+                                                                                std::string_view timestamp) {
+    const auto work = state_machine_.FindWork(work_id);
+    if (!config_.enabled || !work.has_value() || work->stage != WorkStage::kSorting) {
+        return {};
+    }
+    std::vector<ProcessCommandIntent> commands;
+    commands.reserve(2);
+    commands.push_back(MakeSortingControlCommand(work_id, mqtt::ControlCommand::kStop, "sorting_conveyor", timestamp));
+    commands.push_back(MakeSortingControlCommand(work_id, mqtt::ControlCommand::kRecovery, "GATE", timestamp));
+    return commands;
+}
+
 ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id) {
     if (!config_.enabled) {
         return {
@@ -425,7 +458,8 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
 
 ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
     ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
-    std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence) {
+    std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence,
+    std::vector<std::string> processed_message_ids) {
     std::vector<InvalidatedRestoredWork> invalidated_works;
     std::erase_if(works, [](const WorkProcessSnapshot& work) { return work.stage == WorkStage::kFailed; });
     if (!homography_.Enabled()) {
@@ -450,7 +484,7 @@ ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
             }
         }
     }
-    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
+    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works), std::move(processed_message_ids))) {
         return {};
     }
     gripper_targets_ = std::move(gripper_targets);
@@ -638,6 +672,8 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                                                          message.timestamp));
         result.commands.push_back(
             MakeInputConveyorCommand(work->work_id, mqtt::ControlCommand::kStart, message.timestamp));
+        result.commands.push_back(MakeSortingControlCommand(work->work_id, mqtt::ControlCommand::kStart,
+                                                            "sorting_conveyor", message.timestamp));
     }
     if (event.type == ProcessEventType::kWorkCompleted) {
         gripper_targets_.erase(event.work_id);
@@ -702,6 +738,33 @@ ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_v
                         .command = command,
                         .target_device_id = config_.input_device_id,
                         .component_id = "input_conveyor",
+                        .params = mqtt::Json{ { "workId", work_id } },
+                    },
+            },
+        .dispatched_event = std::nullopt,
+        .work_id = std::string(work_id),
+    };
+}
+
+ProcessCommandIntent ProcessOrchestrator::MakeSortingControlCommand(std::string_view work_id,
+                                                                    mqtt::ControlCommand command,
+                                                                    std::string_view component_id,
+                                                                    std::string_view timestamp) {
+    const std::string request_id = NextMessageId();
+    return {
+        .message =
+            {
+                .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+                .message_id = request_id,
+                .message_type = mqtt::MessageType::kControlCommand,
+                .source_id = config_.server_id,
+                .timestamp = std::string(timestamp),
+                .data =
+                    mqtt::ControlCommandPayload{
+                        .request_id = request_id,
+                        .command = command,
+                        .target_device_id = config_.sorting_device_id,
+                        .component_id = std::string(component_id),
                         .params = mqtt::Json{ { "workId", work_id } },
                     },
             },

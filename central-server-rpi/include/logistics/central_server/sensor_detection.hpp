@@ -5,6 +5,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
+
+#include "logistics/central_server/process_state_machine.hpp"
 
 namespace logistics::contracts::mqtt {
 struct MqttMessage;
@@ -90,17 +93,42 @@ class InputDetectionGate final {
 public:
     explicit InputDetectionGate(std::string input_device_id, std::int32_t sensor_id = 1);
 
+    // Physical stopping is independent from whether the process can create a
+    // work item. This closes the partial-START case where the conveyor is
+    // moving but the server already returned to STOPPED after another node
+    // timed out.
+    [[nodiscard]] bool ShouldStopConveyor(const contracts::mqtt::MqttMessage& message);
+
     // Consumes one physical DETECTED interval. A stopped process defers the
     // interval so the next reading after START can create the work; an already
     // occupied input station consumes it because vision won the same-box race.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
                                         bool input_station_occupied);
     void Retry() noexcept;
+    void RetryStop() noexcept;
 
 private:
     std::string input_device_id_;
     std::int32_t sensor_id_;
     bool consumed_{ false };
+    bool stop_consumed_{ false };
+};
+
+class SortingDetectionGate final {
+public:
+    explicit SortingDetectionGate(std::string sorting_device_id);
+
+    // Matches sensor N to destination N and consumes one DETECTED interval.
+    // The interval is deferred while the process is stopped or no matching
+    // sorting work exists, so START can resume the same physical box.
+    [[nodiscard]] std::optional<std::string> ShouldStop(const contracts::mqtt::MqttMessage& message,
+                                                        bool process_running,
+                                                        const std::vector<WorkProcessSnapshot>& active_works);
+    void Retry() noexcept;
+
+private:
+    std::string sorting_device_id_;
+    std::optional<std::int32_t> consumed_sensor_id_;
 };
 
 }  // namespace logistics::central_server

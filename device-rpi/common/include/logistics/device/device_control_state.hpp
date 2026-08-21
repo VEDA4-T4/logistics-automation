@@ -26,6 +26,7 @@ struct DeviceControlConfig final {
 struct DeviceControlDecision final {
     contracts::mqtt::MqttMessage response;
     bool clear_work{};
+    bool preserve_work{};
     bool state_changed{};
 };
 
@@ -43,7 +44,7 @@ public:
     void SetFault();
 
     [[nodiscard]] bool IsOperational() const;
-    [[nodiscard]] bool ConsumeResetRequest();
+    [[nodiscard]] bool ConsumeResetRequest(bool* preserve_work = nullptr);
     [[nodiscard]] DeviceOperatingState State() const;
     [[nodiscard]] std::string CurrentState() const;
 
@@ -61,6 +62,7 @@ private:
     DeviceOperatingState state_{ DeviceOperatingState::kStopped };
     bool ready_{};
     bool reset_requested_{};
+    bool preserve_work_on_reset_{};
     std::optional<std::string> pending_recovery_request_id_;
 };
 

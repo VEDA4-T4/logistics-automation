@@ -18,6 +18,7 @@ namespace logistics::device {
 enum class SortingCommandStatus {
     kSent,
     kSentNoReply,
+    kAcknowledged,
     kDuplicate,
     kInvalidMessage,
     kInvalidTarget,
@@ -163,7 +164,7 @@ private:
     PendingContext pending_{};
     PendingSafetyContext pending_safety_{};
     std::array<std::uint8_t, 3U> sensor_states_{ 0xffU, 0xffU, 0xffU };
-    std::uint8_t last_device_state_{ 0xffU };
+    std::uint8_t last_device_state_{ UART_DEVICE_STOPPED };
     std::uint8_t last_device_error_{ 0xffU };
     std::uint8_t default_speed_{ 50U };
     std::uint8_t configured_speed_{};

@@ -29,7 +29,8 @@ nano device-rpi/config/sorting-node.ini
 | MQTT 메시지/명령 | STM32 UART 명령 | Payload |
 |---|---|---|
 | `DESTINATION_SET` | `SORTING_ROUTE_ITEM (0x30)` | 로컬 `uint16_t cycle_id` + 목적지 `1..3` |
-| `START`, `RESTART` (`params.speed=1..100` 선택) | `SORTING_CONVEYOR_SET_SPEED (0x36)` 성공 후 `SORTING_CONVEYOR_START (0x34)` | 생략 시 직전값/기본값 사용. MCU 재부팅 복구를 위해 START마다 속도를 재전송 |
+| `START`, `RESTART` (component 생략) | UART 명령 없음 | 시스템 가동 준비만 확인하고 컨베이어는 정지 유지 |
+| `START`, `RESTART` (`component=sorting_conveyor`, `params.speed=1..100` 선택) | `SORTING_CONVEYOR_SET_SPEED (0x36)` 성공 후 `SORTING_CONVEYOR_START (0x34)` | 그리퍼 완료 후 중앙 서버가 발행. 속도 생략 시 직전값/기본값 사용 |
 | `STOP` | `SORTING_CONVEYOR_STOP (0x35)` | 없음 |
 | `INITIALIZE` | `SORTING_RESET (0x33)` | 없음 |
 | `STATUS_REQUEST` | `SORTING_GET_STATUS (0x31)` | 없음 |

@@ -29,6 +29,14 @@ struct LogEntry final {
     std::string message;
 };
 
+std::int64_t Scalar(central_server::Database& database, std::string_view sql) {
+    central_server::Statement statement;
+    assert(database.Prepare(sql, statement).ok());
+    bool row = false;
+    assert(statement.Step(row).ok() && row);
+    return statement.ColumnInt64(0);
+}
+
 [[nodiscard]] mqtt::MqttMessage MakeRegistration(std::string source_id = "PI-01") {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
@@ -222,6 +230,33 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
         assert(handler.Handle("device/PI-VISION-01/event", Encode(box)));
         assert(!work_id.empty());
 
+        const mqtt::MqttMessage position{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-POSITION-QT-01",
+            .message_type = mqtt::MessageType::kPositionDetected,
+            .source_id = "PI-VISION-01",
+            .timestamp = "2026-07-21T01:00:00Z",
+            .data =
+                mqtt::PositionDetectedPayload{
+                    .work_id = work_id,
+                    .box_x = 100,
+                    .box_y = 50,
+                    .box_width = 200,
+                    .box_height = 100,
+                    .center_x = 200,
+                    .center_y = 100,
+                    .offset_x = 0,
+                    .offset_y = 0,
+                    .position_status = "DETECTED",
+                    .box_corners = std::nullopt,
+                },
+        };
+        assert(handler.Handle("device/PI-VISION-01/event", Encode(position)));
+        assert(qt_events.size() == 1);
+        const auto* forwarded_position = mqtt::GetPayload<mqtt::PositionDetectedPayload>(qt_events.front());
+        assert(forwarded_position != nullptr);
+        assert(forwarded_position->work_id == work_id);
+
         const mqtt::MqttMessage barcode{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
             .message_id = "MSG-BARCODE-CATALOG",
@@ -238,9 +273,9 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
                 },
         };
         assert(handler.Handle("device/PI-VISION-01/event", Encode(barcode)));
-        assert(qt_events.size() == 2);
-        assert(qt_events[0].message_type == mqtt::MessageType::kBarcodeDetected);
-        const auto* product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events[1]);
+        assert(qt_events.size() == 3);
+        assert(qt_events[1].message_type == mqtt::MessageType::kBarcodeDetected);
+        const auto* product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events[2]);
         assert(product != nullptr);
         assert(product->work_id == work_id);
         assert(product->barcode == "5901234123457");
@@ -275,7 +310,7 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
                 },
         };
         assert(handler.Handle("device/PI-VISION-01/event", Encode(unknown_barcode)));
-        assert(qt_events.size() == 4);
+        assert(qt_events.size() == 5);
         const auto* unknown_product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events.back());
         assert(unknown_product != nullptr);
         assert(unknown_product->product_id == "UNREGISTERED");
@@ -310,7 +345,9 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         });
 
         assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:01Z"));
-        assert(handler.Handle("device/PI-01/status", Encode(MakePositionStatus()), "2026-07-16T01:00:03Z"));
+        assert(handler.Handle("device/PI-01/status", Encode(MakePositionStatus()), "2026-07-16T01:00:03Z", 1, true));
+        assert(Scalar(database, "SELECT qos FROM mqtt_event_log WHERE message_id='MSG-POSITION-STATUS-01'") == 1);
+        assert(Scalar(database, "SELECT retained FROM mqtt_event_log WHERE message_id='MSG-POSITION-STATUS-01'") == 1);
         assert(qt_statuses.size() == 1);
         qt_statuses.clear();
         const mqtt::MqttMessage heartbeat{
@@ -328,7 +365,9 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
                     .error_code = std::nullopt,
                 },
         };
-        assert(handler.Handle("device/PI-01/heartbeat", Encode(heartbeat), "2026-07-16T01:00:05Z"));
+        assert(handler.Handle("device/PI-01/heartbeat", Encode(heartbeat), "2026-07-16T01:00:05Z", 0, false));
+        assert(Scalar(database, "SELECT qos FROM mqtt_event_log WHERE message_id='MSG-HEARTBEAT-QT-01'") == 0);
+        assert(Scalar(database, "SELECT retained FROM mqtt_event_log WHERE message_id='MSG-HEARTBEAT-QT-01'") == 0);
         assert(qt_statuses.size() == 1);
         assert(qt_statuses[0].message_type == mqtt::MessageType::kDeviceStatus);
         assert(qt_statuses[0].source_id == "PI-01");
@@ -661,6 +700,195 @@ void TestMessageTypesUseDedicatedRouteHandlers() {
     std::filesystem::remove_all(root);
 }
 
+void TestPendingInboxReplaysSideEffectsOnceAfterReopen() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto root = std::filesystem::temp_directory_path() / ("logistics-inbox-replay-test-" + unique);
+    std::filesystem::create_directories(root);
+    const central_server::DatabaseConfig database_config{
+        .path = root / "test.db",
+        .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+        .busy_timeout_ms = 100,
+    };
+    const mqtt::MqttMessage box{
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-BOX-INBOX-REPLAY",
+        .message_type = mqtt::MessageType::kBoxDetected,
+        .source_id = "PI-VISION-INBOX",
+        .timestamp = "2026-08-13T01:00:00Z",
+        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "inbox-box.jpg" },
+    };
+    const auto topic = mqtt::DeviceEventTopic(box.source_id);
+    const auto payload = Encode(box);
+    std::string original_work_id;
+
+    {
+        central_server::Database database;
+        assert(database.Open(database_config).ok());
+        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
+        central_server::StorageConfig storage;
+        storage.image_root = root / "images";
+        central_server::PersistenceService persistence(database, storage);
+        central_server::DeviceManager device_manager;
+        central_server::MqttHandler handler(device_manager, {}, &persistence);
+        handler.SetWorkCreatedHandler([&original_work_id](std::string_view, std::string_view work_id) {
+            original_work_id = work_id;
+            return false;
+        });
+
+        assert(!handler.Handle(topic, payload, {}, 0, true));
+        assert(!original_work_id.empty());
+        assert(Scalar(database,
+                      "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BOX-INBOX-REPLAY' AND "
+                      "processing_state='RECEIVED'") == 1);
+        assert(Scalar(database, "SELECT count(*) FROM product") == 1);
+        assert(Scalar(database, "SELECT count(*) FROM work_history") == 1);
+    }
+
+    {
+        central_server::Database database;
+        assert(database.Open(database_config).ok());
+        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
+        central_server::StorageConfig storage;
+        storage.image_root = root / "images";
+        central_server::PersistenceService persistence(database, storage);
+        std::vector<central_server::PendingReceivedEvent> pending;
+        assert(persistence.PendingReceivedEvents(pending).ok());
+        assert(pending.size() == 1);
+        assert(pending.front().topic == topic);
+        assert(pending.front().raw_payload == payload);
+        assert(pending.front().qos == 0);
+        assert(pending.front().retained);
+        assert(pending.front().received_at_ms > 0);
+
+        central_server::DeviceManager device_manager;
+        central_server::MqttHandler handler(device_manager, {}, &persistence);
+        int successful_routes = 0;
+        std::string replayed_work_id;
+        handler.SetWorkCreatedHandler([&](std::string_view, std::string_view work_id) {
+            ++successful_routes;
+            replayed_work_id = work_id;
+            return true;
+        });
+
+        assert(handler.ReplayPendingReceivedEvents());
+        assert(successful_routes == 1);
+        assert(replayed_work_id == original_work_id);
+        assert(Scalar(database,
+                      "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BOX-INBOX-REPLAY' AND "
+                      "processing_state='STORED'") == 1);
+        assert(Scalar(database, "SELECT count(*) FROM product") == 1);
+        assert(Scalar(database, "SELECT count(*) FROM work_history") == 1);
+
+        assert(handler.Handle(topic, payload, {}, 0, true));
+        assert(successful_routes == 1);
+        assert(persistence.PendingReceivedEvents(pending).ok());
+        assert(pending.empty());
+    }
+    std::filesystem::remove_all(root);
+}
+
+void TestSensorTelemetryBypassesInboxAndRoutesImmediately() {
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto root = std::filesystem::temp_directory_path() / ("logistics-sensor-inbox-test-" + unique);
+    std::filesystem::create_directories(root);
+    {
+        central_server::Database database;
+        const central_server::DatabaseConfig database_config{
+            .path = root / "test.db",
+            .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
+            .busy_timeout_ms = 100,
+        };
+        assert(database.Open(database_config).ok());
+        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
+        central_server::StorageConfig storage;
+        storage.image_root = root / "images";
+        central_server::PersistenceService persistence(database, storage);
+        central_server::DeviceManager device_manager;
+        central_server::MqttHandler handler(device_manager, {}, &persistence, {},
+                                            { .enter_threshold_cm = 10, .exit_threshold_cm = 12, .debounce_count = 3 });
+        std::vector<std::string> routed_detections;
+        bool fail_first = true;
+        handler.SetQtEventHandler([&](const mqtt::MqttMessage& message) {
+            const auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(message);
+            assert(sensor != nullptr && sensor->detection_status.has_value());
+            if (fail_first) {
+                fail_first = false;
+                return false;
+            }
+            routed_detections.push_back(*sensor->detection_status);
+            return true;
+        });
+        mqtt::MqttMessage sensor{
+            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+            .message_id = "MSG-SENSOR-INBOX-1",
+            .message_type = mqtt::MessageType::kSensorStatus,
+            .source_id = "PI-INPUT-INBOX",
+            .timestamp = "2026-08-13T02:00:00Z",
+            .data =
+                mqtt::SensorStatusPayload{
+                    .sensor_id = 1, .measurement_status = "OK", .distance_cm = 8, .detection_status = std::nullopt },
+        };
+        const auto topic = mqtt::DeviceEventTopic(sensor.source_id);
+        assert(!handler.Handle(topic, Encode(sensor)));
+        sensor.message_id = "MSG-SENSOR-INBOX-2";
+        assert(handler.Handle(topic, Encode(sensor)));
+        sensor.message_id = "MSG-SENSOR-INBOX-3";
+        assert(handler.Handle(topic, Encode(sensor)));
+        assert((routed_detections == std::vector<std::string>{ "CLEAR", "DETECTED" }));
+
+        assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_type='SENSOR_STATUS'") == 0);
+    }
+    std::filesystem::remove_all(root);
+}
+
+void TestPoisonInboxRowDoesNotStarveLaterReplay() {
+    const auto root =
+        std::filesystem::temp_directory_path() /
+        ("logistics-poison-inbox-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    central_server::Database database;
+    const central_server::DatabaseConfig config{ .path = root / "test.db",
+                                                 .migration_dir = LOGISTICS_TEST_MIGRATION_DIR };
+    assert(database.Open(config).ok());
+    assert(central_server::MigrationRunner::Apply(database, config.migration_dir).ok());
+    central_server::StorageConfig storage;
+    storage.image_root = root / "images";
+    central_server::PersistenceService persistence(database, storage);
+    central_server::DeviceManager devices;
+    central_server::MqttHandler handler(devices, {}, &persistence);
+    const mqtt::MqttMessage poison{ .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+                                    .message_id = "POISON-ROW",
+                                    .message_type = mqtt::MessageType::kBoxDetected,
+                                    .source_id = "PI-VISION-POISON",
+                                    .timestamp = "2026-08-13T01:00:00Z",
+                                    .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "poison.jpg" } };
+    const mqtt::MqttMessage later{ .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+                                   .message_id = "LATER-ROW",
+                                   .message_type = mqtt::MessageType::kBoxDetected,
+                                   .source_id = "PI-VISION-LATER",
+                                   .timestamp = "2026-08-13T01:00:01Z",
+                                   .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "later.jpg" } };
+    bool replaying = false;
+    handler.SetWorkCreatedHandler(
+        [&replaying](std::string_view source, std::string_view) { return replaying && source != "PI-VISION-POISON"; });
+    assert(!handler.Handle(mqtt::DeviceEventTopic(poison.source_id), Encode(poison)));
+    assert(!handler.Handle(mqtt::DeviceEventTopic(later.source_id), Encode(later)));
+    replaying = true;
+    int routed = 0;
+    handler.SetWorkCreatedHandler([&routed](std::string_view source, std::string_view) {
+        if (source == "PI-VISION-POISON")
+            return false;
+        ++routed;
+        return true;
+    });
+    assert(handler.ReplayPendingReceivedEvents());
+    assert(routed == 1);
+    assert(Scalar(database,
+                  "SELECT count(*) FROM mqtt_event_log WHERE message_id='LATER-ROW' AND processing_state='STORED'") ==
+           1);
+    std::filesystem::remove_all(root);
+}
+
 }  // namespace
 
 int main() {
@@ -675,5 +903,8 @@ int main() {
     TestHeartbeatTimeoutChangesAreForwardedToQt();
     TestRetainedPositionSnapshotReplay();
     TestMessageTypesUseDedicatedRouteHandlers();
+    TestPendingInboxReplaysSideEffectsOnceAfterReopen();
+    TestSensorTelemetryBypassesInboxAndRoutesImmediately();
+    TestPoisonInboxRowDoesNotStarveLaterReplay();
     return 0;
 }

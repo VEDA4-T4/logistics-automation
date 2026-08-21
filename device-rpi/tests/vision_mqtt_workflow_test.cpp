@@ -37,14 +37,14 @@ vision::VisionObservation Observation(std::optional<std::string> barcode = std::
     };
 }
 
-mqtt::MqttMessage WorkCreated() {
+mqtt::MqttMessage WorkCreated(std::string work_id = std::string(kWorkId)) {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = "WORK-ASSIGN-01",
         .message_type = mqtt::MessageType::kWorkCreated,
         .source_id = "central-server",
         .timestamp = "2026-07-21T11:00:01Z",
-        .data = mqtt::WorkCreatedPayload{ .work_id = std::string(kWorkId) },
+        .data = mqtt::WorkCreatedPayload{ .work_id = std::move(work_id) },
     };
 }
 
@@ -107,6 +107,8 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(!workflow.HasPendingBarcode());
     assert(workflow.NeedsBarcodeFallback());
     assert(workflow.AssignWork(WorkCreated()));
+    // Re-delivery after a transient WORK_ASSIGNED status publish failure is idempotent.
+    assert(workflow.AssignWork(WorkCreated()));
     assert(!workflow.HasPendingBarcode());
     assert(workflow.NeedsBarcodeFallback());
     assert(!workflow.Observe(Observation(std::string("8801234567893")), "IGNORED", "2026-07-21T11:00:01Z").has_value());
@@ -114,7 +116,8 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(!workflow.NeedsBarcodeFallback());
     const auto assigned = workflow.TakeAssignedWork();
     assert(assigned.has_value());
-    assert(assigned->observation.barcode == "8801234567893");
+    assert(assigned->observation.has_value());
+    assert(assigned->observation->barcode == "8801234567893");
 
     const auto position =
         vision::MakePositionDetectedMessage("PI-VISION-01", *assigned, "MSG-POSITION-01", "2026-07-21T11:00:02Z");
@@ -151,7 +154,8 @@ void TestSensorWorkCanBeAssignedBeforeVisionDetection() {
     const auto assigned = workflow.TakeAssignedWork();
     assert(assigned.has_value());
     assert(assigned->work_id == kWorkId);
-    assert(assigned->observation.barcode == "8801234567893");
+    assert(assigned->observation.has_value());
+    assert(assigned->observation->barcode == "8801234567893");
 }
 
 void TestBarcodeSurvivesDetectionConfirmation() {
@@ -163,7 +167,8 @@ void TestBarcodeSurvivesDetectionConfirmation() {
 
     const auto work = workflow.TakeAssignedWork();
     assert(work.has_value());
-    assert(work->observation.barcode == "8801234567893");
+    assert(work->observation.has_value());
+    assert(work->observation->barcode == "8801234567893");
     const auto barcode =
         vision::MakeBarcodeDetectedMessage("PI-VISION-01", *work, "MSG-BARCODE-01", "2026-07-21T11:00:03Z");
     const auto* payload = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(barcode);
@@ -209,6 +214,59 @@ void TestBarcodeDecodeFailureIdentifiesStage() {
     assert(payload->recognition_status == "FAILED");
     assert(payload->error_code == "ERR-VISION-BARCODE-DECODE-FAILED");
     assert(payload->failure_stage == "BARCODE_DECODE");
+}
+
+void TestPreassignmentTimeoutProducesBoxDetectionFailure() {
+    constexpr std::string_view kNextWorkId = "7026045c-92ba-4fd9-93dc-6dfa04a5fd30";
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1, 1, 3);
+    assert(workflow.AssignWork(WorkCreated()));
+    assert(!workflow.Observe(std::nullopt, "IGNORED-01", "2026-07-21T11:00:01Z").has_value());
+    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!workflow.Observe(std::nullopt, "IGNORED-02", "2026-07-21T11:00:02Z").has_value());
+    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!workflow.Observe(std::nullopt, "IGNORED-03", "2026-07-21T11:00:03Z").has_value());
+
+    const auto work = workflow.TakeAssignedWork();
+    assert(work.has_value());
+    assert(work->work_id == kWorkId);
+    assert(!work->observation.has_value());
+    bool position_rejected = false;
+    try {
+        static_cast<void>(
+            vision::MakePositionDetectedMessage("PI-VISION-01", *work, "IGNORED-POSITION", "2026-07-21T11:00:03Z"));
+    } catch (const std::bad_optional_access&) {
+        position_rejected = true;
+    }
+    assert(position_rejected);
+    const auto barcode =
+        vision::MakeBarcodeDetectedMessage("PI-VISION-01", *work, "MSG-BOX-TIMEOUT", "2026-07-21T11:00:03Z");
+    const auto* payload = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(barcode);
+    assert(payload != nullptr);
+    assert(payload->recognition_status == "FAILED");
+    assert(payload->error_code == "ERR-VISION-BOX-NOT-DETECTED");
+    assert(payload->failure_stage == "BOX_DETECTION");
+
+    workflow.CompleteWork();
+    assert(!workflow.Observe(std::nullopt, "IGNORED-CLEAR", "2026-07-21T11:00:04Z").has_value());
+    assert(workflow.AssignWork(WorkCreated(std::string(kNextWorkId))));
+}
+
+void TestPreassignmentTimeoutDiscardsUnconfirmedObservation() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1, 1, 2);
+    assert(workflow.AssignWork(WorkCreated()));
+    assert(!workflow.Observe(Observation(), "IGNORED-BOX", "2026-07-21T11:00:01Z").has_value());
+    assert(!workflow.Observe(std::nullopt, "IGNORED-01", "2026-07-21T11:00:02Z").has_value());
+    assert(!workflow.Observe(std::nullopt, "IGNORED-02", "2026-07-21T11:00:03Z").has_value());
+
+    const auto work = workflow.TakeAssignedWork();
+    assert(work.has_value());
+    assert(!work->observation.has_value());
+    const auto barcode =
+        vision::MakeBarcodeDetectedMessage("PI-VISION-01", *work, "MSG-BOX-TIMEOUT", "2026-07-21T11:00:03Z");
+    const auto* payload = mqtt::GetPayload<mqtt::BarcodeDetectedPayload>(barcode);
+    assert(payload != nullptr);
+    assert(payload->error_code == "ERR-VISION-BOX-NOT-DETECTED");
+    assert(payload->failure_stage == "BOX_DETECTION");
 }
 
 void TestResultOutboxRetriesFromFirstUnsentPublication() {
@@ -293,13 +351,13 @@ void TestVisionControlLifecycle() {
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 7);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
-    assert(decision.clear_work);
+    assert(!decision.clear_work);
     assert(control.State() == device::DeviceOperatingState::kStopped);
 
     static_cast<void>(Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 8));
     decision = Handle(control, EmergencyStop(), 9);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kSuccess);
-    assert(decision.clear_work);
+    assert(!decision.clear_work);
     assert(control.State() == device::DeviceOperatingState::kEmergencyStop);
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStart), 10);
@@ -307,8 +365,11 @@ void TestVisionControlLifecycle() {
 
     decision = Handle(control, ControlCommand(mqtt::ControlCommand::kRecovery), 11);
     assert(ResponsePayload(decision).result == mqtt::CommandResult::kProcessing);
+    assert(decision.preserve_work);
     assert(control.State() == device::DeviceOperatingState::kRecovering);
-    assert(control.ConsumeResetRequest());
+    bool preserve_work = false;
+    assert(control.ConsumeResetRequest(&preserve_work));
+    assert(preserve_work);
     assert(!control.ConsumeResetRequest());
 
     control.SetReady(false);
@@ -337,7 +398,7 @@ void TestVisionControlLifecycle() {
     assert(!control.IsOperational());
 }
 
-void TestStopClearsPendingVisionWork() {
+void TestStopPreservesPendingVisionWork() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 1, 1);
     device::DeviceControlState control({
         .device_id = "PI-VISION-01",
@@ -350,9 +411,8 @@ void TestStopClearsPendingVisionWork() {
     assert(workflow.Observe(Observation("8801234567893"), "MSG-BOX-01", "2026-07-21T11:00:00Z").has_value());
     assert(workflow.AssignWork(WorkCreated()));
     const auto decision = Handle(control, ControlCommand(mqtt::ControlCommand::kStop), 2);
-    assert(decision.clear_work);
-    workflow.Reset();
-    assert(!workflow.TakeAssignedWork().has_value());
+    assert(!decision.clear_work);
+    assert(workflow.TakeAssignedWork().has_value());
     assert(!control.IsOperational());
 }
 
@@ -364,8 +424,10 @@ int main() {
     TestBarcodeSurvivesDetectionConfirmation();
     TestMissingBarcodeProducesFailedResult();
     TestBarcodeDecodeFailureIdentifiesStage();
+    TestPreassignmentTimeoutProducesBoxDetectionFailure();
+    TestPreassignmentTimeoutDiscardsUnconfirmedObservation();
     TestResultOutboxRetriesFromFirstUnsentPublication();
     TestVisionControlLifecycle();
-    TestStopClearsPendingVisionWork();
+    TestStopPreservesPendingVisionWork();
     return 0;
 }

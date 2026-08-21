@@ -1,5 +1,6 @@
 #include "logistics/central_server/sensor_detection.hpp"
 
+#include <algorithm>
 #include <utility>
 
 #include "logistics/contracts/mqtt_codec.hpp"
@@ -50,6 +51,23 @@ std::optional<std::string> SensorDetector::Evaluate(std::string_view device_id, 
 InputDetectionGate::InputDetectionGate(std::string input_device_id, const std::int32_t sensor_id)
     : input_device_id_(std::move(input_device_id)), sensor_id_(sensor_id) {}
 
+bool InputDetectionGate::ShouldStopConveyor(const contracts::mqtt::MqttMessage& message) {
+    const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
+    if (sensor == nullptr || message.source_id != input_device_id_ || sensor->sensor_id != sensor_id_ ||
+        !sensor->detection_status.has_value()) {
+        return false;
+    }
+    if (*sensor->detection_status != kDetectionDetected) {
+        stop_consumed_ = false;
+        return false;
+    }
+    if (stop_consumed_) {
+        return false;
+    }
+    stop_consumed_ = true;
+    return true;
+}
+
 bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& message, const bool process_accepts_work,
                                           const bool input_station_occupied) {
     const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
@@ -77,6 +95,46 @@ bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& me
 
 void InputDetectionGate::Retry() noexcept {
     consumed_ = false;
+}
+
+void InputDetectionGate::RetryStop() noexcept {
+    stop_consumed_ = false;
+}
+
+SortingDetectionGate::SortingDetectionGate(std::string sorting_device_id)
+    : sorting_device_id_(std::move(sorting_device_id)) {}
+
+std::optional<std::string> SortingDetectionGate::ShouldStop(const contracts::mqtt::MqttMessage& message,
+                                                            const bool process_running,
+                                                            const std::vector<WorkProcessSnapshot>& active_works) {
+    const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
+    if (sensor == nullptr || message.source_id != sorting_device_id_ || !sensor->detection_status.has_value()) {
+        return std::nullopt;
+    }
+    if (*sensor->detection_status == kDetectionClear) {
+        if (consumed_sensor_id_ == sensor->sensor_id) {
+            consumed_sensor_id_.reset();
+        }
+        return std::nullopt;
+    }
+    if (*sensor->detection_status != kDetectionDetected || consumed_sensor_id_.has_value() || !process_running) {
+        return std::nullopt;
+    }
+
+    const std::string destination = std::to_string(sensor->sensor_id);
+    const auto work = std::ranges::find_if(active_works, [&destination](const WorkProcessSnapshot& candidate) {
+        return candidate.stage == WorkStage::kSorting && candidate.destination == destination;
+    });
+    if (work == active_works.end()) {
+        return std::nullopt;
+    }
+
+    consumed_sensor_id_ = sensor->sensor_id;
+    return work->work_id;
+}
+
+void SortingDetectionGate::Retry() noexcept {
+    consumed_sensor_id_.reset();
 }
 
 }  // namespace logistics::central_server

@@ -390,9 +390,21 @@ void TestControllerErrorsDistinguishRejectionFromFailure() {
     assert(failed.error_code == "ERR-MOTOR");
 }
 
+void TestSystemStartKeepsConveyorStopped() {
+    Fixture fixture;
+
+    const auto start = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart));
+    const auto restart = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRestart));
+
+    assert(start.status == SortingCommandStatus::kAcknowledged);
+    assert(restart.status == SortingCommandStatus::kAcknowledged);
+    assert(fixture.backend->writes.empty());
+}
+
 void TestStartConfiguresSpeedBeforeStartingConveyor() {
     Fixture fixture;
-    const auto default_speed_result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart));
+    const auto default_speed_result =
+        fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor"));
     assert(default_speed_result.Succeeded());
     assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
     assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
@@ -403,7 +415,8 @@ void TestStartConfiguresSpeedBeforeStartingConveyor() {
 
     mqtt::Json params = mqtt::Json::object();
     params["speed"] = 50;
-    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, {}, params));
+    const auto result =
+        fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor", params));
     assert(result.Succeeded());
     assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
     assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
@@ -426,12 +439,13 @@ void TestStartResendsCachedSpeedAfterControllerRestart() {
     Fixture fixture;
     mqtt::Json params = mqtt::Json::object();
     params["speed"] = 70;
-    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, {}, params)).Succeeded());
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor", params))
+               .Succeeded());
     fixture.PushOperationResult();
     fixture.PushOperationResult();
 
     fixture.node->ResetControllerHeartbeatMonitor();
-    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart)).Succeeded());
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor")).Succeeded());
 
     const auto command = fixture.LastCommand();
     assert(command.command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
@@ -470,6 +484,34 @@ void TestEmergencyStopPreemptsPendingCommandAndIsNotRetried() {
 
     fixture.session->Tick(std::chrono::milliseconds{ UART_ACK_TIMEOUT_MS * 4U });
     assert(fixture.backend->writes.size() == 2U);
+}
+
+void TestEmergencyStopReportsActiveCycleFailureBeforeRecoveryClearsIt() {
+    Fixture fixture;
+    ActivateCycle(fixture);
+
+    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).status == SortingCommandStatus::kSentNoReply);
+    fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_ESTOP_LATCHED, 1U);
+
+    const auto error_it = std::find_if(fixture.reports.begin(), fixture.reports.end(), [](const SortingReport& report) {
+        return report.message_type == mqtt::MessageType::kErrorOccurred;
+    });
+    assert(error_it != fixture.reports.end());
+    const auto response_it = std::find_if(
+        fixture.reports.begin(), fixture.reports.end(),
+        [](const SortingReport& report) { return report.message_type == mqtt::MessageType::kCommandResponse; });
+    assert(response_it != fixture.reports.end());
+    assert(error_it < response_it);
+    const auto& error = ReportPayload<mqtt::ErrorOccurredPayload>(*error_it);
+    assert(error.job_id == std::optional<std::string>(kWorkId));
+    assert(error.error_code == "ERR-SORTING-CYCLE-ABORTED");
+    assert(fixture.node->ActiveWorkId() == kWorkId);
+
+    assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery)).status ==
+           SortingCommandStatus::kSentNoReply);
+    fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_RESET_COMPLETE, 1U);
+    assert(!fixture.node->HasActiveCycle());
+    assert(fixture.node->ActiveWorkId().empty());
 }
 
 void TestSafetyRecoveryUsesOneWayDeviceReset() {
@@ -529,6 +571,30 @@ void TestSafetyCommandsCompleteWithOriginalRequestId() {
     assert(recoveryFixture.reports.size() == 2U);
 }
 
+void TestRepeatedSafetyEventStillConfirmsNewPendingCommand() {
+    Fixture fixture;
+    ActivateCycle(fixture);
+    fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_ESTOP_LATCHED, 1U);
+
+    const auto result = fixture.node->HandleMqttCommand(MakeEmergencyStop());
+    assert(result.status == SortingCommandStatus::kSentNoReply);
+    fixture.PushControllerEvent(APP_EVENT_SAFETY, SAFETY_EVENT_ESTOP_LATCHED, 1U);
+
+    assert(!fixture.node->HasPendingSafetyCommand());
+    const auto error_count = std::count_if(
+        fixture.reports.begin(), fixture.reports.end(),
+        [](const SortingReport& report) { return report.message_type == mqtt::MessageType::kErrorOccurred; });
+    assert(error_count == 1U);
+    assert(fixture.reports.size() == 3U);
+    const auto response_it = std::find_if(
+        fixture.reports.begin(), fixture.reports.end(),
+        [](const SortingReport& report) { return report.message_type == mqtt::MessageType::kCommandResponse; });
+    assert(response_it != fixture.reports.end());
+    const auto& response = ReportPayload<mqtt::CommandResponsePayload>(*response_it);
+    assert(response.request_id == "REQ-ESTOP-01");
+    assert(response.result == mqtt::CommandResult::kSuccess);
+}
+
 void TestSafetyAndHeartbeatTimeoutsAreReported() {
     Fixture fixture;
     static_cast<void>(fixture.node->HandleMqttCommand(MakeEmergencyStop()));
@@ -559,6 +625,8 @@ void TestEmergencyHeartbeatIsSafetyStateNotError() {
 
 void TestReturnHomeAndCycleCompletePublishCompletion() {
     Fixture fixture;
+    fixture.PushHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE);
+    fixture.reports.clear();
     ActivateCycle(fixture);
     const std::uint16_t cycle_id = fixture.node->ActiveCycleId();
 
@@ -578,9 +646,9 @@ void TestReturnHomeAndCycleCompletePublishCompletion() {
     const auto& completed = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[0]);
     assert(completed.current_state == "CYCLE_COMPLETE");
     assert(completed.job_id == std::optional<std::string>(kWorkId));
-    const auto& idle = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
-    assert(idle.current_state == "IDLE");
-    assert(!idle.job_id.has_value());
+    const auto& running = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports[1]);
+    assert(running.current_state == "RUNNING");
+    assert(!running.job_id.has_value());
 }
 
 void TestReconnectStatusQueryPublishesControllerState() {
@@ -594,8 +662,21 @@ void TestReconnectStatusQueryPublishesControllerState() {
     assert(!fixture.session->HasPendingCommand());
     assert(fixture.reports.size() == 1U);
     const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
-    assert(status.current_state == "IDLE");
+    assert(status.current_state == "STOPPED");
     assert(!status.job_id.has_value());
+}
+
+void TestGateHomeStatusDoesNotOverwriteRunningConveyor() {
+    Fixture fixture;
+    fixture.PushHeartbeat(UART_DEVICE_RUNNING, UART_ERROR_NONE);
+    fixture.reports.clear();
+
+    assert(fixture.node->RequestControllerStatus().Succeeded());
+    fixture.PushSortingStatus(UART_SORTING_GATE_HOME, UART_SORTING_CYCLE_ID_NONE, UART_SORTING_DESTINATION_NONE);
+
+    assert(fixture.reports.size() == 1U);
+    const auto& status = ReportPayload<mqtt::DeviceStatusPayload>(fixture.reports.front());
+    assert(status.current_state == "RUNNING");
 }
 
 void TestReconnectStatusRejectsDestinationMappingMismatch() {
@@ -735,18 +816,22 @@ int main() {
     TestBusyPreservesCommandOrderAtNodeBoundary();
     TestNackDoesNotActivateCycleAndReportsFailure();
     TestControllerErrorsDistinguishRejectionFromFailure();
+    TestSystemStartKeepsConveyorStopped();
     TestStartConfiguresSpeedBeforeStartingConveyor();
     TestStartResendsCachedSpeedAfterControllerRestart();
     TestSpeedNotConfiguredErrorIsDistinctFromMalformedPayload();
     TestEmergencyStopPreemptsPendingCommandAndIsNotRetried();
+    TestEmergencyStopReportsActiveCycleFailureBeforeRecoveryClearsIt();
     TestSafetyRecoveryUsesOneWayDeviceReset();
     TestPendingSafetyCommandCannotBeOverwritten();
     TestSystemTargetUsesSafetyRecovery();
     TestSafetyCommandsCompleteWithOriginalRequestId();
+    TestRepeatedSafetyEventStillConfirmsNewPendingCommand();
     TestSafetyAndHeartbeatTimeoutsAreReported();
     TestEmergencyHeartbeatIsSafetyStateNotError();
     TestReturnHomeAndCycleCompletePublishCompletion();
     TestReconnectStatusQueryPublishesControllerState();
+    TestGateHomeStatusDoesNotOverwriteRunningConveyor();
     TestReconnectStatusRejectsDestinationMappingMismatch();
     TestConveyorStatusUsesHeartbeatStateNames();
     TestSensorStatusPublishesEveryDistanceMeasurement();

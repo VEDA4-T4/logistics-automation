@@ -28,6 +28,7 @@ public:
     explicit MqttMessageProcessor(std::string device_id);
 
     [[nodiscard]] IncomingMqttMessage DecodeCommand(std::string_view topic, std::string_view payload);
+    void ForgetCommand(std::string_view message_id);
 
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeHeartbeat(
         std::string message_id, std::string timestamp, std::string current_state, std::uint64_t uptime,

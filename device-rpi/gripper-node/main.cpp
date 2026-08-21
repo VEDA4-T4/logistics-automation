@@ -129,10 +129,18 @@ void UpdateDeviceStatus(const GripperReport& report, DeviceStatus& device_status
     }
 }
 
+[[nodiscard]] bool PublishOutbound(MqttNodeClient& mqtt_client, const OutboundMessage& outbound);
+
 [[nodiscard]] bool EnqueueOutbound(std::deque<OutboundMessage>& outbox, const GripperReport& report,
                                    std::string_view device_id, std::string_view message_session_id,
-                                   std::uint64_t& message_sequence, DeviceStatus& device_status) {
+                                   std::uint64_t& message_sequence, DeviceStatus& device_status,
+                                   MqttNodeClient* durable_client = nullptr) {
     UpdateDeviceStatus(report, device_status);
+    auto outbound = MakeOutboundMessage(report, device_id, message_session_id, message_sequence);
+    if (durable_client != nullptr && report.channel != GripperReportChannel::kStatus &&
+        PublishOutbound(*durable_client, outbound)) {
+        return true;
+    }
     if (outbox.size() >= kOutboundQueueCapacity) {
         // Status snapshots are the only safely droppable messages; command
         // responses and cycle events must survive a broker outage.
@@ -145,7 +153,7 @@ void UpdateDeviceStatus(const GripperReport& report, DeviceStatus& device_status
         }
         outbox.erase(stale_status);
     }
-    outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
+    outbox.push_back(std::move(outbound));
     return true;
 }
 
@@ -224,8 +232,8 @@ int RunGripperDaemon(int argc, char* argv[]) {
     std::uint64_t message_sequence = 1U;
 
     const auto queue_report = [&](const GripperReport& report) {
-        static_cast<void>(
-            EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence, *device_status));
+        static_cast<void>(EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence,
+                                          *device_status, &mqtt_client));
     };
     gripper_node.SetReportHandler(queue_report);
     uart_session.SetSpontaneousFrameHandler(
@@ -245,9 +253,11 @@ int RunGripperDaemon(int argc, char* argv[]) {
             std::clog << "[gripper][mqtt][INFO] non-control command received: message_id=" << message.message_id
                       << '\n';
         }
-        if (!command_inbox.Push(message)) {
+        const bool accepted = command_inbox.Push(message);
+        if (!accepted) {
             std::cerr << "[gripper][mqtt][ERROR] command queue full; command rejected: " << message.message_id << '\n';
         }
+        return accepted;
     });
 
     device_status->SetUartConnected(false);

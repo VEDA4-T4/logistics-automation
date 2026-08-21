@@ -850,7 +850,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 }
                 process_control_panel_->setCommandPending(command);
 
-                const auto timeout = logistics::contracts::mqtt::CommandResponseTimeout(command);
+                const auto timeout = logistics::contracts::mqtt::CommandResponseWatchdogTimeout(command);
                 command_response_timer_->start(
                     static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
             });
@@ -1538,7 +1538,7 @@ void MainWindow::handleMqttMessage(const QString& topic, const QJsonObject& enve
     }
 
     process_control_panel_->setCommandProgress(response.command, response.result, detail);
-    const auto timeout = logistics::contracts::mqtt::CommandResponseTimeout(response.command);
+    const auto timeout = logistics::contracts::mqtt::CommandResponseWatchdogTimeout(response.command);
     command_response_timer_->start(
         static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
 }

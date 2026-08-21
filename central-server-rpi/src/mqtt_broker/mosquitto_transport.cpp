@@ -1,10 +1,12 @@
 #include <mosquitto.h>
 
+#include <atomic>
 #include <climits>
 #include <cstddef>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "logistics/central_server/mqtt_transport.hpp"
 
@@ -34,11 +36,12 @@ private:
     return library;
 }
 
-[[nodiscard]] MqttOperationResult MakeResult(int code) {
+[[nodiscard]] MqttOperationResult MakeResult(int code, int packet_id = 0) {
     const char* description = code == MOSQ_ERR_SUCCESS ? nullptr : mosquitto_strerror(code);
     return {
         .code = code,
         .message = description == nullptr ? std::string{} : std::string(description),
+        .packet_id = packet_id,
     };
 }
 
@@ -89,6 +92,8 @@ public:
         mosquitto_connect_callback_set(client_, &MosquittoTransport::OnConnected);
         mosquitto_disconnect_callback_set(client_, &MosquittoTransport::OnDisconnected);
         mosquitto_message_callback_set(client_, &MosquittoTransport::OnMessage);
+        mosquitto_publish_callback_set(client_, &MosquittoTransport::OnPublish);
+        mosquitto_subscribe_callback_set(client_, &MosquittoTransport::OnSubscribe);
         mosquitto_log_callback_set(client_, &MosquittoTransport::OnLog);
 
         int result = mosquitto_int_option(client_, MOSQ_OPT_PROTOCOL_VERSION, MQTT_PROTOCOL_V311);
@@ -132,18 +137,40 @@ public:
         return MakeResult(MOSQ_ERR_SUCCESS);
     }
 
-    void Stop() noexcept override {
+    void Stop(bool graceful = true) noexcept override {
         if (client_ == nullptr) {
             return;
         }
 
-        static_cast<void>(mosquitto_disconnect(client_));
+        reconnect_requested_ = false;
+        stopping_ = true;
+        if (graceful) {
+            static_cast<void>(mosquitto_disconnect(client_));
+        }
         if (loop_started_) {
-            static_cast<void>(mosquitto_loop_stop(client_, false));
+            static_cast<void>(mosquitto_loop_stop(client_, !graceful));
             loop_started_ = false;
         }
         mosquitto_destroy(client_);
         client_ = nullptr;
+    }
+
+    [[nodiscard]] MqttOperationResult RequestReconnect() override {
+        if (client_ == nullptr) {
+            return {
+                .code = MOSQ_ERR_NO_CONN,
+                .message = "Mosquitto client is not running",
+            };
+        }
+        if (!connected_.load()) {
+            return MakeResult(mosquitto_reconnect_async(client_));
+        }
+        reconnect_requested_ = true;
+        const auto result = MakeResult(mosquitto_disconnect(client_));
+        if (!result) {
+            reconnect_requested_ = false;
+        }
+        return result;
     }
 
     [[nodiscard]] MqttOperationResult Publish(std::string_view topic, std::string_view payload, int qos,
@@ -162,9 +189,10 @@ public:
         }
 
         const std::string topic_text(topic);
-        const int result = mosquitto_publish(client_, nullptr, topic_text.c_str(), static_cast<int>(payload.size()),
+        int packet_id = 0;
+        const int result = mosquitto_publish(client_, &packet_id, topic_text.c_str(), static_cast<int>(payload.size()),
                                              payload.data(), qos, retain);
-        return MakeResult(result);
+        return MakeResult(result, packet_id);
     }
 
     [[nodiscard]] MqttOperationResult Subscribe(std::string_view topic_filter, int qos) override {
@@ -176,12 +204,17 @@ public:
         }
 
         const std::string topic_text(topic_filter);
-        return MakeResult(mosquitto_subscribe(client_, nullptr, topic_text.c_str(), qos));
+        int packet_id = 0;
+        return MakeResult(mosquitto_subscribe(client_, &packet_id, topic_text.c_str(), qos), packet_id);
     }
 
 private:
     static void OnConnected(mosquitto*, void* object, int reason_code) {
         auto* self = static_cast<MosquittoTransport*>(object);
+        if (self != nullptr) {
+            self->connected_ = reason_code == 0;
+            self->stopping_ = false;
+        }
         if (self != nullptr && self->callbacks_.connected) {
             self->callbacks_.connected(reason_code, ConnectionReason(reason_code));
         }
@@ -189,6 +222,10 @@ private:
 
     static void OnDisconnected(mosquitto*, void* object, int reason_code) {
         auto* self = static_cast<MosquittoTransport*>(object);
+        if (self == nullptr) {
+            return;
+        }
+        self->connected_ = false;
         if (self != nullptr && self->callbacks_.disconnected) {
             const char* reason = mosquitto_strerror(reason_code);
             self->callbacks_.disconnected(reason_code, reason == nullptr ? std::string_view("unknown disconnect reason")
@@ -207,7 +244,33 @@ private:
             payload == nullptr || message->payloadlen <= 0
                 ? std::string_view{}
                 : std::string_view(payload, static_cast<std::size_t>(message->payloadlen));
-        self->callbacks_.message_received(message->topic, payload_view);
+        self->callbacks_.message_received(message->topic, payload_view, message->qos, message->retain != 0);
+    }
+
+    static void OnPublish(mosquitto*, void* object, int packet_id) {
+        auto* self = static_cast<MosquittoTransport*>(object);
+        if (self != nullptr && self->callbacks_.publish_acknowledged) {
+            self->callbacks_.publish_acknowledged(packet_id);
+        }
+        if (self->reconnect_requested_.exchange(false) && !self->stopping_.load() && self->client_ != nullptr) {
+            const int result = mosquitto_reconnect_async(self->client_);
+            if (result != MOSQ_ERR_SUCCESS && self->callbacks_.log_received) {
+                self->callbacks_.log_received(MqttTransportLogLevel::kError,
+                                              "Mosquitto reconnect after forced disconnect failed");
+            }
+        }
+    }
+
+    static void OnSubscribe(mosquitto*, void* object, int packet_id, int qos_count, const int* granted_qos) {
+        auto* self = static_cast<MosquittoTransport*>(object);
+        if (self == nullptr || !self->callbacks_.subscribe_acknowledged || qos_count < 0) {
+            return;
+        }
+        std::vector<int> granted;
+        if (granted_qos != nullptr) {
+            granted.assign(granted_qos, granted_qos + qos_count);
+        }
+        self->callbacks_.subscribe_acknowledged(packet_id, granted);
     }
 
     static void OnLog(mosquitto*, void* object, int level, const char* message) {
@@ -220,6 +283,9 @@ private:
     MqttTransportCallbacks callbacks_;
     mosquitto* client_{ nullptr };
     bool loop_started_{ false };
+    std::atomic_bool connected_{ false };
+    std::atomic_bool reconnect_requested_{ false };
+    std::atomic_bool stopping_{ false };
 };
 
 }  // namespace

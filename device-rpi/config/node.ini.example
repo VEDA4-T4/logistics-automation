@@ -14,7 +14,10 @@ ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
-clean_session=true
+clean_session=false
+# Root directory; each node stores durable MQTT records under <root>/<device_id>.
+publish_spool_directory=/var/lib/logistics/mqtt-spool
+publish_spool_maximum_bytes=52428800
 
 [log_upload]
 enabled=true
