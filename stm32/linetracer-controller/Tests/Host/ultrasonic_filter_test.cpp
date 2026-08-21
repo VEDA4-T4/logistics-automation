@@ -39,8 +39,7 @@ void TestAllDirectionSafetyPolicy() {
     constexpr auto kAllObstacles = static_cast<std::uint8_t>(
         SENSOR_LOGIC_DIRECTION_FRONT | SENSOR_LOGIC_DIRECTION_LEFT | SENSOR_LOGIC_DIRECTION_RIGHT);
     constexpr auto kAllUltrasonicErrors = static_cast<std::uint32_t>(
-        SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT |
-        SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
+        SENSOR_LOGIC_ERROR_ULTRASONIC_FRONT | SENSOR_LOGIC_ERROR_ULTRASONIC_LEFT | SENSOR_LOGIC_ERROR_ULTRASONIC_RIGHT);
     constexpr auto kEnabledObstacles = static_cast<std::uint8_t>(
         SENSOR_LOGIC_DIRECTION_FRONT | SENSOR_LOGIC_DIRECTION_LEFT | SENSOR_LOGIC_DIRECTION_RIGHT);
 
