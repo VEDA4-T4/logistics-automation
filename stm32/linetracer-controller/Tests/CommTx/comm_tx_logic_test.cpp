@@ -7,6 +7,7 @@ extern "C" {
 #include "comm_tx_logic.h"
 #include "logistics/contracts/uart/linetracer_commands.h"
 #include "logistics/contracts/uart_codec.h"
+#include "sensor_config.h"
 }
 
 namespace {
@@ -111,6 +112,32 @@ void TestFaultMayBeReportedWithoutActiveJob() {
     assert(frame.payload[UART_EVENT_ID_INDEX] == UART_LINETRACER_EVENT_FAULT);
     assert(frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX] == UART_ERROR_EMERGENCY_STOP);
     assert(UART_IS_VALID_LINETRACER_EVENT_PAYLOAD(frame.payload, frame.length) != 0U);
+}
+
+void TestSensorStatusUsesAsyncSequenceAndDistance() {
+    comm_tx_logic_t logic{};
+    app_tx_event_t event{};
+    std::array<std::uint8_t, UART_MAX_FRAME_SIZE> encoded{};
+    std::size_t length{};
+
+    event.type = APP_TX_EVENT_SENSOR_STATUS;
+    event.sensor_id = 1U;
+    event.sensor_state = UART_SENSOR_OK;
+    event.sensor_distance_cm = 4U;
+
+    CommTxLogic_Init(&logic);
+    assert(CommTxLogic_EncodeEvent(&logic, &event, encoded.data(), encoded.size(), &length) == UART_CODEC_OK);
+    const auto frame = Decode(encoded, length);
+    assert(frame.sequence == 0U);
+    assert(frame.command == UART_CMD_SENSOR_STATUS);
+    assert(frame.length == UART_SENSOR_STATUS_PAYLOAD_SIZE);
+    assert(frame.payload[UART_SENSOR_ID_INDEX] == 1U);
+    assert(frame.payload[UART_SENSOR_STATE_INDEX] == UART_SENSOR_OK);
+    const std::uint16_t distance_cm =
+        static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_LOW_INDEX]) |
+        static_cast<std::uint16_t>(static_cast<std::uint16_t>(frame.payload[UART_SENSOR_DISTANCE_HIGH_INDEX]) << 8U);
+    assert(distance_cm == 4U);
+    assert(logic.next_sequence == 1U);
 }
 
 void TestHeartbeatContainsUptimeStateSensorsAndError() {
@@ -227,7 +254,7 @@ void TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags() {
     CommTxLogic_InitObservedState(&state);
     snapshot.line_state = LINETRACER_LINE_CENTERED;
     snapshot.load_state = UART_LINETRACER_LOAD_PRESENT;
-    snapshot.ultrasonic_front_mm = 100U;
+    snapshot.ultrasonic_front_mm = SENSOR_OBSTACLE_ON_MM;
     snapshot.ultrasonic_left_mm = 500U;
     snapshot.ultrasonic_right_mm = 500U;
     snapshot.event_flags = APP_SENSOR_EVENT_OBSTACLE;
@@ -239,6 +266,25 @@ void TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags() {
     assert((heartbeat.sensor_flags & UART_LINETRACER_FLAG_LOAD_PRESENT) != 0U);
     assert(heartbeat.load_state == UART_LINETRACER_LOAD_PRESENT);
     assert(heartbeat.error_code == UART_ERROR_SENSOR);
+}
+
+void TestDisabledRearSensorDoesNotBlockObstacleClear() {
+    comm_tx_observed_state_t state{};
+    app_sensor_snapshot_t snapshot{};
+    comm_tx_heartbeat_t heartbeat{};
+
+    CommTxLogic_InitObservedState(&state);
+    snapshot.ultrasonic_front_mm = SENSOR_OBSTACLE_ON_MM;
+    snapshot.ultrasonic_left_mm = 500U;
+    snapshot.ultrasonic_right_mm = 500U;
+    CommTxLogic_ObserveSensor(&state, &snapshot);
+    assert((state.sensor_flags & UART_LINETRACER_FLAG_OBSTACLE_DETECTED) != 0U);
+
+    snapshot.ultrasonic_front_mm = 500U;
+    CommTxLogic_ObserveSensor(&state, &snapshot);
+    CommTxLogic_MakeHeartbeat(&state, 6000U, UART_ERROR_NONE, &heartbeat);
+    assert((heartbeat.sensor_flags & UART_LINETRACER_FLAG_OBSTACLE_DETECTED) == 0U);
+    assert(heartbeat.error_code == UART_ERROR_NONE);
 }
 
 void TestObservedFaultPersistsUntilSuccessfulReset() {
@@ -294,12 +340,14 @@ int main() {
     TestStatusResponseContainsCurrentState();
     TestStartedEventUsesAsyncSequence();
     TestFaultMayBeReportedWithoutActiveJob();
+    TestSensorStatusUsesAsyncSequenceAndDistance();
     TestHeartbeatContainsUptimeStateSensorsAndError();
     TestHeartbeatAllowsIdleAndRejectsUnknownFlags();
     TestAsyncSequenceWraps();
     TestEmergencyEventPriorityPrecedesRegularEvents();
     TestControlSnapshotOverridesBestEffortObservedState();
     TestExistingSensorSnapshotUpdatesBestEffortHeartbeatFlags();
+    TestDisabledRearSensorDoesNotBlockObstacleClear();
     TestObservedFaultPersistsUntilSuccessfulReset();
     TestUnloadCompletionClearsObservedActiveRoute();
     return 0;

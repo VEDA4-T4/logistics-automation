@@ -67,6 +67,70 @@ int main() {
                    { QStringLiteral("currentState"), QStringLiteral("RUNNING") } }));
     assert(result.handled && !result.applied && result.error.isEmpty());
 
+    OperationalLogState uart_status_state;
+    result = uart_status_state.applyEnvelope(
+        QStringLiteral("qt/control-center/status"),
+        Envelope(QStringLiteral("UART-STATUS-1"), QStringLiteral("DEVICE_STATUS"), QStringLiteral("PI-LT-01"),
+                 { { QStringLiteral("status"), QStringLiteral("UART_ERROR") },
+                   { QStringLiteral("currentState"), QStringLiteral("UART_DISCONNECTED") },
+                   { QStringLiteral("errorCode"), QStringLiteral("ERR-UART-DISCONNECTED") } }));
+    assert(result.handled && result.applied && result.error.isEmpty());
+    assert(uart_status_state.entries().size() == 1);
+
+    result = uart_status_state.applyEnvelope(
+        QStringLiteral("qt/control-center/status"),
+        Envelope(QStringLiteral("UART-HEARTBEAT-1"), QStringLiteral("DEVICE_STATUS"), QStringLiteral("PI-LT-01"),
+                 { { QStringLiteral("status"), QStringLiteral("ONLINE") },
+                   { QStringLiteral("currentState"), QStringLiteral("UART_DISCONNECTED") },
+                   { QStringLiteral("errorCode"), QStringLiteral("ERR-UART-DISCONNECTED") } }));
+    assert(result.handled && !result.applied && result.error.isEmpty());
+    assert(uart_status_state.entries().size() == 1);
+
+    result = uart_status_state.applyEnvelope(
+        QStringLiteral("qt/control-center/error"),
+        Envelope(QStringLiteral("UART-TIMEOUT-ERROR-1"), QStringLiteral("ERROR_OCCURRED"), QStringLiteral("PI-LT-01"),
+                 { { QStringLiteral("errorCode"), QStringLiteral("ERR-UART-TIMEOUT") },
+                   { QStringLiteral("errorLevel"), QStringLiteral("ERROR") },
+                   { QStringLiteral("currentState"), QStringLiteral("FAULT") },
+                   { QStringLiteral("message"), QStringLiteral("UART timeout") } }));
+    assert(result.handled && result.applied && result.error.isEmpty());
+    assert(uart_status_state.entries().size() == 2);
+
+    result = uart_status_state.applyEnvelope(
+        QStringLiteral("qt/control-center/status"),
+        Envelope(QStringLiteral("UART-TIMEOUT-STATUS-1"), QStringLiteral("DEVICE_STATUS"), QStringLiteral("PI-LT-01"),
+                 { { QStringLiteral("status"), QStringLiteral("ONLINE") },
+                   { QStringLiteral("currentState"), QStringLiteral("FAULT") },
+                   { QStringLiteral("errorCode"), QStringLiteral("ERR-UART-TIMEOUT") } }));
+    assert(result.handled && !result.applied && result.error.isEmpty());
+    assert(uart_status_state.entries().size() == 2);
+
+    result = uart_status_state.applyEnvelope(
+        QStringLiteral("qt/control-center/error"),
+        Envelope(QStringLiteral("UART-TIMEOUT-ERROR-2"), QStringLiteral("ERROR_OCCURRED"), QStringLiteral("PI-LT-01"),
+                 { { QStringLiteral("errorCode"), QStringLiteral("ERR-UART-TIMEOUT") },
+                   { QStringLiteral("errorLevel"), QStringLiteral("ERROR") },
+                   { QStringLiteral("currentState"), QStringLiteral("FAULT") },
+                   { QStringLiteral("message"), QStringLiteral("duplicate UART timeout") } }));
+    assert(result.handled && !result.applied && result.error.isEmpty());
+    assert(uart_status_state.entries().size() == 2);
+
+    result = uart_status_state.applyEnvelope(
+        QStringLiteral("qt/control-center/status"),
+        Envelope(QStringLiteral("UART-RECOVERED-1"), QStringLiteral("DEVICE_STATUS"), QStringLiteral("PI-LT-01"),
+                 { { QStringLiteral("status"), QStringLiteral("ONLINE") },
+                   { QStringLiteral("currentState"), QStringLiteral("IDLE") } }));
+    assert(result.handled && !result.applied && result.error.isEmpty());
+
+    result = uart_status_state.applyEnvelope(
+        QStringLiteral("qt/control-center/status"),
+        Envelope(QStringLiteral("UART-STATUS-2"), QStringLiteral("DEVICE_STATUS"), QStringLiteral("PI-LT-01"),
+                 { { QStringLiteral("status"), QStringLiteral("UART_ERROR") },
+                   { QStringLiteral("currentState"), QStringLiteral("UART_DISCONNECTED") },
+                   { QStringLiteral("errorCode"), QStringLiteral("ERR-UART-DISCONNECTED") } }));
+    assert(result.handled && result.applied && result.error.isEmpty());
+    assert(uart_status_state.entries().size() == 3);
+
     result = state.applyEnvelope(
         QStringLiteral("qt/control-center/error"),
         Envelope(QStringLiteral("STALE-ERROR"), QStringLiteral("ERROR_OCCURRED"), QStringLiteral("PI-SORTING-01"),
