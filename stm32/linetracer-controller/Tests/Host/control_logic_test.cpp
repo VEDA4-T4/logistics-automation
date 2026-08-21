@@ -1,6 +1,8 @@
 #include "control_logic.h"
 
+#include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 
 void RunMotorControlLogicTests();
@@ -537,15 +539,7 @@ void AdvanceToTargetSearch(control_context_t& context, route_action_t action, st
     (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, started_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
 
-    if (action == ROUTE_ACTION_TURN_AROUND) {
-        /* A U-turn accepts 100 immediately; a stable 000/60 ms interval is not required. */
-        (void)ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
-                                                       started_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 1U);
-        assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
-        return;
-    }
-
-    /* Both 90-degree directions require a stable 000 source-line gap. */
+    /* Every pivot direction requires a stable 000 source-line gap. */
     const auto clear_at = started_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 10U;
     (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, clear_at);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
@@ -789,42 +783,87 @@ void TestCenteredSampleCannotCompleteTurnWithoutDirectionalEdge() {
     assert(context.junction_guard_active != 0U);
 }
 
-void TestTurnAroundCompletesOnStableRightTargetSide() {
-    control_context_t context{};
-    StartRoute(context, UART_LINETRACER_POSITION_DEST_B, UART_LINETRACER_ROUTE_B, 409U, 0U);
-    context.state = LINETRACER_CONTROL_TURNING_AT_PICKUP;
-    context.pending_route_action = ROUTE_ACTION_TURN_AROUND;
-    AdvanceToTargetSearch(context, ROUTE_ACTION_TURN_AROUND, 100U);
-    const auto search_at = 100U + (2U * CONTROL_TURN_SOURCE_CLEAR_MS) + 10U;
-    assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_JUNCTION, search_at, search_at) != 0U);
+void TestTurnAroundHandsFirstLeftOrCenterTargetToPid() {
+    const std::array<std::array<std::uint8_t, 3>, 2> target_samples = { {
+        { 1U, 0U, 0U },
+        { 0U, 1U, 0U },
+    } };
 
-    /* 000 is line loss and must not complete the turn. */
-    auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, search_at + 40U);
+    for (std::size_t index = 0U; index < target_samples.size(); ++index) {
+        control_context_t context{};
+        StartRoute(context, UART_LINETRACER_POSITION_DEST_B, UART_LINETRACER_ROUTE_B,
+                   static_cast<std::uint32_t>(409U + index), 0U);
+        context.state = LINETRACER_CONTROL_TURNING_AT_PICKUP;
+        context.pending_route_action = ROUTE_ACTION_TURN_AROUND;
+        AdvanceToTargetSearch(context, ROUTE_ACTION_TURN_AROUND, 100U);
+        const auto search_at = 100U + (2U * CONTROL_TURN_SOURCE_CLEAR_MS) + 10U;
+        assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_JUNCTION, search_at, search_at) != 0U);
+
+        /* 000 and the old right-side edge cannot finish the U-turn. */
+        auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, search_at + 40U);
+        assert(result.maneuver_completed == 0U);
+        result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, search_at + 50U);
+        assert(result.maneuver_completed == 0U);
+        assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
+
+        /* The first 100 or 010 sample stops pivoting and is handed directly to normal PID. */
+        const auto completed_at = search_at + 60U;
+        result = ControlLogic_ProcessLineSampleWithCenter(&context, target_samples[index][0], target_samples[index][1],
+                                                          target_samples[index][2], completed_at);
+        assert(result.maneuver_completed != 0U);
+        assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
+        assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
+
+        const auto after_guard = completed_at + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U;
+        assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, search_at, after_guard) != 0U);
+        assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, completed_at + 1U, after_guard) == 0U);
+    }
+}
+
+void TestPickupTurnAroundRejectsReversePhaseLineSamples() {
+    control_context_t context{};
+    constexpr std::uint32_t kLoadDetectedAtMs = 100U;
+    constexpr std::uint32_t kTurnStartedAtMs = kLoadDetectedAtMs + CONTROL_PICKUP_REVERSE_MS;
+
+    ControlLogic_Init(&context, 0U);
+    context.state = LINETRACER_CONTROL_WAITING_LOAD;
+    context.current_position = UART_LINETRACER_POSITION_DEST_A;
+    context.active_route = UART_LINETRACER_ROUTE_A;
+    context.active_job_id = 418U;
+    context.route_active = 1U;
+    assert(RoutePlanner_Create(context.current_position, context.active_route, &context.route_plan) != 0U);
+    context.route_plan.phase = ROUTE_PHASE_WAITING_LOAD;
+    context.route_plan.loaded = 0U;
+
+    assert(ControlLogic_HandleLoadOn(&context, kLoadDetectedAtMs) == ROUTE_ACTION_TURN_AROUND);
+    assert(ControlLogic_StartPendingManeuver(&context, kLoadDetectedAtMs) != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_PICKUP_REVERSE);
+    assert(ControlLogic_UpdateTimedManeuver(&context, kTurnStartedAtMs) != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+
+    /* Reverse-phase 000 and 100 samples cannot advance or complete the U-turn. */
+    auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, kTurnStartedAtMs - 20U);
+    assert(result.maneuver_completed == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U, kTurnStartedAtMs - 10U);
+    assert(result.maneuver_completed == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+
+    /* Only post-reverse 000 samples establish the common source-line gap. */
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, kTurnStartedAtMs);
+    assert(result.maneuver_completed == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+    result =
+        ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, kTurnStartedAtMs + CONTROL_TURN_SOURCE_CLEAR_MS);
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
-    /* Stable 001 only records the target edge; the pivot must continue until centre is black. */
-    const auto completed_at = search_at + 50U;
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, completed_at);
-    assert(result.maneuver_completed == 0U);
-    result =
-        ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, completed_at + CONTROL_TURN_TARGET_CENTERED_MS);
-    assert(result.maneuver_completed == 0U);
-
-    /* 011 brings the line under the centre sensor and completes after the short stability interval. */
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U,
-                                                      completed_at + CONTROL_TURN_TARGET_CENTERED_MS + 10U);
-    assert(result.maneuver_completed == 0U);
-    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 1U,
-                                                      completed_at + (2U * CONTROL_TURN_TARGET_CENTERED_MS) + 10U);
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
+                                                      kTurnStartedAtMs + CONTROL_TURN_SOURCE_CLEAR_MS + 10U);
     assert(result.maneuver_completed != 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
-
-    const auto stable_completed_at = completed_at + (2U * CONTROL_TURN_TARGET_CENTERED_MS) + 10U;
-    const auto after_guard = stable_completed_at + CONTROL_JUNCTION_EXIT_GUARD_MS + 1U;
-    assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, search_at, after_guard) != 0U);
-    assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_DEST_A, stable_completed_at + 1U, after_guard) == 0U);
+    assert(context.pending_route_action == ROUTE_ACTION_GO_STRAIGHT);
 }
 
 void TestLeftTurnHandsTargetEdgeToNormalPidImmediately() {
@@ -1380,6 +1419,60 @@ void TestLoadOffDuringReturnIsFault() {
     assert(context.stop_reason == LINETRACER_STOP_REASON_LOAD_LOST);
 }
 
+void TestEveryPickupReversesForTwoSecondsBeforeTurnAround() {
+    const uart_linetracer_route_t routes[] = {
+        UART_LINETRACER_ROUTE_A,
+        UART_LINETRACER_ROUTE_B,
+        UART_LINETRACER_ROUTE_C,
+    };
+
+    for (const auto route : routes) {
+        control_context_t context{};
+        constexpr std::uint32_t kLoadDetectedAtMs = 100U;
+
+        ControlLogic_Init(&context, 0U);
+        context.state = LINETRACER_CONTROL_WAITING_LOAD;
+        context.current_position = UART_LINETRACER_POSITION_DEST_A;
+        context.active_route = route;
+        context.active_job_id = 501U;
+        context.route_active = 1U;
+        assert(RoutePlanner_Create(context.current_position, route, &context.route_plan) != 0U);
+        context.route_plan.phase = ROUTE_PHASE_WAITING_LOAD;
+        context.route_plan.loaded = 0U;
+
+        assert(ControlLogic_HandleLoadOn(&context, kLoadDetectedAtMs) == ROUTE_ACTION_TURN_AROUND);
+        assert(context.state == LINETRACER_CONTROL_TURNING_AT_PICKUP);
+        assert(ControlLogic_StartPendingManeuver(&context, kLoadDetectedAtMs) != 0U);
+        assert(context.junction_phase == CONTROL_JUNCTION_PICKUP_REVERSE);
+        assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_REVERSE);
+
+        assert(ControlLogic_UpdateTimedManeuver(&context, kLoadDetectedAtMs + CONTROL_PICKUP_REVERSE_MS - 1U) == 0U);
+        assert(context.junction_phase == CONTROL_JUNCTION_PICKUP_REVERSE);
+        assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_REVERSE);
+
+        assert(ControlLogic_UpdateTimedManeuver(&context, kLoadDetectedAtMs + CONTROL_PICKUP_REVERSE_MS) != 0U);
+        assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+        assert(context.junction_turn_started_at_ms == kLoadDetectedAtMs + CONTROL_PICKUP_REVERSE_MS);
+        assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_TURN_AROUND);
+    }
+}
+
+void TestDepartureTurnAroundDoesNotReverse() {
+    control_context_t context{};
+
+    ControlLogic_Init(&context, 0U);
+    context.state = LINETRACER_CONTROL_TURNING_FROM_DEST;
+    context.current_position = UART_LINETRACER_POSITION_DEST_A;
+    context.active_route = UART_LINETRACER_ROUTE_B;
+    context.active_job_id = 502U;
+    context.route_active = 1U;
+    context.pending_route_action = ROUTE_ACTION_TURN_AROUND;
+
+    assert(ControlLogic_StartPendingManeuver(&context, 100U) != 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+    assert(ControlLogic_JunctionMotorAction(&context) == ROUTE_ACTION_TURN_AROUND);
+}
+
 void TestTelemetrySnapshotAndLifecycleEvents() {
     control_context_t context{};
     app_control_snapshot_t snapshot{};
@@ -1456,7 +1549,8 @@ int main() {
     TestPersistentSingleOuterHitReturnsControlToPid();
     TestRightTurnHandsTargetEdgeToNormalPidImmediately();
     TestCenteredSampleCannotCompleteTurnWithoutDirectionalEdge();
-    TestTurnAroundCompletesOnStableRightTargetSide();
+    TestTurnAroundHandsFirstLeftOrCenterTargetToPid();
+    TestPickupTurnAroundRejectsReversePhaseLineSamples();
     TestLeftTurnHandsTargetEdgeToNormalPidImmediately();
     TestTurnTargetEdgeDoesNotWaitForCenterHit();
     TestStraightJunctionCrossingAndGuard();
@@ -1472,6 +1566,8 @@ int main() {
     TestMarkerAndLoadEventsDriveRouteB();
     TestMarkerAndLoadEventsDriveRouteC();
     TestLoadOffDuringReturnIsFault();
+    TestEveryPickupReversesForTwoSecondsBeforeTurnAround();
+    TestDepartureTurnAroundDoesNotReverse();
     TestTelemetrySnapshotAndLifecycleEvents();
     return 0;
 }

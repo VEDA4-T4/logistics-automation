@@ -140,6 +140,15 @@ void TestRouteActions() {
     assert(output.left_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_UTURN_PWM + MOTOR_CONTROL_LEFT_TRIM));
     assert(output.right_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_UTURN_PWM + MOTOR_CONTROL_RIGHT_TRIM));
     assert(output.standby != 0U);
+
+    assert(MotorControlLogic_ComputeRouteAction(ROUTE_ACTION_REVERSE, &output) != 0U);
+    assert(output.left_direction == MOTOR_DIRECTION_REVERSE);
+    assert(output.right_direction == MOTOR_DIRECTION_REVERSE);
+    assert(output.left_pwm ==
+           MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_PICKUP_REVERSE_PWM + MOTOR_CONTROL_LEFT_TRIM));
+    assert(output.right_pwm ==
+           MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_PICKUP_REVERSE_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+    assert(output.standby != 0U);
 }
 
 void TestStopActions() {

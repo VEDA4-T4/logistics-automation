@@ -37,6 +37,7 @@ extern "C" {
 #define CONTROL_TURN_REACQUIRE_MAX_MS 100U
 #define CONTROL_JUNCTION_EXIT_GUARD_MS 100U
 #define CONTROL_MARKER_APPROACH_HOLD_MS 20U
+#define CONTROL_PICKUP_REVERSE_MS 1000U
 
 #if ((CONTROL_ROUTE_TIMEOUTS_ENABLED != 0U) && (CONTROL_ROUTE_TIMEOUTS_ENABLED != 1U))
 #error "CONTROL_ROUTE_TIMEOUTS_ENABLED must be either 0 or 1"
@@ -58,6 +59,10 @@ extern "C" {
 #error "Control marker approach hold time must be greater than zero"
 #endif
 
+#if CONTROL_PICKUP_REVERSE_MS == 0U
+#error "Control pickup reverse time must be greater than zero"
+#endif
+
 #if CONTROL_TURN_REACQUIRE_CENTERED_MS == 0U
 #error "Control turn reacquisition time must be greater than zero"
 #endif
@@ -68,6 +73,7 @@ extern "C" {
 
 typedef enum {
     CONTROL_JUNCTION_IDLE = 0,
+    CONTROL_JUNCTION_PICKUP_REVERSE,
     CONTROL_JUNCTION_APPROACH_CENTER,
     CONTROL_JUNCTION_CROSS_STRAIGHT,
     CONTROL_JUNCTION_TURN_CLEAR_SOURCE,
@@ -176,6 +182,7 @@ uint8_t ControlLogic_JunctionManeuverActive(const control_context_t* context);
 uint8_t ControlLogic_JunctionReacquireActive(const control_context_t* context);
 uint8_t ControlLogic_MarkerApproachHoldActive(const control_context_t* context);
 uint8_t ControlLogic_StartPendingManeuver(control_context_t* context, uint32_t now_ms);
+uint8_t ControlLogic_UpdateTimedManeuver(control_context_t* context, uint32_t now_ms);
 route_action_t ControlLogic_JunctionMotorAction(const control_context_t* context);
 uint8_t ControlLogic_ShouldIgnoreMarker(const control_context_t* context, app_marker_code_t marker_code,
                                         uint32_t marker_detected_at_ms, uint32_t now_ms);

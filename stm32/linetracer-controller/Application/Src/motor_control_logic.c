@@ -146,6 +146,12 @@ uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output
                                         MOTOR_CONTROL_RIGHT_UTURN_PWM, output);
             return 1U;
 
+        case ROUTE_ACTION_REVERSE:
+            MotorControlLogic_MakePivot(MOTOR_DIRECTION_REVERSE, MOTOR_DIRECTION_REVERSE,
+                                        MOTOR_CONTROL_LEFT_PICKUP_REVERSE_PWM, MOTOR_CONTROL_RIGHT_PICKUP_REVERSE_PWM,
+                                        output);
+            return 1U;
+
         case ROUTE_ACTION_STOP_AT_PICKUP:
         case ROUTE_ACTION_STOP_AT_DEST:
         case ROUTE_ACTION_JOB_COMPLETE:

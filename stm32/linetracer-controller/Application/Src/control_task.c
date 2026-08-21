@@ -393,13 +393,19 @@ static void ControlTask_ApplyStartBoost(motor_output_t* output, uint32_t now_ms)
     motor_output_t previous_output;
     uint16_t faster_pwm;
     uint16_t boost_delta;
+    uint8_t same_direction_drive;
 
     if (output == NULL) {
         return;
     }
 
-    if (output->standby == 0U || output->left_direction != MOTOR_DIRECTION_FORWARD ||
-        output->right_direction != MOTOR_DIRECTION_FORWARD || (output->left_pwm == 0U && output->right_pwm == 0U)) {
+    same_direction_drive =
+        ((output->left_direction == MOTOR_DIRECTION_FORWARD && output->right_direction == MOTOR_DIRECTION_FORWARD) ||
+         (output->left_direction == MOTOR_DIRECTION_REVERSE && output->right_direction == MOTOR_DIRECTION_REVERSE))
+            ? 1U
+            : 0U;
+
+    if (output->standby == 0U || same_direction_drive == 0U || (output->left_pwm == 0U && output->right_pwm == 0U)) {
         controlTaskStartBoostUntilMs = 0U;
         return;
     }
@@ -412,7 +418,7 @@ static void ControlTask_ApplyStartBoost(motor_output_t* output, uint32_t now_ms)
     if (controlTaskStartBoostUntilMs != 0U && ControlTask_TimeReached(now_ms, controlTaskStartBoostUntilMs) == 0U) {
         faster_pwm = (output->left_pwm > output->right_pwm) ? output->left_pwm : output->right_pwm;
         if (faster_pwm < MOTOR_CONTROL_START_BOOST_PWM) {
-            /* Raise both wheels by the same amount so the PID steering difference survives startup. */
+            /* Raise both wheels equally so straight PID and pickup reverse keep their intended balance. */
             boost_delta = MOTOR_CONTROL_START_BOOST_PWM - faster_pwm;
             output->left_pwm = MotorControlLogic_ClampPwm((int32_t)output->left_pwm + boost_delta);
             output->right_pwm = MotorControlLogic_ClampPwm((int32_t)output->right_pwm + boost_delta);
@@ -509,6 +515,17 @@ static uint8_t ControlTask_CToBOrBToARouteActive(void) {
                : 0U;
 }
 
+static uint8_t ControlTask_SameLocationRouteActive(void) {
+    return ((controlTaskContext.current_position == UART_LINETRACER_POSITION_DEST_A &&
+             controlTaskContext.active_route == UART_LINETRACER_ROUTE_A) ||
+            (controlTaskContext.current_position == UART_LINETRACER_POSITION_DEST_B &&
+             controlTaskContext.active_route == UART_LINETRACER_ROUTE_B) ||
+            (controlTaskContext.current_position == UART_LINETRACER_POSITION_DEST_C &&
+             controlTaskContext.active_route == UART_LINETRACER_ROUTE_C))
+               ? 1U
+               : 0U;
+}
+
 static uint8_t ControlTask_CToBOrBToACommonLinePidActive(void) {
     return (ControlTask_CToBOrBToARouteActive() != 0U &&
             controlTaskContext.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE &&
@@ -537,6 +554,7 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
 
     if (ControlTask_RouteMotionEnabled() != 0U) {
         (void)ControlLogic_StartPendingManeuver(&controlTaskContext, now_ms);
+        (void)ControlLogic_UpdateTimedManeuver(&controlTaskContext, now_ms);
     }
     if (ControlTask_RouteMotionEnabled() != 0U && ControlLogic_JunctionReacquireActive(&controlTaskContext) != 0U) {
         int16_t correction = 0;
@@ -572,15 +590,14 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
     if (ControlTask_RouteMotionEnabled() != 0U && ControlLogic_JunctionManeuverActive(&controlTaskContext) != 0U) {
         LineFollowPid_Reset(&controlTaskLinePid);
         maneuver_action = ControlLogic_JunctionMotorAction(&controlTaskContext);
-        if (maneuver_action == ROUTE_ACTION_GO_STRAIGHT &&
-            ControlTask_CToBOrBToARightTurnApproachActive() != 0U) {
+        if (maneuver_action == ROUTE_ACTION_GO_STRAIGHT && ControlTask_CToBOrBToARightTurnApproachActive() != 0U) {
             (void)MotorControlLogic_ComputeDifferentialForward(MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM,
                                                                MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM, 0, &output);
             ControlTask_ApplyMotorOutput(&output, now_ms);
         } else if (MotorControlLogic_ComputeRouteAction(maneuver_action, &output) != 0U) {
             ControlTask_ApplyMotorOutput(&output, now_ms);
         }
-        ControlTask_TracePid('T', 0, now_ms);
+        ControlTask_TracePid((maneuver_action == ROUTE_ACTION_REVERSE) ? 'B' : 'T', 0, now_ms);
         return;
     }
 
@@ -919,17 +936,23 @@ static void ControlTask_ProcessRouteAction(route_action_t action, linetracer_con
         case ROUTE_ACTION_GO_STRAIGHT:
         case ROUTE_ACTION_TURN_LEFT:
         case ROUTE_ACTION_TURN_RIGHT:
+        case ROUTE_ACTION_REVERSE:
         default:
             break;
     }
 }
 
-static void ControlTask_ProcessLineInput(uint8_t line_left, uint8_t line_center, uint8_t line_right,
-                                         uint32_t sampled_at_ms, uint32_t now_ms) {
+static uint8_t ControlTask_ProcessLineInput(uint8_t line_left, uint8_t line_center, uint8_t line_right,
+                                            uint32_t sampled_at_ms, uint32_t now_ms) {
     linetracer_control_state_t previous_state = controlTaskContext.state;
     control_junction_phase_t previous_junction_phase = controlTaskContext.junction_phase;
     control_line_result_t line_result = ControlLogic_ProcessLineSampleWithCenter(
         &controlTaskContext, line_left, line_center, line_right, sampled_at_ms);
+    uint8_t turn_completed =
+        (line_result.maneuver_completed != 0U && (previous_junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET ||
+                                                  previous_junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE))
+            ? 1U
+            : 0U;
 
     if (previous_junction_phase != CONTROL_JUNCTION_TURN_REACQUIRE &&
         controlTaskContext.junction_phase == CONTROL_JUNCTION_TURN_REACQUIRE) {
@@ -938,6 +961,10 @@ static void ControlTask_ProcessLineInput(uint8_t line_left, uint8_t line_center,
     }
     if (line_result.maneuver_completed != 0U) {
         LineFollowPid_Reset(&controlTaskLinePid);
+        if (turn_completed != 0U) {
+            /* Keep this target sample, but discard AO steering history from the completed pivot. */
+            SensorTask_RequestLineTrackingReset();
+        }
     }
     if (line_result.action_valid != 0U) {
         LineFollowPid_Reset(&controlTaskLinePid);
@@ -945,6 +972,8 @@ static void ControlTask_ProcessLineInput(uint8_t line_left, uint8_t line_center,
     } else if (line_result.state_changed != 0U) {
         ControlTask_PublishStateChanged(now_ms);
     }
+
+    return turn_completed;
 }
 
 static void ControlTask_ProcessSensorSnapshots(void) {
@@ -978,6 +1007,27 @@ static void ControlTask_ProcessSensorSnapshots(void) {
             continue;
         }
 
+        /*
+         * Load detection is independent of marker rearming. The vehicle waits
+         * on top of the
+         * pickup marker, so requiring that marker to clear first
+         * can otherwise discard every LOAD_PRESENT
+         * snapshot and prevent the
+         * pickup reverse/U-turn sequence from ever starting.
+         */
+        if (controlTaskContext.state == LINETRACER_CONTROL_WAITING_LOAD) {
+            if (snapshot.load_state == UART_LINETRACER_LOAD_EMPTY) {
+                /* Require an empty pickup tray after arrival before accepting a new load. */
+                controlTaskContext.load_wait_armed = 1U;
+            } else if (snapshot.load_state == UART_LINETRACER_LOAD_PRESENT &&
+                       controlTaskContext.load_wait_armed != 0U) {
+                linetracer_control_state_t previous_state = controlTaskContext.state;
+                route_action_t action = ControlLogic_HandleLoadOn(&controlTaskContext, now_ms);
+
+                ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
+            }
+        }
+
         if (ControlTask_UpdateRouteMarkerArm(&snapshot, sampled_at_ms) == 0U &&
             ControlLogic_JunctionManeuverActive(&controlTaskContext) == 0U) {
             ++processed;
@@ -991,11 +1041,21 @@ static void ControlTask_ProcessSensorSnapshots(void) {
             (int32_t)(snapshot.marker_cleared_at_ms - controlTaskContext.junction_phase_started_at_ms) >= 0 &&
             (int32_t)(sampled_at_ms - snapshot.marker_cleared_at_ms) >= 0) {
             /* This synthetic edge updates only route sequencing; PID still uses the real latest snapshot above. */
-            ControlTask_ProcessLineInput(0U, 0U, 0U, snapshot.marker_cleared_at_ms, now_ms);
+            (void)ControlTask_ProcessLineInput(0U, 0U, 0U, snapshot.marker_cleared_at_ms, now_ms);
         }
 
-        ControlTask_ProcessLineInput(snapshot.line_left, snapshot.line_center, snapshot.line_right, sampled_at_ms,
-                                     now_ms);
+        if (ControlTask_ProcessLineInput(snapshot.line_left, snapshot.line_center, snapshot.line_right, sampled_at_ms,
+                                         now_ms) != 0U) {
+            /*
+             * Apply PID from the target-acquisition sample before a queued
+             * post-turn 000
+             * can overwrite it. Remaining samples stay queued
+             * for the next control cycle; do not reset
+             * the queue.
+             */
+            ++processed;
+            break;
+        }
 
         if ((snapshot.event_flags & APP_SENSOR_EVENT_MARKER) != 0U && controlTaskContext.route_active != 0U &&
             ControlTask_MarkerEventIsCurrent(snapshot.marker_detected_at_ms) != 0U &&
@@ -1007,19 +1067,6 @@ static void ControlTask_ProcessSensorSnapshots(void) {
                                                               snapshot.marker_detected_at_ms, now_ms);
 
             ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
-        }
-
-        if (controlTaskContext.state == LINETRACER_CONTROL_WAITING_LOAD) {
-            if (snapshot.load_state == UART_LINETRACER_LOAD_EMPTY) {
-                /* Require an empty pickup tray after arrival before accepting a new load. */
-                controlTaskContext.load_wait_armed = 1U;
-            } else if (snapshot.load_state == UART_LINETRACER_LOAD_PRESENT &&
-                       controlTaskContext.load_wait_armed != 0U) {
-                linetracer_control_state_t previous_state = controlTaskContext.state;
-                route_action_t action = ControlLogic_HandleLoadOn(&controlTaskContext, now_ms);
-
-                ControlTask_ProcessRouteAction(action, previous_state, NULL, now_ms);
-            }
         }
 
         if (controlTaskContext.state == LINETRACER_CONTROL_MOVING_TO_DEST &&
@@ -1099,6 +1146,18 @@ static void ControlTask_ProcessCommands(void) {
             (command.type == APP_CONTROL_COMMAND_SET_CURRENT_POSITION ||
              command.type == APP_CONTROL_COMMAND_ASSIGN_ROUTE || command.type == APP_CONTROL_COMMAND_RESET_SYSTEM)) {
             ControlTask_ResetRouteSensorPipeline(now_ms);
+        }
+
+        if (result.accepted != 0U && command.type == APP_CONTROL_COMMAND_ASSIGN_ROUTE &&
+            ControlTask_SameLocationRouteActive() != 0U) {
+            /*
+             * A-A, B-B and C-C share the same straight PWM. Arm the same
+             * launch boost
+             * explicitly so a stale previous motor output cannot
+             * make only one of the same-location
+             * routes miss it.
+             */
+            controlTaskStartBoostUntilMs = now_ms + MOTOR_CONTROL_START_BOOST_MS;
         }
 
         if (command.type == APP_CONTROL_COMMAND_STOP_DRIVE && result.accepted != 0U &&
