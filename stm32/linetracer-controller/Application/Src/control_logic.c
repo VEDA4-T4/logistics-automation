@@ -1484,14 +1484,16 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
         if (context->junction_candidate_active == 0U) {
             context->junction_candidate_active = 1U;
             context->junction_candidate_since_ms = now_ms;
-            if (CONTROL_JUNCTION_BLACK_STABLE_MS != 0U) {
-                return result;
-            }
+#if CONTROL_JUNCTION_BLACK_STABLE_MS != 0U
+            return result;
+#endif
         }
 
+#if CONTROL_JUNCTION_BLACK_STABLE_MS != 0U
         if ((uint32_t)(now_ms - context->junction_candidate_since_ms) < CONTROL_JUNCTION_BLACK_STABLE_MS) {
             return result;
         }
+#endif
 
         previous_state = context->state;
         result.action =
