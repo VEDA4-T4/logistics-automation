@@ -15,18 +15,15 @@ extern "C" {
 namespace {
 
 enum class PortCall : std::uint8_t {
-    NotifyEmergency = 1U,
-    PutSafety = 2U,
+    PutSafety = 1U,
 };
 
 struct FakePort {
     bool control_ok{ true };
     bool safety_ok{ true };
-    bool emergency_notify_ok{ true };
     bool response_ok{ true };
     std::uint32_t control_calls{};
     std::uint32_t safety_calls{};
-    std::uint32_t emergency_notify_calls{};
     std::uint32_t response_calls{};
     std::uint32_t health_calls{};
     std::uint8_t last_safety_priority{};
@@ -55,13 +52,6 @@ std::uint8_t PutSafety(void* context, const app_safety_event_t* event, std::uint
     return fake.safety_ok ? 1U : 0U;
 }
 
-std::uint8_t NotifyEmergency(void* context) {
-    auto& fake = *static_cast<FakePort*>(context);
-    ++fake.emergency_notify_calls;
-    fake.call_order[fake.call_order_size++] = PortCall::NotifyEmergency;
-    return fake.emergency_notify_ok ? 1U : 0U;
-}
-
 std::uint8_t PutResponse(void* context, const app_tx_event_t* event) {
     auto& fake = *static_cast<FakePort*>(context);
     ++fake.response_calls;
@@ -78,7 +68,7 @@ void ReportHealth(void* context, app_health_event_type_t type, std::uint32_t det
 
 comm_rx_dispatch_port_t MakePort(FakePort& fake) {
     return {
-        &fake, PutControl, PutSafety, NotifyEmergency, PutResponse, ReportHealth,
+        &fake, PutControl, PutSafety, PutResponse, ReportHealth,
     };
 }
 
@@ -259,6 +249,7 @@ void TestBrokenBytesDoNotPreventValidFrameTimeout() {
     uart_frame_t frame{};
 
     CommRxLogic_LinkInit(&monitor, 0U);
+    assert(CommRxLogic_LinkSetMonitoringRequired(&monitor, 1U, 0U) == 0U);
     uart_parser_init(&parser);
     for (std::uint32_t now_ms = 10U; now_ms < COMM_RX_LINK_TIMEOUT_MS; now_ms += 10U) {
         assert(uart_parser_feed(&parser, 0x55U, &frame) == UART_PARSER_NO_FRAME);
@@ -271,6 +262,59 @@ void TestBrokenBytesDoNotPreventValidFrameTimeout() {
     assert(monitor.last_valid_frame_ms == 0U);
     assert(CommRxLogic_LinkCheckTimeout(&monitor, COMM_RX_LINK_TIMEOUT_MS, COMM_RX_LINK_TIMEOUT_MS) == 1U);
     assert(CommRxLogic_LinkCheckTimeout(&monitor, COMM_RX_LINK_TIMEOUT_MS + 1U, COMM_RX_LINK_TIMEOUT_MS) == 0U);
+}
+
+void TestIdleLinkDoesNotTimeout() {
+    comm_rx_link_monitor_t monitor{};
+
+    CommRxLogic_LinkInit(&monitor, 0U);
+    assert(CommRxLogic_LinkCheckTimeout(&monitor, COMM_RX_LINK_TIMEOUT_MS * 2U, COMM_RX_LINK_TIMEOUT_MS) == 0U);
+    assert(monitor.timeout_reported == 0U);
+}
+
+void TestLinkMonitoringOnlyAppliesWhileVehicleIsMoving() {
+    app_control_snapshot_t snapshot{};
+
+    snapshot.job_id = 1U;
+    snapshot.route_id = UART_LINETRACER_ROUTE_A;
+
+    snapshot.state = UART_LINETRACER_STATE_FOLLOWING_LINE;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 1U);
+
+    snapshot.state = UART_LINETRACER_STATE_CORRECTING;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 1U);
+
+    snapshot.state = UART_LINETRACER_STATE_UNLOADING;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.state = UART_LINETRACER_STATE_LOAD_WAIT;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.state = UART_LINETRACER_STATE_STOPPED;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.state = UART_LINETRACER_STATE_IDLE;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.state = UART_LINETRACER_STATE_FOLLOWING_LINE;
+    snapshot.job_id = UART_LINETRACER_JOB_ID_NONE;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+
+    snapshot.job_id = 1U;
+    snapshot.route_id = UART_LINETRACER_ROUTE_NONE;
+    assert(CommRxLogic_LinkMonitoringRequired(&snapshot) == 0U);
+    assert(CommRxLogic_LinkMonitoringRequired(nullptr) == 0U);
+}
+
+void TestDisablingLinkMonitoringClearsTimeout() {
+    comm_rx_link_monitor_t monitor{};
+
+    CommRxLogic_LinkInit(&monitor, 0U);
+    assert(CommRxLogic_LinkSetMonitoringRequired(&monitor, 1U, 100U) == 0U);
+    assert(CommRxLogic_LinkCheckTimeout(&monitor, 100U + COMM_RX_LINK_TIMEOUT_MS, COMM_RX_LINK_TIMEOUT_MS) == 1U);
+    assert(CommRxLogic_LinkSetMonitoringRequired(&monitor, 0U, 200U + COMM_RX_LINK_TIMEOUT_MS) == 1U);
+    assert(monitor.timeout_reported == 0U);
+    assert(CommRxLogic_LinkCheckTimeout(&monitor, 300U + COMM_RX_LINK_TIMEOUT_MS, COMM_RX_LINK_TIMEOUT_MS) == 0U);
 }
 
 void TestPartialFrameTimesOutAt100Ms() {
@@ -286,7 +330,7 @@ void TestPartialFrameTimesOutAt100Ms() {
     assert(parser.state == UART_PARSER_WAIT_SOF);
 }
 
-void TestEmergencyNotificationPrecedesSafetyQueue() {
+void TestEmergencyStopUsesPrioritySafetyQueue() {
     comm_rx_dispatch_t dispatcher{};
     comm_rx_dispatch_effects_t effects{};
     FakePort fake{};
@@ -297,16 +341,14 @@ void TestEmergencyNotificationPrecedesSafetyQueue() {
     CommRxDispatch_Frame(&dispatcher, &port, &frame, 500U, &effects);
 
     assert(effects.safety_commands == 1U);
-    assert(fake.emergency_notify_calls == 1U);
     assert(fake.safety_calls == 1U);
-    assert(fake.call_order_size == 2U);
-    assert(fake.call_order[0] == PortCall::NotifyEmergency);
-    assert(fake.call_order[1] == PortCall::PutSafety);
+    assert(fake.call_order_size == 1U);
+    assert(fake.call_order[0] == PortCall::PutSafety);
     assert(fake.last_safety_priority == APP_TX_PRIORITY_SAFETY);
     assert(fake.last_safety.type == APP_SAFETY_EVENT_EMERGENCY_STOP);
 }
 
-void TestEmergencyNotificationSurvivesFullSafetyQueue() {
+void TestEmergencyStopReportsFullSafetyQueue() {
     comm_rx_dispatch_t dispatcher{};
     comm_rx_dispatch_effects_t effects{};
     FakePort fake{};
@@ -317,15 +359,14 @@ void TestEmergencyNotificationSurvivesFullSafetyQueue() {
     CommRxDispatch_Init(&dispatcher);
     CommRxDispatch_Frame(&dispatcher, &port, &frame, 600U, &effects);
 
-    assert(fake.emergency_notify_calls == 1U);
-    assert(effects.safety_commands == 1U);
+    assert(fake.safety_calls == 1U);
+    assert(effects.safety_commands == 0U);
     assert(effects.queue_drops == 1U);
     assert(fake.response_calls == 1U);
-    assert(fake.last_response.status == UART_STATUS_ACK);
-
-    CommRxDispatch_Frame(&dispatcher, &port, &frame, 601U, &effects);
-    assert(effects.duplicate_sequences == 1U);
-    assert(fake.emergency_notify_calls == 1U);
+    assert(fake.last_response.status == UART_STATUS_BUSY);
+    assert(fake.last_response.error_code == UART_ERROR_BUSY);
+    assert(fake.last_health_type == APP_HEALTH_EVENT_QUEUE_FULL);
+    assert(fake.last_health_detail == COMM_RX_HEALTH_SAFETY_QUEUE_FULL);
 }
 
 void TestPartialAndContinuousFrames() {
@@ -379,9 +420,12 @@ int main() {
     TestDuplicateSequenceDeliveredOnce();
     TestResponseRetriesThreeTimes();
     TestBrokenBytesDoNotPreventValidFrameTimeout();
+    TestIdleLinkDoesNotTimeout();
+    TestLinkMonitoringOnlyAppliesWhileVehicleIsMoving();
+    TestDisablingLinkMonitoringClearsTimeout();
     TestPartialFrameTimesOutAt100Ms();
-    TestEmergencyNotificationPrecedesSafetyQueue();
-    TestEmergencyNotificationSurvivesFullSafetyQueue();
+    TestEmergencyStopUsesPrioritySafetyQueue();
+    TestEmergencyStopReportsFullSafetyQueue();
     TestPartialAndContinuousFrames();
     return 0;
 }

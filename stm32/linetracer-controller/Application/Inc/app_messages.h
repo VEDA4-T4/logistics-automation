@@ -64,20 +64,47 @@ typedef enum {
     APP_SENSOR_EVENT_LOAD_ON = (1U << 3U),
     APP_SENSOR_EVENT_LOAD_OFF = (1U << 4U),
     APP_SENSOR_EVENT_OVERLOAD = (1U << 5U),
-    APP_SENSOR_EVENT_OBSTACLE = (1U << 6U)
+    APP_SENSOR_EVENT_OBSTACLE = (1U << 6U),
+    APP_SENSOR_EVENT_FSR_BASELINE_READY = (1U << 7U),
+    APP_SENSOR_EVENT_MARKER_CLEARED = (1U << 8U)
 } app_sensor_event_flags_t;
+
+/*
+ * Marker identity decoded by SensorTask. The current control phase determines
+ * whether a route marker represents a
+ * pickup point or a parking destination.
+ */
+typedef enum {
+    APP_MARKER_NONE = 0,
+    APP_MARKER_JUNCTION,
+    APP_MARKER_DEST_A,
+    APP_MARKER_DEST_B,
+    APP_MARKER_DEST_C,
+    APP_MARKER_INVALID
+} app_marker_code_t;
 
 typedef struct {
     uint32_t sampled_at_ms;
     uint32_t event_flags;
+    uint32_t marker_detected_at_ms;
+    uint32_t marker_cleared_at_ms;
     uint16_t fsr_raw;
+    uint16_t line_left_raw;
+    uint16_t line_center_raw;
+    uint16_t line_right_raw;
+    int16_t line_error;
     uint16_t ultrasonic_front_mm;
     uint16_t ultrasonic_left_mm;
     uint16_t ultrasonic_right_mm;
     linetracer_line_state_t line_state;
     uart_linetracer_load_state_t load_state;
+    app_marker_code_t marker_code;
     uint8_t line_left;
+    uint8_t line_center;
     uint8_t line_right;
+    uint8_t marker_count;
+    uint8_t fsr_valid;
+    uint8_t marker_active;
 } app_sensor_snapshot_t;
 
 typedef enum {
@@ -91,7 +118,8 @@ typedef enum {
     APP_SAFETY_EVENT_MARKER_SEQUENCE,
     APP_SAFETY_EVENT_COMM_TIMEOUT,
     APP_SAFETY_EVENT_RESET_REQUEST,
-    APP_SAFETY_EVENT_SENSOR_FAULT
+    APP_SAFETY_EVENT_SENSOR_FAULT,
+    APP_SAFETY_EVENT_HEALTH_FAULT
 } app_safety_event_type_t;
 
 typedef struct {
@@ -111,6 +139,8 @@ typedef struct {
 typedef enum {
     APP_CONTROL_SAFETY_NONE = 0,
     APP_CONTROL_SAFETY_LATCHED,
+    APP_CONTROL_SAFETY_OBSTACLE_ACTIVE,
+    APP_CONTROL_SAFETY_OBSTACLE_CLEARED,
     APP_CONTROL_SAFETY_RESET_APPROVED,
     APP_CONTROL_SAFETY_RESET_REJECTED
 } app_control_safety_event_type_t;
@@ -118,6 +148,7 @@ typedef enum {
 typedef struct {
     app_control_safety_event_type_t type;
     uint32_t occurred_at_ms;
+    uint32_t unload_inhibit_generation;
     linetracer_stop_reason_t reason;
     uint16_t original_payload_crc;
     uint8_t error_code;
@@ -136,9 +167,32 @@ typedef enum {
 typedef struct {
     app_unload_command_type_t type;
     uint32_t requested_at_ms;
+    uint32_t inhibit_generation;
+    uint32_t request_id;
     uint16_t job_id;
     uart_linetracer_route_t route_id;
 } app_unload_command_t;
+
+typedef enum {
+    APP_UNLOAD_RESULT_NONE = 0,
+    APP_UNLOAD_RESULT_COMPLETE,
+    APP_UNLOAD_RESULT_FAILED,
+    APP_UNLOAD_RESULT_TIMEOUT,
+    APP_UNLOAD_RESULT_ABORTED,
+    APP_UNLOAD_RESULT_RESET_COMPLETE,
+    APP_UNLOAD_RESULT_RESET_FAILED
+} app_unload_result_type_t;
+
+typedef struct {
+    app_unload_result_type_t type;
+    uint32_t requested_at_ms;
+    uint32_t completed_at_ms;
+    uint32_t inhibit_generation;
+    uint32_t request_id;
+    uint16_t job_id;
+    uart_linetracer_route_t route_id;
+    uint8_t error_code;
+} app_unload_result_t;
 
 typedef enum {
     APP_TX_EVENT_NONE = 0,
@@ -150,6 +204,7 @@ typedef enum {
     APP_TX_EVENT_LOAD_DETECTED,
     APP_TX_EVENT_UNLOAD_COMPLETE,
     APP_TX_EVENT_STATE_CHANGED,
+    APP_TX_EVENT_SENSOR_STATUS,
     APP_TX_EVENT_FAULT
 } app_tx_event_type_t;
 
@@ -173,6 +228,9 @@ typedef struct {
     uint8_t original_payload_length;
     uint8_t status;
     uint8_t error_code;
+    uint8_t sensor_id;
+    uint8_t sensor_state;
+    uint16_t sensor_distance_cm;
     uint8_t retry_count;
 } app_tx_event_t;
 
@@ -198,6 +256,7 @@ static inline uint8_t app_tx_event_priority(app_tx_event_type_t type) {
         case APP_TX_EVENT_LOAD_DETECTED:
         case APP_TX_EVENT_UNLOAD_COMPLETE:
         case APP_TX_EVENT_STATE_CHANGED:
+        case APP_TX_EVENT_SENSOR_STATUS:
             return APP_TX_PRIORITY_EVENT;
 
         case APP_TX_EVENT_HEARTBEAT:
@@ -213,7 +272,12 @@ typedef enum {
     APP_HEALTH_EVENT_QUEUE_FULL,
     APP_HEALTH_EVENT_UART_RX_TIMEOUT,
     APP_HEALTH_EVENT_UART_TX_TIMEOUT,
-    APP_HEALTH_EVENT_INTERNAL_ERROR
+    APP_HEALTH_EVENT_INTERNAL_ERROR,
+    APP_HEALTH_EVENT_UART_RX_RECOVERED,
+    APP_HEALTH_EVENT_UART_TX_RECOVERED,
+    APP_HEALTH_EVENT_UART_RX_ERROR,
+    APP_HEALTH_EVENT_UART_TX_ERROR,
+    APP_HEALTH_EVENT_COUNT
 } app_health_event_type_t;
 
 typedef struct {
@@ -227,6 +291,8 @@ typedef struct {
 #define APP_COMM_RX_NOTIFY_DATA_READY (1UL << 0U)
 #define APP_COMM_RX_NOTIFY_UART_ERROR (1UL << 1U)
 #define APP_SAFETY_NOTIFY_EMERGENCY_STOP (1UL << 0U)
+#define APP_UNLOAD_NOTIFY_SAFETY_STOP (1UL << 0U)
+#define APP_UNLOAD_NOTIFY_ABORT (1UL << 1U)
 #define APP_COMM_TX_NOTIFY_QUEUE_READY (1UL << 0U)
 #define APP_COMM_TX_NOTIFY_TX_COMPLETE (1UL << 1U)
 #define APP_COMM_TX_NOTIFY_ABORT_COMPLETE (1UL << 2U)
