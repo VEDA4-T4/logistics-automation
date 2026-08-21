@@ -344,12 +344,12 @@ private:
     }
 
     [[nodiscard]] bool HandleProcessMessage(const mqtt::MqttMessage& message) {
-        if (const auto work_id = sorting_detection_gate_.ShouldStop(
+        if (const auto work_id = line_tracer_load_gate_.ShouldStop(
                 message, orchestrator_.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning,
                 orchestrator_.StateMachine().ActiveWorks())) {
             const auto commands = orchestrator_.SortingDetectionCommands(*work_id, message.timestamp);
             if (commands.empty() || !DispatchProcessCommands(commands)) {
-                sorting_detection_gate_.Retry();
+                line_tracer_load_gate_.Retry(*work_id);
                 return false;
             }
         }
@@ -499,7 +499,7 @@ private:
     central_server::CommandManager command_manager_;
     central_server::ProcessOrchestrator orchestrator_;
     central_server::InputDetectionGate input_detection_gate_{ std::string(kInputId) };
-    central_server::SortingDetectionGate sorting_detection_gate_{ std::string(kSortingId) };
+    central_server::LineTracerLoadGate line_tracer_load_gate_{ std::string(kLineTracerId) };
     central_server::ProcessCommandTracker process_command_tracker_;
     std::unique_ptr<central_server::MqttHandler> handler_;
     std::vector<PublishedMessage> published_;
@@ -569,35 +569,61 @@ void TestAutomaticProcessCompletes(bool line_tracer_enabled) {
            central_server::WorkStage::kSorting);
     assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
     assert(harness.ReportStatus(kSortingId, "ROUTING"));
-    assert(harness.DetectSortedProduct());
-    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 0);
-    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
-    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
-    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
-    assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
     if (line_tracer_enabled) {
-        assert(harness.ReportStatus(kLineTracerId, "FOLLOWING_LINE"));
+        assert(harness.ReportStatus(kLineTracerId, "LOAD_ON_C"));
+        assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 0);
+        assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+        assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
+        assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+        assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
         assert(harness.CompleteWork());
+    } else {
+        assert(harness.DetectSortedProduct());
+        assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
     }
 
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStop) == 1);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 1);
-    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 1);
-    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == (line_tracer_enabled ? 1 : 0));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) ==
+           (line_tracer_enabled ? 1 : 0));
     const auto expected_targets =
         line_tracer_enabled
             ? std::vector<std::string>{ std::string(kInputId),   std::string(kVisionId),  std::string(kLineTracerId),
                                         std::string(kGripperId), std::string(kSortingId), std::string(kSortingId),
                                         std::string(kInputId),   std::string(kSortingId), std::string(kSortingId) }
             : std::vector<std::string>{ std::string(kInputId),   std::string(kVisionId),  std::string(kGripperId),
-                                        std::string(kSortingId), std::string(kSortingId), std::string(kInputId),
-                                        std::string(kSortingId), std::string(kSortingId) };
+                                        std::string(kSortingId), std::string(kSortingId), std::string(kInputId) };
     assert(harness.DeviceCommandTargets() == expected_targets);
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
     assert(work.has_value());
     assert(work->stage == central_server::WorkStage::kCompleted);
+}
+
+void TestLineTracerLoadStopsSortingAndStartsTransportOnce() {
+    ProcessIntegrationHarness harness;
+    AdvanceToGripperRequested(harness);
+    assert(harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kSuccess));
+    assert(harness.ReportStatus(kGripperId, "COMPLETED"));
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kSorting);
+
+    assert(harness.ReportStatus(kLineTracerId, "LOAD_ON_C"));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 1);
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kTransporting);
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
+
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
+    assert(harness.ReportStatus(kLineTracerId, "LOAD_ON_C"));
+    assert(harness.DetectSortedProduct());
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 1);
 }
 
 void TestSortingDispatchFailureKeepsInputStopped() {
@@ -1083,6 +1109,7 @@ int main() {
     for (const bool line_tracer_enabled : std::to_array({ true, false })) {
         TestAutomaticProcessCompletes(line_tracer_enabled);
     }
+    TestLineTracerLoadStopsSortingAndStartsTransportOnce();
     TestSortingDispatchFailureKeepsInputStopped();
     TestRejectedGripperCommandFailsWork();
     TestTimedOutGripperCommandFailsWork();

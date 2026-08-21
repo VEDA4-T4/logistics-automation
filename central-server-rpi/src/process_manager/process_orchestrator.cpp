@@ -460,7 +460,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleCommandCompletion(const Pr
         return completion;
     }
     if (command->command == mqtt::ControlCommand::kStop && command->component_id == "sorting_conveyor" &&
-        work->stage == WorkStage::kSorting) {
+        (work->stage == WorkStage::kSorting || work->stage == WorkStage::kTransporting)) {
         completion.commands.push_back(
             MakeSortingControlCommand(intent.work_id, mqtt::ControlCommand::kRecovery, "GATE", response.timestamp));
         return completion;
@@ -794,7 +794,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             event = Event(meaning == contracts::DeviceStateMeaning::kCompleted ? ProcessEventType::kSortingCompleted
                                                                                : ProcessEventType::kSortingStarted,
                           message, *status->job_id);
-        } else if (message.source_id == config_.line_tracer_device_id) {
+        } else if (config_.line_tracer_enabled && message.source_id == config_.line_tracer_device_id) {
             if (!IsOneOf(current_state, { "LOAD_ON_A", "LOAD_ON_B", "LOAD_ON_C" })) {
                 return NotHandled();
             }

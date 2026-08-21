@@ -162,7 +162,9 @@ mqtt::MqttMessage SensorMessage(std::string_view source_id, std::string detectio
 }
 
 mqtt::MqttMessage DeviceStatus(std::string_view source_id, std::string current_state,
-                               std::optional<std::string> job_id = std::nullopt) {
+                               std::optional<std::string> job_id = std::nullopt,
+                               mqtt::ConnectionState connection_state = mqtt::ConnectionState::kOnline,
+                               std::optional<std::string> error_code = std::nullopt) {
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = "MSG-LINE-TRACER-LOAD-GATE",
@@ -170,10 +172,10 @@ mqtt::MqttMessage DeviceStatus(std::string_view source_id, std::string current_s
         .source_id = std::string(source_id),
         .timestamp = "2026-08-21T03:00:00Z",
         .data = mqtt::DeviceStatusPayload{
-            .status = mqtt::ConnectionState::kOnline,
+            .status = connection_state,
             .current_state = std::move(current_state),
             .job_id = std::move(job_id),
-            .error_code = std::nullopt,
+            .error_code = std::move(error_code),
             .departure_position = std::nullopt,
             .target_position = std::nullopt,
             .confirmed_position = std::nullopt,
@@ -248,6 +250,14 @@ void TestLineTracerLoadGateStopsSortingWorkOnce() {
     assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-UNKNOWN"), true, works).has_value());
     assert(!gate.ShouldStop(DeviceStatus(kDevice, "LOAD_ON_C", "WORK-SORTING"), true, works).has_value());
     assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING"), false, works).has_value());
+    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING",
+                                         mqtt::ConnectionState::kOffline),
+                            true, works)
+                .has_value());
+    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING",
+                                         mqtt::ConnectionState::kOnline, "ERR-LINE-TRACER"),
+                            true, works)
+                .has_value());
     assert(!gate.ShouldStop(SensorMessage(kLineTracerDevice, "DETECTED"), true, works).has_value());
 
     const auto load_on = DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING");

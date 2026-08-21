@@ -119,8 +119,15 @@ LineTracerLoadGate::LineTracerLoadGate(std::string line_tracer_device_id)
 std::optional<std::string> LineTracerLoadGate::ShouldStop(const contracts::mqtt::MqttMessage& message,
                                                           const bool process_running,
                                                           const std::vector<WorkProcessSnapshot>& active_works) {
+    std::erase_if(consumed_work_ids_, [&active_works](const std::string& work_id) {
+        return std::ranges::none_of(active_works, [&work_id](const WorkProcessSnapshot& work) {
+            return work.work_id == work_id && work.stage == WorkStage::kSorting;
+        });
+    });
     const auto* status = contracts::mqtt::GetPayload<contracts::mqtt::DeviceStatusPayload>(message);
-    if (status == nullptr || message.source_id != line_tracer_device_id_ || !status->job_id.has_value() ||
+    if (status == nullptr || message.source_id != line_tracer_device_id_ ||
+        status->status != contracts::mqtt::ConnectionState::kOnline || status->error_code.has_value() ||
+        !status->job_id.has_value() ||
         (status->current_state != "LOAD_ON_A" && status->current_state != "LOAD_ON_B" &&
          status->current_state != "LOAD_ON_C") ||
         !process_running || consumed_work_ids_.contains(*status->job_id)) {

@@ -1197,6 +1197,10 @@ void TestLineTracerBypassRunsGripperAndSortingToCompletion() {
     assert(orchestrator.ConfirmDispatch(sorting_start_done.commands.front()).Applied());
     assert(orchestrator.Handle(Status("MSG-NO-LT-SORTING-START", "PI-SORTING-01", "ROUTING")).transition.Applied());
 
+    const auto disabled_load_on = orchestrator.Handle(Status("MSG-NO-LT-LOAD-ON", "PI-LT-01", "LOAD_ON_C"));
+    assert(!disabled_load_on.handled);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kSorting);
+
     const auto sorting_done = orchestrator.Handle(Status("MSG-NO-LT-SORTING-DONE", "PI-SORTING-01", "CYCLE_COMPLETE"));
     assert(sorting_done.transition.Applied());
     assert(sorting_done.transition.current_stage == central_server::WorkStage::kCompleted);

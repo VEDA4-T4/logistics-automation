@@ -208,7 +208,7 @@ int Application::Run(int argc, char* argv[]) {
     std::unordered_set<std::string> restored_pending_process_commands;
     bool safe_restored_replay_pending = false;
     InputDetectionGate input_detection_gate(server_config.process.input_device_id);
-    SortingDetectionGate sorting_detection_gate(server_config.process.sorting_device_id);
+    LineTracerLoadGate line_tracer_load_gate(server_config.process.line_tracer_device_id);
     ProcessStateStore process_state_store(database);
     // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
     std::mutex process_mutex;
@@ -695,7 +695,8 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_handler.SetQtResponseHandler([&command_manager, &process_orchestrator, &commit_recovery_response,
                                        &finish_system_command, &process_command_tracker, &persist_process_state,
                                        &publish_qt_response,
-                                       &dispatch_process_commands](const contracts::mqtt::MqttMessage& message) {
+                                       &dispatch_process_commands,
+                                       &pending_system_commands](const contracts::mqtt::MqttMessage& message) {
         const auto decision = command_manager.PreviewResponse(message);
         switch (decision.disposition) {
             case CommandResponseDisposition::kForward: {
@@ -706,7 +707,8 @@ int Application::Run(int argc, char* argv[]) {
                     contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(*decision.message);
                 if (response != nullptr && response->command == contracts::mqtt::ControlCommand::kRecovery &&
                     (response->result == contracts::mqtt::CommandResult::kSuccess ||
-                     response->result == contracts::mqtt::CommandResult::kDuplicated)) {
+                     response->result == contracts::mqtt::CommandResult::kDuplicated) &&
+                    pending_system_commands.contains(response->request_id)) {
                     return commit_recovery_response(message);
                 }
                 // The terminal response is the durable commit point.  Do not consume the
@@ -1047,11 +1049,12 @@ int Application::Run(int argc, char* argv[]) {
     };
     mqtt_handler.SetCommandRouteHandler(dispatch_command);
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_command,
-                                           &dispatch_process_commands, &input_detection_gate, &sorting_detection_gate,
+                                           &dispatch_process_commands, &input_detection_gate, &line_tracer_load_gate,
                                            &process_state_persistence_healthy, &persist_process_state, &persistence,
                                            &pending_vision_measurement, &publish_durable,
                                            qt_client_id = server_config.qt_client_id,
                                            default_destination = server_config.process.default_destination,
+                                           line_tracer_enabled = server_config.process.line_tracer_enabled,
                                            &process_epoch](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
             return false;
@@ -1212,13 +1215,15 @@ int Application::Run(int argc, char* argv[]) {
         }
 
         const auto system_state = process_orchestrator.StateMachine().SystemState();
-        if (const auto work_id =
-                sorting_detection_gate.ShouldStop(message, system_state == ProcessSystemState::kRunning,
-                                                  process_orchestrator.StateMachine().ActiveWorks())) {
-            const auto commands = process_orchestrator.SortingDetectionCommands(*work_id, message.timestamp);
-            if (commands.empty() || !dispatch_process_commands(commands)) {
-                sorting_detection_gate.Retry();
-                return false;
+        if (line_tracer_enabled) {
+            if (const auto work_id =
+                    line_tracer_load_gate.ShouldStop(message, system_state == ProcessSystemState::kRunning,
+                                                     process_orchestrator.StateMachine().ActiveWorks())) {
+                const auto commands = process_orchestrator.SortingDetectionCommands(*work_id, message.timestamp);
+                if (commands.empty() || !dispatch_process_commands(commands)) {
+                    line_tracer_load_gate.Retry(*work_id);
+                    return false;
+                }
             }
         }
         const bool process_accepts_work = process_orchestrator.AcceptsInputWorkCreation();
