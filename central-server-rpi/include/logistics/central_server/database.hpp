@@ -40,10 +40,16 @@ struct DatabaseStatus {
     }
 };
 
+enum class StartupMode : std::uint8_t {
+    kFresh,
+    kResume,
+};
+
 struct DatabaseConfig {
     std::filesystem::path path{ "/var/lib/logistics/logistics.db" };
     std::filesystem::path migration_dir{ LOGISTICS_DEFAULT_MIGRATION_DIR };
     int busy_timeout_ms{ 5000 };
+    StartupMode startup_mode{ StartupMode::kFresh };
 };
 
 class Statement final {
@@ -120,5 +126,8 @@ class MigrationRunner final {
 public:
     [[nodiscard]] static DatabaseStatus Apply(Database& database, const std::filesystem::path& migration_dir);
 };
+
+[[nodiscard]] DatabaseStatus ResetDatabasePreservingProductCatalog(Database& database, const DatabaseConfig& config);
+[[nodiscard]] DatabaseStatus PrepareDatabaseForStartup(Database& database, const DatabaseConfig& config);
 
 }  // namespace logistics::central_server

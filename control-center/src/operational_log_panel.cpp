@@ -17,7 +17,6 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSortFilterProxyModel>
-#include <QStackedLayout>
 #include <QTableView>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -28,7 +27,7 @@
 namespace logistics::control_center {
 namespace {
 
-constexpr qsizetype kPageSize = OperationalLogState::kDefaultMaximumEntries;
+constexpr qsizetype kPageSize = OperationalLogState::kPageSize;
 
 enum OperationalLogDataRole {
     kEntryIdRole = Qt::UserRole + 1,
@@ -184,10 +183,7 @@ public:
     }
 
     [[nodiscard]] bool canLoadOlderEntries() const {
-        if (entries_.size() >= maximum_entries_) {
-            return false;
-        }
-        const bool can_load_local_page = static_cast<bool>(page_provider_);
+        const bool can_load_local_page = page_provider_ && !page_provider_(next_offset_, 1).isEmpty();
         const bool can_request_server_page = older_entries_available_ && older_entries_request_handler_;
         return has_more_ && !older_entries_loading_ && (can_load_local_page || can_request_server_page);
     }
@@ -222,34 +218,41 @@ public:
         loaded_capacity_ = std::min(maximum_entries_, loaded_capacity_ + kPageSize);
 
         QList<OperationalLogEntry> unique_entries;
+        QSet<QString> new_ids;
         unique_entries.reserve(page.size());
         for (auto& entry : page) {
-            if (!entry.id.isEmpty() && loaded_ids_.contains(entry.id)) {
+            if (!entry.id.isEmpty() && (loaded_ids_.contains(entry.id) || new_ids.contains(entry.id))) {
                 continue;
             }
-            loaded_ids_.insert(entry.id);
+            new_ids.insert(entry.id);
             unique_entries.append(std::move(entry));
         }
-        const auto remaining_capacity = maximum_entries_ - entries_.size();
-        if (unique_entries.size() > remaining_capacity) {
-            for (auto row = remaining_capacity; row < unique_entries.size(); ++row) {
-                loaded_ids_.remove(unique_entries[row].id);
-            }
-            unique_entries.resize(remaining_capacity);
+        if (unique_entries.size() > maximum_entries_) {
+            unique_entries.resize(maximum_entries_);
         }
         if (unique_entries.isEmpty()) {
             next_offset_ += page.size();
-            has_more_ = entries_.size() < maximum_entries_ &&
-                        (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+            has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
             return;
+        }
+        const auto overflow = entries_.size() + unique_entries.size() - maximum_entries_;
+        if (overflow > 0) {
+            beginRemoveRows({}, 0, static_cast<int>(overflow - 1));
+            for (qsizetype row = 0; row < overflow; ++row) {
+                loaded_ids_.remove(entries_[row].id);
+            }
+            entries_.remove(0, overflow);
+            endRemoveRows();
+        }
+        for (const auto& entry : unique_entries) {
+            loaded_ids_.insert(entry.id);
         }
         const auto first_row = entries_.size();
         beginInsertRows({}, static_cast<int>(first_row), static_cast<int>(first_row + unique_entries.size() - 1));
         entries_.append(std::move(unique_entries));
         endInsertRows();
-        next_offset_ = entries_.size();
-        has_more_ = entries_.size() < maximum_entries_ &&
-                    (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+        next_offset_ += page.size();
+        has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
     }
 
     qsizetype appendOlderEntries(QList<OperationalLogEntry> entries, bool has_more) {
@@ -264,19 +267,26 @@ public:
             new_ids.insert(entry.id);
             unique_entries.append(std::move(entry));
         }
-        const auto remaining_capacity = maximum_entries_ - entries_.size();
-        if (unique_entries.size() > remaining_capacity) {
-            unique_entries.resize(remaining_capacity);
+        if (unique_entries.size() > maximum_entries_) {
+            unique_entries.resize(maximum_entries_);
         }
-        const auto required_capacity = entries_.size() + unique_entries.size();
+        const auto required_capacity = std::min(maximum_entries_, entries_.size() + unique_entries.size());
         while (loaded_capacity_ < required_capacity && loaded_capacity_ < maximum_entries_) {
             loaded_capacity_ = std::min(maximum_entries_, loaded_capacity_ + kPageSize);
         }
         older_entries_available_ = has_more;
         if (unique_entries.isEmpty()) {
-            has_more_ = entries_.size() < maximum_entries_ &&
-                        (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+            has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
             return 0;
+        }
+        const auto overflow = entries_.size() + unique_entries.size() - maximum_entries_;
+        if (overflow > 0) {
+            beginRemoveRows({}, 0, static_cast<int>(overflow - 1));
+            for (qsizetype row = 0; row < overflow; ++row) {
+                loaded_ids_.remove(entries_[row].id);
+            }
+            entries_.remove(0, overflow);
+            endRemoveRows();
         }
         for (const auto& entry : unique_entries) {
             loaded_ids_.insert(entry.id);
@@ -285,9 +295,7 @@ public:
         beginInsertRows({}, static_cast<int>(first_row), static_cast<int>(first_row + unique_entries.size() - 1));
         entries_.append(std::move(unique_entries));
         endInsertRows();
-        next_offset_ = entries_.size();
-        has_more_ = entries_.size() < maximum_entries_ &&
-                    (older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty()));
+        has_more_ = older_entries_available_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
         return entries_.size() - first_row;
     }
 
@@ -328,7 +336,11 @@ public:
             entries_.remove(first_row, overflow);
             endRemoveRows();
         }
-        next_offset_ = entries_.size();
+        if (overflow > 0) {
+            next_offset_ = entries_.size();
+        } else {
+            next_offset_ += unique_entries.size();
+        }
         has_more_ = has_more_ || (page_provider_ && !page_provider_(next_offset_, 1).isEmpty());
         return unique_entries.size();
     }
@@ -440,8 +452,8 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
         "QTableView::item:hover{background:#202a33;}");
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 10, 10, 10);
-    layout->setSpacing(8);
+    layout->setContentsMargins(10, 6, 10, 6);
+    layout->setSpacing(4);
 
     auto* header = new QHBoxLayout();
     auto* header_text = new QVBoxLayout();
@@ -498,9 +510,10 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     layout->addLayout(secondary_filters);
 
     auto* table_surface = new QWidget(this);
-    auto* table_stack = new QStackedLayout(table_surface);
-    table_stack->setContentsMargins(0, 0, 0, 0);
-    table_stack->setStackingMode(QStackedLayout::StackAll);
+    table_surface->setObjectName(QStringLiteral("operationalLogTableSurface"));
+    table_surface->setMinimumHeight(60);
+    auto* table_layout = new QVBoxLayout(table_surface);
+    table_layout->setContentsMargins(0, 0, 0, 0);
     table_model_ = new OperationalLogTableModel(this);
     filter_model_ = new OperationalLogFilterProxyModel(this);
     filter_model_->setSourceModel(table_model_);
@@ -524,13 +537,14 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-    table_stack->addWidget(table_);
-    auto* empty_state = new QLabel(QStringLiteral("표시할 운영 로그가 없습니다"), table_surface);
-    empty_state->setObjectName(QStringLiteral("operationalLogEmptyState"));
-    empty_state->setAlignment(Qt::AlignCenter);
-    empty_state->setAttribute(Qt::WA_TransparentForMouseEvents);
-    empty_state->setStyleSheet("color:#777777;font-size:11px;");
-    table_stack->addWidget(empty_state);
+    table_layout->addWidget(table_);
+    empty_state_ = new QLabel(QStringLiteral("표시할 운영로그 없음"), table_->viewport());
+    empty_state_->setObjectName(QStringLiteral("operationalLogEmptyState"));
+    empty_state_->setAlignment(Qt::AlignCenter);
+    empty_state_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    empty_state_->setStyleSheet("color:#777777;font-size:11px;");
+    empty_state_->setGeometry(table_->viewport()->rect());
+    empty_state_->raise();
     layout->addWidget(table_surface, 1);
 
     connect(severity_filter_, &QComboBox::currentIndexChanged, this, [this]() { applyFilter(); });
@@ -567,6 +581,11 @@ OperationalLogPanel::OperationalLogPanel(QWidget* parent) : QWidget(parent) {
 void OperationalLogPanel::setEntryPageProvider(EntryPageProvider provider) {
     table_model_->setPageProvider(std::move(provider));
     pending_new_entry_count_ = 0;
+    updateSummary();
+}
+
+void OperationalLogPanel::setEntryCountProvider(EntryCountProvider provider) {
+    entry_count_provider_ = std::move(provider);
     updateSummary();
 }
 
@@ -659,6 +678,9 @@ void OperationalLogPanel::setAcknowledgeAllHandler(AcknowledgeAllHandler handler
 }
 
 bool OperationalLogPanel::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == table_->viewport() && event->type() == QEvent::Resize && empty_state_ != nullptr) {
+        empty_state_->setGeometry(table_->viewport()->rect());
+    }
     if ((watched == table_ || watched == table_->viewport()) && event->type() == QEvent::Wheel) {
         auto* wheel_event = static_cast<QWheelEvent*>(event);
         auto vertical_delta =
@@ -707,6 +729,12 @@ void OperationalLogPanel::updateSummary() {
     const auto filtered_count = filter_model_->rowCount();
     const auto displayed_alert_count = std::max(active_alert_count_, table_model_->activeAlertCount());
     QString summary = QStringLiteral("%1건 표시").arg(filtered_count);
+    if (entry_count_provider_) {
+        const auto buffered_count = entry_count_provider_();
+        if (buffered_count > filtered_count) {
+            summary += QStringLiteral(" · 전체 %1건").arg(buffered_count);
+        }
+    }
     if (table_model_->isLoadingOlderEntries()) {
         summary += QStringLiteral(" · 이전 로그 불러오는 중…");
     } else if (table_model_->hasMore()) {
@@ -719,8 +747,11 @@ void OperationalLogPanel::updateSummary() {
     alert_count_->setText(QStringLiteral("미확인 오류 %1").arg(displayed_alert_count));
     alert_count_->setVisible(displayed_alert_count > 0);
     acknowledge_all_button_->setEnabled(displayed_alert_count > 0);
-    if (auto* empty_state = findChild<QLabel*>(QStringLiteral("operationalLogEmptyState")); empty_state != nullptr) {
-        empty_state->setVisible(filtered_count == 0);
+    const bool is_empty = filtered_count == 0;
+    empty_state_->setVisible(is_empty);
+    if (is_empty) {
+        empty_state_->setGeometry(table_->viewport()->rect());
+        empty_state_->raise();
     }
 }
 

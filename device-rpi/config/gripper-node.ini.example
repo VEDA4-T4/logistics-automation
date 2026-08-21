@@ -1,0 +1,196 @@
+# Copy this file to gripper-node.ini before running the gripper node.
+# Do not commit gripper-node.ini because it can contain deployment IP addresses
+# and MQTT credentials.
+
+[device]
+# Must match the gripper_device_id configured in the central server [process]
+# section, and the targetDeviceId the server puts on its control commands.
+device_id=PI-GRIPPER-01
+
+# Human-readable node name reported during device registration.
+node_name=gripper-node-01
+
+# Replace with the gripper Raspberry Pi IP address shown by `hostname -I`.
+ip_address=192.168.0.23
+
+[mqtt]
+# Central server / MQTT broker address.
+host=172.20.33.246
+port=1883
+
+# Must be unique among clients connected to the same MQTT broker.
+client_id=PI-GRIPPER-01
+
+# Leave both values empty only when the MQTT broker permits anonymous access.
+username=
+password=
+
+# Connection recovery policy. The defaults normally do not need adjustment.
+keep_alive_seconds=30
+reconnect_min_delay_seconds=1
+reconnect_max_delay_seconds=30
+clean_session=false
+
+[gripper]
+# ---------------------------------------------------------------------------
+# Taught arm poses, written as base,shoulder,elbow in deci-degrees
+# (900 means 90.0 degrees).
+#
+# The STM32 only accepts calibrated joint targets, so these values decide where
+# the arm actually goes. Teach them against the assembled arm before running a
+# real cycle: drive each joint with device-rpi/tools/gripper_uart_roundtrip and
+# copy the angles that land the claw correctly.
+#
+# The controller clamps every target to its own mechanical limits from
+# stm32/gripper-controller/Application/Inc/gripper_calibration.h:
+#   base     10.0 - 180.0 degrees   (100 - 1800)
+#   shoulder 30.0 - 150.0 degrees   (300 - 1500)
+#   elbow    30.0 - 150.0 degrees   (300 - 1500)
+# Values outside those ranges are silently pulled back to the limit, so keep the
+# poses below inside them or the arm will not reach the pose you expect.
+# ---------------------------------------------------------------------------
+
+# Neutral pose the arm returns to at the end of a cycle.
+home_pose=1000,700,1200
+
+# Taught grasp waypoint used when EXECUTE has no targetPose. The compact taught
+# cycle closes the claw here without adding a separate descent waypoint.
+pick_approach_pose=1000,1300,1400
+
+# Claw closed around the box on the input conveyor.
+pick_pose=1000,1000,1300
+
+# Lift the box clear of the input conveyor before rotating the base.
+pick_lift_pose=1000,600,1400
+
+# Rotate to the sorting conveyor while holding the lifted shoulder and elbow
+# angles, so only the base joint changes during this step.
+transfer_pose=1800,600,1400
+
+# Directly above the drop point on the sorting conveyor.
+place_approach_pose=1800,1100,1500
+
+# Final taught waypoint before returning HOME.
+place_pose=1800,700,1200
+
+# Calibrated claw travel for the assembled mechanism.
+# closed_position_percent must be smaller than open_position_percent; set it to
+# the value that grips a box firmly without stalling the servo.
+open_position_percent=60
+closed_position_percent=30
+
+# Nominal interpolation time for each motion, in milliseconds (100 - 10000).
+# Longer is gentler on the servos and the held box.
+#
+# This is a floor, not the final value. The controller runs every motion for
+# max(this, whatever its own speed limits require), so a long move takes longer
+# than the number below and the node computes the same figure to know when the
+# motion should have finished.
+arm_duration_ms=1500
+claw_duration_ms=600
+
+# ---------------------------------------------------------------------------
+# Vision offset correction (optional).
+#
+# When the central server starts forwarding a pixel offset as params.offsetX,
+# the base joint is nudged by this many deci-degrees per pixel on top of
+# pick_pose. Leave it at 0 until the camera and arm are calibrated together:
+# 0 disables the correction entirely and every cycle uses the taught pose.
+# ---------------------------------------------------------------------------
+base_deci_deg_per_pixel=0.0
+
+# Largest correction accepted before an offset is treated as implausible.
+max_base_correction_deci_deg=150
+
+# ---------------------------------------------------------------------------
+# Arm geometry, for Cartesian targets.
+#
+# When a control command carries params.targetPose the node solves the arm's
+# inverse kinematics instead of using the taught poses above, and everything in
+# this block feeds that calculation. Only targetPose.x/y/z is read; the central
+# server's homography transform also sends rollDeg/pitchDeg/yawDeg alongside it,
+# and none of those three are used (see the next paragraph).
+#
+# Coordinates are millimetres in the arm's own frame: the origin is the base
+# rotation axis at baseplate height, +Z is up, and +X is the direction the arm
+# points when the base servo sits at base_zero_deci_deg. The server's homography
+# transform already rotates and translates pixel coordinates into this frame, so
+# nothing further is done to targetPose.x/y/z here.
+#
+# Box orientation is deliberately not part of this. The arm has three joints and
+# no wrist roll, so the claw's grasp axis is rigidly tied to the base angle,
+# which the target's (x, y) already determines. A yaw in params.targetPose is
+# ignored rather than approximated.
+# ---------------------------------------------------------------------------
+
+# Link lengths, between joint rotation axes. Defaults are a ruler measurement on
+# the assembled arm (2026-07-30): 85 mm shoulder-to-elbow, and 175 mm elbow to
+# the claw's grasp centre (110 mm forearm + 65 mm claw, no wrist joint between
+# them). This replaced an earlier guess from the seller's listing that turned
+# out to be well off once the physical arm was actually measured.
+link_shoulder_to_elbow_mm=85.0
+link_elbow_to_tcp_mm=175.0
+
+# Shoulder pivot position: 20 mm is the measured base stand height below the
+# shoulder servo. The horizontal offset from the base rotation axis has not been
+# measured and is assumed zero.
+shoulder_height_mm=20.0
+shoulder_offset_mm=0.0
+
+# Servo zero references, as servo_angle = zero + direction * geometric_angle.
+#
+# The base and shoulder are referenced to mid-travel. The elbow is referenced to
+# the top of its travel instead, because a fully extended arm is the largest its
+# geometric angle ever gets and folding only reduces it.
+#
+# Set a direction to -1 for a joint whose linkage is mirrored; that is the only
+# change a reversed joint needs.
+base_zero_deci_deg=900.0
+shoulder_zero_deci_deg=900.0
+elbow_zero_deci_deg=1800.0
+base_direction=1
+shoulder_direction=1
+elbow_direction=1
+
+# Vertical clearance between a Cartesian target and the pose the claw descends
+# from. Must clear the tallest box plus the claw's own fingers.
+approach_height_mm=60.0
+
+# Lowest Z a Cartesian target may request, as a guard against driving the claw
+# into the baseplate.
+#
+# Set this NEGATIVE if the arm is mounted above the pick surface, which the
+# default 245 mm forearm makes likely: reaching baseplate height needs the arm at
+# nearly full extension, so a conveyor below the plate is the normal layout.
+min_target_z_mm=0.0
+
+# ---------------------------------------------------------------------------
+# Mirror of the controller's own limits, from
+# stm32/gripper-controller/Application/Inc/gripper_calibration.h.
+#
+# Two reasons these are duplicated here rather than left to the firmware:
+#
+#   Limits - the UART contract accepts the full 0 to 180 degrees, so a target
+#   outside the narrower ranges below is answered with a bare INVALID_PAYLOAD.
+#   Checking on this side turns that into an error naming the joint.
+#
+#   Speeds - the firmware silently stretches a motion that is too fast for it,
+#   so the node has to reproduce the same arithmetic or it times out waiting for
+#   a motion that is still running correctly.
+#
+# Retune these together with the firmware header, never one alone.
+# ---------------------------------------------------------------------------
+base_min_deci_deg=100
+base_max_deci_deg=1800
+shoulder_min_deci_deg=300
+shoulder_max_deci_deg=1500
+elbow_min_deci_deg=300
+elbow_max_deci_deg=1800
+
+base_max_speed_deci_deg_per_sec=300
+shoulder_max_speed_deci_deg_per_sec=120
+elbow_max_speed_deci_deg_per_sec=200
+claw_max_speed_percent_per_sec=40
+
+# Claw position the controller homes to (GRIPPER_HOME_POSITION_PERCENT).
+home_claw_percent=60

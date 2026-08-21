@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 #include <locale>
 #include <sstream>
 #include <string_view>
@@ -199,6 +200,21 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
         config.database.busy_timeout_ms = ParseInteger(path, line_number, key, value, 0, 600'000);
         return;
     }
+    if (section == "database" && key == "startup_mode") {
+        if (value == "fresh") {
+            config.database.startup_mode = StartupMode::kFresh;
+        } else if (value == "resume") {
+            config.database.startup_mode = StartupMode::kResume;
+        } else {
+            ThrowLineError(path, line_number, "startup_mode must be fresh or resume");
+        }
+        return;
+    }
+    if (section == "database" && key == "reset_on_start") {
+        config.database.startup_mode =
+            ParseBoolean(path, line_number, key, value) ? StartupMode::kFresh : StartupMode::kResume;
+        return;
+    }
     if (section == "storage" && key == "log_root") {
         // Kept for compatibility with configurations generated before log_root
         // was removed from StorageConfig.
@@ -248,6 +264,8 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
     if (section == "process") {
         if (key == "enabled") {
             config.process.enabled = ParseBoolean(path, line_number, key, value);
+        } else if (key == "line_tracer_enabled") {
+            config.process.line_tracer_enabled = ParseBoolean(path, line_number, key, value);
         } else if (key == "line_tracer_initial_position") {
             if (value != "A" && value != "B" && value != "C") {
                 ThrowLineError(path, line_number, "line_tracer_initial_position must be A, B, or C");
@@ -263,6 +281,20 @@ void AssignValue(ServerConfig& config, const std::filesystem::path& path, std::s
             AssignProcessId(config, path, line_number, key, value);
         } else {
             ThrowLineError(path, line_number, "unknown [process] setting: " + std::string(key));
+        }
+        return;
+    }
+    if (section == "sensor_detection") {
+        if (key == "enabled") {
+            config.sensor_detection.enabled = ParseBoolean(path, line_number, key, value);
+        } else if (key == "enter_threshold_cm") {
+            config.sensor_detection.enter_threshold_cm = ParseInteger(path, line_number, key, value, 1, 65'534);
+        } else if (key == "exit_threshold_cm") {
+            config.sensor_detection.exit_threshold_cm = ParseInteger(path, line_number, key, value, 1, 65'534);
+        } else if (key == "debounce_count") {
+            config.sensor_detection.debounce_count = ParseInteger(path, line_number, key, value, 1, 100);
+        } else {
+            ThrowLineError(path, line_number, "unknown [sensor_detection] setting: " + std::string(key));
         }
         return;
     }
@@ -296,6 +328,11 @@ void ValidateConfig(const std::filesystem::path& path, const ServerConfig& confi
     }
     if (!config.process.IsValid()) {
         throw ConfigError(path.string() + ": [process] contains an invalid device identifier");
+    }
+    if (!config.sensor_detection.IsValid()) {
+        throw ConfigError(path.string() +
+                          ": [sensor_detection] requires positive thresholds with "
+                          "exit_threshold_cm >= enter_threshold_cm and debounce_count >= 1");
     }
     if (config.process.homography.enabled && !config.process.homography.IsValid()) {
         throw ConfigError(path.string() +
@@ -331,7 +368,8 @@ ServerConfig LoadServerConfig(const std::filesystem::path& path) {
         if (text.front() == '[' && text.back() == ']') {
             section = std::string(Trim(text.substr(1, text.size() - 2)));
             if (section != "mqtt" && section != "device_registry" && section != "database" && section != "storage" &&
-                section != "http" && section != "routing" && section != "process" && section != "homography") {
+                section != "http" && section != "routing" && section != "process" && section != "homography" &&
+                section != "sensor_detection") {
                 ThrowLineError(path, line_number, "unknown configuration section: " + section);
             }
             continue;
@@ -357,6 +395,16 @@ ServerConfig LoadServerConfig(const std::filesystem::path& path) {
             ThrowLineError(path, line_number, "duplicate setting: " + identity);
         }
         AssignValue(config, path, line_number, section, key, value);
+    }
+
+    const bool startup_mode_assigned = assigned_keys.contains("database.startup_mode");
+    const bool reset_on_start_assigned = assigned_keys.contains("database.reset_on_start");
+    if (startup_mode_assigned && reset_on_start_assigned) {
+        throw ConfigError(path.string() +
+                          ": [database] startup_mode and deprecated reset_on_start cannot be used together");
+    }
+    if (reset_on_start_assigned) {
+        std::clog << "[server][WARNING] reset_on_start is deprecated; use startup_mode=fresh|resume\n";
     }
 
     ValidateConfig(path, config);

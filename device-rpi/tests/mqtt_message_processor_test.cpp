@@ -14,6 +14,9 @@ namespace {
 namespace device = logistics::device;
 namespace mqtt = logistics::contracts::mqtt;
 
+constexpr std::string_view kProcessEpoch = "4b0d7a76-49f7-4e39-b624-f59e129fa4c7";
+constexpr std::string_view kOtherProcessEpoch = "6d395cb2-93da-4de6-8eac-b2afee09c17e";
+
 [[nodiscard]] std::string MakeCommandPayload(std::string target_device_id, std::string request_id = "REQ-COMMAND-01") {
     const mqtt::MqttMessage command{
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
@@ -32,6 +35,27 @@ namespace mqtt = logistics::contracts::mqtt;
     };
 
     const auto encoded = mqtt::SerializeMessage(command);
+    assert(encoded.IsSuccess());
+    return encoded.payload;
+}
+
+[[nodiscard]] mqtt::MqttMessage ProcessCommand(mqtt::ControlCommand command, std::string request_id,
+                                               std::string process_epoch) {
+    return {
+        .message_id = "MSG-" + request_id,
+        .message_type = mqtt::MessageType::kControlCommand,
+        .source_id = "central-server",
+        .timestamp = "2026-08-15T01:00:00Z",
+        .process_epoch = std::move(process_epoch),
+        .data = mqtt::ControlCommandPayload{ .request_id = std::move(request_id),
+                                             .command = command,
+                                             .target_device_id = "PI-01",
+                                             .params = mqtt::Json::object() },
+    };
+}
+
+[[nodiscard]] std::string Encode(const mqtt::MqttMessage& message) {
+    const auto encoded = mqtt::SerializeMessage(message);
     assert(encoded.IsSuccess());
     return encoded.payload;
 }
@@ -60,6 +84,16 @@ void TestCommandDecoding() {
 
     const auto malformed = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), "{");
     assert(!malformed.IsSuccess());
+}
+
+void TestForgetCommandAllowsRetry() {
+    device::MqttMessageProcessor processor("PI-01");
+    const auto first = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
+    assert(first.IsSuccess());
+    processor.ForgetCommand(first.message.message_id);
+    const auto retried = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), MakeCommandPayload("PI-01"));
+    assert(retried.IsSuccess());
+    assert(!retried.duplicate);
 }
 
 void TestDuplicateCommandFindsCachedResponse() {
@@ -208,14 +242,140 @@ void TestDeviceEventAndErrorEncoding() {
     assert(!processor.EncodeDeviceEvent(error).IsSuccess());
 }
 
+void TestProcessEpochOwnershipAndPropagation() {
+    device::MqttMessageProcessor processor("PI-01");
+    const auto start = ProcessCommand(mqtt::ControlCommand::kStart, "REQ-START", std::string(kProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(start)).IsSuccess());
+
+    mqtt::MqttMessage response{
+        .message_id = "RESP-START",
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .source_id = "PI-01",
+        .timestamp = "2026-08-15T01:00:01Z",
+        .data = mqtt::CommandResponsePayload{ .request_id = "REQ-START",
+                                              .command = mqtt::ControlCommand::kStart,
+                                              .result = mqtt::CommandResult::kSuccess,
+                                              .message = "started" },
+    };
+    const auto stamped_response = processor.PrepareOutboundMessage(response);
+    assert(stamped_response.has_value());
+    assert(stamped_response->process_epoch == kProcessEpoch);
+
+    mqtt::MqttMessage status{
+        .message_id = "STATUS-WORK",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "PI-01",
+        .timestamp = "2026-08-15T01:00:02Z",
+        .data = mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline,
+                                           .current_state = "COMPLETED",
+                                           .job_id = std::string("22a194c3-3e3c-410c-a329-7e8c4ebcac83") },
+    };
+    const auto stamped_status = processor.PrepareOutboundMessage(status);
+    assert(stamped_status.has_value() && stamped_status->process_epoch == kProcessEpoch);
+
+    auto reused_start = start;
+    reused_start.process_epoch = std::string(kOtherProcessEpoch);
+    assert(!processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(reused_start)).IsSuccess());
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kProcessEpoch);
+
+    mqtt::MqttMessage sensor{
+        .message_id = "SENSOR-CURRENT",
+        .message_type = mqtt::MessageType::kSensorStatus,
+        .source_id = "PI-01",
+        .timestamp = "2026-08-15T01:00:03Z",
+        .data = mqtt::SensorStatusPayload{ .sensor_id = 1, .measurement_status = "OK", .distance_cm = 20 },
+    };
+    const auto unstamped_sensor = processor.PrepareOutboundMessage(sensor);
+    assert(unstamped_sensor.has_value() && !unstamped_sensor->process_epoch.has_value());
+
+    const auto stop = ProcessCommand(mqtt::ControlCommand::kStop, "REQ-STOP", std::string(kOtherProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(stop)).IsSuccess());
+    status.message_id = "STATUS-AFTER-STOP";
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kProcessEpoch);
+    response.message_id = "RESP-STOP";
+    response.data = mqtt::CommandResponsePayload{ .request_id = "REQ-STOP",
+                                                  .command = mqtt::ControlCommand::kStop,
+                                                  .result = mqtt::CommandResult::kSuccess,
+                                                  .message = "stopped" };
+    assert(processor.PrepareOutboundMessage(response)->process_epoch == kOtherProcessEpoch);
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kProcessEpoch);
+
+    auto work_command = ProcessCommand(mqtt::ControlCommand::kExecute, "REQ-WORK-E1", std::string(kProcessEpoch));
+    auto* work_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(work_command);
+    assert(work_payload != nullptr);
+    work_payload->params["workId"] = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(work_command)).IsSuccess());
+    const auto next_start =
+        ProcessCommand(mqtt::ControlCommand::kStart, "REQ-START-E2", std::string(kOtherProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(next_start)).IsSuccess());
+    response.message_id = "RESP-WORK-E1";
+    response.data = mqtt::CommandResponsePayload{ .request_id = "REQ-WORK-E1",
+                                                  .command = mqtt::ControlCommand::kExecute,
+                                                  .result = mqtt::CommandResult::kSuccess,
+                                                  .message = "completed" };
+    assert(processor.PrepareOutboundMessage(response)->process_epoch == kProcessEpoch);
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
+
+    auto mismatched = status;
+    mismatched.process_epoch = std::string(kProcessEpoch);
+    assert(!processor.PrepareOutboundMessage(mismatched).has_value());
+}
+
+void TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval() {
+    device::MqttMessageProcessor processor("PI-01");
+    mqtt::MqttMessage created{
+        .message_id = "WORK-22a194c3-3e3c-410c-a329-7e8c4ebcac83",
+        .message_type = mqtt::MessageType::kWorkCreated,
+        .source_id = "central-server",
+        .timestamp = "2026-08-15T01:10:00Z",
+        .process_epoch = std::string(kProcessEpoch),
+        .data = mqtt::WorkCreatedPayload{ .work_id = "22a194c3-3e3c-410c-a329-7e8c4ebcac83" },
+    };
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(created)).IsSuccess());
+
+    mqtt::MqttMessage event{
+        .message_id = "POSITION-EPOCH",
+        .message_type = mqtt::MessageType::kPositionDetected,
+        .source_id = "PI-01",
+        .timestamp = "2026-08-15T01:10:01Z",
+        .data = mqtt::PositionDetectedPayload{ .work_id = "22a194c3-3e3c-410c-a329-7e8c4ebcac83",
+                                               .box_x = 1,
+                                               .box_y = 2,
+                                               .box_width = 3,
+                                               .box_height = 4,
+                                               .center_x = 2,
+                                               .center_y = 3,
+                                               .offset_x = 0,
+                                               .offset_y = 0,
+                                               .position_status = "DETECTED" },
+    };
+    const auto encoded_event = processor.EncodeDeviceEvent(event);
+    assert(encoded_event.IsSuccess());
+    assert(mqtt::DeserializeMessage(encoded_event.payload).value.process_epoch == kProcessEpoch);
+
+    created.message_id = "WORK-OTHER-EPOCH";
+    created.process_epoch = std::string(kOtherProcessEpoch);
+    const auto conflict = processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(created));
+    assert(!conflict.IsSuccess());
+    assert(conflict.error.find("processEpoch") != std::string::npos);
+    assert(processor.PrepareOutboundMessage(event)->process_epoch == kProcessEpoch);
+
+    processor.SetWorkCreatedEpochReassignmentGuard([] { return true; });
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(created)).IsSuccess());
+    assert(processor.PrepareOutboundMessage(event)->process_epoch == kOtherProcessEpoch);
+}
+
 }  // namespace
 
 int main() {
     TestCommandDecoding();
+    TestForgetCommandAllowsRetry();
     TestDuplicateCommandFindsCachedResponse();
     TestHeartbeatEncoding();
     TestWorkCreatedCommandDecoding();
     TestRegistrationAndOnlineStatusEncoding();
     TestDeviceEventAndErrorEncoding();
+    TestProcessEpochOwnershipAndPropagation();
+    TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval();
     return 0;
 }

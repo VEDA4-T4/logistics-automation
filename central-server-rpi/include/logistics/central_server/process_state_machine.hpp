@@ -100,14 +100,18 @@ struct ProcessTransition final {
 class ProcessStateMachine final {
 public:
     [[nodiscard]] ProcessSystemState SystemState() const noexcept;
+    [[nodiscard]] bool AcceptsNewWork() const noexcept;
     [[nodiscard]] ProcessTransition Apply(const ProcessEvent& event);
     [[nodiscard]] ProcessTransition ApplySystemFailure(std::string reason);
+    [[nodiscard]] ProcessTransition ClearSystemFailureIfIdle();
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
     [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
-                                                 std::vector<WorkProcessSnapshot> works);
+                                                 std::vector<WorkProcessSnapshot> works,
+                                                 std::vector<std::string> processed_message_ids = {});
     [[nodiscard]] std::optional<WorkProcessSnapshot> FindWork(std::string_view work_id) const;
     [[nodiscard]] std::vector<WorkProcessSnapshot> ActiveWorks() const;
+    [[nodiscard]] std::vector<std::string> ProcessedMessageIds() const;
 
 private:
     static constexpr std::size_t kRememberedMessageLimit = 2048;
@@ -131,5 +135,6 @@ private:
 [[nodiscard]] std::string_view ToString(ProcessEventType type) noexcept;
 [[nodiscard]] std::optional<ProcessSystemState> ParseProcessSystemState(std::string_view value) noexcept;
 [[nodiscard]] std::optional<WorkStage> ParseWorkStage(std::string_view value) noexcept;
+[[nodiscard]] std::optional<ProcessEventType> ParseProcessEventType(std::string_view value) noexcept;
 
 }  // namespace logistics::central_server

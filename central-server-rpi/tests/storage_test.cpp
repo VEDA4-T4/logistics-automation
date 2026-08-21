@@ -43,6 +43,39 @@ logistics::central_server::TransportMetadata Metadata(std::int64_t time,
              .raw_payload = "{}" };
 }
 
+void PopulateStartupState(logistics::central_server::Database& database, bool stale_migration_history) {
+    assert(database
+               .Execute(
+                   "DELETE FROM product_catalog;"
+                   "INSERT INTO product_catalog VALUES('8801234567890','CUSTOM-1','Custom product','2',1,1,2);"
+                   "INSERT INTO product(work_id,lifecycle_state,created_at_ms,updated_at_ms) "
+                   "VALUES('OLD-WORK','DETECTED',1,1);"
+                   "INSERT INTO work_history(work_id,message_id,event_type,source_id,occurred_at_ms) "
+                   "VALUES('OLD-WORK','OLD-HISTORY','BOX_DETECTED','PI-INPUT-01',1);"
+                   "INSERT INTO mqtt_event_log(message_id,topic,payload_json,qos,retained,processing_state,"
+                   "received_at_ms,last_received_at_ms) "
+                   "VALUES('OLD-INBOX','device/PI-INPUT-01/event','{}',1,0,'RECEIVED',1,1);"
+                   "INSERT INTO process_runtime_state VALUES(1,'RUNNING',7,1,'');"
+                   "INSERT INTO process_work_state(work_id,stage,updated_at_ms) VALUES('OLD-WORK','INPUT_DETECTED',1);"
+                   "INSERT INTO process_command_outbox "
+                   "VALUES('OLD-COMMAND','{}','OLD-WORK',NULL,0,1);"
+                   "INSERT INTO process_mqtt_outbox VALUES('server/event','OLD-OUTBOX','{}',1);"
+                   "INSERT INTO process_processed_message VALUES('OLD-PROCESSED',8);"
+                   "INSERT INTO command_manager_pending "
+                   "VALUES('OLD-PENDING','{}','[]','[]','[]',NULL,10);"
+                   "INSERT INTO command_manager_completed VALUES('OLD-COMPLETED',9);"
+                   "INSERT INTO command_manager_runtime VALUES(1,10);"
+                   "INSERT INTO pending_system_command VALUES('OLD-SYSTEM','STOP');")
+               .ok());
+    if (stale_migration_history) {
+        assert(database
+                   .Execute("UPDATE schema_migrations SET checksum='old' WHERE version=1;"
+                            "INSERT INTO schema_migrations(version,name,checksum,applied_at_ms) "
+                            "VALUES(999,'old-history.sql','old',1);")
+                   .ok());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -67,7 +100,9 @@ int main() {
     server::Transaction independent_upload_transaction(upload_database);
     assert(independent_upload_transaction.status().code == server::DatabaseStatusCode::kBusy);
     assert(database.Rollback().ok());
-    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 6);
+    assert(Scalar(database, "SELECT count(*) FROM schema_migrations") == 11);
+    assert(Scalar(database,
+                  "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_mqtt_pending_received'") == 1);
     assert(Scalar(database,
                   "SELECT count(*) FROM product_catalog WHERE barcode='5901234123457' AND product_id='VEDA107' AND "
                   "product_name='VEDA107 기본 상품' AND destination='1' AND active=1") == 1);
@@ -231,6 +266,16 @@ int main() {
     assert(error_payload->current_state == "RECALIBRATION_REQUIRED");
     assert(error_payload->message == invalidation.reason);
     assert(mqtt::ValidateTopicMessage(mqtt::QtErrorTopic("control-center"), error).IsSuccess());
+    const auto failed =
+        server::MakeWorkFailureCompletion("central-server", "RECOVERY-FAILED-" + invalidated_work_id,
+                                          invalidated_work_id, invalidation.reason, "2026-07-31T00:00:00Z");
+    assert(failed.message_type == mqtt::MessageType::kWorkCompleted);
+    const auto* failed_payload = mqtt::GetPayload<mqtt::WorkCompletedPayload>(failed);
+    assert(failed_payload != nullptr);
+    assert(failed_payload->work_id == invalidated_work_id);
+    assert(failed_payload->result == "FAILED");
+    assert(failed_payload->message == invalidation.reason);
+    assert(mqtt::ValidateTopicMessage(mqtt::QtEventTopic("control-center"), failed).IsSuccess());
     assert(Scalar(database, "SELECT count(*) FROM product WHERE work_id='" + invalidated_work_id +
                                 "' AND lifecycle_state='ERROR'") == 1);
     assert(Scalar(database, "SELECT count(*) FROM error_log WHERE work_id='" + invalidated_work_id +
@@ -401,6 +446,137 @@ int main() {
     server::Database gap_database;
     assert(gap_database.Open({ .path = root / "gap.db", .migration_dir = gap_dir }).ok());
     assert(server::MigrationRunner::Apply(gap_database, gap_dir).code == server::DatabaseStatusCode::kMigrationError);
+
+    server::Database reset_database;
+    server::DatabaseConfig reset_config{ .path = root / "reset.db",
+                                         .migration_dir = database_config.migration_dir,
+                                         .busy_timeout_ms = 100,
+                                         .startup_mode = server::StartupMode::kFresh };
+    assert(reset_database.Open(reset_config).ok());
+    assert(server::MigrationRunner::Apply(reset_database, reset_config.migration_dir).ok());
+    PopulateStartupState(reset_database, true);
+    assert(server::PrepareDatabaseForStartup(reset_database, reset_config).ok());
+    assert(Scalar(reset_database,
+                  "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_id='CUSTOM-1'") == 1);
+    assert(Scalar(reset_database, "SELECT count(*) FROM schema_migrations") == 11);
+    assert(Scalar(reset_database, "SELECT count(*) FROM schema_migrations WHERE version=999") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM product") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM work_history") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM mqtt_event_log") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM process_runtime_state") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM process_work_state") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM process_command_outbox") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM process_mqtt_outbox") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM process_processed_message") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM command_manager_pending") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM command_manager_completed") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM command_manager_runtime") == 0);
+    assert(Scalar(reset_database, "SELECT count(*) FROM pending_system_command") == 0);
+    assert(!std::filesystem::exists(reset_config.path.string() + ".reset-source"));
+    assert(reset_database.IntegrityCheck().ok());
+
+    server::Database first_start_database;
+    server::DatabaseConfig first_start_config{ .path = root / "first-start.db",
+                                               .migration_dir = database_config.migration_dir,
+                                               .busy_timeout_ms = 100,
+                                               .startup_mode = server::StartupMode::kFresh };
+    assert(first_start_database.Open(first_start_config).ok());
+    assert(server::PrepareDatabaseForStartup(first_start_database, first_start_config).ok());
+    assert(Scalar(first_start_database, "SELECT count(*) FROM schema_migrations") == 11);
+    assert(Scalar(first_start_database, "SELECT count(*) FROM product_catalog") == 1);
+
+    server::Database resume_database;
+    server::DatabaseConfig resume_config{ .path = root / "resume.db",
+                                          .migration_dir = database_config.migration_dir,
+                                          .busy_timeout_ms = 100,
+                                          .startup_mode = server::StartupMode::kResume };
+    assert(resume_database.Open(resume_config).ok());
+    assert(server::MigrationRunner::Apply(resume_database, resume_config.migration_dir).ok());
+    PopulateStartupState(resume_database, false);
+    assert(server::PrepareDatabaseForStartup(resume_database, resume_config).ok());
+    assert(Scalar(resume_database,
+                  "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_id='CUSTOM-1'") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM schema_migrations") == 11);
+    assert(Scalar(resume_database, "SELECT count(*) FROM product WHERE work_id='OLD-WORK'") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM work_history WHERE message_id='OLD-HISTORY'") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM mqtt_event_log WHERE message_id='OLD-INBOX'") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM process_runtime_state") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM process_work_state WHERE work_id='OLD-WORK'") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM process_command_outbox WHERE request_id='OLD-COMMAND'") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM process_mqtt_outbox WHERE message_id='OLD-OUTBOX'") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM process_processed_message WHERE message_id='OLD-PROCESSED'") ==
+           1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM command_manager_pending") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM command_manager_completed") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM command_manager_runtime") == 1);
+    assert(Scalar(resume_database, "SELECT count(*) FROM pending_system_command") == 1);
+
+    server::Database migration_failure_database;
+    server::DatabaseConfig migration_failure_config{ .path = root / "migration-failure.db",
+                                                     .migration_dir = database_config.migration_dir,
+                                                     .busy_timeout_ms = 100,
+                                                     .startup_mode = server::StartupMode::kFresh };
+    assert(migration_failure_database.Open(migration_failure_config).ok());
+    assert(server::MigrationRunner::Apply(migration_failure_database, migration_failure_config.migration_dir).ok());
+    PopulateStartupState(migration_failure_database, false);
+    auto invalid_migration_config = migration_failure_config;
+    invalid_migration_config.migration_dir = gap_dir;
+    const auto migration_failure_status =
+        server::PrepareDatabaseForStartup(migration_failure_database, invalid_migration_config);
+    assert(!migration_failure_status.ok());
+    assert(migration_failure_status.message.find("migration sequence has a gap") != std::string::npos);
+    assert(migration_failure_status.message.find("original database restored") != std::string::npos);
+    assert(migration_failure_database.IsOpen());
+    assert(!std::filesystem::exists(migration_failure_config.path.string() + ".reset-source"));
+    assert(Scalar(migration_failure_database,
+                  "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_id='CUSTOM-1'") == 1);
+    assert(Scalar(migration_failure_database, "SELECT count(*) FROM product WHERE work_id='OLD-WORK'") == 1);
+    auto resume_after_failure = migration_failure_config;
+    resume_after_failure.startup_mode = server::StartupMode::kResume;
+    assert(server::PrepareDatabaseForStartup(migration_failure_database, resume_after_failure).ok());
+    assert(Scalar(migration_failure_database, "SELECT count(*) FROM process_runtime_state") == 1);
+    assert(Scalar(migration_failure_database, "SELECT count(*) FROM process_mqtt_outbox") == 1);
+
+    const auto incompatible_catalog_migrations = root / "incompatible-catalog-migrations";
+    std::filesystem::copy(database_config.migration_dir, incompatible_catalog_migrations,
+                          std::filesystem::copy_options::recursive);
+    {
+        std::ofstream migration(incompatible_catalog_migrations / "012_break_catalog.sql");
+        assert(migration);
+        migration << "ALTER TABLE product_catalog RENAME COLUMN product_name TO legacy_name;\n";
+        assert(migration.good());
+    }
+    server::Database catalog_failure_database;
+    server::DatabaseConfig catalog_failure_config{ .path = root / "catalog-failure.db",
+                                                   .migration_dir = incompatible_catalog_migrations,
+                                                   .busy_timeout_ms = 100,
+                                                   .startup_mode = server::StartupMode::kFresh };
+    assert(catalog_failure_database.Open(catalog_failure_config).ok());
+    assert(server::MigrationRunner::Apply(catalog_failure_database, database_config.migration_dir).ok());
+    PopulateStartupState(catalog_failure_database, false);
+    const auto catalog_failure_status =
+        server::PrepareDatabaseForStartup(catalog_failure_database, catalog_failure_config);
+    assert(!catalog_failure_status.ok());
+    assert(catalog_failure_status.message.find("product_name") != std::string::npos);
+    assert(catalog_failure_status.message.find("original database restored") != std::string::npos);
+    assert(catalog_failure_database.IsOpen());
+    assert(!std::filesystem::exists(catalog_failure_config.path.string() + ".reset-source"));
+    assert(
+        Scalar(
+            catalog_failure_database,
+            "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_name='Custom product'") ==
+        1);
+    assert(Scalar(catalog_failure_database, "SELECT count(*) FROM product WHERE work_id='OLD-WORK'") == 1);
+    auto fresh_after_failure = catalog_failure_config;
+    fresh_after_failure.migration_dir = database_config.migration_dir;
+    assert(server::PrepareDatabaseForStartup(catalog_failure_database, fresh_after_failure).ok());
+    assert(
+        Scalar(
+            catalog_failure_database,
+            "SELECT count(*) FROM product_catalog WHERE barcode='8801234567890' AND product_name='Custom product'") ==
+        1);
+    assert(Scalar(catalog_failure_database, "SELECT count(*) FROM product") == 0);
+    assert(!std::filesystem::exists(catalog_failure_config.path.string() + ".reset-source"));
 
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);

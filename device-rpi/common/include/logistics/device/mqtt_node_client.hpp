@@ -13,7 +13,7 @@ namespace logistics::device {
 
 class MqttNodeClient final {
 public:
-    using CommandHandler = std::function<void(const contracts::mqtt::MqttMessage& message)>;
+    using CommandHandler = std::function<bool(const contracts::mqtt::MqttMessage& message)>;
 
     MqttNodeClient(MqttNodeConfig config, std::string device_type, std::shared_ptr<DeviceStatus> device_status);
     ~MqttNodeClient();
@@ -24,6 +24,7 @@ public:
     MqttNodeClient& operator=(MqttNodeClient&&) = delete;
 
     void SetCommandHandler(CommandHandler handler);
+    void SetWorkCreatedEpochReassignmentGuard(std::function<bool()> guard);
 
     [[nodiscard]] bool Start();
     void Stop() noexcept;

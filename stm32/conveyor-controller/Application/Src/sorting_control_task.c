@@ -45,6 +45,8 @@ static sorting_control_task_response_t sortingPendingResponse;
 static sorting_control_task_transaction_t sortingTransactionCache;
 static uint8_t sortingPendingResponseValid;
 static uint8_t sortingPendingResponseAttempted;
+static sorting_control_task_response_t sortingPendingCycleEvent;
+static uint8_t sortingPendingCycleEventValid;
 
 static sorting_control_safety_sync_state_t sorting_control_task_safety_state(void) {
     return atomic_load_explicit(&sortingSafetySyncState, memory_order_acquire);
@@ -77,8 +79,10 @@ static uart_error_t sorting_control_task_result_error(sorting_control_result_t r
             return UART_ERROR_UNSUPPORTED_COMMAND;
 
         case SORTING_CONTROL_INVALID_PAYLOAD:
-        case SORTING_CONTROL_SPEED_NOT_CONFIGURED:
             return UART_ERROR_INVALID_PAYLOAD;
+
+        case SORTING_CONTROL_SPEED_NOT_CONFIGURED:
+            return UART_ERROR_SPEED_NOT_CONFIGURED;
 
         case SORTING_CONTROL_FAULT_LATCHED:
             return (controller->state.lastError != UART_ERROR_NONE) ? controller->state.lastError : UART_ERROR_INTERNAL;
@@ -165,22 +169,29 @@ static uint8_t sorting_control_task_send_tx(const sorting_control_task_response_
 }
 
 uint8_t sorting_control_task_service_tx(void) {
-    if (sortingPendingResponseValid == 0U) {
-        return 1U;
+    if (sortingPendingResponseValid != 0U) {
+        if (sortingPendingResponseAttempted != 0U) {
+            sortingControlTaskStats.txRetryAttempts++;
+        }
+
+        sortingPendingResponseAttempted = 1U;
+
+        if (sorting_control_task_send_tx(&sortingPendingResponse) == 0U) {
+            return 0U;
+        }
+
+        sortingPendingResponseValid = 0U;
+        sortingPendingResponseAttempted = 0U;
     }
 
-    if (sortingPendingResponseAttempted != 0U) {
-        sortingControlTaskStats.txRetryAttempts++;
+    if (sortingPendingCycleEventValid != 0U) {
+        if (sorting_control_task_send_tx(&sortingPendingCycleEvent) == 0U) {
+            return 0U;
+        }
+
+        sortingPendingCycleEventValid = 0U;
     }
 
-    sortingPendingResponseAttempted = 1U;
-
-    if (sorting_control_task_send_tx(&sortingPendingResponse) == 0U) {
-        return 0U;
-    }
-
-    sortingPendingResponseValid = 0U;
-    sortingPendingResponseAttempted = 0U;
     return 1U;
 }
 
@@ -250,6 +261,17 @@ static sorting_control_task_response_t sorting_control_task_build_cycle_event(
     return response;
 }
 
+static uint8_t sorting_control_task_schedule_cycle_event(const sorting_cycle_complete_t* completion) {
+    if ((completion == NULL) || (sortingPendingCycleEventValid != 0U)) {
+        sortingControlTaskStats.txPendingOverruns++;
+        return 0U;
+    }
+
+    sortingPendingCycleEvent = sorting_control_task_build_cycle_event(completion);
+    sortingPendingCycleEventValid = 1U;
+    return 1U;
+}
+
 static uint8_t sorting_control_task_same_transaction_identity(const control_command_t* message) {
     return ((sortingTransactionCache.valid != 0U) && (sortingTransactionCache.source == message->source) &&
             (sortingTransactionCache.sequence == message->frame.sequence))
@@ -297,6 +319,7 @@ static sorting_control_result_t sorting_control_task_apply_requested_stop(sortin
     sortingTransactionCache.valid = 0U;
     sortingPendingResponseValid = 0U;
     sortingPendingResponseAttempted = 0U;
+    sortingPendingCycleEventValid = 0U;
     result = sorting_control_handle_safety_stop(controller);
 
     if (result == SORTING_CONTROL_OK) {
@@ -334,8 +357,10 @@ sorting_control_result_t sorting_control_task_initialize_controller(sorting_cont
 
     memset(&sortingTransactionCache, 0, sizeof(sortingTransactionCache));
     memset(&sortingPendingResponse, 0, sizeof(sortingPendingResponse));
+    memset(&sortingPendingCycleEvent, 0, sizeof(sortingPendingCycleEvent));
     sortingPendingResponseValid = 0U;
     sortingPendingResponseAttempted = 0U;
+    sortingPendingCycleEventValid = 0U;
     result = sorting_control_init(controller, motor, gate);
     (void)sorting_control_task_apply_requested_stop(controller);
     return result;
@@ -448,22 +473,18 @@ sorting_control_result_t sorting_control_task_process_message(sorting_control_t*
 sorting_control_result_t sorting_control_task_service_motion(sorting_control_t* controller) {
     sorting_cycle_complete_t completion;
     sorting_control_result_t result;
-    sorting_control_task_response_t response;
 
     if (controller == NULL) {
         return SORTING_CONTROL_INVALID_ARGUMENT;
     }
 
-    if (sorting_control_task_service_tx() == 0U) {
-        return SORTING_CONTROL_TX_BUSY;
-    }
-
     result = sorting_control_service_motion(controller, &completion);
 
     if ((result == SORTING_CONTROL_OK) && (completion.valid != 0U)) {
-        response = sorting_control_task_build_cycle_event(&completion);
         sortingControlTaskStats.cycleCompleteEvents++;
-        (void)sorting_control_task_schedule_response(&response);
+        if (sorting_control_task_schedule_cycle_event(&completion) != 0U) {
+            (void)sorting_control_task_service_tx();
+        }
     }
 
     return result;
@@ -541,15 +562,9 @@ void StartSortingControlTask(void* argument) {
             (void)sorting_control_task_process_message(&sortingController, &message);
         }
 
-        if (sorting_control_task_service_tx() == 0U) {
-            osDelay(1U);
-            continue;
-        }
+        (void)sorting_control_task_service_tx();
 
-        if (sorting_control_task_service_motion(&sortingController) == SORTING_CONTROL_TX_BUSY) {
-            osDelay(1U);
-            continue;
-        }
+        (void)sorting_control_task_service_motion(&sortingController);
 
         if (sortingControlQueueHandle == NULL) {
             osDelay(SORTING_CONTROL_QUEUE_RETRY_TICKS);

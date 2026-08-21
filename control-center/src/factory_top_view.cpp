@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QBrush>
+#include <QFocusEvent>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsObject>
@@ -10,12 +11,16 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsSimpleTextItem>
 #include <QHash>
+#include <QKeyEvent>
 #include <QLineF>
 #include <QPainter>
 #include <QPen>
 #include <QResizeEvent>
 #include <QTimer>
 #include <functional>
+
+#include "logistics/contracts/device.hpp"
+#include "logistics/contracts/uart/linetracer_commands.h"
 
 namespace logistics::control_center {
 namespace {
@@ -31,14 +36,6 @@ std::optional<int> RouteSuffix(const QString& state, QStringView prefix) {
     const auto suffix = state.back();
     return suffix >= QLatin1Char('A') && suffix <= QLatin1Char('C') ? std::optional<int>(suffix.unicode() - 'A' + 1)
                                                                     : std::nullopt;
-}
-
-bool HasDestinationSuffix(const QString& state, QStringView prefix) {
-    if (!state.startsWith(prefix) || state.size() != prefix.size() + 1) {
-        return false;
-    }
-    const auto suffix = state.back();
-    return suffix >= QLatin1Char('1') && suffix <= QLatin1Char('3');
 }
 
 FactoryMotionPhase MotionPhaseFor(const ProcessUnitStatus& process, const QString& state) {
@@ -86,33 +83,13 @@ FactoryMotionPhase MotionPhaseFor(const ProcessUnitStatus& process, const QStrin
     return FactoryMotionPhase::InputConveyor;
 }
 
-bool IsWorkingState(const ProcessUnitStatus& process, const QString& state) {
-    if (process.key == QString::fromLatin1(kVisionProcessKey)) {
-        return state == QStringLiteral("WORK_ASSIGNED") || state == QStringLiteral("AWAITING_WORK_ID") ||
-               state == QStringLiteral("VISION_PROCESSING");
-    }
-    if (process.key == QString::fromLatin1(kInputProcessKey)) {
-        return state == QStringLiteral("BUSY");
-    }
-    if (process.key == QString::fromLatin1(kGripperProcessKey)) {
-        return state == QStringLiteral("PICKING") || state == QStringLiteral("TRANSFERRING") ||
-               state == QStringLiteral("PLACED") || state == QStringLiteral("COMPLETED");
-    }
-    if (process.key == QString::fromLatin1(kSortingProcessKey)) {
-        return state == QStringLiteral("BUSY") || state == QStringLiteral("SORTING") ||
-               state == QStringLiteral("ROUTING") || state == QStringLiteral("RETURNING_HOME") ||
-               HasDestinationSuffix(state, u"GATE_MOVING_DEST_") || HasDestinationSuffix(state, u"WAITING_ITEM_DEST_");
-    }
-    if (process.key == QString::fromLatin1(kLineTracerProcessKey)) {
-        return state == QStringLiteral("DELIVERING") || state == QStringLiteral("FOLLOWING_LINE") ||
-               state == QStringLiteral("CORRECTING") || RouteSuffix(state, u"PICKUP_READY_").has_value() ||
-               RouteSuffix(state, u"ARRIVED_").has_value() || RouteSuffix(state, u"UNLOADING_").has_value() ||
-               RouteSuffix(state, u"LOAD_ON_").has_value() || RouteSuffix(state, u"LOAD_OFF_").has_value();
-    }
-    return false;
+contracts::DeviceStateMeaning StateMeaning(const ProcessUnitStatus& process, const QString& state) {
+    const auto role = contracts::DeviceRoleFromString(process.key.toStdString());
+    return role.has_value() ? contracts::DeviceStateMeaningFor(*role, state.toStdString())
+                            : contracts::DeviceStateMeaning::kUnknown;
 }
 
-bool IsRunningState(const ProcessUnitStatus& process, const QString& state) {
+bool UsesRunningVisual(const ProcessUnitStatus& process, const QString& state) {
     return state == QStringLiteral("RUNNING") || state == QStringLiteral("ONLINE") ||
            (process.key == QString::fromLatin1(kVisionProcessKey) && state == QStringLiteral("WAITING_FOR_PRODUCT")) ||
            (process.key == QString::fromLatin1(kLineTracerProcessKey) && RouteSuffix(state, u"PARKED_").has_value());
@@ -126,6 +103,10 @@ FactoryNodeVisual BaseVisual(const ProcessUnitStatus& process) {
     visual.state_text = process.current_state;
     visual.sensors.reserve(process.sensors.size());
     for (const auto& sensor : process.sensors) {
+        if (process.key == QString::fromLatin1(kLineTracerProcessKey) &&
+            uart_linetracer_sensor_id_is_valid(static_cast<uint32_t>(sensor.sensor_id)) == 0U) {
+            continue;
+        }
         const auto status = NormalizedState(sensor.measurement_status);
         visual.sensors.append({ .sensor_id = sensor.sensor_id,
                                 .detected = status == QStringLiteral("DETECTED"),
@@ -138,7 +119,7 @@ FactoryNodeVisual BaseVisual(const ProcessUnitStatus& process) {
 FactoryNodeVisual DisconnectedVisual(const ProcessUnitStatus& process) {
     auto visual = BaseVisual(process);
     visual.state = FactoryNodeVisualState::Disconnected;
-    visual.opacity = 0.15;
+    visual.opacity = 0.4;
     return visual;
 }
 
@@ -152,6 +133,20 @@ FactoryNodeVisual EmergencyVisual(const ProcessUnitStatus& process) {
 FactoryNodeVisual ErrorVisual(const ProcessUnitStatus& process) {
     auto visual = BaseVisual(process);
     visual.state = FactoryNodeVisualState::Error;
+    visual.opacity = 1.0;
+    return visual;
+}
+
+FactoryNodeVisual RecoveryVisual(const ProcessUnitStatus& process) {
+    auto visual = BaseVisual(process);
+    visual.state = FactoryNodeVisualState::Recovery;
+    visual.opacity = 1.0;
+    return visual;
+}
+
+FactoryNodeVisual StoppedVisual(const ProcessUnitStatus& process) {
+    auto visual = BaseVisual(process);
+    visual.state = FactoryNodeVisualState::Stopped;
     visual.opacity = 1.0;
     return visual;
 }
@@ -190,22 +185,32 @@ std::optional<int> FactoryRouteIndex(const QString& current_state) {
 
 FactoryNodeVisual BuildFactoryNodeVisual(const ProcessUnitStatus& process) {
     const auto state = NormalizedState(process.current_state);
+    const auto meaning = StateMeaning(process, state);
+    if (meaning == contracts::DeviceStateMeaning::kEmergencyStop) {
+        return EmergencyVisual(process);
+    }
+    if (process.has_error ||
+        (meaning == contracts::DeviceStateMeaning::kError && state != QStringLiteral("DISCONNECTED"))) {
+        return ErrorVisual(process);
+    }
     if (process.connection_state != logistics::contracts::mqtt::ConnectionState::kOnline ||
         state == QStringLiteral("DISCONNECTED")) {
         return DisconnectedVisual(process);
     }
-    if (state == QStringLiteral("EMERGENCY_STOP") || state == QStringLiteral("ESTOP")) {
-        return EmergencyVisual(process);
+    if (meaning == contracts::DeviceStateMeaning::kRecovery) {
+        return RecoveryVisual(process);
     }
-    if (process.has_error) {
-        return ErrorVisual(process);
+    if (meaning == contracts::DeviceStateMeaning::kStopped) {
+        return StoppedVisual(process);
+    }
+    if (UsesRunningVisual(process, state)) {
+        return RunningVisual(process);
     }
     if ((process.work_completed && process.key == QString::fromLatin1(kLineTracerProcessKey)) ||
-        IsWorkingState(process, state)) {
+        meaning == contracts::DeviceStateMeaning::kWorking ||
+        (meaning == contracts::DeviceStateMeaning::kCompleted &&
+         process.key == QString::fromLatin1(kGripperProcessKey))) {
         return WorkingVisual(process, state);
-    }
-    if (IsRunningState(process, state)) {
-        return RunningVisual(process);
     }
     return WaitingVisual(process);
 }
@@ -215,8 +220,13 @@ QColor FactoryNodeColor(FactoryNodeVisualState state) {
         case FactoryNodeVisualState::Disconnected:
             return QColor(QStringLiteral("#777777"));
         case FactoryNodeVisualState::EmergencyStop:
+            return QColor(QStringLiteral("#ff3b30"));
         case FactoryNodeVisualState::Error:
             return QColor(QStringLiteral("#f14c4c"));
+        case FactoryNodeVisualState::Recovery:
+            return QColor(QStringLiteral("#c586c0"));
+        case FactoryNodeVisualState::Stopped:
+            return QColor(QStringLiteral("#cca700"));
         case FactoryNodeVisualState::Working:
             return QColor(QStringLiteral("#75beff"));
         case FactoryNodeVisualState::Running:
@@ -230,13 +240,19 @@ QColor FactoryNodeColor(FactoryNodeVisualState state) {
 namespace {
 
 constexpr QRectF kFactoryScene{ 0, 0, 700, 500 };
-constexpr QPointF kInputPositions[]{ { 143, 81 }, { 242, 81 }, { 341, 81 }, { 440, 81 } };
-constexpr QPointF kGripperPivot{ 440, 145 };
-constexpr qreal kGripperReach = 64.0;
-constexpr QPointF kSortingFeed{ 504, 145 };
+constexpr QPointF kInputPositions[]{ { 80, 81 }, { 195, 81 }, { 310, 81 }, { 425, 81 } };
+constexpr QPointF kVisionPosition{ 440, 81 };
+constexpr QRectF kVisionSelectionRect{ 335, 30, 119, 81 };
+constexpr QPointF kGripperPivot{ 504, 81 };
+constexpr qreal kGripperReach = 42.0;
+constexpr QRectF kGripperSelectionRect{ 464, 44, 49, 79 };
+constexpr QPointF kSortingFeed{ 504, 137 };
 constexpr QPointF kSortingPositions[]{ { 504, 250 }, { 504, 345 }, { 504, 442 } };
 constexpr QPointF kLineIntersections[]{ { 292, 250 }, { 292, 345 }, { 292, 442 } };
 constexpr QPointF kLineDestinations[]{ { 80, 250 }, { 80, 345 }, { 80, 442 } };
+constexpr QPointF kLineTracerSensorPositions[]{ { 80, 165 }, { 80, 183 }, { 195, 183 } };
+constexpr qreal kLineTracerSensorFontIncreasePoints = 1.0;
+constexpr QRectF kLineTracerSelectionRect{ 70, 235, 445, 222 };
 
 std::optional<int> LineTracerPositionRoute(const LineTracerPositionStatus& position) {
     const auto location = position.location.trimmed().toUpper();
@@ -292,13 +308,30 @@ public:
         : process_key_(std::move(process_key)), selected_(std::move(selected)) {
         setAcceptedMouseButtons(Qt::LeftButton);
         setCursor(Qt::PointingHandCursor);
+        setFlag(QGraphicsItem::ItemIsFocusable);
+        setObjectName(QStringLiteral("factoryProcessNode"));
+        setProperty("processKey", process_key_);
+    }
+
+    void setFocusOutlineRect(const QRectF& rect) {
+        focus_outline_rect_ = rect;
+        update();
     }
 
     [[nodiscard]] QRectF boundingRect() const override {
         return childrenBoundingRect().adjusted(-4, -4, 4, 4);
     }
 
-    void paint(QPainter*, const QStyleOptionGraphicsItem*, QWidget*) override {}
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override {
+        if (!hasFocus() || !focus_outline_visible_) {
+            return;
+        }
+        QPen focus_pen(QColor(QStringLiteral("#d7ba7d")), 2, Qt::DashLine);
+        focus_pen.setCosmetic(true);
+        painter->setPen(focus_pen);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawRoundedRect(focus_outline_rect_.value_or(boundingRect()), 4, 4);
+    }
 
 protected:
     void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override {
@@ -310,9 +343,33 @@ protected:
         QGraphicsObject::mouseReleaseEvent(event);
     }
 
+    void keyPressEvent(QKeyEvent* event) override {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter || event->key() == Qt::Key_Space) {
+            selected_(process_key_);
+            event->accept();
+            return;
+        }
+        QGraphicsObject::keyPressEvent(event);
+    }
+
+    void focusInEvent(QFocusEvent* event) override {
+        focus_outline_visible_ = event->reason() == Qt::TabFocusReason || event->reason() == Qt::BacktabFocusReason ||
+                                 event->reason() == Qt::ShortcutFocusReason;
+        QGraphicsObject::focusInEvent(event);
+        update();
+    }
+
+    void focusOutEvent(QFocusEvent* event) override {
+        focus_outline_visible_ = false;
+        QGraphicsObject::focusOutEvent(event);
+        update();
+    }
+
 private:
     QString process_key_;
     std::function<void(const QString&)> selected_;
+    std::optional<QRectF> focus_outline_rect_;
+    bool focus_outline_visible_{ false };
 };
 
 bool AllowsMotion(const QString& process_key, const FactoryNodeVisual& visual) {
@@ -348,13 +405,16 @@ struct FactoryTopViewWidget::Impl {
     struct NodeItems {
         ProcessGraphicsGroup* group{ nullptr };
         QGraphicsEllipseItem* state_marker{ nullptr };
+        QGraphicsSimpleTextItem* display_label{ nullptr };
         QGraphicsRectItem* selection_outline{ nullptr };
         QGraphicsItem* moving_item{ nullptr };
         QList<QGraphicsLineItem*> state_lines;
         QList<QAbstractGraphicsShapeItem*> state_shapes;
         QHash<int, QGraphicsSimpleTextItem*> sensor_labels;
+        QHash<int, QString> sensor_label_prefixes;
         QHash<int, QString> sensor_text;
         FactoryNodeVisual visual;
+        QString process_key;
         QString display_name;
         QColor color{ QStringLiteral("#9d9d9d") };
         bool motion_enabled{ false };
@@ -369,6 +429,7 @@ struct FactoryTopViewWidget::Impl {
         owner->setFrameShape(QFrame::NoFrame);
         owner->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         owner->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        owner->setFocusPolicy(Qt::StrongFocus);
         owner->setRenderHint(QPainter::Antialiasing);
         buildScene();
         QObject::connect(&timer, &QTimer::timeout, owner, [this] { tick(); });
@@ -377,14 +438,15 @@ struct FactoryTopViewWidget::Impl {
 
     NodeItems& addNode(const QString& key, const QString& display_name, const QPointF& label_position) {
         NodeItems node;
+        node.process_key = key;
         node.group =
             new ProcessGraphicsGroup(key, [this](const QString& selected_key) { owner->selectProcess(selected_key); });
         node.display_name = display_name;
         node.state_marker =
             new QGraphicsEllipseItem(QRectF(label_position.x(), label_position.y(), 10, 10), node.group);
-        auto* label = new QGraphicsSimpleTextItem(display_name, node.group);
-        label->setBrush(QColor(QStringLiteral("#cccccc")));
-        label->setPos(label_position + QPointF(15, -4));
+        node.display_label = new QGraphicsSimpleTextItem(display_name, node.group);
+        node.display_label->setBrush(QColor(QStringLiteral("#cccccc")));
+        node.display_label->setPos(label_position + QPointF(15, -4));
         nodes.insert(key, node);
         return nodes[key];
     }
@@ -405,12 +467,15 @@ struct FactoryTopViewWidget::Impl {
         return box;
     }
 
-    static void finalizeNode(NodeItems& node) {
+    static void finalizeNode(NodeItems& node, std::optional<QRectF> selection_rect = std::nullopt) {
         for (auto* child : node.group->childItems()) {
             child->setAcceptedMouseButtons(Qt::NoButton);
         }
-        node.selection_outline =
-            new QGraphicsRectItem(node.group->childrenBoundingRect().adjusted(-5, -5, 5, 5), node.group);
+        const auto outline_rect = selection_rect.value_or(node.group->childrenBoundingRect()).adjusted(-5, -5, 5, 5);
+        node.selection_outline = new QGraphicsRectItem(outline_rect, node.group);
+        if (selection_rect.has_value()) {
+            node.group->setFocusOutlineRect(outline_rect);
+        }
         QPen selection_pen(QColor(QStringLiteral("#4daafc")), 2);
         selection_pen.setCosmetic(true);
         node.selection_outline->setPen(selection_pen);
@@ -421,8 +486,25 @@ struct FactoryTopViewWidget::Impl {
         node.group->scene()->update(node.group->boundingRect());
     }
 
+    void alignSortingLabels(NodeItems& node) {
+        if (sorting_label_right <= 0.0) {
+            return;
+        }
+        auto heading_position = node.display_label->pos();
+        heading_position.setX(sorting_label_right - node.display_label->boundingRect().right());
+        node.display_label->setPos(heading_position);
+        auto marker_rect = node.state_marker->rect();
+        marker_rect.moveLeft(heading_position.x() - 15.0);
+        node.state_marker->setRect(marker_rect);
+        for (auto* sensor_label : node.sensor_labels) {
+            auto sensor_position = sensor_label->pos();
+            sensor_position.setX(sorting_label_right - sensor_label->boundingRect().right());
+            sensor_label->setPos(sensor_position);
+        }
+    }
+
     void buildScene() {
-        auto& input = addNode(QString::fromLatin1(kInputProcessKey), QStringLiteral("Input"), QPointF(32, 35));
+        auto& input = addNode(QString::fromLatin1(kInputProcessKey), QStringLiteral("Input"), QPointF(80, 35));
         addStateLine(input, QLineF(kInputPositions[0], kInputPositions[3]), 6);
         addBox(input, kInputPositions[0]);
         auto* input_sensor = new QGraphicsSimpleTextItem(QStringLiteral("US1 -- cm"), input.group);
@@ -433,48 +515,69 @@ struct FactoryTopViewWidget::Impl {
         finalizeNode(input);
 
         auto& vision = addNode(QString::fromLatin1(kVisionProcessKey), QStringLiteral("Vision"), QPointF(335, 35));
-        auto* camera =
-            new QGraphicsRectItem(QRectF(kInputPositions[3] - QPointF(15, 15), QSizeF(30, 30)), vision.group);
+        auto* camera = new QGraphicsRectItem(QRectF(kVisionPosition - QPointF(15, 15), QSizeF(30, 30)), vision.group);
         camera->setBrush(QColor(QStringLiteral("#2d2d30")));
         camera->setPen(QPen(vision.color, 3));
         vision.state_shapes.append(camera);
-        addStateLine(vision, QLineF(kInputPositions[3] - QPointF(9, 7), kInputPositions[3] + QPointF(9, 7)), 3);
-        addBox(vision, kInputPositions[3]);
+        addStateLine(vision, QLineF(kVisionPosition - QPointF(9, 7), kVisionPosition + QPointF(9, 7)), 3);
+        addBox(vision, kVisionPosition);
         scene->addItem(vision.group);
-        finalizeNode(vision);
+        finalizeNode(vision, kVisionSelectionRect);
 
-        auto& gripper = addNode(QString::fromLatin1(kGripperProcessKey), QStringLiteral("Gripper"), QPointF(405, 105));
+        auto& gripper = addNode(QString::fromLatin1(kGripperProcessKey), QStringLiteral("Gripper"), QPointF(462, 48));
+        gripper.state_marker->setZValue(10);
         auto* pivot =
             new QGraphicsEllipseItem(QRectF(kGripperPivot.x() - 8, kGripperPivot.y() - 8, 16, 16), gripper.group);
         pivot->setBrush(QColor(QStringLiteral("#2d2d30")));
         pivot->setPen(QPen(gripper.color, 3));
         gripper.state_shapes.append(pivot);
-        gripper_arm = addStateLine(gripper, QLineF(kGripperPivot, kGripperPivot - QPointF(0, kGripperReach)), 7);
-        gripper_jaw_left = addStateLine(gripper, QLineF(432, 81, 440, 81), 3);
-        gripper_jaw_right = addStateLine(gripper, QLineF(440, 81, 448, 81), 3);
+        const auto gripper_pickup_position = kGripperPivot - QPointF(kGripperReach, 0);
+        gripper_arm = addStateLine(gripper, QLineF(kGripperPivot, gripper_pickup_position), 7);
+        gripper_jaw_left =
+            addStateLine(gripper, QLineF(gripper_pickup_position - QPointF(0, 8), gripper_pickup_position), 3);
+        gripper_jaw_right =
+            addStateLine(gripper, QLineF(gripper_pickup_position, gripper_pickup_position + QPointF(0, 8)), 3);
         gripper_product = new QGraphicsRectItem(QRectF(-8, -8, 16, 16), gripper.group);
         gripper_product->setBrush(QColor(QStringLiteral("#ce9178")));
         gripper_product->setPen(QPen(QColor(QStringLiteral("#f0f0f0")), 1));
-        gripper_product->setPos(kInputPositions[3]);
+        gripper_product->setPos(gripper_pickup_position);
         gripper_product->hide();
         scene->addItem(gripper.group);
-        finalizeNode(gripper);
+        finalizeNode(gripper, kGripperSelectionRect);
 
-        auto& sorting = addNode(QString::fromLatin1(kSortingProcessKey), QStringLiteral("Sorting"), QPointF(530, 85));
+        auto& sorting = addNode(QString::fromLatin1(kSortingProcessKey), QStringLiteral("Sorting"), QPointF(535, 185));
         addStateLine(sorting, QLineF(kSortingFeed, kSortingPositions[2]), 6);
         addBox(sorting, kSortingPositions[0]);
         for (int sensor_id = 1; sensor_id <= 3; ++sensor_id) {
             auto* sensor = new QGraphicsSimpleTextItem(QStringLiteral("US%1 -- cm").arg(sensor_id + 1), sorting.group);
             sensor->setBrush(QColor(QStringLiteral("#cccccc")));
             sensor->setPos(kSortingPositions[sensor_id - 1] + QPointF(18, -10));
+            if (sensor_id == 1) {
+                sorting_label_right = sensor->pos().x() + sensor->boundingRect().right();
+            }
             sorting.sensor_labels.insert(sensor_id, sensor);
         }
+        alignSortingLabels(sorting);
         sorting_servo = addStateLine(sorting, QLineF(485, 297, 505, 297), 5);
         scene->addItem(sorting.group);
         finalizeNode(sorting);
 
         auto& line_tracer =
-            addNode(QString::fromLatin1(kLineTracerProcessKey), QStringLiteral("Line tracer"), QPointF(525, 280));
+            addNode(QString::fromLatin1(kLineTracerProcessKey), QStringLiteral("Line tracer"), QPointF(80, 205));
+        constexpr int sensor_ids[]{ 1, 3, 4 };
+        const QString sensor_directions[]{ QStringLiteral("전"), QStringLiteral("좌"), QStringLiteral("우") };
+        for (int sensor_index = 0; sensor_index < 3; ++sensor_index) {
+            const auto sensor_id = sensor_ids[sensor_index];
+            const auto& direction = sensor_directions[sensor_index];
+            auto* sensor = new QGraphicsSimpleTextItem(QStringLiteral("%1 -- cm").arg(direction), line_tracer.group);
+            auto sensor_font = sensor->font();
+            sensor_font.setPointSizeF(sensor_font.pointSizeF() + kLineTracerSensorFontIncreasePoints);
+            sensor->setFont(sensor_font);
+            sensor->setBrush(QColor(QStringLiteral("#cccccc")));
+            sensor->setPos(kLineTracerSensorPositions[sensor_index]);
+            line_tracer.sensor_labels.insert(sensor_id, sensor);
+            line_tracer.sensor_label_prefixes.insert(sensor_id, direction);
+        }
         for (int route = 0; route < 3; ++route) {
             addStateLine(line_tracer, QLineF(kLineIntersections[route], kLineDestinations[route]), 3);
             addStateLine(line_tracer, QLineF(kLineIntersections[route], kSortingPositions[route]), 3);
@@ -497,7 +600,7 @@ struct FactoryTopViewWidget::Impl {
             line_arrows.append(arrow);
         }
         scene->addItem(line_tracer.group);
-        finalizeNode(line_tracer);
+        finalizeNode(line_tracer, kLineTracerSelectionRect);
 
         for (auto iterator = nodes.begin(); iterator != nodes.end(); ++iterator) {
             applyVisual(iterator.value());
@@ -524,9 +627,14 @@ struct FactoryTopViewWidget::Impl {
     void updateSensors(NodeItems& node) {
         node.sensor_text.clear();
         for (auto iterator = node.sensor_labels.begin(); iterator != node.sensor_labels.end(); ++iterator) {
+            const auto fallback_number = iterator.key() + (node.sensor_labels.size() == 1 ? 0 : 1);
+            const auto prefix =
+                node.sensor_label_prefixes.value(iterator.key(), QStringLiteral("US%1").arg(fallback_number));
             node.sensor_text.insert(iterator.key(), QStringLiteral("-- cm"));
-            iterator.value()->setText(
-                QStringLiteral("US%1 -- cm").arg(iterator.key() + (node.sensor_labels.size() == 1 ? 0 : 1)));
+            iterator.value()->setText(QStringLiteral("%1 -- cm").arg(prefix));
+        }
+        if (node.process_key == QString::fromLatin1(kSortingProcessKey)) {
+            alignSortingLabels(node);
         }
         if (node.visual.state == FactoryNodeVisualState::Disconnected) {
             return;
@@ -534,9 +642,14 @@ struct FactoryTopViewWidget::Impl {
         for (const auto& sensor : node.visual.sensors) {
             node.sensor_text.insert(sensor.sensor_id, sensor.distance_text);
             if (auto* label = node.sensor_labels.value(sensor.sensor_id, nullptr); label != nullptr) {
-                const auto number = sensor.sensor_id + (node.sensor_labels.size() == 1 ? 0 : 1);
-                label->setText(QStringLiteral("US%1 %2").arg(number).arg(sensor.distance_text));
+                const auto fallback_number = sensor.sensor_id + (node.sensor_labels.size() == 1 ? 0 : 1);
+                const auto prefix =
+                    node.sensor_label_prefixes.value(sensor.sensor_id, QStringLiteral("US%1").arg(fallback_number));
+                label->setText(QStringLiteral("%1 %2").arg(prefix, sensor.distance_text));
             }
+        }
+        if (node.process_key == QString::fromLatin1(kSortingProcessKey)) {
+            alignSortingLabels(node);
         }
     }
 
@@ -547,17 +660,17 @@ struct FactoryTopViewWidget::Impl {
         }
         gripper_angle = phase == FactoryMotionPhase::GripperPick ? 0.0 : 90.0;
         const bool open = phase == FactoryMotionPhase::GripperPlaced;
-        const QPointF end = gripper_angle == 0.0 ? kGripperPivot - QPointF(0, kGripperReach)
-                                                 : kGripperPivot + QPointF(kGripperReach, 0);
+        const QPointF end = gripper_angle == 0.0 ? kGripperPivot - QPointF(kGripperReach, 0)
+                                                 : kGripperPivot + QPointF(0, kGripperReach);
         gripper_arm->setLine(QLineF(kGripperPivot, end));
         if (gripper_angle == 0.0) {
             const qreal spread = open ? 8.0 : 3.0;
-            gripper_jaw_left->setLine(QLineF(end.x() - spread, end.y(), end.x(), end.y()));
-            gripper_jaw_right->setLine(QLineF(end.x(), end.y(), end.x() + spread, end.y()));
-        } else {
-            const qreal spread = open ? 8.0 : 3.0;
             gripper_jaw_left->setLine(QLineF(end.x(), end.y() - spread, end.x(), end.y()));
             gripper_jaw_right->setLine(QLineF(end.x(), end.y(), end.x(), end.y() + spread));
+        } else {
+            const qreal spread = open ? 8.0 : 3.0;
+            gripper_jaw_left->setLine(QLineF(end.x() - spread, end.y(), end.x(), end.y()));
+            gripper_jaw_right->setLine(QLineF(end.x(), end.y(), end.x() + spread, end.y()));
         }
     }
 
@@ -567,9 +680,9 @@ struct FactoryTopViewWidget::Impl {
             return;
         }
         if (phase == FactoryMotionPhase::GripperPick) {
-            gripper_product->setPos(kInputPositions[3]);
+            gripper_product->setPos(kGripperPivot - QPointF(kGripperReach, 0));
         } else if (phase == FactoryMotionPhase::GripperTransfer) {
-            gripper_product->setPos(kSortingFeed);
+            gripper_product->setPos(kGripperPivot + QPointF(0, kGripperReach));
         } else {
             gripper_product->setPos(kSortingPositions[0]);
         }
@@ -932,6 +1045,7 @@ struct FactoryTopViewWidget::Impl {
     QGraphicsLineItem* gripper_jaw_right{ nullptr };
     QGraphicsRectItem* gripper_product{ nullptr };
     QGraphicsLineItem* sorting_servo{ nullptr };
+    qreal sorting_label_right{ 0.0 };
     QList<QGraphicsSimpleTextItem*> line_arrows;
     qreal gripper_angle{ 0.0 };
     qreal sorting_servo_angle{ 0.0 };
@@ -1009,8 +1123,25 @@ QList<QPointF> FactoryTopViewWidget::lineArrowPositions() const {
     return positions;
 }
 
+QRectF FactoryTopViewWidget::nodeSelectionRect(const QString& process_key) const {
+    const auto iterator = impl_->nodes.constFind(process_key);
+    return iterator == impl_->nodes.cend() ? QRectF{} : iterator->selection_outline->rect();
+}
+
 qreal FactoryTopViewWidget::gripperAngle() const {
     return impl_->gripper_angle;
+}
+
+qreal FactoryTopViewWidget::gripperArmLength() const {
+    return impl_->gripper_arm->line().length();
+}
+
+QPointF FactoryTopViewWidget::gripperEndPosition() const {
+    return impl_->gripper_arm->line().p2();
+}
+
+QPointF FactoryTopViewWidget::gripperPivotPosition() const {
+    return kGripperPivot;
 }
 
 bool FactoryTopViewWidget::gripperProductVisible() const {

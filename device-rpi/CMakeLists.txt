@@ -19,30 +19,66 @@ target_include_directories(device_uart_session PUBLIC common/include)
 target_link_libraries(device_uart_session PUBLIC logistics::device_uart_transport logistics::uart)
 logistics_enable_warnings(device_uart_session)
 
+if(LOGISTICS_BUILD_DEVICE_UART_TRANSPORT)
+    add_executable(logistics_gripper_uart_roundtrip tools/gripper_uart_roundtrip.cpp)
+    target_link_libraries(
+        logistics_gripper_uart_roundtrip
+        PRIVATE logistics::device_uart_transport logistics::uart
+    )
+    logistics_enable_warnings(logistics_gripper_uart_roundtrip)
+endif()
+
 add_library(device_linetracer_node linetracer-node/linetracer_node.cpp)
 add_library(logistics::device_linetracer_node ALIAS device_linetracer_node)
 target_include_directories(device_linetracer_node PUBLIC common/include)
 target_link_libraries(device_linetracer_node PUBLIC logistics::contracts logistics::device_uart_session)
 logistics_enable_warnings(device_linetracer_node)
 
-add_library(
-    device_input_node
-    input-node/input_uart_session.cpp
-    input-node/input_node.cpp
+# Shared by every controller that answers a command with a sequence-matched
+# RESPONSE frame instead of an ACK (input conveyor and gripper today).
+add_library(device_response_uart_session input-node/input_uart_session.cpp)
+add_library(logistics::device_response_uart_session ALIAS device_response_uart_session)
+target_include_directories(device_response_uart_session PUBLIC common/include)
+target_link_libraries(
+    device_response_uart_session
+    PUBLIC logistics::contracts logistics::uart logistics::device_uart_transport
 )
+logistics_enable_warnings(device_response_uart_session)
+
+add_library(device_input_node input-node/input_node.cpp)
 add_library(logistics::device_input_node ALIAS device_input_node)
 target_include_directories(device_input_node PUBLIC common/include)
 target_link_libraries(
     device_input_node
-    PUBLIC logistics::contracts logistics::uart logistics::device_uart_transport
+    PUBLIC logistics::contracts logistics::uart logistics::device_response_uart_session
 )
 logistics_enable_warnings(device_input_node)
+
+add_library(
+    device_gripper_node
+    gripper-node/gripper_kinematics.cpp
+    gripper-node/gripper_pose_config.cpp
+    gripper-node/gripper_node.cpp
+)
+add_library(logistics::device_gripper_node ALIAS device_gripper_node)
+target_include_directories(device_gripper_node PUBLIC common/include)
+target_link_libraries(
+    device_gripper_node
+    PUBLIC logistics::contracts logistics::uart logistics::device_response_uart_session
+)
+logistics_enable_warnings(device_gripper_node)
 
 add_library(device_sorting_node sorting-node/sorting_node.cpp)
 add_library(logistics::device_sorting_node ALIAS device_sorting_node)
 target_include_directories(device_sorting_node PUBLIC common/include)
 target_link_libraries(device_sorting_node PUBLIC logistics::contracts logistics::device_uart_session)
 logistics_enable_warnings(device_sorting_node)
+
+add_library(device_control_state common/device_control/device_control_state.cpp)
+add_library(logistics::device_control_state ALIAS device_control_state)
+target_include_directories(device_control_state PUBLIC common/include)
+target_link_libraries(device_control_state PUBLIC logistics::contracts)
+logistics_enable_warnings(device_control_state)
 
 if(BUILD_TESTING)
     add_executable(device_uart_transport_test tests/uart_transport_test.cpp)
@@ -69,6 +105,16 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_input_node_test)
     add_test(NAME device_input_node_test COMMAND device_input_node_test)
 
+    add_executable(device_gripper_node_test tests/gripper_node_test.cpp)
+    target_link_libraries(device_gripper_node_test PRIVATE logistics::device_gripper_node)
+    logistics_enable_warnings(device_gripper_node_test)
+    add_test(NAME device_gripper_node_test COMMAND device_gripper_node_test)
+
+    add_executable(device_gripper_kinematics_test tests/gripper_kinematics_test.cpp)
+    target_link_libraries(device_gripper_kinematics_test PRIVATE logistics::device_gripper_node)
+    logistics_enable_warnings(device_gripper_kinematics_test)
+    add_test(NAME device_gripper_kinematics_test COMMAND device_gripper_kinematics_test)
+
     add_executable(device_sorting_node_test tests/sorting_node_test.cpp)
     target_link_libraries(device_sorting_node_test PRIVATE logistics::device_sorting_node)
     logistics_enable_warnings(device_sorting_node_test)
@@ -80,9 +126,15 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_node_command_queue_test)
     add_test(NAME device_node_command_queue_test COMMAND device_node_command_queue_test)
 
+    add_executable(device_outbound_delivery_test tests/outbound_delivery_test.cpp)
+    target_include_directories(device_outbound_delivery_test PRIVATE common/include)
+    target_link_libraries(device_outbound_delivery_test PRIVATE logistics::contracts)
+    logistics_enable_warnings(device_outbound_delivery_test)
+    add_test(NAME device_outbound_delivery_test COMMAND device_outbound_delivery_test)
+
     add_executable(device_control_policy_test tests/device_control_policy_test.cpp)
     target_include_directories(device_control_policy_test PRIVATE common/include)
-    target_link_libraries(device_control_policy_test PRIVATE logistics::contracts)
+    target_link_libraries(device_control_policy_test PRIVATE logistics::contracts logistics::device_control_state)
     logistics_enable_warnings(device_control_policy_test)
     add_test(NAME device_control_policy_test COMMAND device_control_policy_test)
 endif()
@@ -95,6 +147,7 @@ add_library(
     device_mqtt_core
     common/config/mqtt_node_config.cpp
     common/mqtt_client/mqtt_message_processor.cpp
+    common/mqtt_client/mqtt_publish_spool.cpp
     common/mqtt_client/mqtt_time.cpp
 )
 add_library(logistics::device_mqtt_core ALIAS device_mqtt_core)
@@ -138,29 +191,23 @@ target_include_directories(device_status PUBLIC common/include)
 target_link_libraries(device_status PUBLIC logistics::contracts)
 logistics_enable_warnings(device_status)
 
+add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
+add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
+target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
+target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
+logistics_enable_warnings(vision_mqtt_workflow)
+
+add_library(
+    vision_processing_config
+    vision-node/vision_processing_config.cpp
+    vision-node/vision_processing_config.hpp
+)
+add_library(logistics::vision_processing_config ALIAS vision_processing_config)
+target_include_directories(vision_processing_config PUBLIC vision-node)
+logistics_enable_warnings(vision_processing_config)
+
 if(LOGISTICS_BUILD_VISION_NODE)
     find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core dnn highgui imgcodecs imgproc objdetect videoio)
-
-    add_library(device_control_state common/device_control/device_control_state.cpp)
-    add_library(logistics::device_control_state ALIAS device_control_state)
-    target_include_directories(device_control_state PUBLIC common/include)
-    target_link_libraries(device_control_state PUBLIC logistics::contracts)
-    logistics_enable_warnings(device_control_state)
-
-    add_library(vision_mqtt_workflow vision-node/vision_mqtt_workflow.cpp)
-    add_library(logistics::vision_mqtt_workflow ALIAS vision_mqtt_workflow)
-    target_include_directories(vision_mqtt_workflow PUBLIC vision-node)
-    target_link_libraries(vision_mqtt_workflow PUBLIC logistics::contracts)
-    logistics_enable_warnings(vision_mqtt_workflow)
-
-    add_library(
-        vision_processing_config
-        vision-node/vision_processing_config.cpp
-        vision-node/vision_processing_config.hpp
-    )
-    add_library(logistics::vision_processing_config ALIAS vision_processing_config)
-    target_include_directories(vision_processing_config PUBLIC vision-node)
-    logistics_enable_warnings(vision_processing_config)
 
     add_library(
         vision_failure_frame_store
@@ -281,6 +328,21 @@ if(LOGISTICS_BUILD_SORTING_NODE)
     target_link_libraries(logistics_sorting_node PRIVATE logistics::device_sorting_node logistics::device_uart_session)
 endif()
 
+if(LOGISTICS_BUILD_GRIPPER_NODE)
+    add_device_node(logistics_gripper_node gripper-node/main.cpp)
+
+    if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
+        target_compile_definitions(logistics_gripper_node PRIVATE LOGISTICS_GRIPPER_DAEMON_ENABLED=1)
+        target_link_libraries(
+            logistics_gripper_node
+            PRIVATE
+                logistics::device_gripper_node
+                logistics::device_mqtt_mosquitto
+                logistics::device_status
+        )
+    endif()
+endif()
+
 if(LOGISTICS_BUILD_LINETRACER_NODE)
     add_device_node(logistics_linetracer_node linetracer-node/main.cpp)
 endif()
@@ -321,6 +383,11 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_mqtt_node_config_test)
     add_test(NAME device_mqtt_node_config_test COMMAND device_mqtt_node_config_test)
 
+    add_executable(device_mqtt_publish_spool_test tests/mqtt_publish_spool_test.cpp)
+    target_link_libraries(device_mqtt_publish_spool_test PRIVATE logistics::device_mqtt_core)
+    logistics_enable_warnings(device_mqtt_publish_spool_test)
+    add_test(NAME device_mqtt_publish_spool_test COMMAND device_mqtt_publish_spool_test)
+
     add_executable(device_status_test tests/device_status_test.cpp)
     target_link_libraries(device_status_test PRIVATE logistics::device_status)
     logistics_enable_warnings(device_status_test)
@@ -331,20 +398,20 @@ if(BUILD_TESTING)
     logistics_enable_warnings(device_log_spool_test)
     add_test(NAME device_log_spool_test COMMAND device_log_spool_test)
 
+    add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
+    target_link_libraries(
+        vision_mqtt_workflow_test
+        PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow Threads::Threads
+    )
+    logistics_enable_warnings(vision_mqtt_workflow_test)
+    add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
+
+    add_executable(vision_processing_config_test tests/vision_processing_config_test.cpp)
+    target_link_libraries(vision_processing_config_test PRIVATE logistics::vision_processing_config)
+    logistics_enable_warnings(vision_processing_config_test)
+    add_test(NAME vision_processing_config_test COMMAND vision_processing_config_test)
+
     if(LOGISTICS_BUILD_VISION_NODE)
-        add_executable(vision_mqtt_workflow_test tests/vision_mqtt_workflow_test.cpp)
-        target_link_libraries(
-            vision_mqtt_workflow_test
-            PRIVATE logistics::device_control_state logistics::vision_mqtt_workflow
-        )
-        logistics_enable_warnings(vision_mqtt_workflow_test)
-        add_test(NAME vision_mqtt_workflow_test COMMAND vision_mqtt_workflow_test)
-
-        add_executable(vision_processing_config_test tests/vision_processing_config_test.cpp)
-        target_link_libraries(vision_processing_config_test PRIVATE logistics::vision_processing_config)
-        logistics_enable_warnings(vision_processing_config_test)
-        add_test(NAME vision_processing_config_test COMMAND vision_processing_config_test)
-
         add_executable(vision_detection_test tests/vision_detection_test.cpp)
         target_link_libraries(vision_detection_test PRIVATE logistics::vision_detection)
         logistics_enable_warnings(vision_detection_test)
@@ -366,6 +433,12 @@ if(BUILD_TESTING)
     target_link_libraries(device_image_uploader_test PRIVATE logistics::device_image_upload)
     logistics_enable_warnings(device_image_uploader_test)
     add_test(NAME device_image_uploader_test COMMAND device_image_uploader_test)
+
+    add_executable(vision_image_upload_task_test tests/image_upload_task_test.cpp)
+    target_include_directories(vision_image_upload_task_test PRIVATE vision-node)
+    target_link_libraries(vision_image_upload_task_test PRIVATE Threads::Threads)
+    logistics_enable_warnings(vision_image_upload_task_test)
+    add_test(NAME vision_image_upload_task_test COMMAND vision_image_upload_task_test)
 endif()
 if(LOGISTICS_BUILD_VISION_NODE)
     add_device_node(logistics_vision_node vision-node/main.cpp)

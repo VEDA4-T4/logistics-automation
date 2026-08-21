@@ -40,6 +40,7 @@ int main(int argc, char* argv[]) {
     panel.resize(390, 500);
     panel.setEntryPageProvider(
         [&state](qsizetype offset, qsizetype limit) { return state.entries().mid(offset, limit); });
+    panel.setEntryCountProvider([&state]() { return state.entries().size(); });
     panel.reloadEntries(state.activeAlertCount());
     panel.setAcknowledgeHandler([&state, &panel](const QString& id) {
         assert(state.acknowledge(id));
@@ -70,6 +71,11 @@ int main(int argc, char* argv[]) {
     assert(table->rowHeight(0) == 34);
     assert(table->horizontalHeader()->sectionResizeMode(3) == QHeaderView::Stretch);
     assert(severity->view()->styleSheet().isEmpty());
+    panel.resize(640, 180);
+    application.processEvents();
+    auto* table_surface = panel.findChild<QWidget*>(QStringLiteral("operationalLogTableSurface"));
+    assert(table_surface != nullptr && table_surface->height() >= 60);
+    assert(table->height() >= table->horizontalHeader()->height() + table->rowHeight(0));
 
     severity->setCurrentIndex(severity->findData(static_cast<int>(OperationalLogSeverity::Error)));
     application.processEvents();
@@ -87,6 +93,11 @@ int main(int argc, char* argv[]) {
     application.processEvents();
     assert(table->model()->rowCount() == 0);
     assert(empty_state->isVisible());
+    assert(table->isVisible());
+    assert(empty_state->parentWidget() == table->viewport());
+    const QRect empty_state_rect(empty_state->mapTo(table, QPoint{}), empty_state->size());
+    assert(!empty_state_rect.intersects(table->horizontalHeader()->geometry()));
+    assert(table->rect().contains(empty_state_rect));
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
     query->clear();
     application.processEvents();
@@ -124,6 +135,12 @@ int main(int argc, char* argv[]) {
     }
     panel.reloadEntries(state.activeAlertCount());
     application.processEvents();
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize);
+    assert(result_count->text().contains(QStringLiteral("100건 표시")));
+    assert(result_count->text().contains(QStringLiteral("전체 104건")));
+    assert(panel.canLoadOlderEntries());
+    panel.requestOlderEntries();
+    application.processEvents();
     assert(table->model()->rowCount() == OperationalLogState::kPageSize + 4);
     assert(!panel.canLoadOlderEntries());
     table->doubleClicked(table->model()->index(0, 3));
@@ -160,7 +177,7 @@ int main(int argc, char* argv[]) {
     }
     panel.prependEntries(overflow_batch, state.activeAlertCount());
     application.processEvents();
-    assert(table->model()->rowCount() == OperationalLogState::kDefaultMaximumEntries);
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize * 2);
     assert(table->model()->index(0, 3).data().toString().contains(QStringLiteral("한도 로그 599")));
     const auto capped_row_count = table->model()->rowCount();
     panel.prependEntries({ overflow_batch.front(), overflow_batch.front() }, state.activeAlertCount());
@@ -199,8 +216,7 @@ int main(int argc, char* argv[]) {
           .topic = QStringLiteral("server-history"),
           .acknowledged = false },
     };
-    const auto inserted_older_entries = state.appendOlderEntries(std::move(older_entries));
-    panel.appendOlderEntries(inserted_older_entries, false, state.activeAlertCount());
+    panel.appendOlderEntries(std::move(older_entries), false, state.activeAlertCount());
     application.processEvents();
     assert(table->model()->rowCount() == 3);
     assert(table->model()->index(2, 3).data().toString().contains(QStringLiteral("과거 로그 2")));
@@ -210,7 +226,8 @@ int main(int argc, char* argv[]) {
     panel.reloadEntries(state.activeAlertCount());
     application.processEvents();
     assert(empty_state != nullptr && empty_state->isVisible());
-    assert(empty_state->text() == QStringLiteral("표시할 운영 로그가 없습니다"));
+    assert(table->isVisible());
+    assert(empty_state->text() == QStringLiteral("표시할 운영로그 없음"));
     assert(severity->isEnabled() && query->isEnabled() && unacknowledged->isEnabled());
 
     for (qsizetype index = 0; index < OperationalLogState::kDefaultMaximumEntries + 10; ++index) {
@@ -222,11 +239,13 @@ int main(int argc, char* argv[]) {
     application.processEvents();
     assert(state.unacknowledgedCount() == OperationalLogState::kDefaultMaximumEntries);
     assert(state.activeAlertCount() == OperationalLogState::kDefaultMaximumEntries / 2);
+    for (int page = 1; page < OperationalLogState::kDefaultMaximumEntries / OperationalLogState::kPageSize; ++page) {
+        assert(panel.canLoadOlderEntries());
+        panel.requestOlderEntries();
+    }
     assert(table->model()->rowCount() == OperationalLogState::kDefaultMaximumEntries);
     assert(!panel.canLoadOlderEntries());
 
-    panel.setMaximumEntries(OperationalLogState::kDefaultMaximumEntries * 3);
-    panel.reloadEntries(state.activeAlertCount());
     QList<logistics::control_center::OperationalLogEntry> first_sliding_history_page;
     QList<logistics::control_center::OperationalLogEntry> second_sliding_history_page;
     for (qsizetype index = 0; index < OperationalLogState::kDefaultMaximumEntries; ++index) {
@@ -253,13 +272,12 @@ int main(int argc, char* argv[]) {
             .acknowledged = false,
         });
     }
-    const auto latest_message = table->model()->index(0, 3).data().toString();
     assert(panel.appendOlderEntries(first_sliding_history_page, true, state.activeAlertCount()) ==
            OperationalLogState::kDefaultMaximumEntries);
-    assert(table->model()->rowCount() == OperationalLogState::kDefaultMaximumEntries * 2);
-    assert(table->model()->index(0, 3).data().toString() == latest_message);
+    assert(table->model()->rowCount() == OperationalLogState::kDefaultMaximumEntries);
+    assert(table->model()->index(0, 3).data().toString().contains(QStringLiteral("sliding history page 1 entry 0")));
     assert(table->model()
-               ->index(OperationalLogState::kDefaultMaximumEntries * 2 - 1, 3)
+               ->index(OperationalLogState::kDefaultMaximumEntries - 1, 3)
                .data()
                .toString()
                .contains(QStringLiteral("sliding history page 1 entry 499")));
@@ -270,23 +288,25 @@ int main(int argc, char* argv[]) {
     assert(panel.appendOlderEntries(second_sliding_history_page, false, state.activeAlertCount()) ==
            OperationalLogState::kDefaultMaximumEntries);
     application.processEvents();
-    assert(table->model()->rowCount() == OperationalLogState::kDefaultMaximumEntries * 3);
-    assert(table->model()->index(0, 3).data().toString() == latest_message);
+    assert(table->model()->rowCount() == OperationalLogState::kDefaultMaximumEntries);
+    assert(table->model()->index(0, 3).data().toString().contains(QStringLiteral("sliding history page 2 entry 0")));
     assert(table->model()
-               ->index(OperationalLogState::kDefaultMaximumEntries * 3 - 1, 3)
+               ->index(OperationalLogState::kDefaultMaximumEntries - 1, 3)
                .data()
                .toString()
                .contains(QStringLiteral("sliding history page 2 entry 499")));
     assert(!panel.canLoadOlderEntries());
 
+    panel.setAcknowledgeHandler([&panel](const QString& id) { panel.setEntryAcknowledged(id, 0); });
     table->doubleClicked(table->model()->index(0, 3));
     application.processEvents();
-    assert(state.unacknowledgedCount() == OperationalLogState::kDefaultMaximumEntries - 1);
+    assert(state.unacknowledgedCount() == OperationalLogState::kDefaultMaximumEntries);
     assert(state.activeAlertCount() == OperationalLogState::kDefaultMaximumEntries / 2);
     detail_dialog = panel.findChild<QDialog*>(QStringLiteral("operationalLogDetailDialog"));
     assert(detail_dialog != nullptr && detail_dialog->isVisible());
     detail_message = detail_dialog->findChild<QPlainTextEdit*>(QStringLiteral("operationalLogDetailMessage"));
-    assert(detail_message != nullptr && detail_message->toPlainText().contains(QStringLiteral("미확인 로그 509")));
+    assert(detail_message != nullptr &&
+           detail_message->toPlainText().contains(QStringLiteral("sliding history page 2 entry 0")));
     detail_dialog->close();
     application.processEvents();
 
@@ -316,8 +336,44 @@ int main(int argc, char* argv[]) {
     assert(model_reset_count == 0);
     assert(rows_inserted_count == kLoadTestEntryCount / kLoadTestBatchSize);
     assert(rows_removed_count == kLoadTestEntryCount / kLoadTestBatchSize);
-    assert(table->model()->rowCount() == OperationalLogState::kDefaultMaximumEntries);
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize);
     assert(table->model()->index(0, 3).data().toString().contains(QStringLiteral("증분 로그 4999")));
     assert(panel.findChild<QDialog*>(QStringLiteral("unacknowledgedOperationalLogDialog")) == nullptr);
+
+    constexpr qsizetype kPagedLiveLogCount = 1200;
+    constexpr qsizetype kPagedLiveBatchSize = 200;
+    state = OperationalLogState{ 5000 };
+    panel.setMaximumEntries(5000);
+    panel.setEntryPageProvider(
+        [&state](qsizetype offset, qsizetype limit) { return state.entries().mid(offset, limit); });
+    panel.reloadEntries(state.activeAlertCount());
+    for (qsizetype index = 0; index < kPagedLiveLogCount; ++index) {
+        state.appendLocal(OperationalLogSeverity::Info, QStringLiteral("PI-PAGED-LIVE-01"),
+                          QStringLiteral("실시간 페이지"), QStringLiteral("PAGED_LIVE"),
+                          QStringLiteral("연속 로그 %1").arg(index));
+        incremental_batch.prepend(state.entries().front());
+        if (incremental_batch.size() == kPagedLiveBatchSize) {
+            panel.prependEntries(incremental_batch, state.activeAlertCount());
+            incremental_batch.clear();
+        }
+    }
+    application.processEvents();
+    assert(table->model()->rowCount() == OperationalLogState::kPageSize);
+    for (qsizetype page = 1; page < kPagedLiveLogCount / OperationalLogState::kPageSize; ++page) {
+        assert(panel.canLoadOlderEntries());
+        panel.requestOlderEntries();
+    }
+    assert(table->model()->rowCount() == kPagedLiveLogCount);
+    assert(result_count->text().contains(QStringLiteral("1200건 표시")));
+    assert(!result_count->text().contains(QStringLiteral("전체 1200건")));
+    assert(!panel.canLoadOlderEntries());
+    for (qsizetype row = 0; row < kPagedLiveLogCount; ++row) {
+        const auto expected_index = kPagedLiveLogCount - row - 1;
+        assert(table->model()
+                   ->index(static_cast<int>(row), 3)
+                   .data()
+                   .toString()
+                   .contains(QStringLiteral("연속 로그 %1").arg(expected_index)));
+    }
     return 0;
 }

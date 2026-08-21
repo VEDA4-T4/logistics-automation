@@ -17,6 +17,7 @@ namespace mqtt = logistics::contracts::mqtt;
 namespace {
 
 constexpr std::string_view kTestWorkId = "123e4567-e89b-12d3-a456-426614174000";
+constexpr std::string_view kTestProcessEpoch = "4b0d7a76-49f7-4e39-b624-f59e129fa4c7";
 
 mqtt::MqttMessage MakeMessage(std::string message_id, mqtt::MessageType message_type, mqtt::MessagePayload payload,
                               std::string source_id = "PI-01") {
@@ -28,6 +29,33 @@ mqtt::MqttMessage MakeMessage(std::string message_id, mqtt::MessageType message_
         .timestamp = "2026-08-20T14:31:30+09:00",
         .data = std::move(payload),
     };
+}
+
+void TestRoleAwareDeviceStates() {
+    using logistics::contracts::DeviceRole;
+    using logistics::contracts::DeviceStateMeaning;
+    using logistics::contracts::DeviceStateMeaningFor;
+
+    static_assert(DeviceStateMeaningFor(DeviceRole::kVision, "WAITING_FOR_PRODUCT") == DeviceStateMeaning::kIdle);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kGripper, "TRANSFERRING") == DeviceStateMeaning::kWorking);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kGripper, "READY") == DeviceStateMeaning::kIdle);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kGripper, "PLACED") == DeviceStateMeaning::kCompleted);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kSorting, "GATE_MOVING_DEST_2") == DeviceStateMeaning::kWorking);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kLineTracer, "FOLLOWING_LINE") == DeviceStateMeaning::kWorking);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kLineTracer, "POSITION_UNKNOWN") == DeviceStateMeaning::kError);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kInput, "TRANSFERRING") == DeviceStateMeaning::kUnknown);
+    static_assert(DeviceStateMeaningFor(DeviceRole::kSorting, "GATE_MOVING_DEST_20") == DeviceStateMeaning::kUnknown);
+
+    const auto future_status = MakeMessage("MSG-FUTURE-STATE", mqtt::MessageType::kDeviceStatus,
+                                           mqtt::DeviceStatusPayload{
+                                               .status = mqtt::ConnectionState::kOnline,
+                                               .current_state = "FUTURE_STATE",
+                                           });
+    const auto encoded = mqtt::SerializeMessage(future_status);
+    assert(encoded.IsSuccess());
+    const auto decoded = mqtt::DeserializeMessage(encoded.payload);
+    assert(decoded.IsSuccess());
+    assert(mqtt::GetPayload<mqtt::DeviceStatusPayload>(decoded.value)->current_state == "FUTURE_STATE");
 }
 
 template <typename PayloadType>
@@ -82,12 +110,41 @@ void TestAllMqttMessageRoundTrips() {
                                                               .image_name = "JOB-0001-BOX.jpg",
                                                           }));
 
+    // Device -> server leg: measurement health only, no detection field yet.
     AssertRoundTrip<mqtt::SensorStatusPayload>(MakeMessage("MSG-0003-S", mqtt::MessageType::kSensorStatus,
                                                            mqtt::SensorStatusPayload{
                                                                .sensor_id = 2,
-                                                               .measurement_status = "DETECTED",
+                                                               .measurement_status = "OK",
                                                                .distance_cm = 17,
+                                                               .detection_status = std::nullopt,
                                                            }));
+
+    // Server -> Qt leg: same reading, now carrying the server's judgement.
+    AssertRoundTrip<mqtt::SensorStatusPayload>(MakeMessage("MSG-0003-T", mqtt::MessageType::kSensorStatus,
+                                                           mqtt::SensorStatusPayload{
+                                                               .sensor_id = 2,
+                                                               .measurement_status = "OK",
+                                                               .distance_cm = 17,
+                                                               .detection_status = "DETECTED",
+                                                           }));
+
+    AssertRoundTrip<mqtt::VisionMeasurementPayload>(MakeMessage("MSG-0003-V", mqtt::MessageType::kVisionMeasurement,
+                                                                mqtt::VisionMeasurementPayload{
+                                                                    .barcode = "5901234123457",
+                                                                    .box_x = 120,
+                                                                    .box_y = 80,
+                                                                    .box_width = 380,
+                                                                    .box_height = 260,
+                                                                    .frame_width = 1280,
+                                                                    .frame_height = 720,
+                                                                    .box_corners =
+                                                                        std::array{
+                                                                            mqtt::PixelPoint{ 120.0, 80.0 },
+                                                                            mqtt::PixelPoint{ 500.0, 80.0 },
+                                                                            mqtt::PixelPoint{ 500.0, 340.0 },
+                                                                            mqtt::PixelPoint{ 120.0, 340.0 },
+                                                                        },
+                                                                }));
 
     AssertRoundTrip<mqtt::WorkCreatedPayload>(MakeMessage("MSG-0003-A", mqtt::MessageType::kWorkCreated,
                                                           mqtt::WorkCreatedPayload{
@@ -238,6 +295,49 @@ void TestAllMqttMessageRoundTrips() {
                                                                   .error_code = std::nullopt,
                                                                   .message = "Destination information received.",
                                                               }));
+}
+
+void TestProcessEpochEnvelopeAndClassification() {
+    auto work_created = MakeMessage("MSG-EPOCH-WORK", mqtt::MessageType::kWorkCreated,
+                                    mqtt::WorkCreatedPayload{ .work_id = std::string(kTestWorkId) });
+    assert(!work_created.process_epoch.has_value());
+    const auto legacy = mqtt::SerializeMessage(work_created);
+    assert(legacy.IsSuccess());
+    assert(!mqtt::Json::parse(legacy.payload).contains("processEpoch"));
+    const auto legacy_decoded = mqtt::DeserializeMessage(legacy.payload);
+    assert(legacy_decoded.IsSuccess());
+    assert(!legacy_decoded.value.process_epoch.has_value());
+
+    work_created.process_epoch = std::string(kTestProcessEpoch);
+    const auto encoded = mqtt::SerializeMessage(work_created);
+    assert(encoded.IsSuccess());
+    assert(mqtt::Json::parse(encoded.payload).at("processEpoch") == kTestProcessEpoch);
+    const auto decoded = mqtt::DeserializeMessage(encoded.payload);
+    assert(decoded.IsSuccess());
+    assert(decoded.value.process_epoch == kTestProcessEpoch);
+
+    work_created.process_epoch = "not-a-uuid";
+    const auto invalid = mqtt::SerializeMessage(work_created);
+    assert(!invalid.IsSuccess());
+    assert(invalid.status.field == "processEpoch");
+
+    assert(mqtt::IsProcessScopedMessage(decoded.value));
+    assert(mqtt::IsProcessScopedMessage(
+        MakeMessage("MSG-BOX-EPOCH", mqtt::MessageType::kBoxDetected,
+                    mqtt::BoxDetectedPayload{ .detected = true, .image_name = "box.jpg" })));
+    assert(mqtt::IsProcessScopedMessage(MakeMessage("MSG-STATUS-WORK", mqtt::MessageType::kDeviceStatus,
+                                                    mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline,
+                                                                               .current_state = "COMPLETED",
+                                                                               .job_id = std::string(kTestWorkId) })));
+    assert(!mqtt::IsProcessScopedMessage(
+        MakeMessage("MSG-STATUS-TELEMETRY", mqtt::MessageType::kDeviceStatus,
+                    mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline, .current_state = "READY" })));
+    assert(!mqtt::IsProcessScopedMessage(
+        MakeMessage("MSG-SENSOR-TELEMETRY", mqtt::MessageType::kSensorStatus,
+                    mqtt::SensorStatusPayload{ .sensor_id = 1, .measurement_status = "OK", .distance_cm = 20 })));
+    assert(!mqtt::IsProcessScopedMessage(MakeMessage(
+        "MSG-HEARTBEAT-TELEMETRY", mqtt::MessageType::kHeartbeat,
+        mqtt::HeartbeatPayload{ .status = mqtt::ConnectionState::kOnline, .current_state = "RUNNING", .uptime = 1 })));
 }
 
 void TestLineTracerPositionStatusRoundTrip() {
@@ -639,11 +739,28 @@ void TestMqttTopicMessageValidation() {
                                             });
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", work_completed).IsSuccess());
 
+    const auto position = MakeMessage("MSG-TOPIC-04-P", mqtt::MessageType::kPositionDetected,
+                                      mqtt::PositionDetectedPayload{
+                                          .work_id = std::string(kTestWorkId),
+                                          .box_x = 10,
+                                          .box_y = 20,
+                                          .box_width = 100,
+                                          .box_height = 50,
+                                          .center_x = 60,
+                                          .center_y = 45,
+                                          .offset_x = 0,
+                                          .offset_y = 0,
+                                          .position_status = "DETECTED",
+                                          .box_corners = std::nullopt,
+                                      });
+    assert(mqtt::ValidateTopicMessage("qt/QT-01/event", position).IsSuccess());
+
     const auto sensor_status = MakeMessage("MSG-TOPIC-04-S", mqtt::MessageType::kSensorStatus,
                                            mqtt::SensorStatusPayload{
                                                .sensor_id = 1,
-                                               .measurement_status = "CLEAR",
+                                               .measurement_status = "OK",
                                                .distance_cm = 42,
+                                               .detection_status = "CLEAR",
                                            });
     assert(mqtt::ValidateTopicMessage("device/PI-01/event", sensor_status).IsSuccess());
     assert(mqtt::ValidateTopicMessage("qt/QT-01/event", sensor_status).IsSuccess());
@@ -667,6 +784,8 @@ void TestMqttTopicMessageValidation() {
 int main() {
     using logistics::contracts::DeviceRole;
     using logistics::contracts::ProcessState;
+
+    TestProcessEpochEnvelopeAndClassification();
 
     assert(logistics::contracts::ToString(DeviceRole::kVision) == "vision");
     assert(logistics::contracts::ToString(DeviceRole::kGripper) == "gripper");
@@ -705,8 +824,11 @@ int main() {
     assert(mqtt::MessageTypeFromString("WORK_CREATED") == mqtt::MessageType::kWorkCreated);
     assert(mqtt::MessageTypeFromString("WORK_COMPLETED") == mqtt::MessageType::kWorkCompleted);
     assert(mqtt::MessageTypeFromString("SENSOR_STATUS") == mqtt::MessageType::kSensorStatus);
+    assert(mqtt::MessageTypeFromString("VISION_MEASUREMENT") == mqtt::MessageType::kVisionMeasurement);
     assert(mqtt::kWorkIdField == "workId");
     assert(mqtt::IsValidUuid(kTestWorkId));
+    assert(mqtt::ControlCommandFromString("EXECUTE") == mqtt::ControlCommand::kExecute);
+    assert(mqtt::ToString(mqtt::ControlCommand::kExecute) == "EXECUTE");
     assert(mqtt::ControlCommandFromString("EMERGENCY_STOP") == mqtt::ControlCommand::kEmergencyStop);
     assert(mqtt::CommandResultFromString("RECEIVED") == mqtt::CommandResult::kReceived);
     assert(mqtt::ToString(mqtt::CommandResult::kDuplicated) == "DUPLICATED");
@@ -716,6 +838,16 @@ int main() {
     const auto heartbeat_policy = mqtt::PolicyFor(mqtt::MessageType::kHeartbeat);
     assert(heartbeat_policy.minimum_qos == mqtt::Qos::kAtMostOnce);
     assert(heartbeat_policy.retain == mqtt::RetainPolicy::kNever);
+
+    const auto sensor_policy = mqtt::PolicyFor(mqtt::MessageType::kSensorStatus);
+    assert(sensor_policy.minimum_qos == mqtt::Qos::kAtMostOnce);
+    assert(sensor_policy.maximum_qos == mqtt::Qos::kAtMostOnce);
+    assert(sensor_policy.retain == mqtt::RetainPolicy::kNever);
+
+    const auto vision_measurement_policy = mqtt::PolicyFor(mqtt::MessageType::kVisionMeasurement);
+    assert(vision_measurement_policy.minimum_qos == mqtt::Qos::kAtMostOnce);
+    assert(vision_measurement_policy.maximum_qos == mqtt::Qos::kAtMostOnce);
+    assert(vision_measurement_policy.retain == mqtt::RetainPolicy::kNever);
 
     const auto status_policy = mqtt::PolicyFor(mqtt::MessageType::kDeviceStatus);
     assert(status_policy.maximum_qos == mqtt::Qos::kAtLeastOnce);
@@ -759,12 +891,52 @@ int main() {
     static_assert(mqtt::kHeartbeatInterval.count() == 5);
     static_assert(mqtt::kHeartbeatDelayedAfter.count() == 10);
     static_assert(mqtt::kHeartbeatOfflineAfter.count() == 15);
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStart, "PI-INPUT-01", "input_conveyor") ==
+                  std::chrono::seconds{ 5 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStop, "PI-INPUT-01", "input_conveyor") ==
+                  std::chrono::seconds{ 15 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStop, "pi-input-01", {}) ==
+                  std::chrono::seconds{ 15 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStart, "PI-01", "INPUT_CONVEYOR") ==
+                  std::chrono::seconds{ 5 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kExecute, "PI-GRIPPER-01", "gripper") ==
+                  std::chrono::seconds{ 180 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kInitialize, "PI-GRIPPER-01", "home") ==
+                  std::chrono::seconds{ 15 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kRecovery, "PI-GRIPPER-01", "home") ==
+                  std::chrono::seconds{ 30 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kDestinationSet, "PI-SORTING-01", {}) ==
+                  std::chrono::seconds{ 5 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStart, "PI-SORTING-01", "sorting_conveyor") ==
+                  std::chrono::seconds{ 5 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStop, "PI-SORTING-01", "sorting_conveyor") ==
+                  std::chrono::seconds{ 5 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kExecute, "PI-LT-01", "line_tracer") ==
+                  std::chrono::seconds{ 5 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kExecute, "pi-linetracer-01", {}) ==
+                  std::chrono::seconds{ 5 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kDestinationSet, "SYSTEM", {}) ==
+                  std::chrono::seconds{ 5 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStart, "system", {}) ==
+                  std::chrono::seconds{ 15 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStop, "ALL", {}) == std::chrono::seconds{ 15 });
+    static_assert(mqtt::CommandResponseTimeout(mqtt::ControlCommand::kStatusRequest, "PI-VISION-01", {}) ==
+                  std::chrono::seconds{ 3 });
+    static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kStop, "PI-INPUT-01", "input_conveyor") ==
+                  std::chrono::seconds{ 17 });
+    static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kEmergencyStop).count() == 3);
+    static_assert(mqtt::CommandResponseWatchdogTimeout(mqtt::ControlCommand::kRecovery).count() == 32);
     static_assert(mqtt::kMqttMaximumRetries == 3);
+    static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kHeartbeat));
+    static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kSensorStatus));
+    static_assert(mqtt::IsTransientTelemetry(mqtt::MessageType::kVisionMeasurement));
+    static_assert(!mqtt::IsTransientTelemetry(mqtt::MessageType::kWorkCompleted));
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 9 }) == mqtt::ConnectionState::kOnline);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 10 }) == mqtt::ConnectionState::kDelayed);
     static_assert(mqtt::ConnectionStateForHeartbeatAge(std::chrono::seconds{ 15 }) == mqtt::ConnectionState::kOffline);
 
     TestAllMqttMessageRoundTrips();
+    TestRoleAwareDeviceStates();
     TestLineTracerPositionStatusRoundTrip();
     TestLineTracerPositionResetRoundTrip();
     TestMqttCodecInvalidInputs();

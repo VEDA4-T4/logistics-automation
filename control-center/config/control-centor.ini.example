@@ -33,6 +33,11 @@ image_base_url=http://central-server.logistics.local:8080/
 ; Use the same value as the central server's [http] bearer_token.
 bearer_token=
 
+[logs]
+; Shared maximum for the live log buffer and rows retained by the operations log table.
+; Valid range: 100-500.
+max_buffer_entries=500
+
 [rtsp]
 reconnect_interval_ms=3000
 ; Video RTP is forced over the RTSP TCP control connection.
@@ -59,6 +64,13 @@ metadata_stale_timeout_ms=1500
 ; Replace cctv-user/cctv-password and percent-encode reserved password characters.
 channel_1_url=rtsp://cctv-user:cctv-password@veda4-t4.iptime.org:8554/profile2/media.smp
 ; Leave channel_1_metadata_url unset when video and ONVIF metadata use the same CCTV endpoint.
+
+[danger_zone]
+; Rectangles use normalized video coordinates: x,y,width,height. Separate multiple regions with semicolons.
+regions=
+overlay_visible=true
+person_classes=Head,Face,Human
+minimum_confidence=0.5
 
 [ui]
 language=ko_KR

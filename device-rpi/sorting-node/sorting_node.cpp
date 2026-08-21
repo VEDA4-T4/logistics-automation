@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "logistics/contracts/mqtt_topic.hpp"
+#include "logistics/contracts/uart/conveyor_events.h"
 #include "logistics/device/device_control_policy.hpp"
 
 namespace logistics::device {
@@ -16,28 +17,6 @@ namespace {
 
 namespace mqtt = contracts::mqtt;
 
-inline constexpr std::uint8_t kHeartbeatEvent = 0x01U;
-inline constexpr std::uint8_t kSafetyEvent = 0x03U;
-inline constexpr std::uint8_t kHealthEvent = 0x04U;
-inline constexpr std::uint8_t kHeartbeatStateIndex = 1U;
-inline constexpr std::uint8_t kHeartbeatErrorIndex = 2U;
-inline constexpr std::uint8_t kHeartbeatPayloadSize = 9U;
-inline constexpr std::uint8_t kSafetyKindIndex = 1U;
-inline constexpr std::uint8_t kSafetyCauseIndex = 2U;
-inline constexpr std::uint8_t kSafetyResultIndex = 7U;
-inline constexpr std::uint8_t kSafetyPayloadSize = 8U;
-inline constexpr std::uint8_t kSafetyEstopLatched = 1U;
-inline constexpr std::uint8_t kSafetyResetComplete = 2U;
-inline constexpr std::uint8_t kSafetyResetRejected = 3U;
-inline constexpr std::uint8_t kHealthKindIndex = 1U;
-inline constexpr std::uint8_t kHealthCauseIndex = 2U;
-inline constexpr std::uint8_t kHealthSensorIdIndex = 3U;
-inline constexpr std::uint8_t kHealthPayloadSize = 8U;
-inline constexpr std::uint8_t kHealthUartChannelTimeout = 1U;
-inline constexpr std::uint8_t kHealthQueueOverflow = 2U;
-inline constexpr std::uint8_t kHealthSensorStale = 3U;
-inline constexpr std::uint8_t kHealthUartRecovery = 4U;
-inline constexpr std::uint8_t kHealthSensorIdNone = 0xFFU;
 inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
 
 [[nodiscard]] SortingCommandStatus ToCommandStatus(UartSessionSendStatus status) noexcept {
@@ -83,35 +62,6 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
     return normalized;
 }
 
-[[nodiscard]] std::optional<std::uint8_t> SpeedFromParams(const mqtt::Json& params, bool& invalid) {
-    invalid = false;
-    const auto speed = params.find("speed");
-    if (speed == params.end()) {
-        return std::nullopt;
-    }
-    if (!speed->is_number_integer() && !speed->is_number_unsigned()) {
-        invalid = true;
-        return std::nullopt;
-    }
-
-    std::uint64_t value = 0U;
-    if (speed->is_number_unsigned()) {
-        value = speed->get<std::uint64_t>();
-    } else {
-        const std::int64_t signed_value = speed->get<std::int64_t>();
-        if (signed_value < 0) {
-            invalid = true;
-            return std::nullopt;
-        }
-        value = static_cast<std::uint64_t>(signed_value);
-    }
-    if (value == 0U || value > UART_SORTING_CONVEYOR_SPEED_MAX) {
-        invalid = true;
-        return std::nullopt;
-    }
-    return static_cast<std::uint8_t>(value);
-}
-
 [[nodiscard]] std::string DestinationSuffix(std::uint8_t destination) {
     return destination == UART_SORTING_DESTINATION_NONE ? std::string{} : "_DEST_" + std::to_string(destination);
 }
@@ -154,16 +104,29 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
     }
 }
 
+[[nodiscard]] std::string ConveyorStateName(std::uint8_t device_state) {
+    switch (device_state) {
+        case UART_DEVICE_RUNNING:
+            return "RUNNING";
+        case UART_DEVICE_ERROR:
+            return "ERROR";
+        case UART_DEVICE_EMERGENCY_STOP:
+            return "EMERGENCY_STOP";
+        default:
+            return "STOPPED";
+    }
+}
+
+// Measurement health only (IsValidMeasurementStatus in mqtt_codec.hpp). Box
+// arrival is decided by the central server from distanceCm, so this node just
+// relays the reading it was handed.
 [[nodiscard]] std::string SensorStateName(std::uint8_t state) {
     switch (state) {
-        case UART_SENSOR_CLEAR:
-            return "CLEAR";
-        case UART_SENSOR_DETECTED:
-            return "DETECTED";
         case UART_SENSOR_FAULT:
             return "FAULT";
+        case UART_SENSOR_OK:
         default:
-            return "UNKNOWN";
+            return "OK";
     }
 }
 
@@ -179,6 +142,8 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
         case UART_ERROR_INVALID_LENGTH:
         case UART_ERROR_INVALID_PAYLOAD:
             return "ERR-UART-PAYLOAD";
+        case UART_ERROR_SPEED_NOT_CONFIGURED:
+            return "ERR-SPEED-NOT-CONFIGURED";
         case UART_ERROR_CRC_MISMATCH:
             return "ERR-UART-CRC";
         case UART_ERROR_SEQUENCE:
@@ -225,7 +190,8 @@ inline constexpr auto kControllerHeartbeatTimeout = std::chrono::seconds{ 3 };
 }  // namespace
 
 bool SortingCommandResult::Succeeded() const noexcept {
-    return status == SortingCommandStatus::kSent || status == SortingCommandStatus::kSentNoReply;
+    return status == SortingCommandStatus::kSent || status == SortingCommandStatus::kSentNoReply ||
+           status == SortingCommandStatus::kAcknowledged;
 }
 
 SortingNode::SortingNode(std::string device_id, UartSession& uart_session, const std::uint8_t default_speed)
@@ -288,11 +254,7 @@ void SortingNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
         return;
     }
     if (event.type == UartSessionEventType::kAckTimeout) {
-        if (pending_.effect == PendingEffect::kActivateCycle) {
-            active_work_id_ = pending_.work_id;
-            active_cycle_id_ = pending_.uart_cycle_id;
-            active_destination_ = pending_.uart_destination;
-        }
+        RememberUncertainCycle();
         EmitPendingResponse(mqtt::CommandResult::kTimeout, std::string("ERR-UART-RESPONSE-TIMEOUT"),
                             "sorting controller response timed out after retries");
         EmitError("ERR-UART-RESPONSE-TIMEOUT", "ERROR", "UART_TIMEOUT",
@@ -302,6 +264,7 @@ void SortingNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
     }
     if (event.type == UartSessionEventType::kTransportDisconnected ||
         event.type == UartSessionEventType::kTransportError) {
+        RememberUncertainCycle();
         EmitPendingResponse(mqtt::CommandResult::kFailed, std::string("ERR-UART-DISCONNECTED"),
                             "UART transport disconnected before the sorting response");
         ClearPending();
@@ -362,7 +325,7 @@ SortingCommandResult SortingNode::HandleDestinationSet(const mqtt::DestinationSe
         result.status = SortingCommandStatus::kInvalidDestination;
         return result;
     }
-    if (HasActiveCycle()) {
+    if (HasActiveCycle() || uncertain_cycle_.active) {
         if (active_work_id_ == command.work_id && active_destination_ == *destination) {
             result.status = SortingCommandStatus::kDuplicate;
             result.uart_cycle_id = active_cycle_id_;
@@ -404,6 +367,17 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
         result.status = SortingCommandStatus::kSafetyCommandPending;
         return result;
     }
+    if (action == DeviceControlAction::kStart) {
+        const std::string component = NormalizeControlComponent(command.component_id);
+        if (component.empty()) {
+            result.status = SortingCommandStatus::kAcknowledged;
+            return result;
+        }
+        if (component != "CONVEYOR" && component != "SORTINGCONVEYOR") {
+            result.status = SortingCommandStatus::kUnsupportedCommand;
+            return result;
+        }
+    }
 
     std::uint8_t uart_command = UART_CMD_NONE;
     PendingEffect effect = PendingEffect::kNone;
@@ -415,24 +389,18 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
     switch (action) {
         case DeviceControlAction::kStart: {
             bool invalid_speed = false;
-            std::optional<std::uint8_t> speed = SpeedFromParams(command.params, invalid_speed);
+            std::optional<std::uint8_t> speed =
+                ReadControlSpeed(command.params, UART_SORTING_CONVEYOR_SPEED_MAX, invalid_speed);
             if (invalid_speed) {
                 result.status = SortingCommandStatus::kInvalidSpeed;
                 return result;
             }
-            if (!speed.has_value() && configured_speed_ == 0U) {
-                speed = default_speed_;
-            }
-            if (speed.has_value()) {
-                requested_speed = *speed;
-                cycle_payload[0] = requested_speed;
-                uart_command = UART_CMD_SORTING_CONVEYOR_SET_SPEED;
-                effect = PendingEffect::kStartAfterSpeed;
-                payload = cycle_payload.data();
-                payload_length = UART_SORTING_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
-            } else {
-                uart_command = UART_CMD_SORTING_CONVEYOR_START;
-            }
+            requested_speed = speed.value_or(configured_speed_ == 0U ? default_speed_ : configured_speed_);
+            cycle_payload[0] = requested_speed;
+            uart_command = UART_CMD_SORTING_CONVEYOR_SET_SPEED;
+            effect = PendingEffect::kStartAfterSpeed;
+            payload = cycle_payload.data();
+            payload_length = UART_SORTING_CONVEYOR_SET_SPEED_PAYLOAD_SIZE;
             break;
         }
         case DeviceControlAction::kStop:
@@ -454,7 +422,10 @@ SortingCommandResult SortingNode::HandleControlCommand(const mqtt::ControlComman
                 pending_safety_ = { .active = true,
                                     .expected = PendingSafetyEvent::kResetComplete,
                                     .command = result.mqtt_command,
-                                    .request_id = result.request_id };
+                                    .request_id = result.request_id,
+                                    .elapsed = std::chrono::milliseconds::zero(),
+                                    .timeout = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        mqtt::kRecoveryCompletionTimeout) };
             }
             return result;
         case DeviceControlAction::kComponentRecovery:
@@ -514,7 +485,10 @@ SortingCommandResult SortingNode::HandleEmergencyStop(const mqtt::EmergencyStopP
         pending_safety_ = { .active = true,
                             .expected = PendingSafetyEvent::kEstopLatched,
                             .command = result.mqtt_command,
-                            .request_id = result.request_id };
+                            .request_id = result.request_id,
+                            .elapsed = std::chrono::milliseconds::zero(),
+                            .timeout = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                mqtt::kEmergencyStopConfirmationTimeout) };
     }
     return result;
 }
@@ -522,7 +496,7 @@ SortingCommandResult SortingNode::HandleEmergencyStop(const mqtt::EmergencyStopP
 void SortingNode::ResetControllerHeartbeatMonitor() noexcept {
     controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
     controller_heartbeat_timed_out_ = false;
-    last_device_state_ = 0xffU;
+    last_device_state_ = UART_DEVICE_STOPPED;
     last_device_error_ = 0xffU;
 }
 
@@ -532,9 +506,14 @@ void SortingNode::Tick(std::chrono::milliseconds elapsed) noexcept {
     }
     if (pending_safety_.active) {
         pending_safety_.elapsed += elapsed;
-        if (pending_safety_.elapsed >= mqtt::kEmergencyStopConfirmationTimeout) {
-            EmitSafetyResponse(mqtt::CommandResult::kTimeout, std::string("ERR-SAFETY-CONFIRMATION-TIMEOUT"),
-                               "sorting controller did not confirm the safety command");
+        if (pending_safety_.timeout > std::chrono::milliseconds::zero() &&
+            pending_safety_.elapsed >= pending_safety_.timeout) {
+            const bool recovery = pending_safety_.command == mqtt::ControlCommand::kRecovery;
+            EmitSafetyResponse(
+                mqtt::CommandResult::kTimeout,
+                std::string(recovery ? "ERR-RECOVERY-CONFIRMATION-TIMEOUT" : "ERR-SAFETY-CONFIRMATION-TIMEOUT"),
+                recovery ? "sorting controller did not complete recovery before the deadline"
+                         : "sorting controller did not confirm the emergency stop before the deadline");
             pending_safety_ = {};
         }
     }
@@ -611,10 +590,22 @@ void SortingNode::ClearPending() noexcept {
     pending_ = {};
 }
 
+void SortingNode::RememberUncertainCycle() noexcept {
+    if (pending_.active && pending_.effect == PendingEffect::kActivateCycle) {
+        uncertain_cycle_ = {
+            .active = true,
+            .work_id = std::move(pending_.work_id),
+            .uart_cycle_id = pending_.uart_cycle_id,
+            .uart_destination = pending_.uart_destination,
+        };
+    }
+}
+
 void SortingNode::ClearActiveCycle() noexcept {
     active_work_id_.clear();
     active_cycle_id_ = UART_SORTING_CYCLE_ID_NONE;
     active_destination_ = UART_SORTING_DESTINATION_NONE;
+    uncertain_cycle_ = {};
 }
 
 void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept {
@@ -660,6 +651,7 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
         active_work_id_ = pending_.work_id;
         active_cycle_id_ = pending_.uart_cycle_id;
         active_destination_ = pending_.uart_destination;
+        uncertain_cycle_ = {};
     } else if (accepted && pending_.effect == PendingEffect::kClearCycle) {
         ClearActiveCycle();
     }
@@ -673,12 +665,15 @@ void SortingNode::HandleCommandResponse(const UartSessionEvent& event) noexcept 
                 EmitStatus("RETURNING_HOME");
                 break;
             case UART_CMD_SORTING_RESET:
-                EmitStatus("IDLE");
+                last_device_state_ = UART_DEVICE_STOPPED;
+                EmitStatus("STOPPED");
                 break;
             case UART_CMD_SORTING_CONVEYOR_START:
+                last_device_state_ = UART_DEVICE_RUNNING;
                 EmitStatus("RUNNING");
                 break;
             case UART_CMD_SORTING_CONVEYOR_STOP:
+                last_device_state_ = UART_DEVICE_STOPPED;
                 EmitStatus("STOPPED");
                 break;
             case UART_CMD_EMERGENCY_STOP:
@@ -715,11 +710,11 @@ void SortingNode::HandleSortingFrame(const uart_frame_t& frame) noexcept {
     const std::uint8_t event_id = frame.payload[UART_EVENT_ID_INDEX];
     if (event_id == UART_SORTING_EVENT_CYCLE_COMPLETE) {
         HandleCycleComplete(frame);
-    } else if (event_id == kHeartbeatEvent) {
+    } else if (event_id == APP_EVENT_HEARTBEAT) {
         HandleHeartbeat(frame);
-    } else if (event_id == kSafetyEvent) {
+    } else if (event_id == APP_EVENT_SAFETY) {
         HandleSafetyEvent(frame);
-    } else if (event_id == kHealthEvent) {
+    } else if (event_id == APP_EVENT_HEALTH) {
         HandleHealthEvent(frame);
     }
 }
@@ -738,15 +733,28 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
         if (cycle_id == UART_SORTING_CYCLE_ID_NONE) {
             ClearActiveCycle();
         } else if (!HasActiveCycle() || cycle_id != active_cycle_id_ || destination != active_destination_) {
-            active_work_id_.clear();
-            active_cycle_id_ = cycle_id;
-            active_destination_ = destination;
-            EmitError("ERR-CYCLE-MAPPING-UNKNOWN", "WARNING", GateStateName(gate_state, destination),
-                      "STM32 has an active cycle that is not mapped to a server work ID");
+            if (uncertain_cycle_.active && cycle_id == uncertain_cycle_.uart_cycle_id &&
+                destination == uncertain_cycle_.uart_destination) {
+                active_work_id_ = std::move(uncertain_cycle_.work_id);
+                active_cycle_id_ = cycle_id;
+                active_destination_ = destination;
+                uncertain_cycle_ = {};
+            } else {
+                active_work_id_.clear();
+                active_cycle_id_ = cycle_id;
+                active_destination_ = destination;
+                uncertain_cycle_ = {};
+                EmitError("ERR-CYCLE-MAPPING-UNKNOWN", "WARNING", GateStateName(gate_state, destination),
+                          "STM32 has an active cycle that is not mapped to a server work ID");
+            }
         } else {
             active_destination_ = destination;
+            uncertain_cycle_ = {};
         }
-        EmitStatus(GateStateName(gate_state, destination),
+        const auto current_state = idle_cycle && gate_state == UART_SORTING_GATE_HOME
+                                       ? ConveyorStateName(last_device_state_)
+                                       : GateStateName(gate_state, destination);
+        EmitStatus(current_state,
                    gate_state == UART_SORTING_GATE_FAULT ? std::optional<std::string>{ "ERR-SERVO" } : std::nullopt);
         return true;
     }
@@ -759,6 +767,9 @@ bool SortingNode::HandleStatusResponse(const uart_frame_t& frame) noexcept {
             return false;
         }
         configured_speed_ = speed;
+        last_device_state_ = state == UART_SORTING_CONVEYOR_RUNNING   ? UART_DEVICE_RUNNING
+                             : state == UART_SORTING_CONVEYOR_STOPPED ? UART_DEVICE_STOPPED
+                                                                      : UART_DEVICE_ERROR;
         const std::string current_state = state == UART_SORTING_CONVEYOR_RUNNING   ? "RUNNING"
                                           : state == UART_SORTING_CONVEYOR_STOPPED ? "STOPPED"
                                                                                    : "ERROR";
@@ -779,27 +790,24 @@ void SortingNode::HandleCycleComplete(const uart_frame_t& frame) noexcept {
         return;
     }
     if (active_work_id_.empty()) {
-        EmitError("ERR-CYCLE-MAPPING-UNKNOWN", "ERROR", "IDLE",
+        EmitError("ERR-CYCLE-MAPPING-UNKNOWN", "ERROR", ConveyorStateName(last_device_state_),
                   "sorting cycle completed without a server work ID mapping");
         ClearActiveCycle();
-        EmitStatus("IDLE");
+        EmitStatus(ConveyorStateName(last_device_state_));
         return;
     }
 
     EmitStatus("CYCLE_COMPLETE");
     ClearActiveCycle();
-    EmitStatus("IDLE");
+    EmitStatus(ConveyorStateName(last_device_state_));
 }
 
 void SortingNode::HandleHeartbeat(const uart_frame_t& frame) noexcept {
-    if (frame.length != kHeartbeatPayloadSize) {
+    if (UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(frame.payload, frame.length) == 0U) {
         return;
     }
-    const std::uint8_t state = frame.payload[kHeartbeatStateIndex];
-    const std::uint8_t error = frame.payload[kHeartbeatErrorIndex];
-    if (state > UART_DEVICE_EMERGENCY_STOP) {
-        return;
-    }
+    const std::uint8_t state = frame.payload[APP_HEARTBEAT_STATE_INDEX];
+    const std::uint8_t error = frame.payload[APP_HEARTBEAT_ERROR_INDEX];
     const bool recovered = controller_heartbeat_timed_out_;
     controller_heartbeat_elapsed_ = std::chrono::milliseconds::zero();
     controller_heartbeat_timed_out_ = false;
@@ -857,6 +865,8 @@ void SortingNode::HandleDeviceStatus(const uart_frame_t& frame) noexcept {
     if (state > UART_DEVICE_EMERGENCY_STOP) {
         return;
     }
+    last_device_state_ = state;
+    last_device_error_ = error;
     ClearControllerEventDedupIfHealthy(state, error);
     const std::string error_code = state == UART_DEVICE_EMERGENCY_STOP ? std::string{} : UartErrorCode(error);
     EmitStatus(DeviceStateName(state), error_code.empty() ? std::nullopt : std::optional<std::string>{ error_code });
@@ -867,19 +877,26 @@ void SortingNode::HandleDeviceStatus(const uart_frame_t& frame) noexcept {
 }
 
 void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
-    if (frame.length != kSafetyPayloadSize) {
+    if (UART_IS_VALID_APP_SAFETY_PAYLOAD(frame.payload, frame.length) == 0U) {
         return;
     }
-    const std::uint8_t kind = frame.payload[kSafetyKindIndex];
-    const std::uint8_t cause = frame.payload[kSafetyCauseIndex];
-    const std::uint8_t result = frame.payload[kSafetyResultIndex];
+    const std::uint8_t kind = frame.payload[APP_SAFETY_EVENT_KIND_INDEX];
+    const std::uint8_t cause = frame.payload[APP_SAFETY_EVENT_CAUSE_INDEX];
+    const std::uint8_t result = frame.payload[APP_SAFETY_EVENT_RESULT_INDEX];
+    const bool repeated = IsRepeatedControllerEvent(APP_EVENT_SAFETY, kind, cause, result);
+    // Enqueue the work failure before acknowledging the safety command.  The
+    // central state machine can then persist failure_reason while it is still
+    // in EmergencyStop, before a recovery request is accepted.
+    if (!repeated && kind == SAFETY_EVENT_ESTOP_LATCHED && HasActiveCycle()) {
+        EmitError("ERR-SORTING-CYCLE-ABORTED", "ERROR", "EMERGENCY_STOP", "sorting cycle aborted by emergency stop");
+    }
     if (pending_safety_.active) {
         const bool estopConfirmed =
-            pending_safety_.expected == PendingSafetyEvent::kEstopLatched && kind == kSafetyEstopLatched;
+            pending_safety_.expected == PendingSafetyEvent::kEstopLatched && kind == SAFETY_EVENT_ESTOP_LATCHED;
         const bool resetConfirmed =
-            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == kSafetyResetComplete;
+            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == SAFETY_EVENT_RESET_COMPLETE;
         const bool resetRejected =
-            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == kSafetyResetRejected;
+            pending_safety_.expected == PendingSafetyEvent::kResetComplete && kind == SAFETY_EVENT_RESET_REJECTED;
         if (estopConfirmed || resetConfirmed || resetRejected) {
             EmitSafetyResponse(resetRejected ? mqtt::CommandResult::kRejected : mqtt::CommandResult::kSuccess,
                                resetRejected ? std::optional<std::string>{ "ERR-SAFETY-RESET-REJECTED" } : std::nullopt,
@@ -889,60 +906,64 @@ void SortingNode::HandleSafetyEvent(const uart_frame_t& frame) noexcept {
             pending_safety_ = {};
         }
     }
-    if (IsRepeatedControllerEvent(kSafetyEvent, kind, cause, result)) {
+    // A duplicate controller event may still be the confirmation for a newly
+    // issued safety command (the first copy could have arrived unsolicited).
+    // Consume that response, but do not repeat the durable status/error side
+    // effects below.
+    if (repeated) {
         return;
     }
-    if (kind == kSafetyEstopLatched) {
+    if (kind == SAFETY_EVENT_ESTOP_LATCHED) {
         last_device_state_ = UART_DEVICE_EMERGENCY_STOP;
         last_device_error_ = UART_ERROR_NONE;
         EmitStatus("EMERGENCY_STOP");
-    } else if (kind == kSafetyResetComplete) {
+    } else if (kind == SAFETY_EVENT_RESET_COMPLETE) {
         ClearActiveCycle();
         configured_speed_ = 0U;
         last_device_state_ = UART_DEVICE_STOPPED;
         last_device_error_ = UART_ERROR_NONE;
         EmitStatus("STOPPED");
-    } else if (kind == kSafetyResetRejected) {
+    } else if (kind == SAFETY_EVENT_RESET_REJECTED) {
         EmitError("ERR-SAFETY-RESET-REJECTED", "ERROR", "EMERGENCY_STOP",
                   "sorting controller rejected safety reset result " + std::to_string(result));
     }
 }
 
 void SortingNode::HandleHealthEvent(const uart_frame_t& frame) noexcept {
-    if (frame.length != kHealthPayloadSize) {
+    if (UART_IS_VALID_APP_HEALTH_PAYLOAD(frame.payload, frame.length) == 0U) {
         return;
     }
-    const std::uint8_t kind = frame.payload[kHealthKindIndex];
-    const std::uint8_t cause = frame.payload[kHealthCauseIndex];
-    const std::uint8_t sensor_id = frame.payload[kHealthSensorIdIndex];
+    const std::uint8_t kind = frame.payload[APP_HEALTH_EVENT_KIND_INDEX];
+    const std::uint8_t cause = frame.payload[APP_HEALTH_EVENT_CAUSE_INDEX];
+    const std::uint8_t sensor_id = frame.payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX];
     // UART timeout events are delivered to the opposite healthy channel.
     // Reporting one here would incorrectly mark this sorting Pi as faulty;
     // MQTT heartbeat expiry owns the affected node's offline state.
-    if (kind == kHealthUartChannelTimeout) {
+    if (kind == HEALTH_ISSUE_UART_CHANNEL_TIMEOUT) {
         return;
     }
-    if (IsRepeatedControllerEvent(kHealthEvent, kind, cause, sensor_id)) {
+    if (IsRepeatedControllerEvent(APP_EVENT_HEALTH, kind, cause, sensor_id)) {
         return;
     }
 
     std::string error_code;
     std::string message;
     switch (kind) {
-        case kHealthQueueOverflow:
+        case HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT:
             error_code = "ERR-HEALTH-QUEUE-OVERFLOW";
             message = "sorting controller reported a transient queue overflow";
             break;
-        case kHealthSensorStale:
+        case HEALTH_ISSUE_SENSOR_STALE:
             error_code = "ERR-HEALTH-SENSOR-STALE";
             message = "sorting controller reported a stale sensor";
             // cause only says which Pi channel (INPUT/SORTING); on the sorting side 3
             // sensors (US2/US3/US4) share that channel, so sensor_id is what actually
             // tells them apart.
-            if (sensor_id != kHealthSensorIdNone) {
+            if (sensor_id != HEALTH_ISSUE_SENSOR_ID_NONE) {
                 message += " sensorId=" + std::to_string(sensor_id);
             }
             break;
-        case kHealthUartRecovery:
+        case HEALTH_ISSUE_UART_RECOVERY:
             // Recovery started, not a confirmed loss - the frame is retried, and an
             // exhausted retry surfaces separately as a queue overflow. Still WARNING:
             // a line that keeps needing recovery is the precursor to those drops.

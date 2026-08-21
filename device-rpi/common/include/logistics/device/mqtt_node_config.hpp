@@ -23,8 +23,13 @@ struct MqttNodeConfig final {
     std::uint16_t keep_alive_seconds{ 30 };
     std::uint32_t reconnect_min_delay_seconds{ 1 };
     std::uint32_t reconnect_max_delay_seconds{ 30 };
-    std::uint8_t sorting_default_speed{ 50 };
-    bool clean_session{ true };
+    // Root directory; the client appends device_id to isolate node processes.
+    std::filesystem::path publish_spool_directory{ "/var/lib/logistics/mqtt-spool" };
+    std::size_t publish_spool_maximum_bytes{ 50U * 1024U * 1024U };
+    std::uint8_t sorting_default_speed{ 60 };
+    // Persistent sessions preserve broker-side QoS1 deliveries while a node reconnects.
+    // Set true only when at-most-once delivery during offline periods is intentional.
+    bool clean_session{ false };
     bool tls_enabled{ false };
     bool log_upload_enabled{ false };
     LogSpoolConfig log_upload;

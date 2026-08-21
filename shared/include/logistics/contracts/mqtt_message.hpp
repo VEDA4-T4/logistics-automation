@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "logistics/contracts/identifier.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 
 namespace logistics::contracts::mqtt {
@@ -16,6 +17,7 @@ inline constexpr std::string_view kMessageIdField = "messageId";
 inline constexpr std::string_view kMessageTypeField = "messageType";
 inline constexpr std::string_view kSourceIdField = "sourceId";
 inline constexpr std::string_view kTimestampField = "timestamp";
+inline constexpr std::string_view kProcessEpochField = "processEpoch";
 inline constexpr std::string_view kDataField = "data";
 inline constexpr std::string_view kRequestIdField = "requestId";
 inline constexpr std::string_view kTargetDeviceIdField = "targetDeviceId";
@@ -40,11 +42,13 @@ enum class MessageType : std::uint8_t {
     kEmergencyStop,
     kCommandResponse,
     kSensorStatus,
+    kVisionMeasurement,
 };
 
 enum class ControlCommand : std::uint8_t {
     kUnknown,
     kStart,
+    kExecute,
     kStop,
     kRestart,
     kInitialize,
@@ -100,12 +104,13 @@ struct EnvelopeView {
     MessageType message_type{ MessageType::kUnknown };
     std::string_view source_id;
     std::string_view timestamp;
+    std::string_view process_epoch{};
     std::string_view data_json;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return protocol_version == kCurrentProtocolVersion && IsValidTopicLevel(message_id) &&
                message_type != MessageType::kUnknown && IsValidTopicLevel(source_id) && !timestamp.empty() &&
-               !data_json.empty();
+               (process_epoch.empty() || ::logistics::contracts::IsValidUuid(process_epoch)) && !data_json.empty();
     }
 };
 
@@ -137,18 +142,110 @@ inline constexpr auto kHeartbeatDelayedAfter = std::chrono::seconds{ 10 };
 inline constexpr auto kHeartbeatOfflineAfter = std::chrono::seconds{ 15 };
 inline constexpr auto kMqttResponseTimeout = std::chrono::seconds{ 3 };
 inline constexpr auto kEmergencyStopConfirmationTimeout = std::chrono::seconds{ 1 };
+inline constexpr auto kInputStartCompletionTimeout = std::chrono::seconds{ 5 };
+inline constexpr auto kInputStopCompletionTimeout = std::chrono::seconds{ 15 };
+inline constexpr auto kSortingCommandCompletionTimeout = std::chrono::seconds{ 5 };
+inline constexpr auto kLineTracerCommandCompletionTimeout = std::chrono::seconds{ 5 };
+inline constexpr auto kGripperHomeCompletionTimeout = std::chrono::seconds{ 15 };
+inline constexpr auto kGripperExecuteCompletionTimeout = std::chrono::seconds{ 180 };
 inline constexpr auto kRecoveryCompletionTimeout = std::chrono::seconds{ 30 };
+inline constexpr auto kCommandResponseDeliveryGrace = std::chrono::seconds{ 2 };
 inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
-[[nodiscard]] constexpr std::chrono::seconds CommandResponseTimeout(const ControlCommand command) noexcept {
-    switch (command) {
-        case ControlCommand::kEmergencyStop:
-            return kEmergencyStopConfirmationTimeout;
-        case ControlCommand::kRecovery:
-            return kRecoveryCompletionTimeout;
-        default:
-            return kMqttResponseTimeout;
+[[nodiscard]] constexpr char AsciiLower(const char value) noexcept {
+    return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A')) : value;
+}
+
+[[nodiscard]] constexpr bool AsciiEqualsIgnoreCase(const std::string_view left, const std::string_view right) noexcept {
+    if (left.size() != right.size()) {
+        return false;
     }
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        if (AsciiLower(left[index]) != AsciiLower(right[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] constexpr bool AsciiContainsIgnoreCase(const std::string_view text,
+                                                     const std::string_view needle) noexcept {
+    if (needle.empty() || needle.size() > text.size()) {
+        return false;
+    }
+    for (std::size_t offset = 0; offset + needle.size() <= text.size(); ++offset) {
+        if (AsciiEqualsIgnoreCase(text.substr(offset, needle.size()), needle)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] constexpr std::chrono::seconds CommandResponseTimeout(const ControlCommand command,
+                                                                    const std::string_view target_device = {},
+                                                                    const std::string_view component_id = {}) noexcept {
+    if (command == ControlCommand::kEmergencyStop) {
+        return kEmergencyStopConfirmationTimeout;
+    }
+    if (command == ControlCommand::kRecovery) {
+        return kRecoveryCompletionTimeout;
+    }
+
+    if (AsciiEqualsIgnoreCase(target_device, "system") || AsciiEqualsIgnoreCase(target_device, "all")) {
+        switch (command) {
+            case ControlCommand::kStart:
+                return kGripperHomeCompletionTimeout;
+            case ControlCommand::kStop:
+                return kInputStopCompletionTimeout;
+            case ControlCommand::kExecute:
+                return kGripperExecuteCompletionTimeout;
+            case ControlCommand::kInitialize:
+                return kGripperHomeCompletionTimeout;
+            case ControlCommand::kDestinationSet:
+                return kLineTracerCommandCompletionTimeout;
+            default:
+                break;
+        }
+    }
+
+    const bool input =
+        AsciiContainsIgnoreCase(target_device, "input") || AsciiEqualsIgnoreCase(component_id, "input_conveyor");
+    if (input && command == ControlCommand::kStart) {
+        return kInputStartCompletionTimeout;
+    }
+    if (input && command == ControlCommand::kStop) {
+        return kInputStopCompletionTimeout;
+    }
+
+    const bool gripper = AsciiContainsIgnoreCase(target_device, "gripper") ||
+                         AsciiEqualsIgnoreCase(component_id, "gripper") || AsciiEqualsIgnoreCase(component_id, "home");
+    if (gripper && command == ControlCommand::kExecute) {
+        return kGripperExecuteCompletionTimeout;
+    }
+    if (gripper && (command == ControlCommand::kInitialize || command == ControlCommand::kStart)) {
+        return kGripperHomeCompletionTimeout;
+    }
+
+    const bool sorting =
+        AsciiContainsIgnoreCase(target_device, "sorting") || AsciiEqualsIgnoreCase(component_id, "sorting_conveyor");
+    if (sorting && (command == ControlCommand::kDestinationSet || command == ControlCommand::kStart ||
+                    command == ControlCommand::kStop)) {
+        return kSortingCommandCompletionTimeout;
+    }
+
+    const bool line_tracer = AsciiContainsIgnoreCase(target_device, "linetracer") ||
+                             AsciiContainsIgnoreCase(target_device, "-lt-") ||
+                             AsciiEqualsIgnoreCase(component_id, "line_tracer");
+    if (line_tracer && (command == ControlCommand::kExecute || command == ControlCommand::kDestinationSet)) {
+        return kLineTracerCommandCompletionTimeout;
+    }
+    return kMqttResponseTimeout;
+}
+
+[[nodiscard]] constexpr std::chrono::seconds CommandResponseWatchdogTimeout(
+    const ControlCommand command, const std::string_view target_device = {},
+    const std::string_view component_id = {}) noexcept {
+    return CommandResponseTimeout(command, target_device, component_id) + kCommandResponseDeliveryGrace;
 }
 
 [[nodiscard]] constexpr std::string_view ToString(MessageType type) noexcept {
@@ -185,6 +282,8 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
             return "COMMAND_RESPONSE";
         case MessageType::kSensorStatus:
             return "SENSOR_STATUS";
+        case MessageType::kVisionMeasurement:
+            return "VISION_MEASUREMENT";
         case MessageType::kUnknown:
             break;
     }
@@ -193,12 +292,12 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
 [[nodiscard]] constexpr MessageType MessageTypeFromString(std::string_view value) noexcept {
     constexpr std::array values = {
-        MessageType::kDeviceRegister,  MessageType::kHeartbeat,     MessageType::kBoxDetected,
-        MessageType::kWorkCreated,     MessageType::kWorkCompleted, MessageType::kPositionDetected,
-        MessageType::kBarcodeDetected, MessageType::kProductImage,  MessageType::kProductInfo,
-        MessageType::kDestinationSet,  MessageType::kDeviceStatus,  MessageType::kControlCommand,
-        MessageType::kErrorOccurred,   MessageType::kEmergencyStop, MessageType::kCommandResponse,
-        MessageType::kSensorStatus,
+        MessageType::kDeviceRegister,  MessageType::kHeartbeat,         MessageType::kBoxDetected,
+        MessageType::kWorkCreated,     MessageType::kWorkCompleted,     MessageType::kPositionDetected,
+        MessageType::kBarcodeDetected, MessageType::kProductImage,      MessageType::kProductInfo,
+        MessageType::kDestinationSet,  MessageType::kDeviceStatus,      MessageType::kControlCommand,
+        MessageType::kErrorOccurred,   MessageType::kEmergencyStop,     MessageType::kCommandResponse,
+        MessageType::kSensorStatus,    MessageType::kVisionMeasurement,
     };
     for (const auto type : values) {
         if (ToString(type) == value) {
@@ -212,6 +311,8 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
     switch (command) {
         case ControlCommand::kStart:
             return "START";
+        case ControlCommand::kExecute:
+            return "EXECUTE";
         case ControlCommand::kStop:
             return "STOP";
         case ControlCommand::kRestart:
@@ -234,9 +335,9 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
 
 [[nodiscard]] constexpr ControlCommand ControlCommandFromString(std::string_view value) noexcept {
     constexpr std::array values = {
-        ControlCommand::kStart,      ControlCommand::kStop,           ControlCommand::kRestart,
-        ControlCommand::kInitialize, ControlCommand::kStatusRequest,  ControlCommand::kEmergencyStop,
-        ControlCommand::kRecovery,   ControlCommand::kDestinationSet,
+        ControlCommand::kStart,         ControlCommand::kExecute,    ControlCommand::kStop,
+        ControlCommand::kRestart,       ControlCommand::kInitialize, ControlCommand::kStatusRequest,
+        ControlCommand::kEmergencyStop, ControlCommand::kRecovery,   ControlCommand::kDestinationSet,
     };
     for (const auto command : values) {
         if (ToString(command) == value) {
@@ -307,9 +408,22 @@ inline constexpr std::uint8_t kMqttMaximumRetries = 3;
     return "UNKNOWN";
 }
 
+[[nodiscard]] constexpr bool IsConnectionFailure(ConnectionState state) noexcept {
+    return state == ConnectionState::kOffline || state == ConnectionState::kRtspError ||
+           state == ConnectionState::kMqttError || state == ConnectionState::kMqttAuthError ||
+           state == ConnectionState::kTlsError || state == ConnectionState::kUartError;
+}
+
+[[nodiscard]] constexpr bool IsTransientTelemetry(MessageType type) noexcept {
+    return type == MessageType::kHeartbeat || type == MessageType::kSensorStatus ||
+           type == MessageType::kVisionMeasurement;
+}
+
 [[nodiscard]] constexpr DeliveryPolicy PolicyFor(MessageType type) noexcept {
     switch (type) {
         case MessageType::kHeartbeat:
+        case MessageType::kSensorStatus:
+        case MessageType::kVisionMeasurement:
             return { .minimum_qos = Qos::kAtMostOnce, .maximum_qos = Qos::kAtMostOnce, .retain = RetainPolicy::kNever };
         case MessageType::kDeviceStatus:
             return { .minimum_qos = Qos::kAtMostOnce,

@@ -67,9 +67,24 @@ gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
 default_destination=3
+
+[sensor_detection]
+enabled=true
+enter_threshold_cm=10
+exit_threshold_cm=12
+debounce_count=3
 ```
 
 현재 Gripper 전용 Raspberry Pi 실행 파일이 없으므로 전체 실제 공정이 준비되기 전에는 `enabled=false`가 안전합니다.
+
+`[sensor_detection]`은 초음파 상자 존재 판정 임계값입니다. STM32는 거리(cm)와 측정
+건전성(`OK`/`FAULT`)만 보고하고 판정은 서버가 하므로, **임계값을 바꿀 때 펌웨어를 다시
+구울 필요가 없습니다** — 값을 고치고 서버만 재시작하면 수신하는 초음파 센서에 반영됩니다.
+`exit_threshold_cm`은 `enter_threshold_cm` 이상이어야 하고, 두 값의 간격이 히스테리시스
+폭입니다(같게 두면 상자가 문턱에 걸쳐 있을 때 판정이 깜빡입니다). `debounce_count`를
+늘리면 오탐은 줄지만 반응이 측정 주기 × 횟수만큼 늦어집니다. Input 센서의
+`DETECTED` 진입은 `BOX_DETECTED`와 투입 컨베이어 정지로 연결됩니다. Line-tracer의
+모터 안전 정지는 서버 판정과 별도로 STM32 내부 장애물 safety 로직이 유지합니다.
 
 ## Vision 노드
 
@@ -128,12 +143,12 @@ bearer_token=중앙서버-http-bearer-token과-동일한-값
 max_buffer_entries=500
 ```
 
-`http/bearer_token`을 설정하면 운영 로그가 중앙 서버의 과거 이력을 cursor 기반으로 500건씩 조회합니다. 메인
-화면은 최신 500건으로 시작하고, 표의 맨 아래에서 계속 아래로 스크롤하면 기존 행을 유지한 채 과거 로그를
-500건씩 이어 붙입니다. 한 화면 세션의 누적 표시 상한은 5,000건입니다. 토큰을 비워 두면 실시간 MQTT 로그만
-표시합니다. `logs/max_buffer_entries`는 실시간 로그 상태의 롤링 버퍼 크기이며 100~5,000 범위에서 설정할 수
-있고 기본값은 500입니다. `dashboard/*_device_id` 값은 각 노드가 MQTT `sourceId`로 보내는 ID와 정확히 같아야
-합니다.
+`http/bearer_token`을 설정하면 운영 로그가 중앙 서버의 과거 이력을 cursor 기반으로 100건씩 조회합니다. 메인
+화면은 최신 100건으로 시작하고, 표의 맨 아래에서 계속 아래로 스크롤하면 과거 로그를 100건씩 이어 붙입니다.
+화면 표시 모델과 실시간 로그 상태는 모두 `logs/max_buffer_entries`의 한도를 사용합니다. 한도에 도달한 뒤 과거
+이력을 더 불러오면 화면 위쪽의 최신 행을 제거해 메모리 사용량을 유지합니다. 토큰을 비워 두면 실시간 MQTT
+로그만 표시합니다. 이 설정은 100~500 범위에서 지정할 수 있고 기본값은 500입니다.
+`dashboard/*_device_id` 값은 각 노드가 MQTT `sourceId`로 보내는 ID와 정확히 같아야 합니다.
 
 ## 환경 변수로 설정 경로 지정
 

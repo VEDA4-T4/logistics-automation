@@ -26,7 +26,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdint.h>
 
+#include "fault_trap.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -203,6 +205,10 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  /* IRQ를 끄고 영원히 멈추므로 HealthTask도 IWDG를 못 갱신한다 - 2초 뒤
+   * MCU가 리셋되면서 RAM이 날아가 원인이 사라진다. 호출자 주소를 .noinit에
+   * 남겨서 어느 HAL 호출이 실패했는지 재부팅 후 추적할 수 있게 한다. */
+  FaultTrap_CaptureCaller(FAULT_TRAP_ERROR_HANDLER, (uint32_t)(uintptr_t)__builtin_return_address(0));
   __disable_irq();
   while (1)
   {

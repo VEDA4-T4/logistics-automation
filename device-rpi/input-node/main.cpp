@@ -25,6 +25,7 @@
 #include "logistics/device/mqtt_node_config.hpp"
 #include "logistics/device/mqtt_time.hpp"
 #include "logistics/device/node_command_queue.hpp"
+#include "logistics/device/outbound_delivery.hpp"
 
 namespace logistics::device {
 namespace {
@@ -107,18 +108,27 @@ void UpdateDeviceStatus(const InputReport& report, DeviceStatus& device_status) 
     // controller state transition emitted a new DEVICE_STATUS.
 }
 
+[[nodiscard]] bool PublishOutbound(MqttNodeClient& mqtt_client, const OutboundMessage& outbound);
+
 [[nodiscard]] bool EnqueueOutbound(std::deque<OutboundMessage>& outbox, const InputReport& report,
                                    std::string_view device_id, std::string_view message_session_id,
-                                   std::uint64_t& message_sequence, DeviceStatus& device_status) {
+                                   std::uint64_t& message_sequence, DeviceStatus& device_status,
+                                   MqttNodeClient* mqtt_client = nullptr) {
     UpdateDeviceStatus(report, device_status);
-    if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
-            return queued.channel == InputReportChannel::kStatus;
-        })) {
-        std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued messages\n";
-        return false;
-    }
-    outbox.push_back(MakeOutboundMessage(report, device_id, message_session_id, message_sequence));
-    return true;
+    auto outbound = MakeOutboundMessage(report, device_id, message_session_id, message_sequence);
+    return PublishOrQueueOutbound(
+        report.message_type, mqtt_client != nullptr && report.channel != InputReportChannel::kStatus,
+        [&] { return PublishOutbound(*mqtt_client, outbound); },
+        [&] {
+            if (!MakeRoomInBoundedQueue(outbox, kOutboundQueueCapacity, [](const OutboundMessage& queued) {
+                    return queued.channel == InputReportChannel::kStatus;
+                })) {
+                std::cerr << "[input][mqtt][ERROR] outbound queue full; preserving queued messages\n";
+                return false;
+            }
+            outbox.push_back(std::move(outbound));
+            return true;
+        });
 }
 
 [[nodiscard]] bool PublishOutbound(MqttNodeClient& mqtt_client, const OutboundMessage& outbound) {
@@ -186,21 +196,35 @@ int RunInputDaemon(int argc, char* argv[]) {
     std::uint64_t message_sequence = 1U;
 
     const auto queue_report = [&](const InputReport& report) {
-        static_cast<void>(
-            EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence, *device_status));
+        static_cast<void>(EnqueueOutbound(outbox, report, device_id, message_session_id, message_sequence,
+                                          *device_status, &mqtt_client));
     };
     input_node.SetReportHandler(queue_report);
     uart_session.SetSpontaneousFrameHandler(
         [&input_node](const uart_frame_t& frame) { input_node.HandleUartFrame(frame); });
     mqtt_client.SetCommandHandler([&command_inbox, &mqtt_client, &device_id](const mqtt::MqttMessage& message) {
+        std::clog << "[input][mqtt][INFO] command received; messageId=" << message.message_id
+                  << "; messageType=" << mqtt::ToString(message.message_type)
+                  << "; queueSizeBefore=" << command_inbox.Size();
+        if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(message); command != nullptr) {
+            std::clog << "; requestId=" << command->request_id << "; command=" << mqtt::ToString(command->command)
+                      << "; target=" << command->target_device_id << "; component=" << command->component_id;
+        } else if (const auto* emergency = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message);
+                   emergency != nullptr) {
+            std::clog << "; requestId=" << emergency->request_id << "; command=" << mqtt::ToString(emergency->command)
+                      << "; target=" << emergency->target_device_id;
+        }
+        std::clog << '\n';
         std::deque<mqtt::MqttMessage> preempted;
-        if (!command_inbox.Push(message, &preempted)) {
+        bool handled = command_inbox.Push(message, &preempted);
+        if (!handled) {
             std::cerr << "[input][mqtt][ERROR] command queue full; command rejected: " << message.message_id << '\n';
             const auto response = MakeTerminalCommandResponse(
                 message, device_id, message.message_id + "-QUEUE-FULL", CurrentIso8601Timestamp(),
                 mqtt::CommandResult::kRejected, std::string("ERR-COMMAND-QUEUE-FULL"),
                 "input command rejected because the local command queue is full");
             if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                handled = false;
                 std::cerr << "[input][mqtt][ERROR] unable to publish command queue full response: "
                           << message.message_id << '\n';
             }
@@ -211,10 +235,15 @@ int RunInputDaemon(int argc, char* argv[]) {
                 mqtt::CommandResult::kRejected, std::string("ERR-EMERGENCY-STOP-PREEMPTED"),
                 "input command was preempted by an emergency stop");
             if (!response.has_value() || !mqtt_client.PublishResponse(*response)) {
+                handled = false;
                 std::cerr << "[input][mqtt][ERROR] unable to publish emergency preemption response: "
                           << command.message_id << '\n';
             }
         }
+        std::clog << "[input][mqtt][INFO] command queue result; messageId=" << message.message_id
+                  << "; accepted=" << (handled ? "true" : "false") << "; queueSize=" << command_inbox.Size()
+                  << "; preempted=" << preempted.size() << '\n';
+        return handled;
     });
 
     device_status->SetUartConnected(false);
@@ -282,6 +311,18 @@ int RunInputDaemon(int argc, char* argv[]) {
             if (keepalive.status == InputCommandStatus::kTimeout ||
                 keepalive.status == InputCommandStatus::kUartNotOpen ||
                 keepalive.status == InputCommandStatus::kUartError) {
+                // Name the failure before dropping the link. "disconnected" alone
+                // cannot tell a response timeout apart from a transport error, and
+                // the sequence plus the CRC/transport counters are what identify a
+                // recurring fault rather than a one-off glitch.
+                const InputUartDiagnostics& diagnostics = uart_session.Diagnostics();
+                std::cerr << "[input][uart][WARN] keepalive failed: status=" << static_cast<int>(keepalive.status)
+                          << "; sequence=" << static_cast<int>(keepalive.uart_result.sequence)
+                          << "; commandsSent=" << diagnostics.commands_sent
+                          << "; responsesMatched=" << diagnostics.responses_matched
+                          << "; retries=" << diagnostics.retries << "; timeouts=" << diagnostics.timeouts
+                          << "; parserErrors=" << diagnostics.parser_errors << "; crcErrors=" << diagnostics.crc_errors
+                          << "; transportErrors=" << diagnostics.transport_errors << '\n';
                 uart_session.Close();
             } else if (!keepalive.Succeeded()) {
                 std::cerr << "[input][uart][WARN] keepalive rejected: status="

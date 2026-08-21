@@ -29,7 +29,8 @@ nano device-rpi/config/sorting-node.ini
 | MQTT 메시지/명령 | STM32 UART 명령 | Payload |
 |---|---|---|
 | `DESTINATION_SET` | `SORTING_ROUTE_ITEM (0x30)` | 로컬 `uint16_t cycle_id` + 목적지 `1..3` |
-| `START`, `RESTART` + `params.speed=1..100` | `SORTING_CONVEYOR_SET_SPEED (0x36)` 성공 후 `SORTING_CONVEYOR_START (0x34)` | 속도 `uint8_t` 후 START payload 없음 |
+| `START`, `RESTART` (component 생략) | UART 명령 없음 | 시스템 가동 준비만 확인하고 컨베이어는 정지 유지 |
+| `START`, `RESTART` (`component=sorting_conveyor`, `params.speed=1..100` 선택) | `SORTING_CONVEYOR_SET_SPEED (0x36)` 성공 후 `SORTING_CONVEYOR_START (0x34)` | 그리퍼 완료 후 중앙 서버가 발행. 속도 생략 시 직전값/기본값 사용 |
 | `STOP` | `SORTING_CONVEYOR_STOP (0x35)` | 없음 |
 | `INITIALIZE` | `SORTING_RESET (0x33)` | 없음 |
 | `STATUS_REQUEST` | `SORTING_GET_STATUS (0x31)` | 없음 |
@@ -48,7 +49,7 @@ nano device-rpi/config/sorting-node.ini
 | `OPERATION_RESULT`, `RESPONSE` | `device/{id}/response`의 `COMMAND_RESPONSE` |
 | 분류·컨베이어 상태 응답 | `device/{id}/status`의 `DEVICE_STATUS` |
 | `CYCLE_COMPLETE` | `device/{id}/event`의 `WORK_COMPLETED` |
-| `SENSOR_STATUS` | `device/{id}/event`의 `SENSOR_STATUS(sensorId, measurementStatus, distanceCm)` |
+| `SENSOR_STATUS` | `device/{id}/event`의 `SENSOR_STATUS(sensorId, measurementStatus, distanceCm)`. `measurementStatus`는 `OK`/`FAULT`(측정 건전성)뿐이며, 상자 도착 판정은 중앙 서버가 거리값으로 내려 `detectionStatus`를 덧붙인다 |
 | `DEVICE_STATUS`, heartbeat, Safety·Health 이벤트 | 상태 갱신 및 필요 시 `ERROR_OCCURRED` |
 | CRC·Parser 오류, 응답 타임아웃, UART 단절 | `device/{id}/error` 및 UART 오류 상태 |
 
@@ -66,7 +67,7 @@ nano device-rpi/config/sorting-node.ini
 9. UART가 끊기면 오류 상태를 발행하고 2초마다 재연결한다. 재연결 직후 STM32 상태를 조회하여 노드 상태를
    다시 동기화한다. cycle ID 또는 목적지가 기존 서버 작업 매핑과 다르면 작업 ID를 제거하고 매핑 오류를 보고한다.
 10. MQTT가 잠시 끊기면 응답·이벤트·오류를 메모리 outbox에 보존한다. 포화 시 오래된 상태 메시지만 먼저
-    제거하고 명령 응답과 공정 이벤트를 우선 보존한다. 센서 거리값은 센서별 최신 측정값 하나로 병합한다.
+    제거하고 명령 응답과 공정 이벤트를 우선 보존한다. QoS 0 센서 거리값은 즉시 발행하고 실패 시 버린다.
 
 ## 현재 하드웨어 검증 범위
 

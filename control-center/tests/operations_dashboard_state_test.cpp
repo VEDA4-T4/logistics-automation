@@ -70,6 +70,14 @@ const logistics::control_center::SensorUnitStatus& SensorById(
     std::abort();
 }
 
+bool HasSensor(const logistics::control_center::ProcessUnitStatus& process, int sensor_id) {
+    for (const auto& sensor : process.sensors) {
+        if (sensor.sensor_id == sensor_id)
+            return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 int main() {
@@ -83,8 +91,35 @@ int main() {
     assert(ProcessByKey(state, QStringLiteral("input")).sensors.size() == 1);
     assert(ProcessByKey(state, QStringLiteral("sorting")).sensors.size() == 3);
 
+    OperationsDashboardState line_sensor_state;
+    auto result =
+        line_sensor_state.applyEnvelope(Envelope("PI-LT-SENSOR-REAR", "SENSOR_STATUS",
+                                                 { { QStringLiteral("sensorId"), 2 },
+                                                   { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                   { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
+                                                   { QStringLiteral("distanceCm"), 18 } },
+                                                 QStringLiteral("PI-LT-01")));
+    assert(result.handled && !result.applied && result.error.isEmpty());
+    assert(!HasSensor(ProcessByKey(line_sensor_state, QStringLiteral("linetracer")), 2));
+
+    for (const int sensor_id : { 1, 3, 4 }) {
+        result =
+            line_sensor_state.applyEnvelope(Envelope(QStringLiteral("PI-LT-SENSOR-%1").arg(sensor_id), "SENSOR_STATUS",
+                                                     { { QStringLiteral("sensorId"), sensor_id },
+                                                       { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                       { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
+                                                       { QStringLiteral("distanceCm"), 20 + sensor_id } },
+                                                     QStringLiteral("PI-LT-01")));
+        assert(result.applied);
+    }
+    const auto line_sensors = ProcessByKey(line_sensor_state, QStringLiteral("linetracer"));
+    assert(line_sensors.sensors.size() == 3);
+    assert(HasSensor(line_sensors, 1));
+    assert(HasSensor(line_sensors, 3));
+    assert(HasSensor(line_sensors, 4));
+
     OperationsDashboardState position_state;
-    auto result = position_state.applyEnvelope(
+    result = position_state.applyEnvelope(
         Envelope("SNAPSHOT-PI-LT-01-1", "DEVICE_STATUS",
                  PositionStatus(QStringLiteral("MOVING"), Position(QStringLiteral("DEPARTURE"), QStringLiteral("A")),
                                 Position(QStringLiteral("DESTINATION"), QStringLiteral("C")),
@@ -272,9 +307,12 @@ int main() {
         Envelope("SORTING-STOPPED", "DEVICE_STATUS", DeviceStatus("ONLINE", "STOPPED"), "PI-SORTING-01"));
     assert(result.applied);
     result = stopped_sensor_state.applyEnvelope(
+        // measurementStatus is the device's measurement health; detectionStatus
+        // is what the central server derived from distanceCm.
         Envelope("SORTING-SENSOR-2-DETECTED", "SENSOR_STATUS",
                  { { QStringLiteral("sensorId"), 2 },
-                   { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
+                   { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                   { QStringLiteral("detectionStatus"), QStringLiteral("DETECTED") },
                    { QStringLiteral("distanceCm"), 12 } },
                  "PI-SORTING-01", "2026-07-23T01:00:00.100Z"));
     assert(result.applied);
@@ -313,7 +351,8 @@ int main() {
     result =
         stopped_sensor_state.applyEnvelope(Envelope("SORTING-SENSOR-2-CLEAR", "SENSOR_STATUS",
                                                     { { QStringLiteral("sensorId"), 2 },
-                                                      { QStringLiteral("measurementStatus"), QStringLiteral("CLEAR") },
+                                                      { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                      { QStringLiteral("detectionStatus"), QStringLiteral("CLEAR") },
                                                       { QStringLiteral("distanceCm"), 45 } },
                                                     "PI-SORTING-01", "2026-07-23T01:00:00.500Z"));
     assert(result.applied);
@@ -324,12 +363,13 @@ int main() {
     assert(SensorById(sorting_after_clear, 2).measurement_status == QStringLiteral("CLEAR"));
     assert(stopped_sensor_state.overall().state == OverallProcessState::Stopped);
 
-    result = stopped_sensor_state.applyEnvelope(
-        Envelope("SORTING-SENSOR-1-DETECTED", "SENSOR_STATUS",
-                 { { QStringLiteral("sensorId"), 1 },
-                   { QStringLiteral("measurementStatus"), QStringLiteral("DETECTED") },
-                   { QStringLiteral("distanceCm"), 10 } },
-                 "PI-SORTING-01", "2026-07-23T01:00:00.600Z"));
+    result =
+        stopped_sensor_state.applyEnvelope(Envelope("SORTING-SENSOR-1-DETECTED", "SENSOR_STATUS",
+                                                    { { QStringLiteral("sensorId"), 1 },
+                                                      { QStringLiteral("measurementStatus"), QStringLiteral("OK") },
+                                                      { QStringLiteral("detectionStatus"), QStringLiteral("DETECTED") },
+                                                      { QStringLiteral("distanceCm"), 10 } },
+                                                    "PI-SORTING-01", "2026-07-23T01:00:00.600Z"));
     assert(result.applied);
     result = stopped_sensor_state.applyEnvelope(
         Envelope("SORTING-SENSORS-STALE", "ERROR_OCCURRED",
@@ -634,6 +674,8 @@ int main() {
                  "2026-07-23T01:55:00.000Z"),
         received_at);
     assert(result.applied);
+    assert(ProcessByKey(clock_skew_state, QStringLiteral("vision")).updated_at == received_at);
+    assert(clock_skew_state.overall().updated_at == received_at);
     assert(!clock_skew_state.expireStaleProcesses(received_at.addMSecs(14999)));
     assert(clock_skew_state.expireStaleProcesses(received_at.addSecs(15)));
     result = clock_skew_state.applyEnvelope(Envelope("VISION-SKEWED-STALE-ERROR", "ERROR_OCCURRED",
@@ -822,6 +864,30 @@ int main() {
         Envelope("CUSTOM-1", "DEVICE_STATUS", DeviceStatus("ONLINE", "RUNNING", "WORK-CUSTOM"), "CUSTOM-INPUT"));
     assert(result.applied);
     assert(ProcessByKey(configured_state, QStringLiteral("input")).work_id == QStringLiteral("WORK-CUSTOM"));
+
+    OperationsDashboardState ready_gripper_state;
+    result = ready_gripper_state.applyEnvelope(
+        Envelope("GRIPPER-READY", "DEVICE_STATUS", DeviceStatus("ONLINE", "READY"), "PI-GRIPPER-01"));
+    assert(result.applied);
+    const auto gripper_key = QStringLiteral("gripper");
+    const auto& ready_gripper = ProcessByKey(ready_gripper_state, gripper_key);
+    assert(ready_gripper.current_state == QStringLiteral("READY"));
+    assert(ready_gripper.work_id.isEmpty());
+    assert(ready_gripper_state.overall().active_unit_count == 0);
+    assert(ready_gripper_state.overall().state == OverallProcessState::Idle);
+
+    OperationsDashboardState unknown_state;
+    result = unknown_state.applyEnvelope(
+        Envelope("LINE-FUTURE", "DEVICE_STATUS", DeviceStatus("ONLINE", "FUTURE_STATE"), "PI-LT-01"));
+    assert(result.applied);
+    assert(ProcessByKey(unknown_state, QStringLiteral("linetracer")).current_state == QStringLiteral("FUTURE_STATE"));
+    assert(!ProcessByKey(unknown_state, QStringLiteral("linetracer")).has_error);
+    assert(unknown_state.overall().state == OverallProcessState::Idle);
+    result = unknown_state.applyEnvelope(
+        Envelope("LINE-POSITION-UNKNOWN", "DEVICE_STATUS", DeviceStatus("ONLINE", "POSITION_UNKNOWN"), "PI-LT-01"));
+    assert(result.applied);
+    assert(ProcessByKey(unknown_state, QStringLiteral("linetracer")).has_error);
+    assert(unknown_state.overall().state == OverallProcessState::Error);
 
     return 0;
 }

@@ -272,6 +272,7 @@ static void test_estop_latches_before_notifying_controls(void) {
     assert(inputEvent->payload[APP_SAFETY_EVENT_KIND_INDEX] == SAFETY_EVENT_ESTOP_LATCHED);
     assert(inputEvent->payload[APP_SAFETY_EVENT_CAUSE_INDEX] == SAFETY_CAUSE_ESTOP_INPUT_PI);
     assert(inputEvent->payload[APP_SAFETY_EVENT_RESULT_INDEX] == 0U);
+    assert(UART_IS_VALID_APP_SAFETY_PAYLOAD(inputEvent->payload, inputEvent->length) != 0U);
 
     /* 타임스탬프(LE uint32)가 이벤트 발생 tick과 일치한다. */
     uint32_t reported = (uint32_t)inputEvent->payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX] |

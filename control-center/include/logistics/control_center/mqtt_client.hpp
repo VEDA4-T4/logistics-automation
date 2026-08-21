@@ -52,7 +52,8 @@ signals:
     void messageRejected(const QString& topic, const QString& reason);
     void errorOccurred(const QString& detail);
     void commandPublished(qint32 message_id, const QString& request_id,
-                          logistics::contracts::mqtt::ControlCommand command);
+                          logistics::contracts::mqtt::ControlCommand command, const QString& target_device_id,
+                          const QString& component_id);
 
 private:
     void connectToBroker();

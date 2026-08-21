@@ -19,6 +19,11 @@ std::size_t CurlWrite(char* data, std::size_t size, std::size_t count, void* out
     return size * count;
 }
 
+int CurlProgress(void* stop_token_pointer, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    const auto& stop_token = *static_cast<const std::stop_token*>(stop_token_pointer);
+    return stop_token.stop_requested() ? 1 : 0;
+}
+
 void AddField(curl_mime* mime, std::string_view name, const std::string& value) {
     curl_mimepart* part = curl_mime_addpart(mime);
     curl_mime_name(part, name.data());
@@ -29,7 +34,7 @@ class CurlImageUploadTransport final : public ImageUploadTransport {
 public:
     explicit CurlImageUploadTransport(ImageUploadConfig config) : config_(std::move(config)) {}
 
-    ImageUploadResult Upload(const ImageUploadRequest& request) override {
+    ImageUploadResult Upload(const ImageUploadRequest& request, std::stop_token stop_token) override {
         static std::once_flag curl_once;
         std::call_once(curl_once, [] { static_cast<void>(curl_global_init(CURL_GLOBAL_DEFAULT)); });
         CURL* curl = curl_easy_init();
@@ -64,6 +69,9 @@ public:
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, config_.request_timeout.count());
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, config_.request_timeout.count());
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, &CurlProgress);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &stop_token);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         const std::string ca_certificate = config_.ca_certificate.string();
@@ -77,6 +85,9 @@ public:
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
 
+        if (code == CURLE_ABORTED_BY_CALLBACK && stop_token.stop_requested()) {
+            return { ImageUploadDisposition::kPermanentFailure, {}, {}, {}, "image upload cancelled" };
+        }
         if (code != CURLE_OK) {
             return { ImageUploadDisposition::kRetryableFailure, {}, {}, {}, curl_easy_strerror(code) };
         }

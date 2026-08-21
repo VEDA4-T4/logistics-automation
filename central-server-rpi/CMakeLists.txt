@@ -1,5 +1,6 @@
 find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MICROHTTPD REQUIRED IMPORTED_TARGET libmicrohttpd)
 
@@ -64,7 +65,9 @@ target_include_directories(
 )
 target_link_libraries(
     logistics_central_server_mqtt_core
-    PUBLIC logistics::contracts
+    PUBLIC
+        logistics::contracts
+        Threads::Threads
 )
 
 logistics_enable_warnings(logistics_central_server_mqtt_core)
@@ -186,6 +189,7 @@ logistics_enable_warnings(logistics_central_server_config)
 add_library(
     logistics_central_server_mqtt_handler
     src/mqtt_handler/mqtt_handler.cpp
+    src/mqtt_handler/sensor_detection.cpp
 )
 add_library(
     logistics::central_server_mqtt_handler
@@ -211,7 +215,6 @@ logistics_enable_warnings(logistics_central_server_mqtt_handler)
 # ------------------------------------------------------------------------------
 
 if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
-    find_package(Threads REQUIRED)
     find_package(PkgConfig QUIET)
 
     if(PkgConfig_FOUND)
@@ -287,6 +290,7 @@ if(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT)
         logistics_central_server
         src/main.cpp
         src/application.cpp
+        src/application_recovery.cpp
     )
 
     target_include_directories(
@@ -416,6 +420,7 @@ if(BUILD_TESTING)
         central_server_process_state_store_test
         PRIVATE
             logistics::central_storage
+            logistics::central_server_command_manager
             logistics::central_server_process_state_machine
     )
     target_compile_definitions(
@@ -439,6 +444,25 @@ if(BUILD_TESTING)
         COMMAND central_server_process_orchestrator_test
     )
 
+    add_executable(
+        central_server_process_integration_test
+        tests/process_integration_test.cpp
+        src/application_recovery.cpp
+    )
+    target_link_libraries(
+        central_server_process_integration_test
+        PRIVATE
+            logistics::central_server_command_manager
+            logistics::central_server_mqtt_handler
+            logistics::central_server_process_orchestrator
+    )
+    target_compile_definitions(
+        central_server_process_integration_test
+        PRIVATE LOGISTICS_TEST_MIGRATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/db/migrations"
+    )
+    logistics_enable_warnings(central_server_process_integration_test)
+    add_test(NAME central_server_process_integration_test COMMAND central_server_process_integration_test)
+
     add_executable(central_server_homography_test tests/homography_test.cpp)
     target_link_libraries(
         central_server_homography_test
@@ -446,6 +470,20 @@ if(BUILD_TESTING)
     )
     logistics_enable_warnings(central_server_homography_test)
     add_test(NAME central_server_homography_test COMMAND central_server_homography_test)
+
+    add_executable(
+        central_server_sensor_detection_test
+        tests/sensor_detection_test.cpp
+    )
+    target_link_libraries(
+        central_server_sensor_detection_test
+        PRIVATE logistics::central_server_mqtt_handler
+    )
+    logistics_enable_warnings(central_server_sensor_detection_test)
+    add_test(
+        NAME central_server_sensor_detection_test
+        COMMAND central_server_sensor_detection_test
+    )
 
     add_executable(
         central_server_mqtt_handler_test

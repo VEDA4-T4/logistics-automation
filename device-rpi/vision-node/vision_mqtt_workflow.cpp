@@ -11,96 +11,151 @@ namespace logistics::vision {
 namespace mqtt = contracts::mqtt;
 
 VisionMqttWorkflow::VisionMqttWorkflow(std::string device_id, const std::size_t detection_confirm_frames,
-                                       const std::size_t clear_confirm_frames, const std::size_t barcode_wait_frames)
+                                       const std::size_t clear_confirm_frames,
+                                       const std::chrono::milliseconds preassignment_timeout,
+                                       const std::chrono::milliseconds barcode_timeout, MonotonicNow monotonic_now)
     : device_id_(std::move(device_id)),
       detection_confirm_frames_(detection_confirm_frames),
       clear_confirm_frames_(clear_confirm_frames),
-      barcode_wait_frames_(barcode_wait_frames) {
+      preassignment_timeout_(preassignment_timeout),
+      barcode_timeout_(barcode_timeout),
+      monotonic_now_(std::move(monotonic_now)) {
     if (!mqtt::IsValidTopicLevel(device_id_) || detection_confirm_frames_ == 0 || clear_confirm_frames_ == 0 ||
-        barcode_wait_frames_ == 0) {
+        preassignment_timeout_ <= std::chrono::milliseconds::zero() ||
+        barcode_timeout_ <= std::chrono::milliseconds::zero() || !monotonic_now_) {
         throw std::invalid_argument("invalid vision MQTT workflow configuration");
     }
 }
 
-std::optional<mqtt::MqttMessage> VisionMqttWorkflow::Observe(std::optional<VisionObservation> observation,
-                                                             std::string message_id, std::string timestamp) {
+void VisionMqttWorkflow::Observe(std::optional<VisionObservation> observation) {
     std::lock_guard lock(mutex_);
-    if (phase_ == Phase::kAssigned && assigned_frames_ < barcode_wait_frames_) {
-        ++assigned_frames_;
+    const TimePoint now = monotonic_now_();
+    ExpirePreassignment(now);
+
+    const bool barcode_deadline_expired =
+        phase_ == Phase::kAssigned && barcode_deadline_.has_value() && now >= *barcode_deadline_;
+    const bool confirming_box = observation.has_value() && observation->box_detected &&
+                                (phase_ == Phase::kIdle || phase_ == Phase::kPreassigned);
+    const bool awaiting_barcode_for_confirmed_box =
+        confirmed_box_observation_.has_value() && (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned);
+    if (observation.has_value() && !barcode_deadline_expired &&
+        (confirming_box || awaiting_barcode_for_confirmed_box)) {
+        if (observation->barcode.has_value()) {
+            barcode_ = std::move(observation->barcode);
+        }
+        barcode_region_detected_ = barcode_region_detected_ || observation->barcode_region_detected;
     }
-    if (!observation.has_value()) {
+
+    if (!observation.has_value() || !observation->box_detected) {
         detected_frames_ = 0;
+        box_candidate_.reset();
+        if (phase_ == Phase::kIdle) {
+            confirmed_box_observation_.reset();
+            barcode_.reset();
+            barcode_region_detected_ = false;
+        }
         if (phase_ == Phase::kAwaitingClear && ++clear_frames_ >= clear_confirm_frames_) {
             phase_ = Phase::kIdle;
             clear_frames_ = 0;
-            observation_.reset();
+            confirmed_box_observation_.reset();
+            barcode_.reset();
+            barcode_region_detected_ = false;
             work_id_.reset();
         }
-        return std::nullopt;
+        return;
     }
 
     clear_frames_ = 0;
-    if ((phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && observation->barcode.has_value()) {
-        observation_->barcode = std::move(observation->barcode);
+    if (phase_ != Phase::kIdle && phase_ != Phase::kPreassigned) {
+        return;
     }
-    if ((phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && observation->barcode_region_detected) {
-        observation_->barcode_region_detected = true;
-    }
-    if (phase_ != Phase::kIdle) {
-        return std::nullopt;
-    }
+    box_candidate_ = std::move(observation);
+    box_candidate_->barcode.reset();
+    box_candidate_->barcode_region_detected = false;
     if (++detected_frames_ < detection_confirm_frames_) {
-        return std::nullopt;
+        return;
     }
 
     detected_frames_ = 0;
-    observation_ = std::move(observation);
+    confirmed_box_observation_ = std::move(box_candidate_);
+    if (work_id_.has_value()) {
+        preassignment_deadline_.reset();
+        barcode_deadline_ = now + barcode_timeout_;
+        phase_ = Phase::kAssigned;
+        return;
+    }
     phase_ = Phase::kAwaitingWork;
-    return mqtt::MqttMessage{
-        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = std::move(message_id),
-        .message_type = mqtt::MessageType::kBoxDetected,
-        .source_id = device_id_,
-        .timestamp = std::move(timestamp),
-        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = observation_->image_name },
-    };
 }
 
 bool VisionMqttWorkflow::AssignWork(const mqtt::MqttMessage& message) {
     const auto* work = mqtt::GetPayload<mqtt::WorkCreatedPayload>(message);
     std::lock_guard lock(mutex_);
-    if (phase_ != Phase::kAwaitingWork || work == nullptr || !work->IsValid() ||
+    if (work == nullptr || !work->IsValid() ||
         (last_completed_work_id_.has_value() && work->work_id == *last_completed_work_id_)) {
         return false;
     }
+    if (work_id_.has_value() && *work_id_ == work->work_id) {
+        return phase_ != Phase::kIdle && phase_ != Phase::kAwaitingClear;
+    }
+    if ((phase_ != Phase::kIdle && phase_ != Phase::kAwaitingWork) || work_id_.has_value()) {
+        return false;
+    }
     work_id_ = work->work_id;
-    assigned_frames_ = 0;
-    phase_ = Phase::kAssigned;
+    if (phase_ == Phase::kAwaitingWork) {
+        barcode_deadline_ = monotonic_now_() + barcode_timeout_;
+        phase_ = Phase::kAssigned;
+    } else {
+        preassignment_deadline_ = monotonic_now_() + preassignment_timeout_;
+        phase_ = Phase::kPreassigned;
+    }
     return true;
+}
+
+bool VisionMqttWorkflow::CanAcceptWork() const {
+    std::lock_guard lock(mutex_);
+    return !work_id_.has_value() && (phase_ == Phase::kIdle || phase_ == Phase::kAwaitingWork);
 }
 
 bool VisionMqttWorkflow::HasPendingBarcode() const {
     std::lock_guard lock(mutex_);
-    return (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && observation_.has_value() &&
-           observation_->barcode.has_value();
+    return (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && confirmed_box_observation_.has_value() &&
+           barcode_.has_value();
 }
 
 bool VisionMqttWorkflow::NeedsBarcodeFallback() const {
     std::lock_guard lock(mutex_);
-    return (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && observation_.has_value() &&
-           !observation_->barcode.has_value();
+    return (phase_ == Phase::kAwaitingWork || phase_ == Phase::kAssigned) && confirmed_box_observation_.has_value() &&
+           !barcode_.has_value();
 }
 
 std::optional<AssignedVisionWork> VisionMqttWorkflow::TakeAssignedWork() {
     std::lock_guard lock(mutex_);
-    if (phase_ != Phase::kAssigned || !work_id_.has_value() || !observation_.has_value()) {
+    ExpirePreassignment(monotonic_now_());
+    if (phase_ != Phase::kAssigned || !work_id_.has_value()) {
         return std::nullopt;
     }
-    if (!observation_->barcode.has_value() && assigned_frames_ < barcode_wait_frames_) {
+    if (confirmed_box_observation_.has_value() && !barcode_.has_value() && barcode_deadline_.has_value() &&
+        monotonic_now_() < *barcode_deadline_) {
         return std::nullopt;
     }
     phase_ = Phase::kProcessing;
-    return AssignedVisionWork{ .work_id = *work_id_, .observation = *observation_ };
+    auto observation = confirmed_box_observation_;
+    if (observation.has_value()) {
+        observation->barcode = barcode_;
+        observation->barcode_region_detected = barcode_region_detected_;
+    }
+    return AssignedVisionWork{ .work_id = *work_id_, .observation = std::move(observation) };
+}
+
+void VisionMqttWorkflow::ExpirePreassignment(const TimePoint now) {
+    if (phase_ != Phase::kPreassigned || !preassignment_deadline_.has_value() || now < *preassignment_deadline_) {
+        return;
+    }
+    detected_frames_ = 0;
+    box_candidate_.reset();
+    confirmed_box_observation_.reset();
+    preassignment_deadline_.reset();
+    phase_ = Phase::kAssigned;
 }
 
 void VisionMqttWorkflow::CancelPendingWork() {
@@ -108,8 +163,12 @@ void VisionMqttWorkflow::CancelPendingWork() {
     if (phase_ == Phase::kAwaitingWork) {
         phase_ = Phase::kIdle;
         detected_frames_ = 0;
-        assigned_frames_ = 0;
-        observation_.reset();
+        preassignment_deadline_.reset();
+        barcode_deadline_.reset();
+        box_candidate_.reset();
+        confirmed_box_observation_.reset();
+        barcode_.reset();
+        barcode_region_detected_ = false;
         work_id_.reset();
     }
 }
@@ -120,7 +179,8 @@ void VisionMqttWorkflow::CompleteWork() {
         last_completed_work_id_ = work_id_;
         phase_ = Phase::kAwaitingClear;
         clear_frames_ = 0;
-        assigned_frames_ = 0;
+        preassignment_deadline_.reset();
+        barcode_deadline_.reset();
     }
 }
 
@@ -186,14 +246,18 @@ void VisionMqttWorkflow::Reset() {
     phase_ = Phase::kIdle;
     detected_frames_ = 0;
     clear_frames_ = 0;
-    assigned_frames_ = 0;
-    observation_.reset();
+    preassignment_deadline_.reset();
+    barcode_deadline_.reset();
+    box_candidate_.reset();
+    confirmed_box_observation_.reset();
+    barcode_.reset();
+    barcode_region_detected_ = false;
     work_id_.reset();
 }
 
 mqtt::MqttMessage MakePositionDetectedMessage(std::string_view device_id, const AssignedVisionWork& work,
                                               std::string message_id, std::string timestamp) {
-    const auto& observation = work.observation;
+    const auto& observation = work.observation.value();
     const std::int32_t center_x = observation.box_x + observation.box_width / 2;
     const std::int32_t center_y = observation.box_y + observation.box_height / 2;
     return {
@@ -221,8 +285,9 @@ mqtt::MqttMessage MakePositionDetectedMessage(std::string_view device_id, const 
 
 mqtt::MqttMessage MakeBarcodeDetectedMessage(std::string_view device_id, const AssignedVisionWork& work,
                                              std::string message_id, std::string timestamp) {
-    const bool detected = work.observation.barcode.has_value();
-    const bool region_detected = work.observation.barcode_region_detected;
+    const bool box_detected = work.observation.has_value();
+    const bool detected = box_detected && work.observation->barcode.has_value();
+    const bool region_detected = box_detected && work.observation->barcode_region_detected;
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
         .message_id = std::move(message_id),
@@ -233,19 +298,47 @@ mqtt::MqttMessage MakeBarcodeDetectedMessage(std::string_view device_id, const A
             mqtt::BarcodeDetectedPayload{
                 .work_id = work.work_id,
                 .recognition_status = detected ? "SUCCESS" : "FAILED",
-                .barcode = detected ? *work.observation.barcode : std::string{},
+                .barcode = detected ? *work.observation->barcode : std::string{},
                 .confidence = std::nullopt,
                 .message = detected ? std::nullopt
                                     : std::optional<std::string>(
-                                          region_detected ? "barcode region detected but EAN-13 decode failed"
-                                                          : "barcode region was not detected"),
+                                          !box_detected     ? "box was not detected within the preassignment timeout"
+                                          : region_detected ? "barcode region detected but EAN-13 decode failed"
+                                                            : "barcode region was not detected"),
                 .error_code =
                     detected ? std::nullopt
-                             : std::optional<std::string>(region_detected ? "ERR-VISION-BARCODE-DECODE-FAILED"
-                                                                          : "ERR-VISION-BARCODE-REGION-NOT-DETECTED"),
-                .failure_stage =
-                    detected ? std::nullopt
-                             : std::optional<std::string>(region_detected ? "BARCODE_DECODE" : "BARCODE_DETECTION"),
+                             : std::optional<std::string>(!box_detected     ? "ERR-VISION-BOX-NOT-DETECTED"
+                                                          : region_detected ? "ERR-VISION-BARCODE-DECODE-FAILED"
+                                                                            : "ERR-VISION-BARCODE-REGION-NOT-DETECTED"),
+                .failure_stage = detected ? std::nullopt
+                                          : std::optional<std::string>(!box_detected     ? "BOX_DETECTION"
+                                                                       : region_detected ? "BARCODE_DECODE"
+                                                                                         : "BARCODE_DETECTION"),
+            },
+    };
+}
+
+mqtt::MqttMessage MakeVisionMeasurementMessage(std::string_view device_id, const VisionObservation& observation,
+                                               std::string message_id, std::string timestamp) {
+    if (!observation.box_detected || !observation.barcode.has_value()) {
+        throw std::invalid_argument("vision measurement requires a detected box and barcode");
+    }
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = std::move(message_id),
+        .message_type = mqtt::MessageType::kVisionMeasurement,
+        .source_id = std::string(device_id),
+        .timestamp = std::move(timestamp),
+        .data =
+            mqtt::VisionMeasurementPayload{
+                .barcode = *observation.barcode,
+                .box_x = observation.box_x,
+                .box_y = observation.box_y,
+                .box_width = observation.box_width,
+                .box_height = observation.box_height,
+                .frame_width = observation.frame_width,
+                .frame_height = observation.frame_height,
+                .box_corners = observation.box_corners,
             },
     };
 }

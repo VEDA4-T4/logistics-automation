@@ -148,9 +148,10 @@ TCP 성공은 포트 접근만 확인합니다. MQTT 인증·ACL이나 HTTP 요�
 Input → Vision → Gripper → Sorting → Line Tracer → Completed
 ```
 
-다만 현재 `main`에는 Gripper 전용 Raspberry Pi 실행 파일이 없고 Input/Sorting/Line Tracer는 공통 런타임
-기반입니다. 모든 장치별 MQTT↔UART 구현과 상태 보고가 합쳐지기 전에는 중앙서버 `[process] enabled=false`를
-유지합니다. 준비되지 않은 상태에서 활성화하면 다음 장치 명령 전송 시 공정이 `ERROR`로 전환됩니다.
+현재 `main`은 `logistics_gripper_node` Raspberry Pi 실행 파일을 제공합니다. 장치별 MQTT/UART 구현과 상태 보고가
+배포 대상 장비에서 검증되기 전에는 중앙 서버 `[process] enabled=false`를 유지합니다. 준비되지 않은 상태에서
+활성화하면 다음 장치 명령 전송 후 공정은 `ERROR`로 전환됩니다. 실제 장비 검증 절차와 판정 기록은
+[공정 워크플로 하드웨어 검증](../test/process-workflow-hardware-validation.md)을 따릅니다.
 
 ## 9. 종료 순서
 

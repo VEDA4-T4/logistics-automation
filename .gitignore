@@ -115,6 +115,9 @@ Thumbs.db
 # Codex/PDF review intermediates
 tmp/
 
+# Local reference documents (never commit)
+docs/documents/V-*.pdf
+
 # C++ objects and libs
 *.slo
 *.lo
@@ -194,3 +197,7 @@ docs/superpowers/
 .worktrees/
 
 .codex/
+
+# Track Yocto image recipes
+!yocto/meta-logistics/recipes-core/images/
+!yocto/meta-logistics/recipes-core/images/**

@@ -11,6 +11,7 @@
 #include "logistics/contracts/uart_codec.h"
 #include "queue.h"
 #include "stm32f4xx_hal.h"
+#include "task.h"
 #include "usart.h"
 
 void Health_TaskAlive(health_task_id_t id) {
@@ -18,8 +19,6 @@ void Health_TaskAlive(health_task_id_t id) {
 }
 
 #define FAKE_OBJECT_QUEUE 0x51554555UL
-#define FAKE_OBJECT_SET 0x53455420UL
-#define FAKE_MAX_SET_MEMBERS 4U
 #define FAKE_MAX_TX_CAPTURES 128U
 
 typedef struct {
@@ -32,11 +31,6 @@ typedef struct {
     uint8_t* storage;
 } fake_queue_t;
 
-typedef struct {
-    uint32_t type;
-    UBaseType_t memberCount;
-    QueueHandle_t members[FAKE_MAX_SET_MEMBERS];
-} fake_queue_set_t;
 
 typedef struct {
     UART_HandleTypeDef* huart;
@@ -47,9 +41,9 @@ typedef struct {
 static uint32_t fakeTick;
 static uint32_t fakeCreateCalls;
 static uint32_t fakeFailCreateCall;
-static uint32_t fakeFailAddCall;
-static uint32_t fakeAddCalls;
 static uint32_t fakeCriticalDepth;
+static uint32_t fakeNotifyCount;
+static uint8_t fakeTaskObject;
 static HAL_StatusTypeDef fakeNextTransmitStatus = HAL_OK;
 static uint32_t fakeTransmitCalls;
 static uint32_t fakeAbortCalls;
@@ -86,63 +80,35 @@ QueueHandle_t xQueueCreate(UBaseType_t length, UBaseType_t item_size) {
     return queue;
 }
 
-QueueSetHandle_t xQueueCreateSet(UBaseType_t event_queue_length) {
-    (void)event_queue_length;
-    fakeCreateCalls++;
-    if (fakeFailCreateCall != 0U && fakeCreateCalls == fakeFailCreateCall) {
-        return NULL;
-    }
-
-    fake_queue_set_t* queueSet = (fake_queue_set_t*)calloc(1U, sizeof(*queueSet));
-    assert(queueSet != NULL);
-    queueSet->type = FAKE_OBJECT_SET;
-    return queueSet;
+TaskHandle_t xTaskGetCurrentTaskHandle(void) {
+    return (TaskHandle_t)&fakeTaskObject;
 }
 
-BaseType_t xQueueAddToSet(QueueSetMemberHandle_t member, QueueSetHandle_t queue_set) {
-    fake_queue_set_t* queueSet = (fake_queue_set_t*)queue_set;
-    assert(queueSet != NULL);
-    assert(queueSet->type == FAKE_OBJECT_SET);
-    fakeAddCalls++;
-
-    if ((fakeFailAddCall != 0U && fakeAddCalls == fakeFailAddCall) || queueSet->memberCount >= FAKE_MAX_SET_MEMBERS) {
-        return pdFAIL;
-    }
-
-    queueSet->members[queueSet->memberCount] = member;
-    queueSet->memberCount++;
+BaseType_t xTaskNotifyGive(TaskHandle_t task) {
+    assert(task == (TaskHandle_t)&fakeTaskObject);
+    fakeNotifyCount++;
     return pdPASS;
 }
 
-BaseType_t xQueueRemoveFromSet(QueueSetMemberHandle_t member, QueueSetHandle_t queue_set) {
-    fake_queue_set_t* queueSet = (fake_queue_set_t*)queue_set;
-    assert(queueSet != NULL);
-    assert(queueSet->type == FAKE_OBJECT_SET);
+/*
+ * 알림이 없으면 timeout만큼 잔 것으로 치고(heartbeat 주기 테스트가 이
+ * 시간 진행에 의존한다), 있으면 xClearCountOnExit 의미대로 소비한다.
+ */
+uint32_t ulTaskNotifyTake(BaseType_t clear_on_exit, TickType_t ticks_to_wait) {
+    uint32_t taken = fakeNotifyCount;
 
-    for (UBaseType_t i = 0U; i < queueSet->memberCount; i++) {
-        if (queueSet->members[i] == member) {
-            queueSet->members[i] = queueSet->members[queueSet->memberCount - 1U];
-            queueSet->memberCount--;
-            return pdPASS;
-        }
+    if (taken == 0U) {
+        fakeTick += ticks_to_wait;
+        return 0U;
     }
 
-    return pdFAIL;
-}
-
-QueueSetMemberHandle_t xQueueSelectFromSet(QueueSetHandle_t queue_set, TickType_t timeout) {
-    fake_queue_set_t* queueSet = (fake_queue_set_t*)queue_set;
-    assert(queueSet != NULL);
-    assert(queueSet->type == FAKE_OBJECT_SET);
-
-    for (UBaseType_t i = 0U; i < queueSet->memberCount; i++) {
-        if (fake_queue(queueSet->members[i])->count > 0U) {
-            return queueSet->members[i];
-        }
+    if (clear_on_exit != pdFALSE) {
+        fakeNotifyCount = 0U;
+    } else {
+        fakeNotifyCount--;
     }
 
-    fakeTick += timeout;
-    return NULL;
+    return taken;
 }
 
 BaseType_t xQueueSend(QueueHandle_t handle, const void* item, TickType_t timeout) {
@@ -186,17 +152,9 @@ BaseType_t xQueuePeek(QueueHandle_t handle, void* item, TickType_t timeout) {
 }
 
 void vQueueDelete(QueueHandle_t handle) {
-    uint32_t type;
-    assert(handle != NULL);
-    type = *(const uint32_t*)handle;
+    fake_queue_t* queue = fake_queue(handle);
 
-    if (type == FAKE_OBJECT_QUEUE) {
-        fake_queue_t* queue = (fake_queue_t*)handle;
-        free(queue->storage);
-    } else {
-        assert(type == FAKE_OBJECT_SET);
-    }
-
+    free(queue->storage);
     free(handle);
 }
 
@@ -441,8 +399,8 @@ static void test_heartbeat_routes_to_both_channels(void) {
     uint32_t captureBefore = fakeCaptureCount;
 
     CommTx_SetDeviceStatus(UART_DEVICE_RUNNING, UART_ERROR_NONE);
-    CommTx_SetSensorState(COMM_TX_CH_INPUT, UART_SENSOR_DETECTED);
-    CommTx_SetSensorState(COMM_TX_CH_SORTING, UART_SENSOR_CLEAR);
+    CommTx_SetSensorState(COMM_TX_CH_INPUT, UART_SENSOR_FAULT);
+    CommTx_SetSensorState(COMM_TX_CH_SORTING, UART_SENSOR_OK);
     osDelay(1000U);
     CommTx_ProcessOnce();
 
@@ -451,9 +409,11 @@ static void test_heartbeat_routes_to_both_channels(void) {
     assert(inputFrame.command == UART_CMD_EVENT);
     assert(sortingFrame.command == UART_CMD_EVENT);
     assert(inputFrame.payload[UART_EVENT_ID_INDEX] == APP_EVENT_HEARTBEAT);
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(inputFrame.payload, inputFrame.length) != 0U);
+    assert(UART_IS_VALID_APP_HEARTBEAT_PAYLOAD(inputFrame.payload, inputFrame.length - 1U) == 0U);
     assert(inputFrame.payload[APP_HEARTBEAT_STATE_INDEX] == UART_DEVICE_RUNNING);
-    assert(inputFrame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX] == UART_SENSOR_DETECTED);
-    assert(sortingFrame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] == UART_SENSOR_CLEAR);
+    assert(inputFrame.payload[APP_HEARTBEAT_INPUT_SENSOR_INDEX] == UART_SENSOR_FAULT);
+    assert(sortingFrame.payload[APP_HEARTBEAT_SORTING_SENSOR_INDEX] == UART_SENSOR_OK);
     assert(stats->heartbeat_sent == heartbeatBefore + 2U);
     complete_channel(&huart1);
     complete_channel(&huart6);
@@ -477,6 +437,49 @@ static void test_heartbeat_uses_channel_specific_device_status(void) {
     complete_channel(&huart6);
 }
 
+/*
+ * 이 테스트가 이번 수정의 핵심이다.
+ *
+ * 예전에는 두 큐를 QueueSet으로 기다렸는데, 큐셋은 "select 1회당 멤버 큐에서
+ * receive 1회"가 규약이다. 그런데 drain은 한 번 깨어날 때 큐를 몽땅 비우므로,
+ * 한 사이클에 메시지가 2건 이상 도착할 때마다 큐셋 컨테이너에 낡은 항목이
+ * 1건씩 남았다. 이게 천천히 쌓이다 12건(멤버 큐 길이 합)에 닿는 순간
+ * queue.c:2890의 configASSERT가 깨져 IRQ를 끈 채 영원히 멈췄고, HealthTask도
+ * 함께 멈춰 약 2초 뒤 IWDG가 MCU를 리셋했다. 실기기에서 두 UART가 8분 35초
+ * 주기로 동시에 끊긴 원인이 이것이다(2026-08-07).
+ *
+ * 태스크 알림은 take 한 번이 쌓인 알림을 전부 소비하므로 잔재가 남지 않는다.
+ * 여기서는 "여러 건이 한꺼번에 도착하는" 그 조건을 반복해도 깨울 거리가
+ * 누적되지 않는지 본다.
+ */
+static void test_bursts_do_not_accumulate_pending_wakeups(void) {
+    const comm_tx_stats_t* stats = CommTx_GetStats();
+    uint32_t droppedBefore = stats->dropped_queue_full;
+    uint32_t cycle;
+
+    for (cycle = 0U; cycle < 64U; cycle++) {
+        /* 프레임 내용은 다른 테스트가 보므로 여기서는 캡처 버퍼만 비워 쓴다. */
+        fakeCaptureCount = 0U;
+
+        /* 한 사이클에 3건 - 예전 구현이 매번 잔재 2건을 남기던 조건. */
+        assert(CommTx_Send(COMM_TX_CH_INPUT, UART_CMD_PING, NULL, 0U) == 0);
+        assert(CommTx_Send(COMM_TX_CH_INPUT, UART_CMD_PING, NULL, 0U) == 0);
+        assert(CommTx_Send(COMM_TX_CH_INPUT, UART_CMD_PING, NULL, 0U) == 0);
+
+        CommTx_ProcessOnce();
+
+        /* 3건 모두 큐에서 빠졌고, 깨울 거리도 남지 않아야 한다. */
+        assert(fakeNotifyCount == 0U);
+
+        complete_channel(&huart1);
+        complete_channel(&huart1);
+        complete_channel(&huart1);
+    }
+
+    /* 큐가 밀려 드랍된 것도 없어야 한다(잔재가 쌓였다면 여기서 터졌을 것). */
+    assert(stats->dropped_queue_full == droppedBefore);
+}
+
 int main(void) {
     test_init_failure_is_recoverable();
     test_sequence_and_payload_are_encoded();
@@ -489,6 +492,7 @@ int main(void) {
     test_spurious_completion_is_ignored();
     test_heartbeat_routes_to_both_channels();
     test_heartbeat_uses_channel_specific_device_status();
+    test_bursts_do_not_accumulate_pending_wakeups();
     assert(fakeAbortCalls >= UART_MAX_RETRY_COUNT + 1U);
     assert(fakeCriticalDepth == 0U);
     return 0;
