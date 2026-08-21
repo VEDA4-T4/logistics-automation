@@ -105,7 +105,8 @@ public:
     [[nodiscard]] ProcessTransition ApplySystemFailure(std::string reason);
     [[nodiscard]] ProcessTransition ClearSystemFailureIfIdle();
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
-    [[nodiscard]] ProcessTransition CompleteSystemRecovery();
+    [[nodiscard]] ProcessTransition CompleteSystemRecovery(
+        std::optional<std::string_view> retained_work_id = std::nullopt);
     [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,
                                                  std::vector<WorkProcessSnapshot> works,
                                                  std::vector<std::string> processed_message_ids = {});

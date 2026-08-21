@@ -1111,6 +1111,37 @@ void TestProcessCommandTrackerRestoresPendingCommand() {
     assert(restored.PendingCount() == 1);
 }
 
+void TestLineTracerTransportCanBeSelectedForEmergencyRecovery() {
+    central_server::ProcessOrchestrator orchestrator({
+        .enabled = true,
+        .server_id = "central-server",
+        .line_tracer_device_id = "PI-LT-01",
+        .line_tracer_enabled = true,
+    });
+    std::vector works{
+        central_server::WorkProcessSnapshot{
+            .work_id = kWorkId,
+            .stage = central_server::WorkStage::kEmergencyStopped,
+            .suspended_stage = central_server::WorkStage::kTransporting,
+            .destination = "C",
+            .last_source_id = "PI-LT-01",
+            .failure_reason = {},
+        },
+    };
+    assert(orchestrator
+               .RestoreAfterServerRestart(central_server::ProcessSystemState::kEmergencyStop, std::move(works), {}, 0)
+               .restored);
+    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
+
+    assert(orchestrator.FindResumableLineTracerWork() == kWorkId);
+    const auto resume = orchestrator.MakeLineTracerResumeCommand(kWorkId, kTimestamp);
+    const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(resume.message);
+    assert(command != nullptr);
+    assert(command->command == mqtt::ControlCommand::kStart);
+    assert(command->target_device_id == "PI-LT-01");
+    assert(command->params.at("workId") == kWorkId);
+}
+
 void TestLineTracerLoadOnStartsTransportOnlyFromSorting() {
     for (const auto state : { "load_on_a", "LOAD_ON_B", "LOAD_ON_C" }) {
         central_server::ProcessOrchestrator orchestrator;
@@ -1225,6 +1256,7 @@ int main() {
     TestFailedWorkIsDiscardedAfterServerRestart();
     TestDeviceEmergencyStopPreservesEmergencyState();
     TestFailedSystemCommandsEnterSafeProcessStates();
+    TestLineTracerTransportCanBeSelectedForEmergencyRecovery();
     TestCommandTimeoutOnlyFailsIdentifiableWork();
     TestSystemCommandTimeoutDoesNotMutateActiveWorks();
     TestFailedDeviceBlocksNewWorkUntilHealthy();
