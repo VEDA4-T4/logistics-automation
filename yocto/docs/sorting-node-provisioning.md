@@ -214,7 +214,7 @@ reconnect_max_delay_seconds=30
 clean_session=false
 
 [sorting]
-default_speed=50
+default_speed=60
 ```
 
 실제 MQTT 비밀번호가 들어 있는 설정 파일은 Git에 추가하지 않는다.

@@ -608,7 +608,7 @@ Sorting Node 예시:
 
 ```ini
 [sorting]
-default_speed=50
+default_speed=60
 ```
 
 주의사항:

@@ -183,10 +183,35 @@ client_id=PI-01
     std::filesystem::remove(path, error);
 }
 
+void TestSortingDefaultSpeedWhenOmitted() {
+    const auto path = MakeTemporaryConfigPath();
+    {
+        std::ofstream output(path);
+        assert(output);
+        output << R"ini(
+[device]
+device_id=PI-SORTING-01
+node_name=sorting-node-01
+ip_address=192.0.2.22
+
+[mqtt]
+host=192.0.2.10
+client_id=PI-SORTING-01
+)ini";
+    }
+
+    const auto config = device::LoadMqttNodeConfig(path);
+    assert(config.sorting_default_speed == 60U);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 }  // namespace
 
 int main() {
     TestConfigLoading();
+    TestSortingDefaultSpeedWhenOmitted();
     TestRegistrationFieldsAreRequired();
     TestTlsWithoutCaIsRejected();
     return 0;

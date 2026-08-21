@@ -26,7 +26,7 @@ struct MqttNodeConfig final {
     // Root directory; the client appends device_id to isolate node processes.
     std::filesystem::path publish_spool_directory{ "/var/lib/logistics/mqtt-spool" };
     std::size_t publish_spool_maximum_bytes{ 50U * 1024U * 1024U };
-    std::uint8_t sorting_default_speed{ 50 };
+    std::uint8_t sorting_default_speed{ 60 };
     // Persistent sessions preserve broker-side QoS1 deliveries while a node reconnects.
     // Set true only when at-most-once delivery during offline periods is intentional.
     bool clean_session{ false };

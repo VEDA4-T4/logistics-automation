@@ -34,4 +34,4 @@ clean_session=false
 
 [sorting]
 # Used when START does not provide params.speed.
-default_speed=50
+default_speed=60

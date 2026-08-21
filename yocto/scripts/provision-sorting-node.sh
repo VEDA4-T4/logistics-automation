@@ -8,7 +8,7 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/logistics_yocto_admin}"
 DEVICE_ID="${DEVICE_ID:-PI-SORTING-01}"
 NODE_NAME="${NODE_NAME:-sorting-node-01}"
 MQTT_PORT="${MQTT_PORT:-8883}"
-DEFAULT_SPEED="${DEFAULT_SPEED:-50}"
+DEFAULT_SPEED="${DEFAULT_SPEED:-60}"
 SERVICE="logistics-sorting-node.service"
 
 for command in ssh scp openssl mktemp; do

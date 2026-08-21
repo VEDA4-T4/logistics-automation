@@ -67,7 +67,7 @@ using InputReportHandler = std::function<void(const InputReport& report)>;
  */
 class InputNode final {
 public:
-    InputNode(std::string device_id, InputUartSession& uart_session, std::uint8_t default_speed = 25U);
+    InputNode(std::string device_id, InputUartSession& uart_session, std::uint8_t default_speed = 35U);
 
     void SetReportHandler(InputReportHandler handler);
 
@@ -129,7 +129,7 @@ private:
 
     std::string device_id_;
     InputUartSession& uart_session_;
-    std::uint8_t default_speed_{ 25U };
+    std::uint8_t default_speed_{ 35U };
     InputReportHandler report_handler_;
     std::optional<std::uint8_t> last_sensor_state_;
     std::optional<std::uint8_t> last_conveyor_state_;

@@ -407,7 +407,7 @@ void TestStartConfiguresSpeedBeforeStartingConveyor() {
         fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor"));
     assert(default_speed_result.Succeeded());
     assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
-    assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
+    assert(fixture.LastCommand().payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 60U);
     fixture.PushOperationResult();
     assert(fixture.LastCommand().command == UART_CMD_SORTING_CONVEYOR_START);
     fixture.PushOperationResult();
@@ -545,7 +545,7 @@ void TestRepeatedRecoveryClearsSortingStateAndCachedSpeed() {
     assert(fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kStart, "sorting_conveyor")).Succeeded());
     const auto command = fixture.LastCommand();
     assert(command.command == UART_CMD_SORTING_CONVEYOR_SET_SPEED);
-    assert(command.payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 50U);
+    assert(command.payload[UART_SORTING_CONVEYOR_SPEED_VALUE_INDEX] == 60U);
 }
 
 void TestPendingSafetyCommandCannotBeOverwritten() {
