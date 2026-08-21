@@ -84,23 +84,9 @@ void InputUartSession::Classify(const uart_frame_t& frame, InputTransactResult& 
         result.response_error = frame.payload[UART_RESPONSE_ERROR_INDEX];
     }
 
-    /*
-     * ACK ("명령을 정상적으로 수신함" -- accepted, completes later via an EVENT)
-     * and SUCCESS ("명령 실행이 정상적으로 완료됨" -- already finished) are both
-     * legitimate positive outcomes, not variants of the same one. Collapsing
-     * ACK into "rejected" is exactly the bug this fixes: every asynchronous
-     * gripper motion (HOME/MOVE_ARM/SET_GRIPPER) answers with ACK, so treating
-     * it as a rejection meant no motion command could ever be accepted.
-     */
-    if (result.response_error != UART_ERROR_NONE) {
-        result.status = InputTransactStatus::kRejected;
-    } else if (result.response_status == UART_STATUS_SUCCESS) {
-        result.status = InputTransactStatus::kSuccess;
-    } else if (result.response_status == UART_STATUS_ACK) {
-        result.status = InputTransactStatus::kAccepted;
-    } else {
-        result.status = InputTransactStatus::kRejected;
-    }
+    result.status = (result.response_status == UART_STATUS_SUCCESS && result.response_error == UART_ERROR_NONE)
+                        ? InputTransactStatus::kSuccess
+                        : InputTransactStatus::kRejected;
 }
 
 void InputUartSession::RouteSpontaneous(const uart_frame_t& frame) {
@@ -147,40 +133,19 @@ InputUartSession::WaitOutcome InputUartSession::WaitForResponse(std::uint8_t seq
             return WaitOutcome::kTransportError;
         }
 
-        /*
-         * kReceiveBufferSize is two frames wide precisely because one Read() can
-         * return our response back-to-back with an unrelated frame the
-         * controller queued right behind it -- most commonly its periodic
-         * health-task heartbeat, which keeps running independently of command
-         * traffic. Returning the moment the match is found, before the loop
-         * reaches those trailing bytes, throws them away: they were already
-         * pulled out of the kernel's receive queue into receive_buffer, so once
-         * this call returns they are gone, not merely deferred to the next
-         * Read(). The frame they belonged to then never completes, and the
-         * spontaneous handler never sees it.
-         *
-         * So every byte already in hand this call is fed to the parser
-         * regardless of whether the match already happened; only the return
-         * itself waits until the buffer is drained.
-         */
-        bool matched = false;
         for (std::size_t index = 0; index < io.bytes_transferred; ++index) {
             uart_frame_t frame{};
             const uart_parser_result_t parser_result = uart_parser_feed(&parser_, receive_buffer[index], &frame);
             if (parser_result == UART_PARSER_FRAME_READY) {
-                if (!matched && IsResponseFrame(frame, sequence)) {
+                if (IsResponseFrame(frame, sequence)) {
                     ++diagnostics_.responses_matched;
                     Classify(frame, result);
-                    matched = true;
-                } else {
-                    RouteSpontaneous(frame);
+                    return WaitOutcome::kMatched;
                 }
+                RouteSpontaneous(frame);
             } else {
                 HandleParserResult(parser_result);
             }
-        }
-        if (matched) {
-            return WaitOutcome::kMatched;
         }
     }
 }

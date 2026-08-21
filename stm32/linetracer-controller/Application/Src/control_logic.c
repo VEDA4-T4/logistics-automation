@@ -148,21 +148,6 @@ uint8_t ControlLogic_StateCanResume(linetracer_control_state_t state) {
     }
 }
 
-static uint8_t ControlLogic_CanResumeAfterEmergency(const control_context_t* context) {
-    if (ControlLogic_HasActiveJob(context) == 0U) {
-        return 0U;
-    }
-
-    if (ControlLogic_StateCanResume(context->state) != 0U) {
-        return 1U;
-    }
-
-    return (context->safety_latched != 0U && context->resume_valid != 0U &&
-            ControlLogic_StateCanResume(context->resume_state) != 0U)
-               ? 1U
-               : 0U;
-}
-
 static uint8_t ControlLogic_NormalTransitionIsAllowed(const control_context_t* context,
                                                       linetracer_control_state_t next_state) {
     switch (context->state) {
@@ -280,32 +265,6 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
 
     switch (event->type) {
         case APP_CONTROL_SAFETY_LATCHED:
-            reason = event->reason;
-            if (reason == LINETRACER_STOP_REASON_NONE) {
-                reason = context->stop_reason;
-            }
-
-            if (reason == LINETRACER_STOP_REASON_EMERGENCY && ControlLogic_CanResumeAfterEmergency(context) != 0U) {
-                if (ControlLogic_StateCanResume(context->state) != 0U) {
-                    context->resume_state = context->state;
-                    context->resume_valid = 1U;
-                }
-            } else {
-                context->resume_valid = 0U;
-            }
-
-            context->safety_latched = 1U;
-            context->stop_reason = reason;
-            if (event->error_code != UART_ERROR_NONE) {
-                context->safety_error_code = event->error_code;
-            } else if (reason == LINETRACER_STOP_REASON_EMERGENCY) {
-                context->safety_error_code = UART_ERROR_EMERGENCY_STOP;
-            } else {
-                context->safety_error_code = UART_ERROR_BUSY;
-            }
-
-            return ControlLogic_Transition(context, ControlLogic_SafetyState(reason), now_ms);
-
         case APP_CONTROL_SAFETY_RESET_REJECTED:
             reason = event->reason;
             if (reason == LINETRACER_STOP_REASON_NONE) {
@@ -314,6 +273,7 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
 
             context->safety_latched = 1U;
             context->stop_reason = reason;
+            context->resume_valid = 0U;
             if (event->error_code != UART_ERROR_NONE) {
                 context->safety_error_code = event->error_code;
             } else if (reason == LINETRACER_STOP_REASON_EMERGENCY) {
@@ -321,21 +281,10 @@ uint8_t ControlLogic_ApplySafetyEvent(control_context_t* context, const app_cont
             } else {
                 context->safety_error_code = UART_ERROR_BUSY;
             }
+
             return ControlLogic_Transition(context, ControlLogic_SafetyState(reason), now_ms);
 
         case APP_CONTROL_SAFETY_RESET_APPROVED:
-            if (context->safety_latched != 0U && context->stop_reason == LINETRACER_STOP_REASON_EMERGENCY &&
-                context->resume_valid != 0U && ControlLogic_HasActiveJob(context) != 0U &&
-                ControlLogic_StateCanResume(context->resume_state) != 0U) {
-                context->state = context->resume_state;
-                context->state_entered_at_ms = now_ms;
-                context->resume_valid = 0U;
-                context->safety_latched = 0U;
-                context->stop_reason = LINETRACER_STOP_REASON_NONE;
-                context->safety_error_code = UART_ERROR_NONE;
-                return 1U;
-            }
-
             ControlLogic_Init(context, now_ms);
             return 1U;
 
@@ -362,8 +311,9 @@ void ControlLogic_MakeSnapshot(const control_context_t* context, uart_linetracer
 }
 
 uint8_t ControlLogic_BuildStartedEvent(const control_context_t* context, const app_control_command_t* command,
-                                       const control_command_result_t* result, uart_linetracer_load_state_t load_state,
-                                       uint32_t now_ms, app_tx_event_t* event) {
+                                       const control_command_result_t* result,
+                                       uart_linetracer_load_state_t load_state, uint32_t now_ms,
+                                       app_tx_event_t* event) {
     if (context == NULL || command == NULL || result == NULL || event == NULL ||
         command->type != APP_CONTROL_COMMAND_ASSIGN_ROUTE || result->accepted == 0U ||
         result->status != UART_STATUS_ACK || result->state_changed == 0U || context->route_active == 0U ||
@@ -390,7 +340,8 @@ uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
                                            app_tx_event_t* event) {
     uart_error_t error_code;
 
-    if (context == NULL || safety_event == NULL || event == NULL || safety_event->type != APP_CONTROL_SAFETY_LATCHED) {
+    if (context == NULL || safety_event == NULL || event == NULL ||
+        safety_event->type != APP_CONTROL_SAFETY_LATCHED) {
         return 0U;
     }
 
@@ -409,10 +360,12 @@ uint8_t ControlLogic_BuildSafetyFaultEvent(const control_context_t* context,
     event->load_state = load_state;
     event->status = UART_STATUS_ERROR;
     error_code = ControlLogic_CurrentError(context);
-    if (error_code == UART_ERROR_NONE && uart_linetracer_fault_error_is_valid(safety_event->error_code) != 0U) {
+    if (error_code == UART_ERROR_NONE &&
+        uart_linetracer_fault_error_is_valid(safety_event->error_code) != 0U) {
         error_code = (uart_error_t)safety_event->error_code;
     }
-    event->error_code = (error_code != UART_ERROR_NONE) ? (uint8_t)error_code : (uint8_t)UART_ERROR_INTERNAL;
+    event->error_code =
+        (error_code != UART_ERROR_NONE) ? (uint8_t)error_code : (uint8_t)UART_ERROR_INTERNAL;
     return 1U;
 }
 

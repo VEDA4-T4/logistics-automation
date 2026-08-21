@@ -151,15 +151,7 @@ See http://www.FreeRTOS.org/RTOS-Cortex-M3-M4.html. */
 /* Normal assert() semantics without relying on the provision of an assert.h
 header file. */
 /* USER CODE BEGIN 1 */
-/* 단언이 깨지면 IRQ를 끄고 영원히 멈추므로 IWDG가 MCU를 리셋하고, 그러면
- * 원인이 RAM과 함께 사라진다. 멈추기 전에 파일/라인을 .noinit에 남긴다.
- * (이 헤더는 어셈블러에서도 포함되므로 선언은 컴파일러에서만 보이게 막는다) */
-#if defined(__ICCARM__) || defined(__CC_ARM) || defined(__GNUC__)
-#include <stdint.h>
-void FaultTrap_CaptureAssert(const char* file, uint32_t line);
-#endif
-#define configASSERT( x ) \
-    if ((x) == 0) { FaultTrap_CaptureAssert(__FILE__, (uint32_t)__LINE__); taskDISABLE_INTERRUPTS(); for( ;; ); }
+#define configASSERT( x ) if ((x) == 0) {taskDISABLE_INTERRUPTS(); for( ;; );}
 /* USER CODE END 1 */
 
 /* Definitions that map the FreeRTOS port interrupt handlers to their CMSIS
@@ -174,15 +166,8 @@ standard names. */
 /* USER CODE BEGIN Defines */
 /* Section where parameter definitions can be added (for instance, to override default ones in FreeRTOS.h) */
 
-/* CommTxTask는 urgent/normal 두 큐를 태스크 알림으로 기다린다(app_comm_tx.c).
- * 예전에는 QueueSet을 썼지만 규약 위반으로 컨테이너가 넘쳐 configASSERT가
- * 깨졌고, 이제 큐셋을 쓰는 곳이 없어 기능 자체를 끈다. */
-
-/* 스택 오버플로 검사가 꺼져 있으면 넘친 태스크가 남의 메모리를 조용히 망가뜨리다
- * 엉뚱한 곳에서 HardFault로 터진다. 2는 패턴 검사까지 하는 강한 쪽이다.
- * 훅은 freertos.c의 Application 영역에 있다. */
-#define configCHECK_FOR_STACK_OVERFLOW 2
-#define configUSE_MALLOC_FAILED_HOOK 1
+/* CommTxTask: urgent/normal 2-Queue 동시 대기(QueueSet)를 위해 필요 */
+#define configUSE_QUEUE_SETS 1
 /* USER CODE END Defines */
 
 #endif /* FREERTOS_CONFIG_H */

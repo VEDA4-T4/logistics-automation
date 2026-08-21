@@ -81,12 +81,6 @@ void AssignValue(VisionProcessingConfig& config, const std::filesystem::path& pa
     } else if (key == "maximum_super_resolution_input_pixels") {
         config.maximum_super_resolution_input_pixels =
             ParseInteger<std::size_t>(path, line_number, key, value, 1, std::numeric_limits<std::size_t>::max());
-    } else if (key == "preassignment_timeout_ms") {
-        config.preassignment_timeout_ms =
-            ParseInteger<int>(path, line_number, key, value, 1, std::numeric_limits<int>::max());
-    } else if (key == "barcode_timeout_ms") {
-        config.barcode_timeout_ms =
-            ParseInteger<int>(path, line_number, key, value, 1, std::numeric_limits<int>::max());
     } else if (key == "super_resolution_model_path") {
         config.super_resolution_model_path = std::string(value);
     } else if (key == "failure_frame_capture_enabled") {
@@ -114,8 +108,7 @@ bool VisionProcessingConfig::IsValid() const noexcept {
                                super_resolution_backend != SuperResolutionBackend::kFsrcnn ||
                                !super_resolution_model_path.empty();
     return super_resolution_scale >= 2 && super_resolution_scale <= 4 && failure_frames_before_super_resolution > 0 &&
-           maximum_super_resolution_input_pixels > 0 && preassignment_timeout_ms > 0 && barcode_timeout_ms > 0 &&
-           valid_backend && failure_frame_capture.IsValid();
+           maximum_super_resolution_input_pixels > 0 && valid_backend && failure_frame_capture.IsValid();
 }
 
 VisionProcessingConfig LoadVisionProcessingConfig(const std::filesystem::path& path) {

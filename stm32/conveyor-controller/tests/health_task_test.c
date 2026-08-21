@@ -14,9 +14,10 @@
 #include "comm_rx_task.h"
 #include "health_hw.h"
 #include "input_control_task.h"
-#include "logistics/contracts/uart_protocol.h"
 #include "safety_task.h"
 #include "sorting_control_task.h"
+
+#include "logistics/contracts/uart_protocol.h"
 
 /*
  * ============================================================================
@@ -292,7 +293,7 @@ static void test_uart_channel_timeout_reports_to_opposite_channel(void) {
     HealthTask_RunCycle(); /* baseline: 둘 다 tick=0, 아직 stale 아님 */
     assert(commTxSendCallCount == 0U);
 
-    fakeTick = 6000U;                   /* 채널 timeout 기준(5000ms)보다 크게 */
+    fakeTick = 6000U; /* 채널 timeout 기준(5000ms)보다 크게 */
     fakeCommRxLastRxTick[1] = fakeTick; /* 분류(sorting) 채널만 방금 활동, 투입은 여전히 0 */
     /* 센서 갱신 지연 체크와 간섭되지 않게 4채널 다 최신으로 고정(이 테스트의 관심사 아님). */
     fakeSensorLastPollTick[0] = fakeTick;
@@ -311,7 +312,6 @@ static void test_uart_channel_timeout_reports_to_opposite_channel(void) {
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] == (uint8_t)HEALTH_ISSUE_UART_CHANNEL_TIMEOUT);
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_CAUSE_INDEX] == (uint8_t)COMM_TX_CH_INPUT);
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] == HEALTH_ISSUE_SENSOR_ID_NONE);
-    assert(UART_IS_VALID_APP_HEALTH_PAYLOAD(commTxSendCalls[0].payload, APP_HEALTH_EVENT_PAYLOAD_SIZE) != 0U);
 
     /* 같은 상태가 지속돼도 재전송하지 않는다(latch). */
     fakeTick += 100U;
@@ -333,7 +333,7 @@ static void test_sensor_staleness_reports_to_owning_process(void) {
     HealthTask_RunCycle();
     assert(commTxSendCallCount == 0U);
 
-    fakeTick = 1100U;                     /* 센서 stale 기준(1000ms)보다 크게, 나머지 채널은 갱신되게 함 */
+    fakeTick = 1100U; /* 센서 stale 기준(1000ms)보다 크게, 나머지 채널은 갱신되게 함 */
     fakeSensorLastPollTick[0] = fakeTick; /* index0=US1=input, 최신 */
     fakeSensorLastPollTick[1] = fakeTick; /* US2=sorting, 최신 */
     fakeSensorLastPollTick[2] = fakeTick; /* US3=sorting, 최신 */
@@ -407,7 +407,8 @@ static void test_transient_queue_overflow_reports_without_fatal(void) {
 
     assert(safetyTriggerCalls == 0U);
     assert(commTxSendCallCount == 1U);
-    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] == (uint8_t)HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT);
+    assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_KIND_INDEX] ==
+           (uint8_t)HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT);
     assert(commTxSendCalls[0].channel == COMM_TX_CH_INPUT); /* InputControlTask -> 투입 공정 */
     assert(commTxSendCalls[0].payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX] == HEALTH_ISSUE_SENSOR_ID_NONE);
 

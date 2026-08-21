@@ -107,12 +107,6 @@ add_executable(
     ../Application/Src/uart_rx.c
 )
 
-add_executable(
-    fault_trap_test
-    fault_trap_test.c
-    ../Application/Src/fault_trap.c
-)
-
 target_include_directories(
     input_control_test
     PRIVATE ../Application/Inc
@@ -221,13 +215,6 @@ target_include_directories(
 
 target_include_directories(
     uart_rx_test
-    PRIVATE
-        fakes
-        ../Application/Inc
-)
-
-target_include_directories(
-    fault_trap_test
     PRIVATE
         fakes
         ../Application/Inc
@@ -363,14 +350,6 @@ set_target_properties(
 
 set_target_properties(
     uart_rx_test
-    PROPERTIES
-        C_STANDARD 11
-        C_STANDARD_REQUIRED ON
-        C_EXTENSIONS OFF
-)
-
-set_target_properties(
-    fault_trap_test
     PROPERTIES
         C_STANDARD 11
         C_STANDARD_REQUIRED ON
@@ -498,12 +477,6 @@ if(WIN32)
                 "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
                 $<TARGET_FILE:uart_rx_test>
     )
-    add_test(
-        NAME fault_trap_test
-        COMMAND ${CMAKE_COMMAND} -E env
-                "PATH=${INPUT_CONTROL_COMPILER_RUNTIME_DIR};$ENV{PATH}"
-                $<TARGET_FILE:fault_trap_test>
-    )
 else()
     add_test(NAME input_control_test COMMAND input_control_test)
     add_test(NAME input_motor_tb6612_test COMMAND input_motor_tb6612_test)
@@ -522,5 +495,4 @@ else()
     add_test(NAME sensor_integration_test COMMAND sensor_integration_test)
     add_test(NAME health_task_test COMMAND health_task_test)
     add_test(NAME uart_rx_test COMMAND uart_rx_test)
-    add_test(NAME fault_trap_test COMMAND fault_trap_test)
 endif()

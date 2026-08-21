@@ -187,6 +187,7 @@ static uint8_t CommTxLogic_DistanceIsValid(uint16_t distance_mm) {
 
 void CommTxLogic_ObserveSensor(comm_tx_observed_state_t* state, const app_sensor_snapshot_t* snapshot) {
     const uint16_t distances[] = {snapshot != NULL ? snapshot->ultrasonic_front_mm : 0U,
+                                  snapshot != NULL ? snapshot->ultrasonic_rear_mm : 0U,
                                   snapshot != NULL ? snapshot->ultrasonic_left_mm : 0U,
                                   snapshot != NULL ? snapshot->ultrasonic_right_mm : 0U};
     uint8_t valid_count = 0U;

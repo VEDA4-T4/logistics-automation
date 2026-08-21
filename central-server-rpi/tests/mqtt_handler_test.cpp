@@ -13,7 +13,6 @@
 #include "logistics/central_server/persistence.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_validation.hpp"
-#include "logistics/contracts/uart/linetracer_commands.h"
 
 #ifndef LOGISTICS_TEST_MIGRATION_DIR
 #define LOGISTICS_TEST_MIGRATION_DIR "central-server-rpi/db/migrations"
@@ -24,20 +23,10 @@ namespace {
 namespace central_server = logistics::central_server;
 namespace mqtt = logistics::contracts::mqtt;
 
-constexpr std::string_view kProcessEpoch = "46bfe627-0935-4cdb-9282-0da7c54469d8";
-
 struct LogEntry final {
     central_server::MqttHandlerLogLevel level;
     std::string message;
 };
-
-std::int64_t Scalar(central_server::Database& database, std::string_view sql) {
-    central_server::Statement statement;
-    assert(database.Prepare(sql, statement).ok());
-    bool row = false;
-    assert(statement.Step(row).ok() && row);
-    return statement.ColumnInt64(0);
-}
 
 [[nodiscard]] mqtt::MqttMessage MakeRegistration(std::string source_id = "PI-01") {
     return {
@@ -214,7 +203,7 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
         std::vector<mqtt::MqttMessage> qt_events;
         handler.SetWorkCreatedHandler([&work_id](std::string_view, std::string_view created_work_id) {
             work_id = created_work_id;
-            return central_server::WorkCreationDisposition::kCreated;
+            return true;
         });
         handler.SetQtEventHandler([&qt_events](const mqtt::MqttMessage& message) {
             qt_events.push_back(message);
@@ -232,33 +221,6 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
         assert(handler.Handle("device/PI-VISION-01/event", Encode(box)));
         assert(!work_id.empty());
 
-        const mqtt::MqttMessage position{
-            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-            .message_id = "MSG-POSITION-QT-01",
-            .message_type = mqtt::MessageType::kPositionDetected,
-            .source_id = "PI-VISION-01",
-            .timestamp = "2026-07-21T01:00:00Z",
-            .data =
-                mqtt::PositionDetectedPayload{
-                    .work_id = work_id,
-                    .box_x = 100,
-                    .box_y = 50,
-                    .box_width = 200,
-                    .box_height = 100,
-                    .center_x = 200,
-                    .center_y = 100,
-                    .offset_x = 0,
-                    .offset_y = 0,
-                    .position_status = "DETECTED",
-                    .box_corners = std::nullopt,
-                },
-        };
-        assert(handler.Handle("device/PI-VISION-01/event", Encode(position)));
-        assert(qt_events.size() == 1);
-        const auto* forwarded_position = mqtt::GetPayload<mqtt::PositionDetectedPayload>(qt_events.front());
-        assert(forwarded_position != nullptr);
-        assert(forwarded_position->work_id == work_id);
-
         const mqtt::MqttMessage barcode{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
             .message_id = "MSG-BARCODE-CATALOG",
@@ -275,9 +237,9 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
                 },
         };
         assert(handler.Handle("device/PI-VISION-01/event", Encode(barcode)));
-        assert(qt_events.size() == 3);
-        assert(qt_events[1].message_type == mqtt::MessageType::kBarcodeDetected);
-        const auto* product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events[2]);
+        assert(qt_events.size() == 2);
+        assert(qt_events[0].message_type == mqtt::MessageType::kBarcodeDetected);
+        const auto* product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events[1]);
         assert(product != nullptr);
         assert(product->work_id == work_id);
         assert(product->barcode == "5901234123457");
@@ -312,7 +274,7 @@ void TestBarcodeUsesCatalogOrDefaultDestination() {
                 },
         };
         assert(handler.Handle("device/PI-VISION-01/event", Encode(unknown_barcode)));
-        assert(qt_events.size() == 5);
+        assert(qt_events.size() == 4);
         const auto* unknown_product = mqtt::GetPayload<mqtt::ProductInfoPayload>(qt_events.back());
         assert(unknown_product != nullptr);
         assert(unknown_product->product_id == "UNREGISTERED");
@@ -340,7 +302,6 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         central_server::PersistenceService persistence(database, storage);
         central_server::DeviceManager device_manager;
         central_server::MqttHandler handler(device_manager, {}, &persistence);
-        handler.SetProcessEpoch(std::string(kProcessEpoch), false);
         std::vector<mqtt::MqttMessage> qt_statuses;
         handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
             qt_statuses.push_back(message);
@@ -348,30 +309,8 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
         });
 
         assert(handler.Handle("device/PI-01/register", Encode(MakeRegistration()), "2026-07-16T01:00:01Z"));
-        auto position_status = MakePositionStatus();
-        position_status.process_epoch = std::string(kProcessEpoch);
-        assert(handler.Handle("device/PI-01/status", Encode(position_status), "2026-07-16T01:00:03Z", 1, true));
-        assert(Scalar(database, "SELECT qos FROM mqtt_event_log WHERE message_id='MSG-POSITION-STATUS-01'") == 1);
-        assert(Scalar(database, "SELECT retained FROM mqtt_event_log WHERE message_id='MSG-POSITION-STATUS-01'") == 1);
+        assert(handler.Handle("device/PI-01/status", Encode(MakePositionStatus()), "2026-07-16T01:00:03Z"));
         assert(qt_statuses.size() == 1);
-        assert(qt_statuses[0].process_epoch == kProcessEpoch);
-
-        auto legacy_job_status = MakePositionStatus();
-        legacy_job_status.message_id = "MSG-POSITION-STATUS-LEGACY";
-        legacy_job_status.timestamp = "2026-07-16T01:00:04Z";
-        assert(handler.Handle("device/PI-01/status", Encode(legacy_job_status), "2026-07-16T01:00:04Z"));
-        assert(qt_statuses.size() == 2);
-        assert(qt_statuses[1].process_epoch == kProcessEpoch);
-
-        auto idle_status = MakePositionStatus();
-        idle_status.message_id = "MSG-POSITION-STATUS-IDLE";
-        idle_status.timestamp = "2026-07-16T01:00:04.500Z";
-        idle_status.process_epoch = std::string(kProcessEpoch);
-        mqtt::GetPayload<mqtt::DeviceStatusPayload>(idle_status)->job_id.reset();
-        assert(handler.Handle("device/PI-01/status", Encode(idle_status), "2026-07-16T01:00:04.500Z"));
-        assert(qt_statuses.size() == 3);
-        assert(!qt_statuses[2].process_epoch.has_value());
-
         qt_statuses.clear();
         const mqtt::MqttMessage heartbeat{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
@@ -388,13 +327,10 @@ void TestHeartbeatIsForwardedToQtAsDeviceStatus() {
                     .error_code = std::nullopt,
                 },
         };
-        assert(handler.Handle("device/PI-01/heartbeat", Encode(heartbeat), "2026-07-16T01:00:05Z", 0, false));
-        assert(Scalar(database, "SELECT qos FROM mqtt_event_log WHERE message_id='MSG-HEARTBEAT-QT-01'") == 0);
-        assert(Scalar(database, "SELECT retained FROM mqtt_event_log WHERE message_id='MSG-HEARTBEAT-QT-01'") == 0);
+        assert(handler.Handle("device/PI-01/heartbeat", Encode(heartbeat), "2026-07-16T01:00:05Z"));
         assert(qt_statuses.size() == 1);
         assert(qt_statuses[0].message_type == mqtt::MessageType::kDeviceStatus);
         assert(qt_statuses[0].source_id == "PI-01");
-        assert(qt_statuses[0].process_epoch == kProcessEpoch);
         const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
         assert(status != nullptr);
         assert(status->status == mqtt::ConnectionState::kOnline);
@@ -424,91 +360,33 @@ void TestSensorStatusIsAcceptedAndForwardedToQt() {
         storage.image_root = root / "images";
         central_server::PersistenceService persistence(database, storage);
         central_server::DeviceManager device_manager;
-        // debounce_count=1 keeps this test about routing; the debounce itself is
-        // covered by sensor_detection_test.
-        const central_server::SensorDetectionConfig detection{
-            .enabled = true,
-            .enter_threshold_cm = 10,
-            .exit_threshold_cm = 12,
-            .debounce_count = 1,
-        };
-        central_server::MqttHandler handler(device_manager, {}, &persistence, {}, detection);
+        central_server::MqttHandler handler(device_manager, {}, &persistence);
         std::vector<mqtt::MqttMessage> qt_events;
         handler.SetQtEventHandler([&qt_events](const mqtt::MqttMessage& message) {
             qt_events.push_back(message);
             return true;
         });
 
-        auto registration = MakeRegistration("PI-LINETRACER-01");
-        auto* registration_payload = mqtt::GetPayload<mqtt::DeviceRegisterPayload>(registration);
-        assert(registration_payload != nullptr);
-        registration_payload->device_type = "linetracer";
-        registration_payload->node_name = "linetracer-node-01";
-        assert(handler.Handle(mqtt::DeviceRegisterTopic("PI-LINETRACER-01"), Encode(registration)));
-
-        // The device reports measurement health and a distance; it never sets
-        // detectionStatus. The handler must stamp that in on the way through.
         const mqtt::MqttMessage sensor_status{
             .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
             .message_id = "MSG-SENSOR-STATUS-01",
             .message_type = mqtt::MessageType::kSensorStatus,
-            .source_id = "PI-LINETRACER-01",
+            .source_id = "PI-INPUT-01",
             .timestamp = "2026-07-27T02:00:00Z",
             .data =
                 mqtt::SensorStatusPayload{
-                    .sensor_id = 4,
-                    .measurement_status = "OK",
-                    .distance_cm = 8,
-                    .detection_status = std::nullopt,
+                    .sensor_id = 1,
+                    .measurement_status = "DETECTED",
+                    .distance_cm = 14,
                 },
         };
-
-        auto retired_rear = sensor_status;
-        retired_rear.message_id = "MSG-SENSOR-STATUS-RETIRED-REAR";
-        auto* retired_rear_payload = mqtt::GetPayload<mqtt::SensorStatusPayload>(retired_rear);
-        assert(retired_rear_payload != nullptr);
-        retired_rear_payload->sensor_id = UART_LINETRACER_RETIRED_REAR_SENSOR_ID;
-        assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(retired_rear)));
-        assert(qt_events.empty());
-
-        assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_status)));
+        assert(handler.Handle(mqtt::DeviceEventTopic("PI-INPUT-01"), Encode(sensor_status)));
         assert(qt_events.size() == 1);
         const auto* forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.front());
         assert(forwarded != nullptr);
-        assert(forwarded->sensor_id == 4);
-        assert(forwarded->measurement_status == "OK");
-        assert(forwarded->distance_cm == 8);
-        assert(forwarded->detection_status.has_value() && *forwarded->detection_status == "DETECTED");
-
-        auto sensor_clear = sensor_status;
-        sensor_clear.message_id = "MSG-SENSOR-STATUS-02";
-        sensor_clear.timestamp = "2026-07-27T02:00:01Z";
-        auto* clear_payload = mqtt::GetPayload<mqtt::SensorStatusPayload>(sensor_clear);
-        assert(clear_payload != nullptr);
-        clear_payload->distance_cm = 20;
-        assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_clear)));
-        assert(qt_events.size() == 2);
-        forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.back());
-        assert(forwarded != nullptr);
-        assert(forwarded->sensor_id == 4);
-        assert(forwarded->measurement_status == "OK");
-        assert(forwarded->distance_cm == 20);
-        assert(forwarded->detection_status.has_value() && *forwarded->detection_status == "CLEAR");
-
-        // A faulty sensor cannot be reasoned about, so detection reports UNKNOWN
-        // rather than leaving the last CLEAR/DETECTED standing.
-        auto sensor_fault = sensor_status;
-        sensor_fault.message_id = "MSG-SENSOR-STATUS-03";
-        sensor_fault.timestamp = "2026-07-27T02:00:02Z";
-        auto* fault_payload = mqtt::GetPayload<mqtt::SensorStatusPayload>(sensor_fault);
-        assert(fault_payload != nullptr);
-        fault_payload->measurement_status = "FAULT";
-        fault_payload->distance_cm = 0xFFFF;
-        assert(handler.Handle(mqtt::DeviceEventTopic("PI-LINETRACER-01"), Encode(sensor_fault)));
-        assert(qt_events.size() == 3);
-        forwarded = mqtt::GetPayload<mqtt::SensorStatusPayload>(qt_events.back());
-        assert(forwarded != nullptr);
-        assert(forwarded->detection_status.has_value() && *forwarded->detection_status == "UNKNOWN");
+        assert(forwarded->sensor_id == 1);
+        assert(forwarded->measurement_status == "DETECTED");
+        assert(forwarded->distance_cm == 14);
     }
     std::filesystem::remove_all(root);
 }
@@ -517,7 +395,6 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     central_server::DeviceManager::Clock::time_point now{};
     central_server::DeviceManager device_manager({}, [&now] { return now; });
     central_server::MqttHandler handler(device_manager);
-    handler.SetProcessEpoch(std::string(kProcessEpoch), false);
     std::vector<mqtt::MqttMessage> qt_statuses;
     handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
         qt_statuses.push_back(message);
@@ -545,7 +422,6 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     now += std::chrono::seconds(10);
     assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:10Z"));
     assert(qt_statuses.size() == 1);
-    assert(qt_statuses[0].process_epoch == kProcessEpoch);
     const auto* delayed = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
     assert(delayed != nullptr);
     assert(delayed->status == mqtt::ConnectionState::kDelayed);
@@ -558,7 +434,6 @@ void TestHeartbeatTimeoutChangesAreForwardedToQt() {
     now += std::chrono::seconds(5);
     assert(handler.CheckHeartbeatTimeouts("2026-07-16T01:00:15Z"));
     assert(qt_statuses.size() == 2);
-    assert(qt_statuses[1].process_epoch == kProcessEpoch);
     const auto* offline = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[1]);
     assert(offline != nullptr);
     assert(offline->status == mqtt::ConnectionState::kOffline);
@@ -581,8 +456,6 @@ void TestRetainedPositionSnapshotReplay() {
         central_server::DeviceManager device_manager(registry_path);
         assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/register"), MakeRegistration(),
                                             "2026-07-16T01:00:01Z"));
-        assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-IDLE/register"), MakeRegistration("PI-IDLE"),
-                                            "2026-07-16T01:00:02Z"));
         assert(device_manager.HandleMessage(mqtt::ParseTopic("device/PI-01/status"), MakePositionStatus(),
                                             "2026-07-16T01:00:03Z"));
     }
@@ -590,7 +463,6 @@ void TestRetainedPositionSnapshotReplay() {
     {
         central_server::DeviceManager restored(registry_path);
         central_server::MqttHandler handler(restored);
-        handler.SetProcessEpoch(std::string(kProcessEpoch), false);
         std::vector<mqtt::MqttMessage> qt_statuses;
         handler.SetQtStatusHandler([&qt_statuses](const mqtt::MqttMessage& message) {
             qt_statuses.push_back(message);
@@ -601,14 +473,10 @@ void TestRetainedPositionSnapshotReplay() {
         assert(qt_statuses.size() == 1);
         assert(qt_statuses[0].source_id == "PI-01");
         assert(qt_statuses[0].timestamp == "2026-07-16T01:00:03Z");
-        assert(qt_statuses[0].process_epoch == kProcessEpoch);
         const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(qt_statuses[0]);
         assert(status != nullptr);
         assert(status->status == mqtt::ConnectionState::kOffline);
         AssertPositionStatus(*status);
-        assert(handler.ReplayDeviceStatuses("PI-IDLE", "2026-07-16T01:05:01Z"));
-        assert(qt_statuses.size() == 2);
-        assert(!qt_statuses[1].process_epoch.has_value());
         assert(!handler.ReplayDeviceStatuses("PI-NOT-REGISTERED", "2026-07-16T01:05:01Z"));
     }
 
@@ -734,370 +602,6 @@ void TestMessageTypesUseDedicatedRouteHandlers() {
     std::filesystem::remove_all(root);
 }
 
-void TestPendingInboxReplaysSideEffectsOnceAfterReopen() {
-    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    const auto root = std::filesystem::temp_directory_path() / ("logistics-inbox-replay-test-" + unique);
-    std::filesystem::create_directories(root);
-    const central_server::DatabaseConfig database_config{
-        .path = root / "test.db",
-        .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
-        .busy_timeout_ms = 100,
-    };
-    const mqtt::MqttMessage box{
-        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = "MSG-BOX-INBOX-REPLAY",
-        .message_type = mqtt::MessageType::kBoxDetected,
-        .source_id = "PI-VISION-INBOX",
-        .timestamp = "2026-08-13T01:00:00Z",
-        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "inbox-box.jpg" },
-    };
-    const auto topic = mqtt::DeviceEventTopic(box.source_id);
-    const auto payload = Encode(box);
-    std::string original_work_id;
-
-    {
-        central_server::Database database;
-        assert(database.Open(database_config).ok());
-        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
-        central_server::StorageConfig storage;
-        storage.image_root = root / "images";
-        central_server::PersistenceService persistence(database, storage);
-        central_server::DeviceManager device_manager;
-        central_server::MqttHandler handler(device_manager, {}, &persistence);
-        handler.SetWorkCreatedHandler([&original_work_id](std::string_view, std::string_view work_id) {
-            original_work_id = work_id;
-            return central_server::WorkCreationDisposition::kFailed;
-        });
-
-        assert(!handler.Handle(topic, payload, {}, 0, true));
-        assert(!original_work_id.empty());
-        assert(Scalar(database,
-                      "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BOX-INBOX-REPLAY' AND "
-                      "processing_state='RECEIVED'") == 1);
-        assert(Scalar(database, "SELECT count(*) FROM product") == 1);
-        assert(Scalar(database, "SELECT count(*) FROM work_history") == 1);
-    }
-
-    {
-        central_server::Database database;
-        assert(database.Open(database_config).ok());
-        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
-        central_server::StorageConfig storage;
-        storage.image_root = root / "images";
-        central_server::PersistenceService persistence(database, storage);
-        std::vector<central_server::PendingReceivedEvent> pending;
-        assert(persistence.PendingReceivedEvents(pending).ok());
-        assert(pending.size() == 1);
-        assert(pending.front().topic == topic);
-        assert(pending.front().raw_payload == payload);
-        assert(pending.front().qos == 0);
-        assert(pending.front().retained);
-        assert(pending.front().received_at_ms > 0);
-
-        central_server::DeviceManager device_manager;
-        central_server::MqttHandler handler(device_manager, {}, &persistence);
-        int successful_routes = 0;
-        std::string replayed_work_id;
-        handler.SetWorkCreatedHandler([&](std::string_view, std::string_view work_id) {
-            ++successful_routes;
-            replayed_work_id = work_id;
-            return central_server::WorkCreationDisposition::kCreated;
-        });
-
-        assert(handler.ReplayPendingReceivedEvents());
-        assert(successful_routes == 1);
-        assert(replayed_work_id == original_work_id);
-        assert(Scalar(database,
-                      "SELECT count(*) FROM mqtt_event_log WHERE message_id='MSG-BOX-INBOX-REPLAY' AND "
-                      "processing_state='STORED'") == 1);
-        assert(Scalar(database, "SELECT count(*) FROM product") == 1);
-        assert(Scalar(database, "SELECT count(*) FROM work_history") == 1);
-
-        assert(handler.Handle(topic, payload, {}, 0, true));
-        assert(successful_routes == 1);
-        assert(persistence.PendingReceivedEvents(pending).ok());
-        assert(pending.empty());
-    }
-    std::filesystem::remove_all(root);
-}
-
-void TestSensorTelemetryBypassesInboxAndRoutesImmediately() {
-    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    const auto root = std::filesystem::temp_directory_path() / ("logistics-sensor-inbox-test-" + unique);
-    std::filesystem::create_directories(root);
-    {
-        central_server::Database database;
-        const central_server::DatabaseConfig database_config{
-            .path = root / "test.db",
-            .migration_dir = LOGISTICS_TEST_MIGRATION_DIR,
-            .busy_timeout_ms = 100,
-        };
-        assert(database.Open(database_config).ok());
-        assert(central_server::MigrationRunner::Apply(database, database_config.migration_dir).ok());
-        central_server::StorageConfig storage;
-        storage.image_root = root / "images";
-        central_server::PersistenceService persistence(database, storage);
-        central_server::DeviceManager device_manager;
-        central_server::MqttHandler handler(device_manager, {}, &persistence, {},
-                                            { .enter_threshold_cm = 10, .exit_threshold_cm = 12, .debounce_count = 3 });
-        std::vector<std::string> routed_detections;
-        std::size_t process_measurements{};
-        handler.SetProcessMessageHandler([&](const mqtt::MqttMessage& message) {
-            assert(message.message_type == mqtt::MessageType::kSensorStatus);
-            assert(!message.process_epoch.has_value());
-            ++process_measurements;
-            return true;
-        });
-        bool fail_first = true;
-        handler.SetQtEventHandler([&](const mqtt::MqttMessage& message) {
-            const auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(message);
-            assert(sensor != nullptr && sensor->detection_status.has_value());
-            if (fail_first) {
-                fail_first = false;
-                return false;
-            }
-            routed_detections.push_back(*sensor->detection_status);
-            return true;
-        });
-        mqtt::MqttMessage sensor{
-            .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-            .message_id = "MSG-SENSOR-INBOX-1",
-            .message_type = mqtt::MessageType::kSensorStatus,
-            .source_id = "PI-INPUT-INBOX",
-            .timestamp = "2026-08-13T02:00:00Z",
-            .data =
-                mqtt::SensorStatusPayload{
-                    .sensor_id = 1, .measurement_status = "OK", .distance_cm = 8, .detection_status = std::nullopt },
-        };
-        const auto topic = mqtt::DeviceEventTopic(sensor.source_id);
-        assert(!handler.Handle(topic, Encode(sensor)));
-        sensor.message_id = "MSG-SENSOR-INBOX-2";
-        assert(handler.Handle(topic, Encode(sensor)));
-        sensor.message_id = "MSG-SENSOR-INBOX-3";
-        assert(handler.Handle(topic, Encode(sensor)));
-        assert((routed_detections == std::vector<std::string>{ "CLEAR", "DETECTED" }));
-
-        for (int index = 3; index < 10'000; ++index) {
-            sensor.message_id = "MSG-SENSOR-INBOX-" + std::to_string(index + 1);
-            assert(handler.Handle(topic, Encode(sensor)));
-        }
-        assert(process_measurements == 10'000);
-        assert(routed_detections.size() == 9'999);
-
-        assert(Scalar(database, "SELECT count(*) FROM mqtt_event_log WHERE message_type='SENSOR_STATUS'") == 0);
-        assert(Scalar(database, "SELECT count(*) FROM process_mqtt_outbox") == 0);
-    }
-    std::filesystem::remove_all(root);
-}
-
-void TestVisionMeasurementBypassesInboxAndRoutesImmediately() {
-    central_server::DeviceManager device_manager;
-    central_server::MqttHandler handler(device_manager);
-    std::size_t measurements{};
-    handler.SetProcessMessageGuard([](const mqtt::MqttMessage&) { return false; });
-    handler.SetProcessMessageHandler([&](const mqtt::MqttMessage& message) {
-        assert(message.message_type == mqtt::MessageType::kVisionMeasurement);
-        const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(message);
-        assert(payload != nullptr && payload->barcode == "5901234123457");
-        ++measurements;
-        return true;
-    });
-
-    const mqtt::MqttMessage measurement{
-        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = "VISION-MEASUREMENT-1",
-        .message_type = mqtt::MessageType::kVisionMeasurement,
-        .source_id = "PI-VISION-01",
-        .timestamp = "2026-08-19T00:00:00Z",
-        .data =
-            mqtt::VisionMeasurementPayload{
-                .barcode = "5901234123457",
-                .box_x = 10,
-                .box_y = 20,
-                .box_width = 100,
-                .box_height = 80,
-                .frame_width = 1280,
-                .frame_height = 720,
-                .box_corners = std::nullopt,
-            },
-    };
-    const auto topic = mqtt::DeviceEventTopic(measurement.source_id);
-    for (int index = 0; index < 1000; ++index) {
-        auto copy = measurement;
-        copy.message_id += '-' + std::to_string(index);
-        assert(handler.Handle(topic, Encode(copy), {}, 0, false));
-    }
-    assert(measurements == 1000);
-}
-
-void TestPoisonInboxRowDoesNotStarveLaterReplay() {
-    const auto root =
-        std::filesystem::temp_directory_path() /
-        ("logistics-poison-inbox-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    std::filesystem::create_directories(root);
-    central_server::Database database;
-    const central_server::DatabaseConfig config{ .path = root / "test.db",
-                                                 .migration_dir = LOGISTICS_TEST_MIGRATION_DIR };
-    assert(database.Open(config).ok());
-    assert(central_server::MigrationRunner::Apply(database, config.migration_dir).ok());
-    central_server::StorageConfig storage;
-    storage.image_root = root / "images";
-    central_server::PersistenceService persistence(database, storage);
-    central_server::DeviceManager devices;
-    central_server::MqttHandler handler(devices, {}, &persistence);
-    const mqtt::MqttMessage poison{ .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-                                    .message_id = "POISON-ROW",
-                                    .message_type = mqtt::MessageType::kBoxDetected,
-                                    .source_id = "PI-VISION-POISON",
-                                    .timestamp = "2026-08-13T01:00:00Z",
-                                    .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "poison.jpg" } };
-    const mqtt::MqttMessage later{ .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-                                   .message_id = "LATER-ROW",
-                                   .message_type = mqtt::MessageType::kBoxDetected,
-                                   .source_id = "PI-VISION-LATER",
-                                   .timestamp = "2026-08-13T01:00:01Z",
-                                   .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "later.jpg" } };
-    bool replaying = false;
-    handler.SetWorkCreatedHandler([&replaying](std::string_view source, std::string_view) {
-        return replaying && source != "PI-VISION-POISON" ? central_server::WorkCreationDisposition::kCreated
-                                                         : central_server::WorkCreationDisposition::kFailed;
-    });
-    assert(!handler.Handle(mqtt::DeviceEventTopic(poison.source_id), Encode(poison)));
-    assert(!handler.Handle(mqtt::DeviceEventTopic(later.source_id), Encode(later)));
-    replaying = true;
-    int routed = 0;
-    handler.SetWorkCreatedHandler([&routed](std::string_view source, std::string_view) {
-        if (source == "PI-VISION-POISON")
-            return central_server::WorkCreationDisposition::kFailed;
-        ++routed;
-        return central_server::WorkCreationDisposition::kCreated;
-    });
-    assert(handler.ReplayPendingReceivedEvents());
-    assert(routed == 1);
-    assert(Scalar(database,
-                  "SELECT count(*) FROM mqtt_event_log WHERE message_id='LATER-ROW' AND processing_state='STORED'") ==
-           1);
-    std::filesystem::remove_all(root);
-}
-
-void TestNonAuthoritativeBoxIsRejectedWithoutCreatingWork() {
-    const auto root =
-        std::filesystem::temp_directory_path() /
-        ("logistics-discarded-box-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    std::filesystem::create_directories(root);
-    central_server::Database database;
-    const central_server::DatabaseConfig config{ .path = root / "test.db",
-                                                 .migration_dir = LOGISTICS_TEST_MIGRATION_DIR };
-    assert(database.Open(config).ok());
-    assert(central_server::MigrationRunner::Apply(database, config.migration_dir).ok());
-    central_server::StorageConfig storage;
-    storage.image_root = root / "images";
-    central_server::PersistenceService persistence(database, storage);
-    central_server::DeviceManager devices;
-    central_server::MqttHandler handler(devices, {}, &persistence);
-
-    int work_creation_calls = 0;
-    handler.SetWorkCreationSourceGuard([](std::string_view source) { return source == "PI-INPUT-01"; });
-    handler.SetWorkCreatedHandler([&](std::string_view, std::string_view) {
-        ++work_creation_calls;
-        return central_server::WorkCreationDisposition::kCreated;
-    });
-
-    mqtt::MqttMessage box{
-        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = "BOX-DISCARDED-WHILE-STOPPED",
-        .message_type = mqtt::MessageType::kBoxDetected,
-        .source_id = "PI-VISION-01",
-        .timestamp = "2026-08-19T01:00:00Z",
-        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "discarded.jpg" },
-    };
-    const auto topic = mqtt::DeviceEventTopic(box.source_id);
-    assert(handler.Handle(topic, Encode(box)));
-    assert(work_creation_calls == 0);
-    assert(Scalar(database,
-                  "SELECT count(*) FROM mqtt_event_log WHERE message_id='BOX-DISCARDED-WHILE-STOPPED' AND "
-                  "processing_state='REJECTED'") == 1);
-    assert(Scalar(database, "SELECT count(*) FROM product") == 0);
-    assert(Scalar(database, "SELECT count(*) FROM work_history") == 0);
-    std::vector<central_server::PendingReceivedEvent> pending;
-    assert(persistence.PendingReceivedEvents(pending).ok() && pending.empty());
-
-    box.message_id = "BOX-CREATED-AFTER-START";
-    box.source_id = "PI-INPUT-01";
-    box.data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "created.jpg" };
-    assert(handler.Handle(mqtt::DeviceEventTopic(box.source_id), Encode(box)));
-    assert(work_creation_calls == 1);
-    assert(Scalar(database, "SELECT count(*) FROM product") == 1);
-    assert(Scalar(database, "SELECT count(*) FROM work_history") == 1);
-
-    std::filesystem::remove_all(root);
-}
-
-void TestProcessEpochRejectsStaleInboxMessagesTerminally() {
-    const auto root =
-        std::filesystem::temp_directory_path() /
-        ("logistics-epoch-inbox-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    std::filesystem::create_directories(root);
-    central_server::Database database;
-    const central_server::DatabaseConfig config{ .path = root / "test.db",
-                                                 .migration_dir = LOGISTICS_TEST_MIGRATION_DIR };
-    assert(database.Open(config).ok());
-    assert(central_server::MigrationRunner::Apply(database, config.migration_dir).ok());
-    central_server::StorageConfig storage;
-    storage.image_root = root / "images";
-    central_server::PersistenceService persistence(database, storage);
-    central_server::DeviceManager devices;
-    central_server::MqttHandler handler(devices, {}, &persistence);
-    constexpr std::string_view current_epoch = "4b0d7a76-49f7-4e39-b624-f59e129fa4c7";
-    handler.SetProcessEpoch(std::string(current_epoch), true);
-    int process_calls = 0;
-    handler.SetProcessMessageHandler([&process_calls](const mqtt::MqttMessage&) {
-        ++process_calls;
-        return true;
-    });
-    handler.SetWorkCreatedHandler(
-        [](std::string_view, std::string_view) { return central_server::WorkCreationDisposition::kCreated; });
-
-    mqtt::MqttMessage box{
-        .message_id = "BOX-CURRENT-EPOCH",
-        .message_type = mqtt::MessageType::kBoxDetected,
-        .source_id = "PI-VISION-EPOCH",
-        .timestamp = "2026-08-15T02:00:00Z",
-        .process_epoch = std::string(current_epoch),
-        .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "current.jpg" },
-    };
-    const auto topic = mqtt::DeviceEventTopic(box.source_id);
-    assert(handler.Handle(topic, Encode(box)));
-    assert(process_calls == 1);
-    assert(Scalar(database, "SELECT count(*) FROM product") == 1);
-
-    box.message_id = "BOX-STALE-EPOCH";
-    box.process_epoch = "6d395cb2-93da-4de6-8eac-b2afee09c17e";
-    assert(handler.Handle(topic, Encode(box)));
-    box.message_id = "BOX-MISSING-EPOCH";
-    box.process_epoch.reset();
-    assert(handler.Handle(topic, Encode(box)));
-    assert(process_calls == 1);
-    assert(Scalar(database, "SELECT count(*) FROM product") == 1);
-    assert(Scalar(database,
-                  "SELECT count(*) FROM mqtt_event_log WHERE processing_state='REJECTED' AND "
-                  "failure_reason='REJECTED_STALE_EPOCH'") == 2);
-    assert(handler.ReplayPendingReceivedEvents());
-    std::vector<central_server::PendingReceivedEvent> pending;
-    assert(persistence.PendingReceivedEvents(pending).ok() && pending.empty());
-
-    mqtt::MqttMessage sensor{
-        .message_id = "SENSOR-NO-EPOCH",
-        .message_type = mqtt::MessageType::kSensorStatus,
-        .source_id = "PI-INPUT-EPOCH",
-        .timestamp = "2026-08-15T02:00:01Z",
-        .data = mqtt::SensorStatusPayload{ .sensor_id = 1, .measurement_status = "OK", .distance_cm = 20 },
-    };
-    assert(handler.Handle(mqtt::DeviceEventTopic(sensor.source_id), Encode(sensor)));
-    assert(process_calls == 2);
-    std::filesystem::remove_all(root);
-}
-
 }  // namespace
 
 int main() {
@@ -1112,11 +616,5 @@ int main() {
     TestHeartbeatTimeoutChangesAreForwardedToQt();
     TestRetainedPositionSnapshotReplay();
     TestMessageTypesUseDedicatedRouteHandlers();
-    TestPendingInboxReplaysSideEffectsOnceAfterReopen();
-    TestSensorTelemetryBypassesInboxAndRoutesImmediately();
-    TestVisionMeasurementBypassesInboxAndRoutesImmediately();
-    TestPoisonInboxRowDoesNotStarveLaterReplay();
-    TestNonAuthoritativeBoxIsRejectedWithoutCreatingWork();
-    TestProcessEpochRejectsStaleInboxMessagesTerminally();
     return 0;
 }

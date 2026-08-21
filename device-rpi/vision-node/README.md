@@ -66,21 +66,17 @@ switches to headless mode automatically when neither `DISPLAY` nor `WAYLAND_DISP
 The runtime sequence is:
 
 1. The vision node connects, publishes registration, and starts heartbeats.
-2. The node confirms a box locally and repeatedly publishes the work-free `VISION_MEASUREMENT` observation (barcode,
-   box geometry, frame size, and optional corners); it does not create a work or publish `BOX_DETECTED`.
-3. The input ultrasonic event causes the central server to create the work and stop the input conveyor. The server
-   ignores measurements received before that event and binds the first measurement after it to the active work.
-4. The central server converts the bound measurement into its canonical `POSITION_DETECTED`, `BARCODE_DETECTED`, and
-   catalog `PRODUCT_INFO` transitions, then starts the existing ACK-gated gripper/sorting process.
-5. If image upload is enabled, the node uploads the JPEG over HTTP(S), verifies the response, and publishes
-   `PRODUCT_IMAGE` for the central work flow.
-6. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. Measurement publication is transient
-   QoS0; a disconnected broker drops that sample and the next camera frame retries. Durable result publication still
-   uses the existing `RESULT_PENDING` retry flow.
+2. After a box is stable for the configured confirmation frames, it publishes `BOX_DETECTED`.
+3. The central server creates a work and sends `WORK_CREATED` to the vision node.
+4. The vision node reads the barcode attached to the product's top face and publishes `POSITION_DETECTED` and
+   `BARCODE_DETECTED` for that work.
+5. If image upload is enabled, it uploads the JPEG over HTTP(S), verifies the response, and publishes `PRODUCT_IMAGE`.
+6. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. MQTT publication failures keep the
+   assigned result in `RESULT_PENDING` and resume from the first unsent message after reconnecting.
 
 The central server must therefore be running with its MQTT subscriptions and image upload endpoint enabled before the
-complete scenario can finish. The vision node does not wait for `WORK_CREATED` or `WORK_ASSIGNED`; it continuously
-reports measurements and the central server supplies the work ID only when it accepts an ultrasonic-gated sample.
+complete scenario can finish. The vision node will not invent a work ID locally; it waits for `WORK_CREATED` so all
+subsequent events use the server-assigned work ID.
 
 The product orientation is a system input constraint: the barcode must face upward when the product enters the vision
 area. The vision node does not request product rotation or search the other five faces.
@@ -88,8 +84,8 @@ area. The vision node does not request product rotation or search the other five
 ## Barcode fallback pipeline
 
 The normal path detects the box, detects barcode regions inside the original box ROI, and decodes EAN-13 from the
-original pixels. Expensive processing is not run continuously. Once a confirmed box has its barcode still missing, the
-node waits for `failure_frames_before_super_resolution` consecutive failures and then:
+original pixels. Expensive processing is not run continuously. Once a box has been announced and its barcode is still
+missing, the node waits for `failure_frames_before_super_resolution` consecutive failures and then:
 
 1. retries barcode-region detection on a 2x super-resolved box ROI;
 2. maps every detected point back to the original frame coordinate system;
@@ -101,7 +97,7 @@ node waits for `failure_frames_before_super_resolution` consecutive failures and
 `super_resolution_backend=fsrcnn` and `super_resolution_model_path` to a TensorFlow `.pb` model whose scale matches
 `super_resolution_scale`. Model files are deployment assets and are not stored in this repository.
 
-When final barcode recognition fails for a confirmed box, the unannotated camera frame is saved separately under
+When final barcode recognition fails for an assigned work, the unannotated camera frame is saved separately under
 `failure_frame_directory`. Only `maximum_failure_frames` JPEG files are retained, so this temporary benchmark input
 cannot grow without bound. A storage failure is logged as a warning and does not replace the MQTT recognition result.
 
@@ -115,13 +111,14 @@ Failure results include enough metadata to identify the failed stage:
 | Camera frame stream lost | `ERR-VISION-CAMERA-FRAME-UNAVAILABLE` | `ERROR_OCCURRED` event |
 | JPEG encode, capture, or HTTP upload failure | `ERR-VISION-IMAGE-*` | `ERROR_OCCURRED` event |
 
-For an MQTT recovery check, keep a confirmed box in view, stop the broker, and restart it. Measurement samples may be
-dropped while disconnected; the next visible frame publishes a fresh barcode/position observation. Durable image and
-error results still remain in `RESULT_PENDING` until reconnect and then return to `WAITING_FOR_PRODUCT`.
+For an MQTT recovery check, start a work, stop the broker before the vision result is published, and restart it. The
+node must remain in `RESULT_PENDING` while disconnected, publish only the unsent result messages after reconnect, and
+then return to `WAITING_FOR_PRODUCT`. Replaying the same `WORK_CREATED` after completion must not produce a second
+result for that `workId`.
 
-No-box frames are not reported as a work failure because the node does not own a `workId`. The node keeps scanning
-without raising a system error. The central server owns the box-arrival gate: it ignores observations until the input
-ultrasonic event creates the active work, rather than asking the vision node to infer an arrival timeout.
+No-box frames before `BOX_DETECTED` are not reported as a work failure because the server has not assigned a `workId`
+yet. The node keeps scanning without raising a system error. A box-arrival timeout requires an upstream sensor event
+that creates an expected work before vision processing; it must not be inferred from ordinary empty camera frames.
 
 ## Vision ablation benchmark
 

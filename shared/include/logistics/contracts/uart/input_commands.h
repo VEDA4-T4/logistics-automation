@@ -35,9 +35,6 @@ typedef enum {
  * SENSOR_STATUS는 STM32 -> Raspberry Pi 방향의 상태 보고이며,
  * 투입 센서는 ID 1을 사용하고 거리값은 cm 단위로 전송한다.
  * Raspberry Pi -> STM32 수신 명령이 아니다.
- *
- * 상자 존재 판단은 이 보고에 포함되지 않는다. STM32는 거리값과 측정 건전성만
- * 올리고, 로봇팔 앞 상자 유무는 중앙 서버가 임계값 설정으로 판정한다.
  */
 typedef enum {
     UART_INPUT_SENSOR_ID_1 = 0x01U
@@ -171,7 +168,7 @@ static inline uint8_t uart_input_sensor_status_is_valid(const uint8_t* payload, 
         return 0U;
     }
 
-    return uart_sensor_state_is_valid(payload[UART_SENSOR_STATE_INDEX]);
+    return (payload[UART_SENSOR_STATE_INDEX] <= UART_SENSOR_FAULT) ? 1U : 0U;
 }
 
 #ifdef __cplusplus

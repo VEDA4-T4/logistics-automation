@@ -11,7 +11,7 @@
 | `logistics_vision_node` | 카메라·바코드·이미지 업로드 구현 |
 | `logistics_sorting_node` | 공통 `NodeRuntime` |
 | `logistics_linetracer_node` | 공통 `NodeRuntime` |
-| `logistics_gripper_node` | MQTT↔UART 이송 사이클 구현 |
+| Gripper node | 전용 Raspberry Pi 타깃 미구현 |
 
 공통 런타임 타깃이 존재한다는 사실과 장치별 MQTT↔UART 공정 동작이 완성되었다는 의미는 다릅니다.
 
@@ -51,7 +51,6 @@ Vision:
 ./build-device/device-rpi/logistics_input_node runtime/input-node/input-node.ini
 ./build-device/device-rpi/logistics_sorting_node runtime/sorting-node/sorting-node.ini
 ./build-device/device-rpi/logistics_linetracer_node runtime/linetracer-node/linetracer-node.ini
-./build-device/device-rpi/logistics_gripper_node runtime/gripper-node/gripper-node.ini /dev/vedauart
 ```
 
 `LOGISTICS_DEVICE_CONFIG` 환경 변수로 공통 노드 설정 경로를 지정할 수도 있습니다.
@@ -59,7 +58,6 @@ Vision:
 ## 관련 문서
 
 - [Vision 동작](vision-node/README.md)
-- [Gripper 동작](gripper-node/README.md)
 - [공통 MQTT client](common/mqtt_client/README.md)
 - [UART bridge](common/uart_bridge/README.md)
 - [장치 상태](common/device_status/README.md)

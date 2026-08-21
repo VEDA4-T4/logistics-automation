@@ -22,10 +22,3 @@ SOF | VERSION | SEQUENCE | COMMAND | LENGTH | PAYLOAD | CRC16
 `SUCCESS`, `ERROR`를 구분하고, 최대 payload 크기와 timeout/재시도 횟수는 codec 구현 시 공통
 상수로 정의합니다. 비상정지는 일반 명령 queue와 무관하게 최우선으로 처리하며 자동 재시작하지
 않습니다.
-
-장치별 명령 계약은 다음 헤더에 정의합니다.
-
-- `input_commands.h`: 투입 컨베이어
-- `gripper_commands.h`: 로봇팔 관절 및 그리퍼 제어
-- `sorting_commands.h`: 분류 컨베이어와 게이트
-- `linetracer_commands.h`: 라인트레이서 주행

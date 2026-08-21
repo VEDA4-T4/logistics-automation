@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
                         "s=H264 TCP test\r\n"
                         "m=video 0 RTP/AVP 96\r\n"
                         "a=rtpmap:96 H264/90000\r\n"
-                        "a=fmtp:96 packetization-mode=1;sprop-parameter-sets=Z2QAH6zZQFAFuwEBAaQeJEU=,aO48gA==\r\n"
+                        "a=fmtp:96 packetization-mode=1;sprop-parameter-sets=Z2QAH6zZQFAFuwEBAaQeJEV,aO48gA==\r\n"
                         "a=control:trackID=1\r\n";
                     socket->write(rtspResponse(request_count,
                                                "Content-Type: application/sdp\r\nContent-Base: " + base + "\r\n", sdp));

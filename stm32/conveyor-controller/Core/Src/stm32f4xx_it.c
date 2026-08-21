@@ -22,7 +22,6 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "fault_trap.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -95,9 +94,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-  /* 아래 while(1)에 갇히면 IWDG가 MCU를 리셋해 RAM이 날아간다.
-   * 멈추기 전에 원인을 .noinit에 남긴다 - fault_trap.h 참고. */
-  FaultTrap_CaptureFault(FAULT_TRAP_HARDFAULT);
+
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -112,7 +109,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-  FaultTrap_CaptureFault(FAULT_TRAP_MEMMANAGE);
+
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -127,7 +124,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-  FaultTrap_CaptureFault(FAULT_TRAP_BUSFAULT);
+
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -142,7 +139,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-  FaultTrap_CaptureFault(FAULT_TRAP_USAGEFAULT);
+
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {

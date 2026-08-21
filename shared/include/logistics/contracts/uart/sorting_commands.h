@@ -23,11 +23,10 @@ extern "C" {
  * 목적지 ID만 전송하고, 목적지별 실제 게이트 각도는 STM32 설정에서
  * 관리한다.
  *
- * 목적지 초음파 센서 1~3의 측정 건전성과 거리(cm)는 UART_CMD_SENSOR_STATUS로
- * Raspberry Pi에 보고한다. 상자 도착 판단(있음/없음)은 STM32가 하지 않는다 -
- * 중앙 서버가 거리값과 서버 설정 임계값으로 판정한다. 센서 결과에 따른 목적지
- * 판단도 이 계약의 범위가 아니며, Raspberry Pi는 외부에서 결정된 최종 장치
- * 제어 명령만 STM32에 전달한다.
+ * 목적지 초음파 센서 1~3의 상태와 거리(cm)는 UART_CMD_SENSOR_STATUS로
+ * Raspberry Pi에 보고한다. 센서 결과에 따른 목적지 판단은 이 계약의
+ * 범위가 아니며, Raspberry Pi는 외부에서 결정된 최종 장치 제어 명령만
+ * STM32에 전달한다.
  */
 typedef enum {
     UART_CMD_SORTING_ROUTE_ITEM = 0x30U,
@@ -398,7 +397,7 @@ static inline uint8_t uart_sorting_sensor_status_is_valid(const uint8_t* payload
         return 0U;
     }
 
-    return uart_sensor_state_is_valid(payload[UART_SENSOR_STATE_INDEX]);
+    return (payload[UART_SENSOR_STATE_INDEX] <= UART_SENSOR_FAULT) ? 1U : 0U;
 }
 
 #ifdef __cplusplus

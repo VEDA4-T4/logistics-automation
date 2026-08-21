@@ -68,8 +68,8 @@
 #error "Ultrasonic minimum distance must be shorter than maximum distance"
 #endif
 
-#if (SENSOR_ULTRASONIC_STALE_MS <= (APP_TIMING_ULTRASONIC_PERIOD_MS * 3U))
-#error "Ultrasonic stale time must exceed one complete three-sensor cycle"
+#if (SENSOR_ULTRASONIC_STALE_MS <= (APP_TIMING_ULTRASONIC_PERIOD_MS * 4U))
+#error "Ultrasonic stale time must exceed one complete four-sensor cycle"
 #endif
 
 #endif /* SENSOR_CONFIG_H */

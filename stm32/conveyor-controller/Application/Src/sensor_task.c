@@ -16,13 +16,12 @@
  * ============================================================================
  *
  * 4개의 HC-SR04를 US1->US2->US3->US4 순서로 순차 폴링한다(동시 트리거 금지).
- * US1은 투입 컨베이어 로봇팔 앞 지점(투입 Pi), US2/US3/US4는 분류 구역
- * A/B/C 지점(분류 Pi)을 향한다.
+ * US1은 투입 컨베이어 로봇팔 앞 상자 검출(투입 Pi), US2/US3/US4는 분류 구역
+ * A/B/C 도착 확인(분류 Pi)이다.
  *
- * 센서별 거리값과 측정 건전성(sensor_filter)을 UART_CMD_SENSOR_STATUS로
- * CommTxTask에 전달한다. 상자 존재 판단(있음/없음)은 이 태스크가 하지 않는다 -
- * 중앙 서버가 거리값과 서버 설정 임계값으로 판정한다. ENTERED/EXITED 같은
- * 업무판단 이벤트나 공용 제어 큐도 다루지 않는다.
+ * 센서별 원시 판정(sensor_filter)을 UART_CMD_SENSOR_STATUS로 CommTxTask에
+ * 전달한다. ENTERED/EXITED 같은 업무판단 이벤트나 공용 제어 큐는 팀 인터페이스
+ * 확정 전까지 다루지 않는다 - 이 태스크는 raw 상태 보고까지만 담당한다.
  */
 
 #define SENSOR_COUNT 4U
@@ -115,7 +114,6 @@ static void sensor_task_report(const sensor_channel_t* channel) {
     uint8_t state = sensor_filter_get_state(&channel->filter);
 
     payload[UART_SENSOR_ID_INDEX] = channel->sensorId;
-    /* 측정 건전성만 싣는다. 상자 유무는 서버가 distanceCm으로 판정한다. */
     payload[UART_SENSOR_STATE_INDEX] = state;
     payload[UART_SENSOR_DISTANCE_LOW_INDEX] = (uint8_t)(distanceCm & 0xFFU);
     payload[UART_SENSOR_DISTANCE_HIGH_INDEX] = (uint8_t)((distanceCm >> 8U) & 0xFFU);
@@ -128,15 +126,14 @@ static uint8_t sensor_task_worst_state(uint8_t a, uint8_t b) {
         return UART_SENSOR_FAULT;
     }
 
-    return UART_SENSOR_OK;
+    if ((a == UART_SENSOR_DETECTED) || (b == UART_SENSOR_DETECTED)) {
+        return UART_SENSOR_DETECTED;
+    }
+
+    return UART_SENSOR_CLEAR;
 }
 
-/*
- * heartbeat payload는 채널당 1바이트뿐이라, 분류 3개 센서는 "가장 나쁜 상태"로
- * 합산한다. 담기는 값은 측정 건전성(OK/FAULT)이므로 셋 중 하나라도 FAULT면
- * FAULT다. 거리값은 heartbeat에 싣지 않는다 - 센서별 거리는 SENSOR_STATUS가
- * 채널/sensorId를 구분해 따로 보고한다.
- */
+/* heartbeat payload는 채널당 1바이트뿐이라, 분류 3개 센서는 "가장 나쁜 상태"로 합산한다. */
 static void sensor_task_update_heartbeat(void) {
     uint8_t sortingState;
 

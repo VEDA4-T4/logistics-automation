@@ -31,8 +31,7 @@ namespace logistics::device {
  * awaiting its response.
  */
 enum class InputTransactStatus {
-    kSuccess,          // controller reported SUCCESS / NONE: the command already finished
-    kAccepted,         // controller reported ACK / NONE: accepted, completes later via an EVENT
+    kSuccess,          // controller reported SUCCESS / NONE
     kRejected,         // controller answered with NACK, BUSY or an error status
     kTimeout,          // no matching response after the configured retries
     kSent,             // frame was written; the command has no sequence-matched reply to wait for
@@ -54,7 +53,7 @@ struct InputTransactResult {
     UartIoResult io_result{ UartIoStatus::kSuccess, 0, 0 };
 
     [[nodiscard]] bool Succeeded() const noexcept {
-        return status == InputTransactStatus::kSuccess || status == InputTransactStatus::kAccepted;
+        return status == InputTransactStatus::kSuccess;
     }
 };
 

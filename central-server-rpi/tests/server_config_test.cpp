@@ -4,8 +4,6 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
-#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -40,7 +38,6 @@ void TestValidConfigAndRelativePaths() {
 path=data/server.db
 migration_dir=migrations
 busy_timeout_ms=1000
-startup_mode=resume
 [storage]
 image_root=images
 log_root=logs
@@ -69,7 +66,6 @@ vision_device_id=PI-VISION-01
 gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
-line_tracer_enabled=false
 line_tracer_initial_position=A
 default_destination=3
 [homography]
@@ -90,7 +86,6 @@ calibration_version=4
     const auto config = central_server::LoadServerConfig(path);
     assert(config.database.path == path.parent_path() / "data/server.db");
     assert(config.database.migration_dir == path.parent_path() / "migrations");
-    assert(config.database.startup_mode == central_server::StartupMode::kResume);
     assert(config.storage.image_root == path.parent_path() / "images");
     assert(config.storage.upload_retention_days == 15);
     assert(config.http.upload_root == path.parent_path() / "uploads");
@@ -98,7 +93,6 @@ calibration_version=4
     assert(config.http.tls_private_key.empty());
     assert(config.http.port == 8081);
     assert(config.process.enabled);
-    assert(!config.process.line_tracer_enabled);
     assert(config.process.line_tracer_initial_position == "A");
     assert(config.process.default_destination == "3");
     assert(config.process.homography.enabled);
@@ -107,37 +101,6 @@ calibration_version=4
     assert(config.process.homography.conveyor_plane_z_mm == 850.0);
     assert(config.process.homography.box_height_mm == 250.0);
     assert(config.process.homography.calibration_version == 4);
-    Remove(path);
-}
-
-void TestStartupModeDefaultsToFresh() {
-    const auto path = TemporaryPath("startup-default");
-    Write(path, "[database]\n");
-    const auto config = central_server::LoadServerConfig(path);
-    assert(config.database.startup_mode == central_server::StartupMode::kFresh);
-    Remove(path);
-}
-
-void TestExplicitFreshStartupMode() {
-    const auto path = TemporaryPath("startup-fresh");
-    Write(path, "[database]\nstartup_mode=fresh\n");
-    const auto config = central_server::LoadServerConfig(path);
-    assert(config.database.startup_mode == central_server::StartupMode::kFresh);
-    Remove(path);
-}
-
-void TestLegacyResetOnStartMapsWithOneWarning() {
-    const auto path = TemporaryPath("legacy-reset");
-    Write(path, "[database]\nreset_on_start=false\n");
-    std::ostringstream warning;
-    auto* previous = std::clog.rdbuf(warning.rdbuf());
-    const auto config = central_server::LoadServerConfig(path);
-    std::clog.rdbuf(previous);
-    assert(config.database.startup_mode == central_server::StartupMode::kResume);
-    constexpr std::string_view expected = "reset_on_start is deprecated; use startup_mode=fresh|resume";
-    const auto first = warning.str().find(expected);
-    assert(first != std::string::npos);
-    assert(warning.str().find(expected, first + expected.size()) == std::string::npos);
     Remove(path);
 }
 
@@ -158,8 +121,6 @@ void TestInvalidSettingsAreRejected() {
     ExpectRejected("unknown-key", "[database]\npat=/tmp/server.db\n");
     ExpectRejected("unknown-storage-key", "[storage]\nlog_rooot=/tmp/logs\n");
     ExpectRejected("duplicate", "[http]\nenabled=false\nenabled=true\n");
-    ExpectRejected("startup-mode", "[database]\nstartup_mode=invalid\n");
-    ExpectRejected("ambiguous-startup", "[database]\nstartup_mode=resume\nreset_on_start=false\n");
     ExpectRejected("port", "[http]\nenabled=false\nport=70000\n");
     ExpectRejected("token", "[http]\nenabled=true\nbearer_token=\n");
     ExpectRejected("tls-empty",
@@ -185,9 +146,6 @@ void TestInvalidSettingsAreRejected() {
 
 int main() {
     TestValidConfigAndRelativePaths();
-    TestStartupModeDefaultsToFresh();
-    TestExplicitFreshStartupMode();
-    TestLegacyResetOnStartMapsWithOneWarning();
     TestInvalidSettingsAreRejected();
     return 0;
 }

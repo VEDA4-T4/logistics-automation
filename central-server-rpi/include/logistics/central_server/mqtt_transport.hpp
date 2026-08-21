@@ -6,7 +6,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace logistics::central_server {
 
@@ -35,7 +34,6 @@ struct MqttTransportOptions final {
 struct MqttOperationResult final {
     int code{};
     std::string message;
-    int packet_id{};
 
     [[nodiscard]] explicit operator bool() const noexcept {
         return code == 0;
@@ -52,9 +50,7 @@ enum class MqttTransportLogLevel : std::uint8_t {
 struct MqttTransportCallbacks final {
     std::function<void(int reason_code, std::string_view reason)> connected;
     std::function<void(int reason_code, std::string_view reason)> disconnected;
-    std::function<void(std::string_view topic, std::string_view payload, int qos, bool retained)> message_received;
-    std::function<void(int packet_id)> publish_acknowledged;
-    std::function<void(int packet_id, const std::vector<int>& granted_qos)> subscribe_acknowledged;
+    std::function<void(std::string_view topic, std::string_view payload)> message_received;
     std::function<void(MqttTransportLogLevel level, std::string_view message)> log_received;
 };
 
@@ -64,8 +60,7 @@ public:
 
     virtual void SetCallbacks(MqttTransportCallbacks callbacks) = 0;
     [[nodiscard]] virtual MqttOperationResult Start(const MqttTransportOptions& options) = 0;
-    virtual void Stop(bool graceful = true) noexcept = 0;
-    [[nodiscard]] virtual MqttOperationResult RequestReconnect() = 0;
+    virtual void Stop() noexcept = 0;
     [[nodiscard]] virtual MqttOperationResult Publish(std::string_view topic, std::string_view payload, int qos,
                                                       bool retain) = 0;
     [[nodiscard]] virtual MqttOperationResult Subscribe(std::string_view topic_filter, int qos) = 0;

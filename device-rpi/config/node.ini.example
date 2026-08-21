@@ -14,10 +14,7 @@ ca_certificate=/etc/logistics/tls/ca.crt
 keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
-clean_session=false
-# Root directory; each node stores durable MQTT records under <root>/<device_id>.
-publish_spool_directory=/var/lib/logistics/mqtt-spool
-publish_spool_maximum_bytes=52428800
+clean_session=true
 
 [log_upload]
 enabled=true
@@ -57,9 +54,6 @@ super_resolution_backend=bicubic
 super_resolution_scale=2
 failure_frames_before_super_resolution=2
 maximum_super_resolution_input_pixels=300000
-# Work assigned before a confirmed box and barcode recognition use monotonic deadlines.
-preassignment_timeout_ms=3000
-barcode_timeout_ms=10000
 failure_frame_capture_enabled=true
 failure_frame_directory=/tmp/logistics-vision-failures
 maximum_failure_frames=200

@@ -114,11 +114,8 @@ namespace mqtt = contracts::mqtt;
     }
 }
 
-// Measurement health only (IsValidMeasurementStatus in mqtt_codec.hpp). Whether
-// an obstacle is actually there is derived by the central server from
-// distanceCm, the same as for the input and sorting ultrasonic sensors.
 [[nodiscard]] std::string SensorMeasurementStatus(std::uint8_t state) {
-    return state == UART_SENSOR_FAULT ? "FAULT" : "OK";
+    return state == UART_SENSOR_DETECTED ? "DETECTED" : "CLEAR";
 }
 
 [[nodiscard]] mqtt::ConnectionState StateConnection(std::uint8_t state) noexcept {
@@ -219,7 +216,6 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             departure_position_.reset();
             target_position_.reset();
             confirmed_position_.reset();
-            last_uart_state_ = UART_LINETRACER_STATE_IDLE;
             movement_state_ = "IDLE";
             ResetStatusKeepalive();
 
@@ -265,7 +261,6 @@ void LineTracerNode::HandleUartEvent(const UartSessionEvent& event) noexcept {
             departure_position_.reset();
             target_position_.reset();
             confirmed_position_.reset();
-            last_uart_state_ = UART_LINETRACER_STATE_IDLE;
             movement_state_ = "IDLE";
             ResetStatusKeepalive();
         }
@@ -493,33 +488,6 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
     std::string requested_area;
     std::array<std::uint8_t, UART_LINETRACER_STOP_PAYLOAD_SIZE> payload{};
     std::size_t payload_length = 0U;
-    const auto parse_requested_position = [&]() {
-        const auto position = command.params.find("currentPosition");
-        if (position == command.params.end()) {
-            return true;
-        }
-        std::string location;
-        requested_area = "DEPARTURE";
-        if (position->is_string()) {
-            location = position->get<std::string>();
-        } else if (position->is_object()) {
-            const auto area = position->find("area");
-            const auto nested_location = position->find("location");
-            if (area == position->end() || nested_location == position->end() || !area->is_string() ||
-                !nested_location->is_string()) {
-                return false;
-            }
-            requested_area = area->get<std::string>();
-            location = nested_location->get<std::string>();
-            if (!mqtt::LineTracerPositionPayload{ .area = requested_area, .location = location }.IsValid()) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-        requested_position = PositionFromDestination(location);
-        return requested_position.has_value();
-    };
 
     switch (action) {
         case DeviceControlAction::kStop:
@@ -542,18 +510,47 @@ LineTracerCommandResult LineTracerNode::HandleControlCommand(const mqtt::Control
         case DeviceControlAction::kInitialize:
             uart_command = UART_CMD_LINETRACER_RESET_SYSTEM;
             effect = PendingEffect::kClearJob;
-            if (!parse_requested_position()) {
-                result.status = LineTracerCommandStatus::kInvalidPosition;
-                return result;
+            if (const auto position = command.params.find("currentPosition"); position != command.params.end()) {
+                std::string location;
+                requested_area = "DEPARTURE";
+                if (position->is_string()) {
+                    location = position->get<std::string>();
+                } else if (position->is_object()) {
+                    const auto area = position->find("area");
+                    const auto nested_location = position->find("location");
+                    if (area == position->end() || nested_location == position->end() || !area->is_string() ||
+                        !nested_location->is_string()) {
+                        result.status = LineTracerCommandStatus::kInvalidPosition;
+                        return result;
+                    }
+                    requested_area = area->get<std::string>();
+                    location = nested_location->get<std::string>();
+                    const mqtt::LineTracerPositionPayload requested{
+                        .area = requested_area,
+                        .location = location,
+                    };
+                    if (!requested.IsValid()) {
+                        result.status = LineTracerCommandStatus::kInvalidPosition;
+                        return result;
+                    }
+                } else {
+                    result.status = LineTracerCommandStatus::kInvalidPosition;
+                    return result;
+                }
+                requested_position = PositionFromDestination(location);
+                if (!requested_position.has_value()) {
+                    result.status = LineTracerCommandStatus::kInvalidPosition;
+                    return result;
+                }
             }
             break;
         case DeviceControlAction::kSafetyRecovery:
             uart_command = UART_CMD_RESET_DEVICE;
-            effect = PendingEffect::kClearJob;
-            if (!parse_requested_position()) {
-                result.status = LineTracerCommandStatus::kInvalidPosition;
-                return result;
-            }
+            /*
+             * A safety recovery clears the controller latch, but the controller
+             * resumes an active route. Preserve its MQTT work/job/position mapping.
+             */
+            effect = HasActiveJob() ? PendingEffect::kNone : PendingEffect::kClearJob;
             break;
         case DeviceControlAction::kStatusRequest:
         case DeviceControlAction::kComponentRecovery:
@@ -676,7 +673,8 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
 
         const std::uint8_t sensor_id = frame.payload[UART_SENSOR_ID_INDEX];
         const std::uint8_t sensor_state = frame.payload[UART_SENSOR_STATE_INDEX];
-        if (uart_linetracer_sensor_id_is_valid(sensor_id) == 0U || uart_sensor_state_is_valid(sensor_state) == 0U) {
+        if (sensor_id == 0U || sensor_id > 4U ||
+            (sensor_state != UART_SENSOR_CLEAR && sensor_state != UART_SENSOR_DETECTED)) {
             return;
         }
 
@@ -814,8 +812,6 @@ void LineTracerNode::HandleLineTracerFrame(const uart_frame_t& frame) noexcept {
 
     if (event_id == UART_LINETRACER_EVENT_FAULT) {
         const std::uint8_t error = frame.payload[UART_LINETRACER_FAULT_EVENT_ERROR_INDEX];
-        last_uart_state_ =
-            error == UART_ERROR_EMERGENCY_STOP ? UART_LINETRACER_STATE_EMERGENCY_STOP : UART_LINETRACER_STATE_FAULT;
         const std::string error_code = UartErrorCode(error);
         EmitReport({
             .channel = LineTracerReportChannel::kError,

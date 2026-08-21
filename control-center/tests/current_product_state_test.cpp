@@ -35,16 +35,6 @@ int main() {
                                           { { QStringLiteral("productId"), QStringLiteral("PRODUCT-B") } }));
     assert(result.handled && !result.applied);
 
-    CurrentProductState recovered_state;
-    assert(recovered_state.applyEnvelope(Envelope("MSG-BASE", "WORK_CREATED", "WORK-BASE")).applied);
-    result =
-        recovered_state.applyEnvelope(Envelope("MSG-RECOVERED", "BARCODE_DETECTED", "WORK-RECOVERED",
-                                               { { QStringLiteral("recognitionStatus"), QStringLiteral("SUCCESS") },
-                                                 { QStringLiteral("barcode"), QStringLiteral("880000000099") } }));
-    assert(result.applied && result.switched_work);
-    assert(recovered_state.product().work_id == QStringLiteral("WORK-RECOVERED"));
-    assert(recovered_state.product().barcode == QStringLiteral("880000000099"));
-
     const QJsonObject product_a{
         { QStringLiteral("recognitionStatus"), QStringLiteral("SUCCESS") },
         { QStringLiteral("barcode"), QStringLiteral("880000000001") },

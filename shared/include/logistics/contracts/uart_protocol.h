@@ -282,7 +282,6 @@ typedef enum {
     UART_ERROR_EMERGENCY_STOP = 0x0BU,
     UART_ERROR_UNSUPPORTED_COMMAND = 0x0CU,
     UART_ERROR_INVALID_PAYLOAD = 0x0DU,
-    UART_ERROR_SPEED_NOT_CONFIGURED = 0x0EU,
     UART_ERROR_INTERNAL = 0xFFU
 
 } uart_error_t;
@@ -318,30 +317,20 @@ typedef enum {
 
 /*
  * ============================================================================
- * 센서 측정 상태 코드
+ * 센서 상태 코드
  * ============================================================================
- *
- * 이 값은 "센서가 지금 유효한 측정을 하고 있는가"(측정 건전성)만 나타낸다.
- * 상자 존재 여부(있음/없음) 판단은 STM32가 하지 않는다 - 중앙 서버가
- * distance_cm과 서버 설정 임계값으로 판정한다. STM32는 값만 올린다.
- *
- * 0x01은 예전 UART_SENSOR_DETECTED가 쓰던 값이라 비워 둔다. 구버전
- * Raspberry Pi 이미지가 신버전 프레임을 읽어도 0x00을 "이상 없음",
- * 0x02를 "센서 오류"로 똑같이 해석하므로 오독이 아니라 기능 축소로만
- * 나타난다(DETECTED가 영영 안 옴). 값을 당겨 쓰면 그 성질이 깨진다.
  */
 typedef enum {
-    /* 측정 정상. 상자 유무는 서버가 거리값으로 판정한다. */
-    UART_SENSOR_OK = 0x00U,
+    /* 감지되지 않음 */
+    UART_SENSOR_CLEAR = 0x00U,
 
-    /* 센서 오류. 무효 측정이 연속으로 누적되어 거리값을 신뢰할 수 없다. */
+    /* 물체 또는 대상 감지 */
+    UART_SENSOR_DETECTED = 0x01U,
+
+    /* 센서 오류 */
     UART_SENSOR_FAULT = 0x02U
 
 } uart_sensor_state_t;
-
-static inline uint8_t uart_sensor_state_is_valid(uint32_t state) {
-    return ((state == UART_SENSOR_OK) || (state == UART_SENSOR_FAULT)) ? 1U : 0U;
-}
 
 /*
  * ============================================================================
@@ -351,7 +340,7 @@ static inline uint8_t uart_sensor_state_is_valid(uint32_t state) {
  * Payload 구조:
  *
  *   [0] sensor_id
- *   [1] measurement_state (uart_sensor_state_t)
+ *   [1] sensor_state
  *   [2] distance_cm_low
  *   [3] distance_cm_high
  *
@@ -359,9 +348,6 @@ static inline uint8_t uart_sensor_state_is_valid(uint32_t state) {
  * 사용하지 않는다. distance_cm은 little-endian uint16_t이고 단위는 cm이다.
  * 거리가 아직 확정되지 않았거나 측정할 수 없으면
  * UART_SENSOR_DISTANCE_UNKNOWN을 사용한다.
- *
- * measurement_state는 측정 건전성만 담는다. 상자 존재 판단(DETECTED/CLEAR)은
- * 이 프레임에 실리지 않으며 중앙 서버가 distance_cm으로 도출한다.
  */
 #define UART_SENSOR_ID_INDEX 0U
 #define UART_SENSOR_STATE_INDEX 1U

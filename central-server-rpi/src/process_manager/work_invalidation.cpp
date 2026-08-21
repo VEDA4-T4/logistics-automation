@@ -25,22 +25,4 @@ contracts::mqtt::MqttMessage MakeWorkInvalidationError(std::string_view source_i
     };
 }
 
-contracts::mqtt::MqttMessage MakeWorkFailureCompletion(std::string_view source_id, std::string_view message_id,
-                                                       std::string_view work_id, std::string_view reason,
-                                                       std::string timestamp) {
-    return {
-        .protocol_version = std::string(contracts::mqtt::kCurrentProtocolVersion),
-        .message_id = std::string(message_id),
-        .message_type = contracts::mqtt::MessageType::kWorkCompleted,
-        .source_id = std::string(source_id),
-        .timestamp = std::move(timestamp),
-        .data =
-            contracts::mqtt::WorkCompletedPayload{
-                .work_id = std::string(work_id),
-                .result = "FAILED",
-                .message = std::string(reason),
-            },
-    };
-}
-
 }  // namespace logistics::central_server

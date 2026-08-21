@@ -4,9 +4,7 @@
 #include <algorithm>
 #include <string>
 
-#include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
-#include "logistics/contracts/uart/linetracer_commands.h"
 
 namespace logistics::control_center {
 namespace {
@@ -171,6 +169,20 @@ std::optional<DeviceMessageOrder> ParseDeviceMessageOrder(const QString& message
                : std::nullopt;
 }
 
+bool IsConnectionError(mqtt::ConnectionState state) {
+    switch (state) {
+        case mqtt::ConnectionState::kOffline:
+        case mqtt::ConnectionState::kRtspError:
+        case mqtt::ConnectionState::kMqttError:
+        case mqtt::ConnectionState::kMqttAuthError:
+        case mqtt::ConnectionState::kTlsError:
+        case mqtt::ConnectionState::kUartError:
+            return true;
+        default:
+            return false;
+    }
+}
+
 QString WorkIdFor(mqtt::MessageType type, const QJsonObject& data) {
     switch (type) {
         case mqtt::MessageType::kWorkCreated:
@@ -209,14 +221,36 @@ QString StageFor(mqtt::MessageType type) {
     }
 }
 
-contracts::DeviceStateMeaning StateMeaning(const ProcessUnitStatus& process, const QString& current_state) {
-    const auto role = contracts::DeviceRoleFromString(process.key.toStdString());
-    return role.has_value() ? contracts::DeviceStateMeaningFor(*role, current_state.trimmed().toUpper().toStdString())
-                            : contracts::DeviceStateMeaning::kUnknown;
+bool IsIdleState(const QString& current_state) {
+    const auto state = current_state.trimmed().toUpper();
+    return state.isEmpty() || state == QStringLiteral("IDLE") || state == QStringLiteral("READY") ||
+           state == QStringLiteral("WAITING") || state == QStringLiteral("STOPPED") ||
+           state == QStringLiteral("DISCONNECTED") || state == QStringLiteral("ONLINE") ||
+           state == QStringLiteral("COMPLETED") || current_state == QStringLiteral("배송 완료");
 }
 
 bool IsOperationalWaitingState(const QString& current_state) {
     return current_state.trimmed().compare(QStringLiteral("WAITING_FOR_PRODUCT"), Qt::CaseInsensitive) == 0;
+}
+
+bool IsEmergencyState(const QString& current_state) {
+    const auto state = current_state.trimmed().toUpper();
+    return state == QStringLiteral("ESTOP") || state == QStringLiteral("EMERGENCY_STOP");
+}
+
+bool IsRecoveryState(const QString& current_state) {
+    const auto state = current_state.trimmed().toUpper();
+    return state == QStringLiteral("RECOVERY");
+}
+
+bool IsStoppedState(const QString& current_state) {
+    const auto state = current_state.trimmed().toUpper();
+    return state == QStringLiteral("STOPPED") || state == QStringLiteral("RECOVERY_READY");
+}
+
+bool IsProcessErrorState(const QString& current_state) {
+    const auto state = current_state.trimmed().toUpper();
+    return state == QStringLiteral("ERROR") || state.endsWith(QStringLiteral("_ERROR"));
 }
 
 QString SensorMeasurementForCurrentState(const QString& current_state) {
@@ -264,11 +298,6 @@ void ResetSensors(ProcessUnitStatus& process) {
     }
 }
 
-bool SensorIsAllowedForProcess(const ProcessUnitStatus& process, int sensor_id) {
-    return process.key != QString::fromLatin1(kLineTracerProcessKey) ||
-           uart_linetracer_sensor_id_is_valid(static_cast<uint32_t>(sensor_id)) != 0U;
-}
-
 void UpdateSensor(ProcessUnitStatus& process, int sensor_id, const QString& measurement_status, int distance_cm,
                   const QDateTime& timestamp) {
     auto sensor = std::find_if(process.sensors.begin(), process.sensors.end(),
@@ -301,10 +330,8 @@ bool IsBusy(const ProcessUnitStatus& process) {
         process.current_state.compare(QStringLiteral("COMPLETED"), Qt::CaseInsensitive) == 0) {
         return false;
     }
-    const auto meaning = StateMeaning(process, process.current_state);
     return !process.work_id.isEmpty() ||
-           (meaning != contracts::DeviceStateMeaning::kUnknown && meaning != contracts::DeviceStateMeaning::kIdle &&
-            meaning != contracts::DeviceStateMeaning::kStopped && meaning != contracts::DeviceStateMeaning::kCompleted);
+           (!IsIdleState(process.current_state) && !IsOperationalWaitingState(process.current_state));
 }
 
 QString CommandStage(const QString& command) {
@@ -382,7 +409,6 @@ void OperationsDashboardState::configureProcesses(const QList<ProcessDefinition>
     processed_message_ids_.clear();
     processed_message_order_.clear();
     last_completion_at_ = {};
-    last_command_message_at_ = {};
     last_completion_detail_.clear();
     command_override_.reset();
     command_override_stage_.clear();
@@ -471,40 +497,20 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         }
         const auto sensor_id_value = data.value(QStringLiteral("sensorId"));
         const auto distance_value = data.value(QStringLiteral("distanceCm"));
-        // measurementStatus is the device's own view of whether the reading can
-        // be trusted; detectionStatus is what the central server derived from
-        // distanceCm using its configured thresholds. The controller stopped
-        // deciding box presence, so DETECTED/CLEAR now only ever arrives in the
-        // latter - and it is absent entirely when server-side detection is off.
         const auto measurement_status = StringValue(data, "measurementStatus").toUpper();
-        const auto detection_status = StringValue(data, "detectionStatus").toUpper();
         const auto sensor_id = sensor_id_value.toInt();
         const auto distance_cm = distance_value.toInt();
-        const bool detection_is_valid = detection_status.isEmpty() || detection_status == QStringLiteral("CLEAR") ||
-                                        detection_status == QStringLiteral("DETECTED") ||
-                                        detection_status == QStringLiteral("UNKNOWN");
         if (!sensor_id_value.isDouble() || sensor_id_value.toDouble() != sensor_id || sensor_id <= 0 ||
             !distance_value.isDouble() || distance_value.toDouble() != distance_cm || distance_cm < 0 ||
-            (measurement_status != QStringLiteral("OK") && measurement_status != QStringLiteral("FAULT")) ||
-            !detection_is_valid) {
-            result.error = QStringLiteral(
-                "센서 상태 메시지의 sensorId, measurementStatus, detectionStatus 또는 distanceCm이 올바르지 않습니다.");
+            (measurement_status != QStringLiteral("CLEAR") && measurement_status != QStringLiteral("DETECTED") &&
+             measurement_status != QStringLiteral("FAULT"))) {
+            result.error =
+                QStringLiteral("센서 상태 메시지의 sensorId, measurementStatus 또는 distanceCm이 올바르지 않습니다.");
             return result;
         }
 
         auto& process = process_runtime_[process_index];
-        if (!SensorIsAllowedForProcess(process.status, sensor_id)) {
-            rememberMessage(message_id);
-            return result;
-        }
-
-        // A faulty sensor outranks whatever detection said: the distance behind
-        // that judgement is not trustworthy.
-        const auto display_status = measurement_status == QStringLiteral("FAULT")
-                                        ? QStringLiteral("FAULT")
-                                        : (detection_status.isEmpty() ? QStringLiteral("UNKNOWN") : detection_status);
-
-        UpdateSensor(process.status, sensor_id, display_status, distance_cm, effective_received_at);
+        UpdateSensor(process.status, sensor_id, measurement_status, distance_cm, timestamp);
         process.last_received_at = effective_received_at;
         if (measurement_status == QStringLiteral("FAULT")) {
             process.status.error_code = QStringLiteral("ERR-SENSOR");
@@ -515,7 +521,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             process.status.error_code.clear();
             process.status.has_error = false;
         }
-        updateOverall(effective_received_at);
+        updateOverall(timestamp);
         publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
@@ -581,7 +587,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 process.status.current_state = current_state;
             }
             process.status.work_completed = false;
-            process.status.updated_at = effective_received_at;
+            process.status.updated_at = timestamp;
         } else {
             const auto state_text = StringValue(data, "status");
             const auto connection_state = mqtt::ConnectionStateFromString(state_text.toStdString());
@@ -605,8 +611,8 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             const auto sensor_measurement = SensorMeasurementForCurrentState(current_state);
             const auto sensor_id = SensorIdForCurrentState(current_state);
             const bool sensor_telemetry = !sensor_measurement.isEmpty();
-            if (sensor_telemetry && sensor_id.has_value() && SensorIsAllowedForProcess(process.status, *sensor_id)) {
-                UpdateSensor(process.status, *sensor_id, sensor_measurement, -1, effective_received_at);
+            if (sensor_telemetry && sensor_id.has_value()) {
+                UpdateSensor(process.status, *sensor_id, sensor_measurement, -1, timestamp);
             }
             if (sensor_stale) {
                 ResetSensors(process.status);
@@ -624,13 +630,12 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 error_code.isEmpty() && HasFaultedSensor(process.status) ? QStringLiteral("ERR-SENSOR") : error_code;
             process.status.has_warning = sensor_stale;
             process.status.has_error =
-                !sensor_stale && (mqtt::IsConnectionFailure(connection_state) || !process.status.error_code.isEmpty() ||
-                                  (!sensor_telemetry && StateMeaning(process.status, current_state) ==
-                                                            contracts::DeviceStateMeaning::kError));
-            if (mqtt::IsConnectionFailure(process.status.connection_state)) {
+                !sensor_stale && (IsConnectionError(connection_state) || !process.status.error_code.isEmpty() ||
+                                  (!sensor_telemetry && IsProcessErrorState(current_state)));
+            if (IsConnectionError(process.status.connection_state)) {
                 process.status.destination.clear();
             }
-            process.status.updated_at = effective_received_at;
+            process.status.updated_at = timestamp;
         }
         if (position_snapshot.has_value()) {
             process.status.departure_position = position_snapshot->departure;
@@ -653,7 +658,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         process.last_device_message_at = timestamp;
         process.last_received_at = effective_received_at;
 
-        updateOverall(effective_received_at);
+        updateOverall(timestamp);
         publishProcessSnapshots();
         if (!device_order.has_value() || device_order->stream != DeviceMessageOrder::Stream::kWill) {
             rememberMessage(message_id);
@@ -667,11 +672,10 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             rememberMessage(message_id);
             return result;
         }
-        if (last_command_message_at_.isValid() && timestamp < last_command_message_at_) {
+        if (overall_.updated_at.isValid() && timestamp < overall_.updated_at) {
             return result;
         }
-        last_command_message_at_ = timestamp;
-        updateOverallForCommand(data, effective_received_at);
+        updateOverallForCommand(data, timestamp);
         publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
@@ -683,7 +687,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
             if (process.status.connection_state != mqtt::ConnectionState::kOffline &&
                 process.status.connection_state != mqtt::ConnectionState::kUnknown) {
                 process.status.current_state = QStringLiteral("EMERGENCY_STOP");
-                process.status.updated_at = effective_received_at;
+                process.status.updated_at = timestamp;
             }
         }
         command_override_ = OverallProcessState::EmergencyStop;
@@ -692,7 +696,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         overall_.state = OverallProcessState::EmergencyStop;
         overall_.stage = command_override_stage_;
         overall_.detail = command_override_detail_;
-        overall_.updated_at = effective_received_at;
+        overall_.updated_at = timestamp;
         publishProcessSnapshots();
         rememberMessage(message_id);
         result.applied = true;
@@ -749,7 +753,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
                 }
                 process.status.work_completed = true;
             }
-            process.status.updated_at = effective_received_at;
+            process.status.updated_at = timestamp;
             if (type == mqtt::MessageType::kWorkCompleted &&
                 StringValue(data, "result").toUpper() == QStringLiteral("FAILED")) {
                 process.status.has_error = true;
@@ -766,7 +770,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
         last_completion_detail_ = StringValue(data, "message");
     }
 
-    updateOverall(effective_received_at);
+    updateOverall(timestamp);
     publishProcessSnapshots();
     rememberMessage(message_id);
     result.applied = true;
@@ -827,14 +831,13 @@ void OperationsDashboardState::updateOverall(const QDateTime& timestamp) {
             continue;
         }
         ++received_processes;
-        const auto meaning = StateMeaning(process, process.current_state);
-        emergency_stop = emergency_stop || meaning == contracts::DeviceStateMeaning::kEmergencyStop;
-        recovery = recovery || meaning == contracts::DeviceStateMeaning::kRecovery;
-        stopped = stopped || meaning == contracts::DeviceStateMeaning::kStopped;
+        emergency_stop = emergency_stop || IsEmergencyState(process.current_state);
+        recovery = recovery || IsRecoveryState(process.current_state);
+        stopped = stopped || IsStoppedState(process.current_state);
         if (IsOperationalWaitingState(process.current_state)) {
             ++operational_waiting_processes;
         }
-        if (process.has_error || mqtt::IsConnectionFailure(process.connection_state)) {
+        if (process.has_error || IsConnectionError(process.connection_state)) {
             ++error_processes;
             if (first_error.isEmpty()) {
                 first_error = process.error_code.isEmpty()
@@ -1070,7 +1073,6 @@ void OperationsDashboardState::resetForMqttTransition(const QString& current_sta
     overall_.active_unit_count = 0;
     overall_.active_work_count = 0;
     last_completion_at_ = {};
-    last_command_message_at_ = {};
     last_completion_detail_.clear();
     command_override_.reset();
     command_override_stage_.clear();

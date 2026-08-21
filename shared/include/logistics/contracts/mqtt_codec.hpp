@@ -55,8 +55,6 @@ inline constexpr std::string_view kOffsetXField = "offsetX";
 inline constexpr std::string_view kOffsetYField = "offsetY";
 inline constexpr std::string_view kPositionStatusField = "positionStatus";
 inline constexpr std::string_view kBoxCornersField = "boxCorners";
-inline constexpr std::string_view kFrameWidthField = "frameWidth";
-inline constexpr std::string_view kFrameHeightField = "frameHeight";
 inline constexpr std::string_view kXField = "x";
 inline constexpr std::string_view kYField = "y";
 inline constexpr std::string_view kBarcodeField = "barcode";
@@ -77,7 +75,6 @@ inline constexpr std::string_view kDistanceField = "distance";
 inline constexpr std::string_view kSensorIdField = "sensorId";
 inline constexpr std::string_view kMeasurementStatusField = "measurementStatus";
 inline constexpr std::string_view kDistanceCmField = "distanceCm";
-inline constexpr std::string_view kDetectionStatusField = "detectionStatus";
 
 [[nodiscard]] constexpr bool IsValidErrorLevel(std::string_view value) noexcept {
     return value == "INFO" || value == "WARNING" || value == "ERROR" || value == "CRITICAL";
@@ -87,19 +84,8 @@ inline constexpr std::string_view kDetectionStatusField = "detectionStatus";
     return value == "SUCCESS" || value == "FAILED" || value == "MISSING_DATA";
 }
 
-// Reported by the device: does the ultrasonic sensor currently produce a
-// trustworthy reading? Box presence is NOT part of this - the STM32 no longer
-// judges it. See IsValidDetectionStatus below.
 [[nodiscard]] constexpr bool IsValidMeasurementStatus(std::string_view value) noexcept {
-    return value == "OK" || value == "FAULT";
-}
-
-// Derived by the central server from distanceCm and the [sensor_detection]
-// thresholds in server.ini. Devices never populate this field; the server
-// stamps it before forwarding SENSOR_STATUS onwards, which is what lets an
-// operator retune detection without reflashing the STM32.
-[[nodiscard]] constexpr bool IsValidDetectionStatus(std::string_view value) noexcept {
-    return value == "CLEAR" || value == "DETECTED" || value == "UNKNOWN";
+    return value == "CLEAR" || value == "DETECTED" || value == "FAULT";
 }
 
 enum class CodecError : std::uint8_t {
@@ -191,16 +177,11 @@ struct SensorStatusPayload {
     std::int32_t sensor_id{ 0 };
     std::string measurement_status;
     std::int32_t distance_cm{ 0 };
-    // Absent on the device -> server leg, present once the server has applied
-    // its detection thresholds. Optional so a device build never has to know
-    // the thresholds exist.
-    std::optional<std::string> detection_status;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return sensor_id > 0 && sensor_id <= std::numeric_limits<std::uint8_t>::max() &&
                IsValidMeasurementStatus(measurement_status) && distance_cm >= 0 &&
-               distance_cm <= std::numeric_limits<std::uint16_t>::max() &&
-               (!detection_status.has_value() || IsValidDetectionStatus(*detection_status));
+               distance_cm <= std::numeric_limits<std::uint16_t>::max();
     }
 };
 
@@ -250,25 +231,6 @@ struct PositionDetectedPayload {
                                                     [](const PixelPoint& point) { return point.IsValid(); });
         return IsValidUuid(work_id) && box_x >= 0 && box_y >= 0 && box_width > 0 && box_height > 0 && center_x >= 0 &&
                center_y >= 0 && !position_status.empty() && valid_corners;
-    }
-};
-
-struct VisionMeasurementPayload {
-    std::string barcode;
-    std::int32_t box_x{ 0 };
-    std::int32_t box_y{ 0 };
-    std::int32_t box_width{ 0 };
-    std::int32_t box_height{ 0 };
-    std::int32_t frame_width{ 0 };
-    std::int32_t frame_height{ 0 };
-    std::optional<std::array<PixelPoint, 4>> box_corners;
-
-    [[nodiscard]] bool IsValid() const noexcept {
-        const bool valid_corners =
-            !box_corners.has_value() || std::all_of(box_corners->begin(), box_corners->end(),
-                                                    [](const PixelPoint& point) { return point.IsValid(); });
-        return !barcode.empty() && box_x >= 0 && box_y >= 0 && box_width > 0 && box_height > 0 && frame_width > 0 &&
-               frame_height > 0 && valid_corners;
     }
 };
 
@@ -456,8 +418,7 @@ using MessagePayload =
     std::variant<std::monostate, DeviceRegisterPayload, HeartbeatPayload, BoxDetectedPayload, WorkCreatedPayload,
                  WorkCompletedPayload, PositionDetectedPayload, BarcodeDetectedPayload, ProductImagePayload,
                  ProductInfoPayload, DestinationSetPayload, DeviceStatusPayload, ControlCommandPayload,
-                 ErrorOccurredPayload, EmergencyStopPayload, CommandResponsePayload, SensorStatusPayload,
-                 VisionMeasurementPayload>;
+                 ErrorOccurredPayload, EmergencyStopPayload, CommandResponsePayload, SensorStatusPayload>;
 
 struct MqttMessage {
     std::string protocol_version{ std::string(kCurrentProtocolVersion) };
@@ -465,7 +426,6 @@ struct MqttMessage {
     MessageType message_type{ MessageType::kUnknown };
     std::string source_id;
     std::string timestamp;
-    std::optional<std::string> process_epoch{};
     MessagePayload data;
 
     [[nodiscard]] bool IsValid() const noexcept;
@@ -667,8 +627,6 @@ struct MqttMessage {
             return std::holds_alternative<CommandResponsePayload>(payload);
         case MessageType::kSensorStatus:
             return std::holds_alternative<SensorStatusPayload>(payload);
-        case MessageType::kVisionMeasurement:
-            return std::holds_alternative<VisionMeasurementPayload>(payload);
         case MessageType::kUnknown:
             return false;
     }
@@ -697,50 +655,11 @@ inline bool MqttMessage::IsValid() const noexcept {
         .message_type = message_type,
         .source_id = source_id,
         .timestamp = timestamp,
-        .process_epoch = process_epoch ? std::string_view(*process_epoch) : std::string_view{},
         .data_json = "{}",
     };
 
     return envelope.IsValid() && IsValidIso8601Timestamp(timestamp) && PayloadMatchesMessageType(message_type, data) &&
            IsPayloadValid(data);
-}
-
-[[nodiscard]] inline bool IsProcessScopedMessage(const MqttMessage& message) noexcept {
-    switch (message.message_type) {
-        case MessageType::kBoxDetected:
-        case MessageType::kWorkCreated:
-        case MessageType::kWorkCompleted:
-        case MessageType::kPositionDetected:
-        case MessageType::kBarcodeDetected:
-        case MessageType::kProductImage:
-        case MessageType::kProductInfo:
-        case MessageType::kDestinationSet:
-            return true;
-        case MessageType::kDeviceStatus: {
-            const auto* status = std::get_if<DeviceStatusPayload>(&message.data);
-            return status != nullptr && status->job_id.has_value();
-        }
-        case MessageType::kErrorOccurred: {
-            const auto* error = std::get_if<ErrorOccurredPayload>(&message.data);
-            return error != nullptr && error->job_id.has_value();
-        }
-        case MessageType::kControlCommand: {
-            const auto* command = std::get_if<ControlCommandPayload>(&message.data);
-            return command != nullptr && command->params.contains(std::string(kWorkIdField));
-        }
-        case MessageType::kCommandResponse: {
-            const auto* response = std::get_if<CommandResponsePayload>(&message.data);
-            return response != nullptr && response->command != ControlCommand::kStatusRequest;
-        }
-        case MessageType::kUnknown:
-        case MessageType::kDeviceRegister:
-        case MessageType::kHeartbeat:
-        case MessageType::kEmergencyStop:
-        case MessageType::kSensorStatus:
-        case MessageType::kVisionMeasurement:
-            return false;
-    }
-    return false;
 }
 
 namespace codec_detail {
@@ -1098,13 +1017,7 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
     if (!ReadRequiredString(root, kMessageIdField, message.message_id, status) ||
         !ReadRequiredString(root, kMessageTypeField, message_type, status) ||
         !ReadRequiredString(root, kSourceIdField, message.source_id, status) ||
-        !ReadRequiredString(root, kTimestampField, message.timestamp, status) ||
-        !ReadOptionalString(root, kProcessEpochField, message.process_epoch, status)) {
-        return false;
-    }
-
-    if (message.process_epoch.has_value() && !IsValidUuid(*message.process_epoch)) {
-        status = MakeError(CodecError::kInvalidFieldValue, kProcessEpochField, "processEpoch must contain a UUID");
+        !ReadRequiredString(root, kTimestampField, message.timestamp, status)) {
         return false;
     }
 
@@ -1127,7 +1040,6 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
         .message_type = message.message_type,
         .source_id = message.source_id,
         .timestamp = message.timestamp,
-        .process_epoch = message.process_epoch ? std::string_view(*message.process_epoch) : std::string_view{},
         .data_json = "{}",
     };
 
@@ -1173,34 +1085,11 @@ inline void WriteOptionalDouble(Json& object, std::string_view field, const std:
 }
 
 [[nodiscard]] inline Json SerializePayload(const SensorStatusPayload& payload) {
-    Json data = {
+    return {
         { std::string(kSensorIdField), payload.sensor_id },
         { std::string(kMeasurementStatusField), payload.measurement_status },
         { std::string(kDistanceCmField), payload.distance_cm },
     };
-
-    WriteOptionalString(data, kDetectionStatusField, payload.detection_status);
-    return data;
-}
-
-[[nodiscard]] inline Json SerializePayload(const VisionMeasurementPayload& payload) {
-    Json data = {
-        { std::string(kBarcodeField), payload.barcode },
-        { std::string(kBoxXField), payload.box_x },
-        { std::string(kBoxYField), payload.box_y },
-        { std::string(kBoxWidthField), payload.box_width },
-        { std::string(kBoxHeightField), payload.box_height },
-        { std::string(kFrameWidthField), payload.frame_width },
-        { std::string(kFrameHeightField), payload.frame_height },
-    };
-    if (payload.box_corners.has_value()) {
-        data[std::string(kBoxCornersField)] = Json::array();
-        for (const auto& point : *payload.box_corners) {
-            data[std::string(kBoxCornersField)].push_back(
-                Json{ { std::string(kXField), point.x }, { std::string(kYField), point.y } });
-        }
-    }
-    return data;
 }
 
 [[nodiscard]] inline Json SerializePayload(const WorkCreatedPayload& payload) {
@@ -1406,49 +1295,7 @@ inline void WriteOptionalLineTracerPosition(Json& data, std::string_view field,
 [[nodiscard]] inline bool DeserializePayload(const Json& data, SensorStatusPayload& payload, CodecStatus& status) {
     return ReadRequiredSignedInteger(data, kSensorIdField, payload.sensor_id, status) &&
            ReadRequiredString(data, kMeasurementStatusField, payload.measurement_status, status) &&
-           ReadRequiredSignedInteger(data, kDistanceCmField, payload.distance_cm, status) &&
-           ReadOptionalString(data, kDetectionStatusField, payload.detection_status, status);
-}
-
-[[nodiscard]] inline bool DeserializePayload(const Json& data, VisionMeasurementPayload& payload, CodecStatus& status) {
-    if (!ReadRequiredString(data, kBarcodeField, payload.barcode, status) ||
-        !ReadRequiredSignedInteger(data, kBoxXField, payload.box_x, status) ||
-        !ReadRequiredSignedInteger(data, kBoxYField, payload.box_y, status) ||
-        !ReadRequiredSignedInteger(data, kBoxWidthField, payload.box_width, status) ||
-        !ReadRequiredSignedInteger(data, kBoxHeightField, payload.box_height, status) ||
-        !ReadRequiredSignedInteger(data, kFrameWidthField, payload.frame_width, status) ||
-        !ReadRequiredSignedInteger(data, kFrameHeightField, payload.frame_height, status)) {
-        return false;
-    }
-
-    const auto corners = data.find(std::string(kBoxCornersField));
-    if (corners == data.end()) {
-        payload.box_corners.reset();
-        return true;
-    }
-    if (!corners->is_array() || corners->size() != 4U) {
-        status =
-            MakeError(CodecError::kInvalidFieldValue, kBoxCornersField, "boxCorners must contain exactly four points");
-        return false;
-    }
-    std::array<PixelPoint, 4> decoded{};
-    for (std::size_t index = 0; index < decoded.size(); ++index) {
-        const Json& point = (*corners)[index];
-        if (!point.is_object()) {
-            status = MakeError(CodecError::kInvalidFieldType, kBoxCornersField, "boxCorners entries must be objects");
-            return false;
-        }
-        const auto x = point.find(std::string(kXField));
-        const auto y = point.find(std::string(kYField));
-        if (x == point.end() || y == point.end() || !x->is_number() || !y->is_number()) {
-            status = MakeError(CodecError::kInvalidFieldType, kBoxCornersField,
-                               "boxCorners entries require numeric x and y");
-            return false;
-        }
-        decoded[index] = { .x = x->get<double>(), .y = y->get<double>() };
-    }
-    payload.box_corners = decoded;
-    return true;
+           ReadRequiredSignedInteger(data, kDistanceCmField, payload.distance_cm, status);
 }
 
 [[nodiscard]] inline bool DeserializePayload(const Json& data, WorkCreatedPayload& payload, CodecStatus& status) {
@@ -1721,7 +1568,6 @@ template <typename PayloadType>
             .message_type = message.message_type,
             .source_id = message.source_id,
             .timestamp = message.timestamp,
-            .process_epoch = message.process_epoch ? std::string_view(*message.process_epoch) : std::string_view{},
             .data_json = "{}",
         };
 
@@ -1745,10 +1591,6 @@ template <typename PayloadType>
             error = CodecError::kInvalidFieldValue;
             field = kTimestampField;
             description = "Timestamp must be ISO 8601 with UTC Z or an explicit offset";
-        } else if (message.process_epoch.has_value() && !IsValidUuid(*message.process_epoch)) {
-            error = CodecError::kInvalidFieldValue;
-            field = kProcessEpochField;
-            description = "processEpoch must contain a UUID";
         } else if (!envelope.IsValid()) {
             error = CodecError::kInvalidEnvelope;
             field = "";
@@ -1782,10 +1624,6 @@ template <typename PayloadType>
             { std::string(kSourceIdField), message.source_id },
             { std::string(kTimestampField), message.timestamp },
         };
-
-        if (message.process_epoch.has_value()) {
-            root[std::string(kProcessEpochField)] = *message.process_epoch;
-        }
 
         root[std::string(kDataField)] =
             std::visit([](const auto& payload) { return codec_detail::SerializePayload(payload); }, message.data);
@@ -1876,10 +1714,6 @@ template <typename PayloadType>
             break;
         case MessageType::kSensorStatus:
             decoded = codec_detail::DecodeAndAssignPayload<SensorStatusPayload>(*data, result.value, result.status);
-            break;
-        case MessageType::kVisionMeasurement:
-            decoded =
-                codec_detail::DecodeAndAssignPayload<VisionMeasurementPayload>(*data, result.value, result.status);
             break;
         case MessageType::kUnknown:
             result.status = codec_detail::MakeError(CodecError::kUnknownMessageType, kMessageTypeField,

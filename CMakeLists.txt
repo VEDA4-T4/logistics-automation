@@ -16,14 +16,12 @@ option(LOGISTICS_ENABLE_MOSQUITTO_TRANSPORT "Build MQTT clients with libmosquitt
 option(LOGISTICS_BUILD_INPUT_NODE "Build the input-conveyor Raspberry Pi node" ON)
 option(LOGISTICS_BUILD_VISION_NODE "Build the vision Raspberry Pi node (requires OpenCV)" ON)
 option(LOGISTICS_BUILD_SORTING_NODE "Build the sorting Raspberry Pi node" ON)
-option(LOGISTICS_BUILD_GRIPPER_NODE "Build the gripper Raspberry Pi node" ON)
 option(LOGISTICS_BUILD_LINETRACER_NODE "Build the linetracer Raspberry Pi node" ON)
 
 add_subdirectory(shared)
 
 if(BUILD_TESTING)
     add_subdirectory(stm32/conveyor-controller/tests)
-    add_subdirectory(stm32/gripper-controller/tests)
     add_subdirectory(stm32/linetracer-controller/Tests/CommRx)
     add_subdirectory(stm32/linetracer-controller/Tests/CommTx)
     add_subdirectory(stm32/linetracer-controller/Tests/Host)

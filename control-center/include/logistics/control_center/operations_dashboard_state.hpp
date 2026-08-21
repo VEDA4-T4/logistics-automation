@@ -162,7 +162,6 @@ private:
     QSet<QString> processed_message_ids_;
     QQueue<QString> processed_message_order_;
     QDateTime last_completion_at_;
-    QDateTime last_command_message_at_;
     QString last_completion_detail_;
     std::optional<OverallProcessState> command_override_;
     QString command_override_stage_;

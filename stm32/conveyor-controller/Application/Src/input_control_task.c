@@ -75,10 +75,8 @@ static uart_error_t input_control_task_result_error(input_control_result_t resul
             return UART_ERROR_UNSUPPORTED_COMMAND;
 
         case INPUT_CONTROL_INVALID_PAYLOAD:
-            return UART_ERROR_INVALID_PAYLOAD;
-
         case INPUT_CONTROL_SPEED_NOT_CONFIGURED:
-            return UART_ERROR_SPEED_NOT_CONFIGURED;
+            return UART_ERROR_INVALID_PAYLOAD;
 
         case INPUT_CONTROL_FAULT_LATCHED:
             return (state->lastError != UART_ERROR_NONE) ? state->lastError : UART_ERROR_INTERNAL;

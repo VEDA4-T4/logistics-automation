@@ -5,10 +5,8 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 build_dir="${LOGISTICS_BUILD_DIR:-${repo_root}/build-central}"
-install_prefix="/opt/logistics-automation"
-runtime_dir="/var/lib/logistics"
-config_path="/etc/logistics/server.ini"
-service_name="logistics-central-server.service"
+runtime_dir="${LOGISTICS_RUNTIME_DIR:-${repo_root}/runtime/central-server}"
+config_path="${LOGISTICS_CONFIG_PATH:-${runtime_dir}/server.ini}"
 mqtt_host="${LOGISTICS_MQTT_HOST:-127.0.0.1}"
 mqtt_port="${LOGISTICS_MQTT_PORT:-8883}"
 mqtt_username="${LOGISTICS_MQTT_USERNAME:-central-server}"
@@ -49,13 +47,6 @@ validate_mqtt_settings() {
     fi
 }
 
-should_write_config() {
-    local config_exists=$1
-    local force_write=$2
-
-    [[ "${config_exists}" == "0" || "${force_write}" == "1" ]]
-}
-
 run_self_check() {
     validate_mqtt_settings mqtt.example 8883 central-server secret true /etc/logistics/tls/ca.crt
     validate_mqtt_settings mqtt.example 1883 central-server secret false ""
@@ -64,10 +55,7 @@ run_self_check() {
     ! validate_mqtt_settings mqtt.example 8883 central-server secret yes /etc/logistics/tls/ca.crt 2>/dev/null
     ! validate_mqtt_settings mqtt.example 8883 central-server secret true "" 2>/dev/null
     ! validate_mqtt_settings $'mqtt.example\ninvalid' 8883 central-server secret true /etc/logistics/tls/ca.crt 2>/dev/null
-    should_write_config 0 0
-    ! should_write_config 1 0
-    should_write_config 1 1
-    echo "$(basename -- "${BASH_SOURCE[0]}") self-check passed."
+    echo "$(basename -- "${BASH_SOURCE[0]}") MQTT security self-check passed."
 }
 
 if [[ "${1:-}" == "--self-check" ]]; then
@@ -79,35 +67,18 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     echo "This script must run on the central Linux/Raspberry Pi host." >&2
     exit 2
 fi
+if [[ (! -e "${config_path}" || "${force_config}" == "1") && -z "${upload_token}" ]]; then
+    echo "LOGISTICS_UPLOAD_TOKEN must be set." >&2
+    exit 2
+fi
+if [[ ! -e "${config_path}" || "${force_config}" == "1" ]]; then
+    validate_mqtt_settings "${mqtt_host}" "${mqtt_port}" "${mqtt_username}" "${mqtt_password}" \
+        "${mqtt_tls_enabled}" "${mqtt_ca_certificate}" || exit 2
+fi
 
 sudo_command=()
 if [[ "${EUID}" -ne 0 ]]; then
     sudo_command=(sudo)
-fi
-
-config_exists=0
-if "${sudo_command[@]}" test -e "${config_path}"; then
-    config_exists=1
-fi
-
-write_config=0
-if should_write_config "${config_exists}" "${force_config}"; then
-    write_config=1
-fi
-
-if [[ "${write_config}" == "1" && -z "${upload_token}" ]]; then
-    echo "LOGISTICS_UPLOAD_TOKEN must be set." >&2
-    exit 2
-fi
-
-if [[ "${write_config}" == "1" ]]; then
-    validate_mqtt_settings \
-        "${mqtt_host}" \
-        "${mqtt_port}" \
-        "${mqtt_username}" \
-        "${mqtt_password}" \
-        "${mqtt_tls_enabled}" \
-        "${mqtt_ca_certificate}" || exit 2
 fi
 
 if [[ "${install_dependencies}" == "1" ]]; then
@@ -117,39 +88,10 @@ if [[ "${install_dependencies}" == "1" ]]; then
         libmosquitto-dev nlohmann-json3-dev libsqlite3-dev libssl-dev libmicrohttpd-dev
 fi
 
-if ! getent group logistics >/dev/null; then
-    "${sudo_command[@]}" groupadd --system logistics
-fi
+install -d -m 0750 "${runtime_dir}" "${runtime_dir}/images" "${runtime_dir}/logs" \
+    "${runtime_dir}/uploads/images" "${runtime_dir}/uploads/logs" "$(dirname -- "${config_path}")"
 
-if ! getent passwd logistics >/dev/null; then
-    "${sudo_command[@]}" useradd \
-        --system \
-        --gid logistics \
-        --home-dir "${runtime_dir}" \
-        --shell /usr/sbin/nologin \
-        logistics
-fi
-
-"${sudo_command[@]}" install \
-    -d \
-    -o root \
-    -g logistics \
-    -m 0750 \
-    "$(dirname -- "${config_path}")"
-
-"${sudo_command[@]}" install \
-    -d \
-    -o logistics \
-    -g logistics \
-    -m 0750 \
-    "${runtime_dir}" \
-    "${runtime_dir}/images" \
-    "${runtime_dir}/logs" \
-    "${runtime_dir}/uploads" \
-    "${runtime_dir}/uploads/images" \
-    "${runtime_dir}/uploads/logs"
-
-if [[ "${write_config}" != "1" ]]; then
+if [[ -e "${config_path}" && "${force_config}" != "1" ]]; then
     echo "Keeping existing config: ${config_path}"
 else
     temporary_config="$(mktemp)"
@@ -173,7 +115,7 @@ path=${runtime_dir}/devices.json
 
 [database]
 path=${runtime_dir}/logistics.db
-migration_dir=${install_prefix}/share/logistics/migrations
+migration_dir=${repo_root}/central-server-rpi/db/migrations
 busy_timeout_ms=5000
 
 [storage]
@@ -197,30 +139,10 @@ upload_root=${runtime_dir}/uploads
 
 [routing]
 qt_client_id=control-center
-
-[process]
-enabled=true
-server_id=central-server
-input_device_id=PI-INPUT-01
-vision_device_id=PI-VISION-01
-gripper_device_id=PI-GRIPPER-01
-sorting_device_id=PI-SORTING-01
-line_tracer_device_id=PI-LT-01
-line_tracer_enabled=true
-line_tracer_initial_position=A
-default_destination=3
 EOF
-    "${sudo_command[@]}" install \
-        -o root \
-        -g logistics \
-        -m 0640 \
-        "${temporary_config}" \
-        "${config_path}"
+    install -m 0600 "${temporary_config}" "${config_path}"
     echo "Created config: ${config_path}"
 fi
-
-"${sudo_command[@]}" chown root:logistics "${config_path}"
-"${sudo_command[@]}" chmod 0640 "${config_path}"
 
 cmake -S "${repo_root}" -B "${build_dir}" -G Ninja \
     -DLOGISTICS_BUILD_CONTROL_CENTER=OFF \
@@ -230,39 +152,7 @@ cmake -S "${repo_root}" -B "${build_dir}" -G Ninja \
 cmake --build "${build_dir}"
 ctest --test-dir "${build_dir}" --output-on-failure
 
-"${sudo_command[@]}" cmake --install "${build_dir}" \
-    --prefix "${install_prefix}"
-
-installed_unit="${install_prefix}/lib/systemd/system/${service_name}"
-
-if ! "${sudo_command[@]}" test -f "${installed_unit}"; then
-    echo "Installed systemd unit was not found: ${installed_unit}" >&2
-    exit 4
-fi
-
-"${sudo_command[@]}" install \
-    -o root \
-    -g root \
-    -m 0644 \
-    "${installed_unit}" \
-    "/etc/systemd/system/${service_name}"
-
-"${sudo_command[@]}" systemctl daemon-reload
-"${sudo_command[@]}" systemctl enable "${service_name}"
-
-if ! "${sudo_command[@]}" systemctl restart "${service_name}"; then
-    "${sudo_command[@]}" systemctl status "${service_name}" --no-pager || true
-    exit 5
-fi
-
-if ! "${sudo_command[@]}" systemctl is-active --quiet "${service_name}"; then
-    "${sudo_command[@]}" systemctl status "${service_name}" --no-pager || true
-    exit 5
-fi
-
 echo
 echo "Central server setup complete."
-echo "Installed: ${install_prefix}/bin/logistics_central_server"
-echo "Config: ${config_path}"
-echo "Service: ${service_name}"
+echo "Run: ${build_dir}/central-server-rpi/logistics_central_server --config ${config_path}"
 echo "This script did not modify or restart Mosquitto."

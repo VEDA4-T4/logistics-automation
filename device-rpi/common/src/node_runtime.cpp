@@ -85,7 +85,6 @@ int NodeRuntime::Run(int argc, char* argv[]) const {
                 device_status->SetJobId(work_created->work_id);
                 device_status->SetCurrentState("WORK_ASSIGNED");
             }
-            return true;
         });
     if (!mqtt_client.Start()) {
         if (log_uploader != nullptr) {

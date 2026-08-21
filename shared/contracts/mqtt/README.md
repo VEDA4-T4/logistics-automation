@@ -30,52 +30,6 @@ MQTT topic, payload, QoS, retain, Last Will 규칙을 중앙에서 관리하는 
 `BOX_DETECTED`를 저장하면 중앙 서버는 UUID형 `workId`를 발급해 `WORK_CREATED`로 응답합니다. 이후의
 위치, 이미지, 바코드, 상품 정보, 목적지 및 `WORK_COMPLETED` payload는 같은 `workId`를 포함해야 합니다.
 
-### 그리퍼 `CONTROL_COMMAND`의 `params.targetPose`
-
-`params`는 자유 형식 object이므로 codec 변경 없이 확장됩니다. 중앙서버 homography가 활성화되면
-`ProcessOrchestrator::MakeGripperCommand()`(`central-server-rpi/src/process_manager/process_orchestrator.cpp`)가
-`START`/`RESTART`의 `params`에 아래를 실어 보내고, 그리퍼 노드는 그중 일부만 읽습니다.
-
-| 키 | 형 | 필수 | 그리퍼 노드가 사용 | 의미 |
-|---|---|---|---|---|
-| `workId` | string | 예 (`componentId=home` 제외) | 예 | 작업 식별자 |
-| `destination` | string | 아니오 | 예 | 분류 목적지 |
-| `action` | string | 아니오 | 아니오 | 항상 `"PICK"` |
-| `coordinateFrame` | string | 아니오 | 아니오 | 좌표계 식별자, 기본 `"PI-GRIPPER-01_BASE"` |
-| `unit` | string | 아니오 | 아니오 | 항상 `"mm"` |
-| `targetPose` | object | 아니오 | 예(`x/y/z`만) | 집기 목표. 없으면 노드가 교시 포즈를 사용 |
-| `targetPose.x/y/z` | number | `targetPose`가 있으면 예 | 예 | mm 단위 좌표 |
-| `targetPose.rollDeg/pitchDeg/yawDeg` | number | 아니오 | **아니오** | 무시됨(아래 참고) |
-| `box.length/width/height` | number | 아니오 | 아니오 | 상자 치수(mm) |
-| `calibrationVersion` | integer | 아니오 | 아니오 | homography 캘리브레이션 버전 |
-
-```json
-"params": {
-  "workId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
-  "destination": "1",
-  "action": "PICK",
-  "coordinateFrame": "PI-GRIPPER-01_BASE",
-  "unit": "mm",
-  "targetPose": { "x": 220.0, "y": 0.0, "z": 20.0, "rollDeg": 180.0, "pitchDeg": 0.0, "yawDeg": 37.5 },
-  "box": { "length": 200.0, "width": 150.0, "height": 90.0 },
-  "calibrationVersion": 1
-}
-```
-
-좌표계는 **그리퍼 팔 기준**입니다. 원점은 밑판 높이의 base 회전축, `+Z`는 위, `+X`는 base 서보 기준각에서 팔이
-향하는 방향입니다. 카메라 픽셀 좌표를 이 좌표계로 변환하는 것은 중앙 서버의 homography 몫이며(`HomographyTransformer::Transform()`),
-그리퍼 노드는 `targetPose.x/y/z`를 그대로 역기구학에 넣습니다.
-
-**상자 방향(`targetPose.yawDeg`)은 계약에는 있지만 그리퍼 노드는 사용하지 않습니다.** 팔이
-3자유도(base·shoulder·elbow)뿐이고 손목 회전이 없어서 클로의 파지축이 base 각에 종속되며, base 각은
-`(x, y)`가 이미 결정합니다. 위치와 파지 방향을 독립적으로 지정할 자유도가 존재하지 않으므로, yaw를 보내도
-노드는 사용하지 않습니다. `rollDeg`/`pitchDeg`도 이 팔에 대응하는 관절이 없어 마찬가지로 무시합니다.
-
-거부 사유는 `COMMAND_RESPONSE`의 `errorCode`로 돌아옵니다: `ERR-GRIPPER-POSE-MALFORMED`,
-`ERR-GRIPPER-POSE-BELOW-PLATE`, `ERR-GRIPPER-UNREACHABLE-FAR`, `ERR-GRIPPER-UNREACHABLE-NEAR`,
-`ERR-GRIPPER-JOINT-LIMIT`. 도달 가능 영역은 노드 INI의 기구 파라미터에 따라 달라지므로
-`device-rpi/gripper-node/README.md`를 참고하십시오.
-
 ### Qt 현재 상품 화면 payload
 
 중앙 서버는 현재 상품 변경을 `qt/{clientId}/event`로 전달합니다. `WORK_CREATED`가 새 `workId`로

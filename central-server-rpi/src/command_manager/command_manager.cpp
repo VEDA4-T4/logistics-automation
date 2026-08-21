@@ -1,7 +1,6 @@
 #include "logistics/central_server/command_manager.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <utility>
 
 namespace logistics::central_server {
@@ -9,11 +8,6 @@ namespace {
 
 namespace mqtt = contracts::mqtt;
 constexpr std::size_t kCompletedRequestLimit = 256;
-
-[[nodiscard]] std::int64_t UnixMilliseconds() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
-}
 
 [[nodiscard]] bool IsReachable(const DeviceSnapshot& device) noexcept {
     return device.registered && device.connection_state != mqtt::ConnectionState::kOffline;
@@ -31,50 +25,6 @@ constexpr std::size_t kCompletedRequestLimit = 256;
         return std::pair{ destination->request_id, destination->command };
     }
     return std::nullopt;
-}
-
-[[nodiscard]] std::chrono::seconds CommandDeadline(const mqtt::MqttMessage& message,
-                                                   const std::vector<std::string>& target_device_ids) {
-    mqtt::ControlCommand command = mqtt::ControlCommand::kUnknown;
-    std::string_view requested_target;
-    std::string_view component_id;
-    if (const auto* payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
-        command = payload->command;
-        requested_target = payload->target_device_id;
-        component_id = payload->component_id;
-    } else if (const auto* emergency_stop = mqtt::GetPayload<mqtt::EmergencyStopPayload>(message)) {
-        command = emergency_stop->command;
-        requested_target = emergency_stop->target_device_id;
-    } else if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(message)) {
-        command = destination->command;
-        requested_target = destination->target_device_id;
-    } else {
-        return mqtt::kMqttResponseTimeout;
-    }
-
-    auto deadline = mqtt::CommandResponseTimeout(command, requested_target, component_id);
-    for (const auto& target_device_id : target_device_ids) {
-        deadline = std::max(deadline, mqtt::CommandResponseTimeout(command, target_device_id, component_id));
-    }
-    return deadline;
-}
-
-[[nodiscard]] std::string MissingDeviceMessage(const auto& pending) {
-    std::vector<std::string> missing;
-    for (const auto& device_id : pending.expected_devices) {
-        if (!pending.completed_devices.contains(device_id)) {
-            missing.push_back(device_id);
-        }
-    }
-    std::ranges::sort(missing);
-    std::string message = std::string(mqtt::ToString(pending.command)) + " command timed out waiting for devices: ";
-    for (std::size_t index = 0; index < missing.size(); ++index) {
-        if (index != 0) {
-            message += ", ";
-        }
-        message += missing[index];
-    }
-    return message;
 }
 
 }  // namespace
@@ -123,9 +73,8 @@ mqtt::MqttMessage PrepareCommandForDevice(const mqtt::MqttMessage& message, std:
 
     if (auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(forwarded)) {
         command->target_device_id = device_id;
-        if ((command->command == mqtt::ControlCommand::kInitialize ||
-             command->command == mqtt::ControlCommand::kRecovery) &&
-            device_id == line_tracer_device_id && !line_tracer_initial_position.empty()) {
+        if (command->command == mqtt::ControlCommand::kInitialize && device_id == line_tracer_device_id &&
+            !line_tracer_initial_position.empty()) {
             command->params["currentPosition"] = std::string(line_tracer_initial_position);
         }
     } else if (auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(forwarded)) {
@@ -146,17 +95,14 @@ bool CommandManager::TrackCommand(const mqtt::MqttMessage& message, const std::v
         return false;
     }
 
-    const auto timeout = CommandDeadline(message, target_device_ids);
     PendingCommand pending{
         .command = identity->second,
-        .original_message = message,
         .started_at = now_provider_(),
-        .timeout = std::chrono::duration_cast<std::chrono::milliseconds>(timeout),
+        .timeout = mqtt::CommandResponseTimeout(identity->second),
         .expected_devices = {},
         .completed_devices = {},
         .response_message_ids = {},
         .failure = std::nullopt,
-        .deadline_at_ms = UnixMilliseconds() + std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count(),
     };
     pending.expected_devices.insert(target_device_ids.begin(), target_device_ids.end());
     if (pending.expected_devices.empty()) {
@@ -229,7 +175,6 @@ std::optional<mqtt::MqttMessage> CommandManager::MakeImmediateResult(const mqtt:
     std::lock_guard lock(mutex_);
     PendingCommand immediate{
         .command = identity->second,
-        .original_message = command,
         .started_at = now_provider_(),
         .timeout = {},
         .expected_devices = {},
@@ -255,14 +200,6 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
     std::lock_guard lock(mutex_);
     const auto pending_iterator = pending_.find(response->request_id);
     if (pending_iterator == pending_.end()) {
-        if (completed_requests_.contains(response->request_id)) {
-            return {
-                .disposition = CommandResponseDisposition::kLateResponse,
-                .message = message,
-                .reason = "LATE_RESPONSE requestId=" + response->request_id + " command=" +
-                          std::string(mqtt::ToString(response->command)) + " sourceId=" + message.source_id,
-            };
-        }
         return {
             .disposition = CommandResponseDisposition::kUnknownRequest,
             .message = std::nullopt,
@@ -288,15 +225,6 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
     }
 
     if (!mqtt::IsTerminal(response->result)) {
-        // A PROCESSING response from a single target proves that it accepted the
-        // request but may still be waiting on its serial controller. Restart the
-        // command-specific completion window without completing the process intent.
-        // Broadcast commands keep their original deadline so one chatty device
-        // cannot hide another target that never responds.
-        if (pending.expected_devices.size() == 1U) {
-            pending.started_at = now_provider_();
-            pending.deadline_at_ms = UnixMilliseconds() + pending.timeout.count();
-        }
         return {
             .disposition = CommandResponseDisposition::kForward,
             .message = message,
@@ -305,8 +233,7 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
     }
 
     pending.completed_devices.insert(message.source_id);
-    if (response->result != mqtt::CommandResult::kSuccess && response->result != mqtt::CommandResult::kDuplicated &&
-        !pending.failure.has_value()) {
+    if (response->result != mqtt::CommandResult::kSuccess && !pending.failure.has_value()) {
         pending.failure = *response;
     }
 
@@ -334,91 +261,6 @@ CommandResponseDecision CommandManager::HandleResponse(const mqtt::MqttMessage& 
     };
 }
 
-CommandManagerSnapshot CommandManager::Snapshot() const {
-    std::lock_guard lock(mutex_);
-    CommandManagerSnapshot snapshot{ .pending = {}, .completed_requests = {}, .message_sequence = message_sequence_ };
-    snapshot.completed_requests.assign(completed_request_order_.begin(), completed_request_order_.end());
-    snapshot.pending.reserve(pending_.size());
-    for (const auto& [request_id, pending] : pending_) {
-        PendingCommandSnapshot stored{
-            .request_id = request_id,
-            .original_message = pending.original_message,
-            .expected_devices = { pending.expected_devices.begin(), pending.expected_devices.end() },
-            .completed_devices = { pending.completed_devices.begin(), pending.completed_devices.end() },
-            .response_message_ids = { pending.response_message_ids.begin(), pending.response_message_ids.end() },
-            .failure = pending.failure,
-            .deadline_at_ms = pending.deadline_at_ms,
-        };
-        std::ranges::sort(stored.expected_devices);
-        std::ranges::sort(stored.completed_devices);
-        std::ranges::sort(stored.response_message_ids);
-        snapshot.pending.push_back(std::move(stored));
-    }
-    std::ranges::sort(snapshot.pending, {}, &PendingCommandSnapshot::request_id);
-    return snapshot;
-}
-
-bool CommandManager::Restore(CommandManagerSnapshot snapshot) {
-    std::unordered_map<std::string, PendingCommand> pending;
-    const auto now_wall = UnixMilliseconds();
-    for (auto& stored : snapshot.pending) {
-        const auto identity = CommandIdentity(stored.original_message);
-        if (!identity || identity->first != stored.request_id || stored.expected_devices.empty() ||
-            stored.deadline_at_ms < 0) {
-            return false;
-        }
-        PendingCommand restored{
-            .command = identity->second,
-            .original_message = std::move(stored.original_message),
-            .started_at = now_provider_(),
-            .timeout = std::chrono::milliseconds(std::max<std::int64_t>(0, stored.deadline_at_ms - now_wall)),
-            .expected_devices = { stored.expected_devices.begin(), stored.expected_devices.end() },
-            .completed_devices = { stored.completed_devices.begin(), stored.completed_devices.end() },
-            .response_message_ids = { stored.response_message_ids.begin(), stored.response_message_ids.end() },
-            .failure = std::move(stored.failure),
-            .deadline_at_ms = stored.deadline_at_ms,
-        };
-        if (restored.completed_devices.size() > restored.expected_devices.size() ||
-            !std::ranges::all_of(
-                restored.completed_devices,
-                [&restored](const std::string& id) { return restored.expected_devices.contains(id); }) ||
-            !pending.emplace(stored.request_id, std::move(restored)).second) {
-            return false;
-        }
-    }
-    std::lock_guard lock(mutex_);
-    pending_ = std::move(pending);
-    completed_requests_.clear();
-    completed_request_order_.clear();
-    for (auto& request_id : snapshot.completed_requests) {
-        RememberCompletedRequest(std::move(request_id));
-    }
-    message_sequence_ = snapshot.message_sequence;
-    last_error_.clear();
-    return true;
-}
-
-void CommandManager::Clear() {
-    std::lock_guard lock(mutex_);
-    pending_.clear();
-    completed_requests_.clear();
-    completed_request_order_.clear();
-    last_error_.clear();
-}
-
-CommandResponseDecision CommandManager::PreviewResponse(const mqtt::MqttMessage& message) const {
-    CommandManager preview(now_provider_);
-    {
-        std::lock_guard lock(mutex_);
-        preview.pending_ = pending_;
-        preview.completed_requests_ = completed_requests_;
-        preview.completed_request_order_ = completed_request_order_;
-        preview.message_sequence_ = message_sequence_;
-        preview.last_error_ = last_error_;
-    }
-    return preview.HandleResponse(message);
-}
-
 std::vector<mqtt::MqttMessage> CommandManager::CheckTimeouts(std::string_view checked_at) {
     std::lock_guard lock(mutex_);
     std::vector<mqtt::MqttMessage> timed_out;
@@ -431,26 +273,13 @@ std::vector<mqtt::MqttMessage> CommandManager::CheckTimeouts(std::string_view ch
             continue;
         }
 
-        const auto message = MissingDeviceMessage(pending);
         timed_out.push_back(MakeAggregateResponse(iterator->first, pending, mqtt::CommandResult::kTimeout,
                                                   std::string(checked_at), std::string("ERR-COMMAND-TIMEOUT"),
-                                                  message));
+                                                  "one or more target devices did not respond before timeout"));
         RememberCompletedRequest(iterator->first);
         iterator = pending_.erase(iterator);
     }
     return timed_out;
-}
-
-std::vector<mqtt::MqttMessage> CommandManager::PreviewTimeouts(std::string_view checked_at) const {
-    CommandManager preview(now_provider_);
-    {
-        std::lock_guard lock(mutex_);
-        preview.pending_ = pending_;
-        preview.completed_requests_ = completed_requests_;
-        preview.completed_request_order_ = completed_request_order_;
-        preview.message_sequence_ = message_sequence_;
-    }
-    return preview.CheckTimeouts(checked_at);
 }
 
 std::size_t CommandManager::PendingCount() const {
@@ -472,7 +301,6 @@ mqtt::MqttMessage CommandManager::MakeAggregateResponse(std::string_view request
         .message_type = mqtt::MessageType::kCommandResponse,
         .source_id = "central-server",
         .timestamp = std::move(timestamp),
-        .process_epoch = pending.original_message.process_epoch,
         .data =
             mqtt::CommandResponsePayload{
                 .request_id = std::string(request_id),

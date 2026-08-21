@@ -48,29 +48,6 @@ static inline void __disable_irq(void) {}
 
 static inline void __enable_irq(void) {}
 
-/* 폴트 상태 레지스터. 테스트가 값을 직접 넣을 수 있도록 변수로 둔다. */
-typedef struct {
-    uint32_t CFSR;
-    uint32_t HFSR;
-    uint32_t BFAR;
-    uint32_t MMFAR;
-} SCB_FakeTypeDef;
-
-extern SCB_FakeTypeDef fakeScb;
-#define SCB (&fakeScb)
-
-/* 스택 포인터도 테스트가 지정한다. */
-extern uint32_t fakeMsp;
-extern uint32_t fakePsp;
-
-static inline uint32_t __get_MSP(void) {
-    return fakeMsp;
-}
-
-static inline uint32_t __get_PSP(void) {
-    return fakePsp;
-}
-
 uint32_t HAL_GetTick(void);
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef* huart, const uint8_t* data, uint16_t length);
 HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef* huart);

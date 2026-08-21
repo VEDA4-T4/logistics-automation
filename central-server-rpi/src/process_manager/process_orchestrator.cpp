@@ -1,13 +1,10 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
-#include <charconv>
 #include <stdexcept>
 #include <utility>
 
-#include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 
 namespace logistics::central_server {
@@ -25,24 +22,10 @@ namespace mqtt = contracts::mqtt;
     return std::ranges::find(expected, value) != expected.end();
 }
 
-[[nodiscard]] std::optional<contracts::DeviceRole> DeviceRoleForSource(const ProcessOrchestratorConfig& config,
-                                                                       std::string_view source_id) noexcept {
-    if (source_id == config.input_device_id) {
-        return contracts::DeviceRole::kInput;
-    }
-    if (source_id == config.vision_device_id) {
-        return contracts::DeviceRole::kVision;
-    }
-    if (source_id == config.gripper_device_id) {
-        return contracts::DeviceRole::kGripper;
-    }
-    if (source_id == config.sorting_device_id) {
-        return contracts::DeviceRole::kSorting;
-    }
-    if (config.line_tracer_enabled && source_id == config.line_tracer_device_id) {
-        return contracts::DeviceRole::kLineTracer;
-    }
-    return std::nullopt;
+[[nodiscard]] bool IsConnectionFailure(mqtt::ConnectionState state) noexcept {
+    return state == mqtt::ConnectionState::kOffline || state == mqtt::ConnectionState::kRtspError ||
+           state == mqtt::ConnectionState::kMqttError || state == mqtt::ConnectionState::kMqttAuthError ||
+           state == mqtt::ConnectionState::kTlsError || state == mqtt::ConnectionState::kUartError;
 }
 
 [[nodiscard]] ProcessOrchestrationResult NotHandled() {
@@ -85,51 +68,6 @@ namespace mqtt = contracts::mqtt;
     };
 }
 
-[[nodiscard]] bool OwnsDownstreamDevices(WorkStage stage) noexcept {
-    constexpr std::array occupied_stages{
-        WorkStage::kGripperRequested, WorkStage::kGripperTransferring, WorkStage::kSortingRequested,
-        WorkStage::kSorting,          WorkStage::kTransportRequested,  WorkStage::kTransporting,
-    };
-    return std::ranges::find(occupied_stages, stage) != occupied_stages.end();
-}
-
-[[nodiscard]] bool DownstreamDevicesBusy(const ProcessStateMachine& machine, std::string_view work_id) {
-    return std::ranges::any_of(machine.ActiveWorks(), [work_id](const WorkProcessSnapshot& work) {
-        return work.work_id != work_id && OwnsDownstreamDevices(work.stage);
-    });
-}
-
-[[nodiscard]] bool CanAutomaticallyRecover(ProcessSystemState state) noexcept {
-    return state == ProcessSystemState::kError || state == ProcessSystemState::kEmergencyStop;
-}
-
-[[nodiscard]] std::optional<std::string> ProcessCommandRequestId(const mqtt::MqttMessage& message) {
-    if (const auto* control = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
-        return control->request_id;
-    }
-    if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(message)) {
-        return destination->request_id;
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::uint64_t> ProcessMessageSequence(std::string_view message_id) noexcept {
-    constexpr std::string_view prefix = "PROCESS-";
-    if (!message_id.starts_with(prefix)) {
-        return std::nullopt;
-    }
-    std::uint64_t sequence{};
-    const auto sequence_separator = message_id.rfind('-');
-    const auto sequence_offset = sequence_separator == std::string_view::npos ? prefix.size() : sequence_separator + 1;
-    if (sequence_offset >= message_id.size()) {
-        return std::nullopt;
-    }
-    const auto first = message_id.data() + sequence_offset;
-    const auto last = message_id.data() + message_id.size();
-    const auto parsed = std::from_chars(first, last, sequence);
-    return parsed.ec == std::errc{} && parsed.ptr == last ? std::optional{ sequence } : std::nullopt;
-}
-
 }  // namespace
 
 bool ProcessOrchestratorConfig::IsValid() const noexcept {
@@ -143,64 +81,6 @@ bool ProcessOrchestratorConfig::IsValid() const noexcept {
            (!homography.enabled || homography.IsValid());
 }
 
-bool ProcessCommandTracker::Track(const ProcessCommandIntent& intent) {
-    const auto request_id = ProcessCommandRequestId(intent.message);
-    if (!request_id.has_value() || request_id->empty() || pending_.contains(*request_id)) {
-        return false;
-    }
-    pending_.emplace(*request_id, intent);
-    return true;
-}
-
-bool ProcessCommandTracker::Restore(std::vector<ProcessCommandIntent> intents) {
-    std::unordered_map<std::string, ProcessCommandIntent> restored;
-    for (auto& intent : intents) {
-        const auto request_id = ProcessCommandRequestId(intent.message);
-        if (!request_id.has_value() || request_id->empty() ||
-            !restored.emplace(*request_id, std::move(intent)).second) {
-            return false;
-        }
-    }
-    pending_ = std::move(restored);
-    return true;
-}
-
-bool ProcessCommandTracker::Remove(std::string_view request_id) {
-    return pending_.erase(std::string(request_id)) != 0;
-}
-
-bool ProcessCommandTracker::MarkDispatched(std::string_view request_id) {
-    const auto pending = pending_.find(std::string(request_id));
-    if (pending == pending_.end()) {
-        return false;
-    }
-    pending->second.dispatch_confirmed = true;
-    return true;
-}
-
-std::optional<ProcessCommandIntent> ProcessCommandTracker::HandleResponse(const mqtt::MqttMessage& message) {
-    const auto* response = mqtt::GetPayload<mqtt::CommandResponsePayload>(message);
-    if (response == nullptr || !mqtt::IsTerminal(response->result)) {
-        return std::nullopt;
-    }
-    const auto pending = pending_.find(response->request_id);
-    if (pending == pending_.end()) {
-        return std::nullopt;
-    }
-
-    ProcessCommandIntent intent = std::move(pending->second);
-    pending_.erase(pending);
-    return intent;
-}
-
-std::size_t ProcessCommandTracker::PendingCount() const noexcept {
-    return pending_.size();
-}
-
-void ProcessCommandTracker::Clear() noexcept {
-    pending_.clear();
-}
-
 ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config)
     : config_(std::move(config)), homography_(config_.homography) {
     if (!config_.IsValid()) {
@@ -208,49 +88,8 @@ ProcessOrchestrator::ProcessOrchestrator(ProcessOrchestratorConfig config)
     }
 }
 
-void ProcessOrchestrator::SetProcessEpoch(std::string process_epoch) {
-    if (!process_epoch.empty() && !contracts::IsValidUuid(process_epoch)) {
-        throw std::invalid_argument("process epoch must be a valid UUID");
-    }
-    process_epoch_ = std::move(process_epoch);
-}
-
 bool ProcessOrchestrator::Enabled() const noexcept {
     return config_.enabled;
-}
-
-bool ProcessOrchestrator::AcceptsInputWorkCreation() const noexcept {
-    return config_.enabled && state_machine_.AcceptsNewWork();
-}
-
-bool ProcessOrchestrator::AcceptsNewWork() const noexcept {
-    if (!AcceptsInputWorkCreation()) {
-        return false;
-    }
-
-    const std::array process_devices{
-        std::string_view(config_.input_device_id),
-        std::string_view(config_.vision_device_id),
-        std::string_view(config_.gripper_device_id),
-        std::string_view(config_.sorting_device_id),
-    };
-    for (const auto device_id : process_devices) {
-        const auto health = device_health_.find(std::string(device_id));
-        if (health != device_health_.end() && !health->second) {
-            return false;
-        }
-    }
-    if (config_.line_tracer_enabled) {
-        const auto health = device_health_.find(config_.line_tracer_device_id);
-        if (health != device_health_.end() && !health->second) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool ProcessOrchestrator::IsWorkCreationSource(std::string_view device_id) const noexcept {
-    return config_.enabled && device_id == config_.input_device_id;
 }
 
 std::string_view ProcessOrchestrator::VisionDeviceId() const noexcept {
@@ -282,20 +121,14 @@ ProcessOrchestrationResult ProcessOrchestrator::Handle(const mqtt::MqttMessage& 
     return result;
 }
 
-ProcessOrchestrationResult ProcessOrchestrator::BeginWork(std::string_view message_id, std::string_view work_id,
-                                                          std::string_view input_device_id,
-                                                          std::string_view timestamp) {
+ProcessTransition ProcessOrchestrator::BeginWork(std::string_view message_id, std::string_view work_id,
+                                                 std::string_view input_device_id) {
     if (!config_.enabled) {
         return {
-            .handled = false,
-            .transition =
-                {
-                    .disposition = TransitionDisposition::kApplied,
-                    .previous_stage = std::nullopt,
-                    .current_stage = std::nullopt,
-                    .reason = {},
-                },
-            .commands = {},
+            .disposition = TransitionDisposition::kApplied,
+            .previous_stage = std::nullopt,
+            .current_stage = std::nullopt,
+            .reason = {},
         };
     }
     auto transition = state_machine_.Apply({
@@ -309,46 +142,7 @@ ProcessOrchestrationResult ProcessOrchestrator::BeginWork(std::string_view messa
     if (transition.Applied()) {
         ++revision_;
     }
-    ProcessOrchestrationResult result{
-        .handled = true,
-        .transition = std::move(transition),
-        .commands = {},
-    };
-    if (result.transition.Applied()) {
-        result.commands.push_back(MakeInputConveyorCommand(work_id, mqtt::ControlCommand::kStop, timestamp));
-    }
-    return result;
-}
-
-contracts::mqtt::MqttMessage ProcessOrchestrator::MakeInputConveyorSafetyStop(std::string_view trigger_message_id,
-                                                                              std::string_view timestamp) const {
-    const std::string request_id = "INPUT-DETECTION-STOP-" + std::string(trigger_message_id);
-    return {
-        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-        .message_id = request_id,
-        .message_type = mqtt::MessageType::kControlCommand,
-        .source_id = config_.server_id,
-        .timestamp = std::string(timestamp),
-        .data =
-            mqtt::ControlCommandPayload{
-                .request_id = request_id,
-                .command = mqtt::ControlCommand::kStop,
-                .target_device_id = config_.input_device_id,
-                .component_id = "input_conveyor",
-                .params = mqtt::Json{ { "reason", "BOX_DETECTED" } },
-            },
-    };
-}
-
-std::vector<ProcessCommandIntent> ProcessOrchestrator::SortingDetectionCommands(std::string_view work_id,
-                                                                                std::string_view timestamp) {
-    const auto work = state_machine_.FindWork(work_id);
-    if (!config_.enabled || !work.has_value() || work->stage != WorkStage::kSorting) {
-        return {};
-    }
-    std::vector<ProcessCommandIntent> commands;
-    commands.push_back(MakeSortingControlCommand(work_id, mqtt::ControlCommand::kStop, "sorting_conveyor", timestamp));
-    return commands;
+    return transition;
 }
 
 ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view message_id, std::string_view work_id) {
@@ -374,111 +168,9 @@ ProcessTransition ProcessOrchestrator::ConfirmVisionAssignment(std::string_view 
     return transition;
 }
 
-ProcessOrchestrationResult ProcessOrchestrator::HandleCommandCompletion(const ProcessCommandIntent& intent,
-                                                                        const mqtt::MqttMessage& response) {
-    const auto* result = mqtt::GetPayload<mqtt::CommandResponsePayload>(response);
-    if (result == nullptr ||
-        (result->result != mqtt::CommandResult::kSuccess && result->result != mqtt::CommandResult::kDuplicated)) {
-        return NotHandled();
-    }
-
-    ProcessOrchestrationResult completion{
-        .handled = true,
-        .transition =
-            {
-                .disposition = TransitionDisposition::kApplied,
-                .previous_stage = std::nullopt,
-                .current_stage = std::nullopt,
-                .reason = {},
-            },
-        .commands = {},
-    };
-
-    if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(intent.message)) {
-        const auto work = state_machine_.FindWork(intent.work_id);
-        if (destination->target_device_id != config_.sorting_device_id ||
-            response.source_id != config_.sorting_device_id || result->request_id != destination->request_id ||
-            result->command != mqtt::ControlCommand::kDestinationSet || !work.has_value() ||
-            (work->stage != WorkStage::kSortingRequested && work->stage != WorkStage::kSorting)) {
-            return NotHandled();
-        }
-        completion.commands.push_back(MakeSortingControlCommand(intent.work_id, mqtt::ControlCommand::kStart,
-                                                                "sorting_conveyor", response.timestamp));
-        return completion;
-    }
-
-    const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(intent.message);
-    if (command == nullptr || response.source_id != command->target_device_id ||
-        result->request_id != command->request_id || result->command != command->command) {
-        return NotHandled();
-    }
-
-    if (command->target_device_id == config_.gripper_device_id && command->command == mqtt::ControlCommand::kExecute) {
-        completion.transition = state_machine_.Apply({
-            .type = ProcessEventType::kGripperCompleted,
-            .message_id = response.message_id + "-PROCESS-COMPLETED",
-            .work_id = intent.work_id,
-            .source_id = response.source_id,
-            .destination = {},
-            .reason = {},
-        });
-        if (!completion.transition.Applied()) {
-            return completion;
-        }
-        ++revision_;
-        const auto work = state_machine_.FindWork(intent.work_id);
-        if (work.has_value()) {
-            completion.commands.push_back(MakeDestinationCommand(
-                intent.work_id, work->destination, config_.sorting_device_id, std::nullopt, response.timestamp));
-        }
-        return completion;
-    }
-
-    if (command->target_device_id != config_.sorting_device_id) {
-        return NotHandled();
-    }
-    const auto work = state_machine_.FindWork(intent.work_id);
-    if (!work.has_value()) {
-        return NotHandled();
-    }
-    if (command->command == mqtt::ControlCommand::kStart && command->component_id == "sorting_conveyor" &&
-        work->stage == WorkStage::kSortingRequested) {
-        completion.transition = state_machine_.Apply({
-            .type = ProcessEventType::kSortingCommandDispatched,
-            .message_id = response.message_id + "-PROCESS-ACCEPTED",
-            .work_id = intent.work_id,
-            .source_id = config_.server_id,
-            .destination = {},
-            .reason = {},
-        });
-        if (!completion.transition.Applied()) {
-            return completion;
-        }
-        ++revision_;
-        completion.commands.push_back(
-            MakeInputConveyorCommand(intent.work_id, mqtt::ControlCommand::kStart, response.timestamp));
-        return completion;
-    }
-    if (command->command == mqtt::ControlCommand::kStop && command->component_id == "sorting_conveyor" &&
-        work->stage == WorkStage::kSorting) {
-        completion.commands.push_back(
-            MakeSortingControlCommand(intent.work_id, mqtt::ControlCommand::kRecovery, "GATE", response.timestamp));
-        return completion;
-    }
-    return NotHandled();
-}
-
 ProcessTransition ProcessOrchestrator::ConfirmDispatch(const ProcessCommandIntent& intent) {
-    if (!intent.dispatched_event.has_value()) {
-        return {
-            .disposition = TransitionDisposition::kApplied,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = {},
-        };
-    }
     auto transition = state_machine_.Apply({
-        .type = *intent.dispatched_event,
+        .type = intent.dispatched_event,
         .message_id = intent.message.message_id + "-DISPATCHED",
         .work_id = intent.work_id,
         .source_id = config_.server_id,
@@ -492,21 +184,6 @@ ProcessTransition ProcessOrchestrator::ConfirmDispatch(const ProcessCommandInten
 }
 
 ProcessTransition ProcessOrchestrator::FailDispatch(const ProcessCommandIntent& intent, std::string reason) {
-    std::string target_device_id;
-    if (const auto* command = mqtt::GetPayload<mqtt::ControlCommandPayload>(intent.message)) {
-        target_device_id = command->target_device_id;
-    } else if (const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(intent.message)) {
-        target_device_id = destination->target_device_id;
-    }
-    if (!target_device_id.empty() && target_device_id != "SYSTEM") {
-        const std::array process_devices{
-            config_.input_device_id,   config_.vision_device_id,      config_.gripper_device_id,
-            config_.sorting_device_id, config_.line_tracer_device_id,
-        };
-        if (std::ranges::find(process_devices, target_device_id) != process_devices.end()) {
-            device_health_.insert_or_assign(std::move(target_device_id), false);
-        }
-    }
     auto transition = state_machine_.Apply({
         .type = ProcessEventType::kWorkFailed,
         .message_id = intent.message.message_id + "-FAILED",
@@ -542,65 +219,6 @@ ProcessTransition ProcessOrchestrator::ApplySystemCommand(mqtt::ControlCommand c
     return transition;
 }
 
-std::vector<ProcessCommandIntent> ProcessCommandTracker::PendingCommands() const {
-    std::vector<ProcessCommandIntent> commands;
-    commands.reserve(pending_.size());
-    for (const auto& [request_id, intent] : pending_) {
-        static_cast<void>(request_id);
-        commands.push_back(intent);
-    }
-    std::ranges::sort(commands, [](const ProcessCommandIntent& left, const ProcessCommandIntent& right) {
-        const auto left_sequence = ProcessMessageSequence(left.message.message_id);
-        const auto right_sequence = ProcessMessageSequence(right.message.message_id);
-        if (left_sequence.has_value() && right_sequence.has_value() && left_sequence != right_sequence) {
-            return *left_sequence < *right_sequence;
-        }
-        return left.message.message_id < right.message.message_id;
-    });
-    return commands;
-}
-
-ProcessTransition ProcessOrchestrator::FailSystemCommand(mqtt::ControlCommand command, mqtt::CommandResult result,
-                                                         std::string reason) {
-    if (!config_.enabled) {
-        return {
-            .disposition = TransitionDisposition::kApplied,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = {},
-        };
-    }
-    if (command == mqtt::ControlCommand::kEmergencyStop) {
-        auto transition = state_machine_.ApplySystemCommand(command);
-        if (transition.Applied()) {
-            ++revision_;
-        }
-        return transition;
-    }
-    if (result == mqtt::CommandResult::kTimeout || command == mqtt::ControlCommand::kRecovery) {
-        return {
-            .disposition = TransitionDisposition::kDuplicate,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = std::move(reason),
-        };
-    }
-    if (command != mqtt::ControlCommand::kStart && command != mqtt::ControlCommand::kRestart &&
-        command != mqtt::ControlCommand::kStop) {
-        return {
-            .disposition = TransitionDisposition::kDuplicate,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = "command failure does not change the process state",
-        };
-    }
-    auto transition = state_machine_.ApplySystemFailure(std::move(reason));
-    if (transition.Applied()) {
-        ++revision_;
-    }
-    return transition;
-}
-
 ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
     if (!config_.enabled) {
         return {
@@ -612,43 +230,15 @@ ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
     }
     auto transition = state_machine_.CompleteSystemRecovery();
     if (transition.Applied()) {
-        std::erase_if(gripper_targets_,
-                      [this](const auto& entry) { return !state_machine_.FindWork(entry.first).has_value(); });
         ++revision_;
     }
     return transition;
 }
 
-ProcessTransition ProcessOrchestrator::CommitSystemRecovery(
-    const std::function<bool(const std::vector<WorkProcessSnapshot>&)>& persist) {
-    auto preview = state_machine_;
-    auto transition = config_.enabled ? preview.CompleteSystemRecovery()
-                                      : ProcessTransition{
-                                            .disposition = TransitionDisposition::kApplied,
-                                            .previous_stage = std::nullopt,
-                                            .current_stage = std::nullopt,
-                                            .reason = {},
-                                        };
-    if (!transition.Applied()) {
-        return transition;
-    }
-    if (!persist(state_machine_.ActiveWorks())) {
-        return {
-            .disposition = TransitionDisposition::kRejected,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = "recovery completion persistence failed",
-        };
-    }
-    return CompleteSystemRecovery();
-}
-
 ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
     ProcessSystemState stored_state, std::vector<WorkProcessSnapshot> works,
-    std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence,
-    std::vector<std::string> processed_message_ids) {
+    std::unordered_map<std::string, GripperTarget> gripper_targets, std::uint64_t message_sequence) {
     std::vector<InvalidatedRestoredWork> invalidated_works;
-    std::erase_if(works, [](const WorkProcessSnapshot& work) { return work.stage == WorkStage::kFailed; });
     if (!homography_.Enabled()) {
         gripper_targets.clear();
     } else {
@@ -671,7 +261,7 @@ ProcessRestoreResult ProcessOrchestrator::RestoreAfterServerRestart(
             }
         }
     }
-    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works), std::move(processed_message_ids))) {
+    if (!state_machine_.RestoreAfterServerRestart(stored_state, std::move(works))) {
         return {};
     }
     gripper_targets_ = std::move(gripper_targets);
@@ -721,60 +311,13 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         event = Event(succeeded ? ProcessEventType::kProductInfoReady : ProcessEventType::kProductInfoFailed, message,
                       product->work_id, product->message.value_or("product information is incomplete"));
         event.destination = product->destination;
-    } else if (const auto* heartbeat = mqtt::GetPayload<mqtt::HeartbeatPayload>(message)) {
-        const auto role = DeviceRoleForSource(config_, message.source_id);
-        if (!role.has_value()) {
-            return NotHandled();
-        }
-        const auto meaning = contracts::DeviceStateMeaningFor(*role, Uppercase(heartbeat->current_state));
-        RememberDeviceHealth(message.source_id, meaning, heartbeat->status, heartbeat->error_code);
-        if (CanAutomaticallyRecover(machine.SystemState()) && machine.ActiveWorks().empty() &&
-            AllProcessDevicesHealthy()) {
-            return {
-                .handled = true,
-                .transition = machine.ClearSystemFailureIfIdle(),
-                .commands = {},
-            };
-        }
-        return NotHandled();
     } else if (const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(message)) {
         const std::string current_state = Uppercase(status->current_state);
-        const auto role = DeviceRoleForSource(config_, message.source_id);
-        const auto meaning = role.has_value() ? contracts::DeviceStateMeaningFor(*role, current_state)
-                                              : contracts::DeviceStateMeaning::kUnknown;
-        if (role.has_value()) {
-            RememberDeviceHealth(message.source_id, meaning, status->status, status->error_code);
-            if (CanAutomaticallyRecover(machine.SystemState()) && machine.ActiveWorks().empty() &&
-                AllProcessDevicesHealthy()) {
-                return {
-                    .handled = true,
-                    .transition = machine.ClearSystemFailureIfIdle(),
-                    .commands = {},
-                };
-            }
-        }
-        const bool expected_position_reset =
-            machine.SystemState() == ProcessSystemState::kRecovery && role == contracts::DeviceRole::kLineTracer &&
-            current_state == "POSITION_UNKNOWN" && status->status == mqtt::ConnectionState::kOnline &&
-            !status->error_code.has_value() && status->position_reset;
-        if (role.has_value() && status->status == mqtt::ConnectionState::kOffline) {
-            return NotHandled();
-        }
-        const bool connection_failure = mqtt::IsConnectionFailure(status->status);
-        if (role.has_value() && !expected_position_reset && !connection_failure &&
-            meaning == contracts::DeviceStateMeaning::kEmergencyStop) {
+        if (message.source_id == config_.input_device_id &&
+            (IsConnectionFailure(status->status) || IsOneOf(current_state, { "FAULT", "ERROR", "ESTOP" }))) {
             return {
                 .handled = true,
-                .transition = machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop),
-                .commands = {},
-            };
-        }
-        if (role.has_value() && !expected_position_reset &&
-            (connection_failure || meaning == contracts::DeviceStateMeaning::kError)) {
-            return {
-                .handled = true,
-                .transition = machine.ApplySystemFailure(std::string(contracts::ToString(*role)) +
-                                                         " node is unavailable: " + current_state),
+                .transition = machine.ApplySystemFailure("input node is unavailable: " + current_state),
                 .commands = {},
             };
         }
@@ -782,27 +325,16 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             return NotHandled();
         }
         if (message.source_id == config_.gripper_device_id) {
-            if (meaning != contracts::DeviceStateMeaning::kWorking) {
-                return NotHandled();
-            }
-            event = Event(ProcessEventType::kGripperStarted, message, *status->job_id);
+            event =
+                Event(IsOneOf(current_state, { "COMPLETED", "PLACED", "READY" }) ? ProcessEventType::kGripperCompleted
+                                                                                 : ProcessEventType::kGripperStarted,
+                      message, *status->job_id);
         } else if (message.source_id == config_.sorting_device_id) {
-            if (meaning != contracts::DeviceStateMeaning::kWorking &&
-                meaning != contracts::DeviceStateMeaning::kCompleted) {
-                return NotHandled();
-            }
-            event = Event(meaning == contracts::DeviceStateMeaning::kCompleted ? ProcessEventType::kSortingCompleted
-                                                                               : ProcessEventType::kSortingStarted,
+            event = Event(IsOneOf(current_state, { "COMPLETED", "CYCLE_COMPLETE", "HOME" })
+                              ? ProcessEventType::kSortingCompleted
+                              : ProcessEventType::kSortingStarted,
                           message, *status->job_id);
         } else if (message.source_id == config_.line_tracer_device_id) {
-            if (meaning != contracts::DeviceStateMeaning::kWorking) {
-                return NotHandled();
-            }
-            const auto work = machine.FindWork(*status->job_id);
-            if (!work.has_value() ||
-                (work->stage != WorkStage::kTransportRequested && work->stage != WorkStage::kTransporting)) {
-                return NotHandled();
-            }
             event = Event(ProcessEventType::kTransportStarted, message, *status->job_id);
         } else {
             mapped = false;
@@ -817,9 +349,6 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             return NotHandled();
         }
         if (!error->job_id.has_value()) {
-            if (DeviceRoleForSource(config_, message.source_id).has_value()) {
-                device_health_.insert_or_assign(message.source_id, false);
-            }
             return {
                 .handled = true,
                 .transition = machine.ApplySystemFailure(reason),
@@ -843,17 +372,6 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
     if (result.transition.Applied() && position_target.has_value()) {
         gripper_targets_.insert_or_assign(event.work_id, *position_target);
     }
-    if (!config_.line_tracer_enabled && event.type == ProcessEventType::kSortingCompleted &&
-        result.transition.Applied()) {
-        auto completion = event;
-        completion.type = ProcessEventType::kWorkCompleted;
-        completion.message_id += "-WITHOUT-LINETRACER";
-        completion.source_id = config_.server_id;
-        result.transition = machine.Apply(completion);
-        if (result.transition.Applied()) {
-            gripper_targets_.erase(event.work_id);
-        }
-    }
     if (!result.transition.Applied() || !create_commands) {
         return result;
     }
@@ -862,110 +380,24 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
     if (!work.has_value()) {
         return result;
     }
-    if (event.type == ProcessEventType::kProductInfoReady && !DownstreamDevicesBusy(machine, work->work_id)) {
-        AppendDownstreamCommands(result, *work, message.timestamp);
+    if (event.type == ProcessEventType::kProductInfoReady) {
+        const auto target = homography_.Enabled() ? gripper_targets_.find(work->work_id) : gripper_targets_.end();
+        result.commands.push_back(MakeGripperCommand(work->work_id, work->destination,
+                                                     target == gripper_targets_.end() ? nullptr : &target->second,
+                                                     message.timestamp));
+    } else if (event.type == ProcessEventType::kGripperCompleted) {
+        result.commands.push_back(MakeDestinationCommand(work->work_id, work->destination, config_.sorting_device_id,
+                                                         ProcessEventType::kSortingCommandDispatched,
+                                                         message.timestamp));
+    } else if (event.type == ProcessEventType::kSortingCompleted) {
+        result.commands.push_back(
+            MakeDestinationCommand(work->work_id, work->destination, config_.line_tracer_device_id,
+                                   ProcessEventType::kTransportCommandDispatched, message.timestamp));
     }
     if (event.type == ProcessEventType::kWorkCompleted) {
         gripper_targets_.erase(event.work_id);
-        // ponytail: the stopped input conveyor leaves at most one routed work waiting; add a persisted FIFO if
-        // multiple camera buffers are introduced.
-        const auto active_works = machine.ActiveWorks();
-        const auto waiting =
-            std::ranges::find(active_works, WorkStage::kProductIdentified, &WorkProcessSnapshot::stage);
-        if (waiting != active_works.end() && !DownstreamDevicesBusy(machine, waiting->work_id)) {
-            AppendDownstreamCommands(result, *waiting, message.timestamp);
-        }
     }
     return result;
-}
-
-void ProcessOrchestrator::AppendDownstreamCommands(ProcessOrchestrationResult& result, const WorkProcessSnapshot& work,
-                                                   std::string_view timestamp) {
-    const auto target = homography_.Enabled() ? gripper_targets_.find(work.work_id) : gripper_targets_.end();
-    if (config_.line_tracer_enabled) {
-        result.commands.push_back(MakeDestinationCommand(work.work_id, work.destination, config_.line_tracer_device_id,
-                                                         std::nullopt, timestamp));
-    }
-    result.commands.push_back(MakeGripperCommand(
-        work.work_id, work.destination, target == gripper_targets_.end() ? nullptr : &target->second, timestamp));
-}
-
-void ProcessOrchestrator::RememberDeviceHealth(std::string_view device_id, contracts::DeviceStateMeaning meaning,
-                                               mqtt::ConnectionState connection_state,
-                                               const std::optional<std::string>& error_code) {
-    const bool healthy_state =
-        meaning == contracts::DeviceStateMeaning::kIdle || meaning == contracts::DeviceStateMeaning::kWorking ||
-        meaning == contracts::DeviceStateMeaning::kStopped || meaning == contracts::DeviceStateMeaning::kCompleted;
-    device_health_.insert_or_assign(std::string(device_id), connection_state == mqtt::ConnectionState::kOnline &&
-                                                                !error_code.has_value() && healthy_state);
-}
-
-bool ProcessOrchestrator::AllProcessDevicesHealthy() const {
-    const std::array required_devices{
-        std::string_view(config_.input_device_id),
-        std::string_view(config_.vision_device_id),
-        std::string_view(config_.gripper_device_id),
-        std::string_view(config_.sorting_device_id),
-    };
-    const auto healthy = [this](std::string_view device_id) {
-        const auto health = device_health_.find(std::string(device_id));
-        return health != device_health_.end() && health->second;
-    };
-    return std::ranges::all_of(required_devices, healthy) &&
-           (!config_.line_tracer_enabled || healthy(config_.line_tracer_device_id));
-}
-
-ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_view work_id,
-                                                                   mqtt::ControlCommand command,
-                                                                   std::string_view timestamp) {
-    const std::string request_id = NextMessageId();
-    return {
-        .message =
-            {
-                .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-                .message_id = request_id,
-                .message_type = mqtt::MessageType::kControlCommand,
-                .source_id = config_.server_id,
-                .timestamp = std::string(timestamp),
-                .data =
-                    mqtt::ControlCommandPayload{
-                        .request_id = request_id,
-                        .command = command,
-                        .target_device_id = config_.input_device_id,
-                        .component_id = "input_conveyor",
-                        .params = mqtt::Json{ { "workId", work_id } },
-                    },
-            },
-        .dispatched_event = std::nullopt,
-        .work_id = std::string(work_id),
-    };
-}
-
-ProcessCommandIntent ProcessOrchestrator::MakeSortingControlCommand(std::string_view work_id,
-                                                                    mqtt::ControlCommand command,
-                                                                    std::string_view component_id,
-                                                                    std::string_view timestamp) {
-    const std::string request_id = NextMessageId();
-    return {
-        .message =
-            {
-                .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
-                .message_id = request_id,
-                .message_type = mqtt::MessageType::kControlCommand,
-                .source_id = config_.server_id,
-                .timestamp = std::string(timestamp),
-                .data =
-                    mqtt::ControlCommandPayload{
-                        .request_id = request_id,
-                        .command = command,
-                        .target_device_id = config_.sorting_device_id,
-                        .component_id = std::string(component_id),
-                        .params = mqtt::Json{ { "workId", work_id } },
-                    },
-            },
-        .dispatched_event = std::nullopt,
-        .work_id = std::string(work_id),
-    };
 }
 
 ProcessCommandIntent ProcessOrchestrator::MakeGripperCommand(std::string_view work_id, std::string_view destination,
@@ -997,7 +429,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeGripperCommand(std::string_view wo
                 .data =
                     mqtt::ControlCommandPayload{
                         .request_id = request_id,
-                        .command = mqtt::ControlCommand::kExecute,
+                        .command = mqtt::ControlCommand::kStart,
                         .target_device_id = config_.gripper_device_id,
                         .component_id = "gripper",
                         .params = std::move(params),
@@ -1010,7 +442,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeGripperCommand(std::string_view wo
 
 ProcessCommandIntent ProcessOrchestrator::MakeDestinationCommand(std::string_view work_id, std::string_view destination,
                                                                  std::string_view target_device_id,
-                                                                 std::optional<ProcessEventType> dispatched_event,
+                                                                 ProcessEventType dispatched_event,
                                                                  std::string_view timestamp) {
     const std::string request_id = NextMessageId();
     return {
@@ -1036,11 +468,7 @@ ProcessCommandIntent ProcessOrchestrator::MakeDestinationCommand(std::string_vie
 }
 
 std::string ProcessOrchestrator::NextMessageId() {
-    const auto sequence = std::to_string(++message_sequence_);
-    if (process_epoch_.empty()) {
-        return "PROCESS-" + sequence;
-    }
-    return "PROCESS-" + process_epoch_ + "-" + sequence;
+    return "PROCESS-" + std::to_string(++message_sequence_);
 }
 
 }  // namespace logistics::central_server

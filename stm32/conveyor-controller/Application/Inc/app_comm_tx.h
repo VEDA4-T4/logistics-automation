@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "logistics/contracts/uart/conveyor_events.h"
+#include "logistics/contracts/uart_protocol.h"
 #include "stm32f4xx_hal.h"
 
 #ifdef __cplusplus
@@ -52,11 +52,14 @@ typedef struct {
 
 /*
  * ============================================================================
- * 애플리케이션 EVENT 계약
+ * 애플리케이션 EVENT ID
  * ============================================================================
  *
- * ID, payload layout, validator는 Pi와 함께 쓰는 conveyor_events.h에 정의한다.
+ * UART 계약(uart_protocol.h)의 UART_CMD_EVENT payload [0] = event_id.
+ * 계약에는 event_id 값이 예약되어 있지 않으므로 애플리케이션에서 정의한다.
+ * (Raspberry Pi 측과 공유해야 하는 값 - 변경 시 통보)
  */
+#define APP_EVENT_HEARTBEAT 0x01U
 
 /*
  * heartbeat Payload 구조 (UART_CMD_EVENT):
@@ -68,12 +71,15 @@ typedef struct {
  *   [4] uptime
  *   [5] uptime
  *   [6] uptime
- *   [7] 투입 센서 측정 건전성 (uart_sensor_state_t: OK/FAULT)
- *   [8] 분류 센서 측정 건전성 (uart_sensor_state_t: OK/FAULT, 3개 중 최악)
- *
- * 상자 존재 판단은 담기지 않는다 - 중앙 서버가 SENSOR_STATUS의 거리값으로
- * 판정한다.
+ *   [7] 투입 센서 상태  (uart_sensor_state_t)
+ *   [8] 분류 센서 상태  (uart_sensor_state_t)
  */
+#define APP_HEARTBEAT_STATE_INDEX 1U
+#define APP_HEARTBEAT_ERROR_INDEX 2U
+#define APP_HEARTBEAT_UPTIME_INDEX 3U
+#define APP_HEARTBEAT_INPUT_SENSOR_INDEX 7U
+#define APP_HEARTBEAT_SORTING_SENSOR_INDEX 8U
+#define APP_HEARTBEAT_PAYLOAD_SIZE 9U
 
 /* 송신 통계. 디버거 Live Expressions로 관찰한다. */
 typedef struct {
@@ -86,7 +92,7 @@ typedef struct {
     uint32_t dropped_ring_full;            /* best-effort heartbeat 링 포화 드랍 */
     uint32_t ring_full_waits;              /* 수락한 메시지가 링 자리를 기다린 횟수 */
     uint32_t dropped_retry_exhausted;      /* DMA 재시도 소진 후 드랍 */
-    uint32_t init_failures;                /* TX Queue 초기화 실패 */
+    uint32_t init_failures;                /* TX Queue/QueueSet 초기화 실패 */
     uint32_t tx_error[COMM_TX_CH_COUNT];   /* HAL 송신 오류 수 */
     uint32_t tx_timeout[COMM_TX_CH_COUNT]; /* DMA 송신 timeout 수 */
     uint32_t tx_retry[COMM_TX_CH_COUNT];   /* timeout 후 재시도 수 */
@@ -129,9 +135,9 @@ void CommTx_SetDeviceStatus(uint8_t device_state, uint8_t error_code);
 void CommTx_SetChannelDeviceStatus(comm_tx_channel_t channel, uint8_t device_state, uint8_t error_code);
 
 /*
- * Updates the per-process sensor measurement health (UART_SENSOR_OK or
- * UART_SENSOR_FAULT) included in heartbeat frames. The process must be
- * COMM_TX_CH_INPUT or COMM_TX_CH_SORTING.
+ * Updates the per-process sensor state included in heartbeat frames. The
+ * process must be COMM_TX_CH_INPUT or
+ * COMM_TX_CH_SORTING.
  */
 void CommTx_SetSensorState(comm_tx_channel_t process, uint8_t sensor_state);
 

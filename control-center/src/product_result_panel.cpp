@@ -1,7 +1,6 @@
 #include "logistics/control_center/product_result_panel.hpp"
 
 #include <QDebug>
-#include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -13,11 +12,8 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QResizeEvent>
-#include <QScrollArea>
-#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSizePolicy>
-#include <QStackedLayout>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -27,9 +23,6 @@ namespace logistics::control_center {
 namespace {
 
 constexpr qint64 kMaximumProductImageBytes = 10 * 1024 * 1024;
-constexpr int kMetadataRowHeight = 18;
-constexpr int kMetadataRowSpacing = 2;
-constexpr int kMetadataRowExtent = kMetadataRowHeight + kMetadataRowSpacing;
 constexpr auto kSurfaceColor = "#141d26";
 constexpr auto kBorderColor = "#24313d";
 constexpr auto kPrimaryTextColor = "#e7eef3";
@@ -41,45 +34,15 @@ QString StatusPillStyle(const char* background, const char* foreground, const ch
         .arg(QString::fromLatin1(background), QString::fromLatin1(foreground), QString::fromLatin1(border));
 }
 
-QString EmptyStateStyle() {
-    return QStringLiteral(
-        "background:#141d26;color:#91a3b0;border:1px solid #24313d;border-radius:6px;"
-        "font-size:11px;font-weight:600;");
-}
-
-class WholeRowScrollArea final : public QScrollArea {
-public:
-    explicit WholeRowScrollArea(QWidget* parent = nullptr) : QScrollArea(parent) {
-        setMinimumHeight(kMetadataRowExtent);
-    }
-
-protected:
-    void resizeEvent(QResizeEvent* event) override {
-        QScrollArea::resizeEvent(event);
-        const int available_height = viewport()->height() + bottom_margin_;
-        const int next_margin = available_height >= kMetadataRowExtent ? available_height % kMetadataRowExtent : 0;
-        if (next_margin == bottom_margin_) {
-            return;
-        }
-        bottom_margin_ = next_margin;
-        setViewportMargins(0, 0, 0, bottom_margin_);
-    }
-
-private:
-    int bottom_margin_{ 0 };
-};
-
 QLabel* AddValueRow(QGridLayout* layout, int row, int column, const QString& title, QWidget* parent,
                     int value_column_span = 1) {
     auto* title_label = new QLabel(title, parent);
     title_label->setMinimumWidth(36);
-    title_label->setFixedHeight(kMetadataRowHeight);
     title_label->setStyleSheet("color:#91a3b0;font-size:10px;font-weight:600;");
-    auto* value_label = new QLabel(QStringLiteral("—"), parent);
-    value_label->setStyleSheet("color:#6e6e6e;font-size:10px;font-weight:600;");
+    auto* value_label = new QLabel(QStringLiteral("데이터 없음"), parent);
+    value_label->setStyleSheet("color:#cca700;font-size:10px;font-weight:700;");
     value_label->setWordWrap(false);
     value_label->setMinimumWidth(0);
-    value_label->setFixedHeight(kMetadataRowHeight);
     value_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     layout->addWidget(title_label, row, column);
     layout->addWidget(value_label, row, column + 1, 1, value_column_span);
@@ -174,12 +137,11 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     eyebrow->setStyleSheet("color:#4daafc;font-size:9px;font-weight:700;letter-spacing:1px;");
     auto* title = new QLabel(QStringLiteral("현재 상품"), this);
     title->setStyleSheet("color:#e7eef3;font-size:17px;font-weight:700;");
-    tracking_status_ = new QLabel(QStringLiteral("활성 작업 없음"), this);
+    tracking_status_ = new QLabel(QStringLiteral("위치 · 확인 중  |  경로 · 확인 중"), this);
     tracking_status_->setObjectName(QStringLiteral("workTrackingStatus"));
     tracking_status_->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:600;");
-    tracking_status_->setWordWrap(true);
     tracking_status_->setMinimumWidth(0);
-    tracking_status_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    tracking_status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     header_text_layout->addWidget(eyebrow);
     header_text_layout->addWidget(title);
     header_text_layout->addWidget(tracking_status_);
@@ -209,76 +171,54 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     image_label_ = new QLabel(this);
     image_label_->setObjectName(QStringLiteral("productImage"));
     image_label_->setMinimumSize(0, 0);
-    image_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    image_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     image_label_->setAlignment(Qt::AlignCenter);
-    image_label_->setWordWrap(false);
-    image_label_->installEventFilter(this);
-    setImagePlaceholder(QStringLiteral("상품 데이터 수신 대기 중"));
+    setImagePlaceholder(QStringLiteral("상품 이미지 대기 중"));
 
     auto* info_card = new QFrame(this);
     info_card->setObjectName(QStringLiteral("productInfoCard"));
-    info_card->setMinimumHeight(0);
-    info_card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     auto* info_layout = new QVBoxLayout(info_card);
-    info_layout->setContentsMargins(8, 6, 8, 6);
-    info_layout->setSpacing(0);
-    auto* metadata = new QWidget(info_card);
-    metadata->setObjectName(QStringLiteral("productMetadataContent"));
-    metadata->setStyleSheet("#productMetadataContent{background-color:#141d26;}");
-    metadata->setMinimumHeight(140);
-    metadata->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    auto* metadata_layout = new QVBoxLayout(metadata);
-    metadata_layout->setContentsMargins(0, 0, 0, 0);
+    info_layout->setContentsMargins(9, 7, 9, 7);
+    info_layout->setSpacing(5);
+    auto* info_title = new QLabel(QStringLiteral("상품 정보"), info_card);
+    info_title->setStyleSheet("color:#e7eef3;font-size:10px;font-weight:700;");
     auto* fields = new QGridLayout();
     fields->setHorizontalSpacing(6);
-    fields->setVerticalSpacing(kMetadataRowSpacing);
+    fields->setVerticalSpacing(3);
     fields->setColumnStretch(1, 1);
-    work_id_value_ = AddValueRow(fields, 0, 0, QStringLiteral("작업"), metadata);
-    barcode_value_ = AddValueRow(fields, 1, 0, QStringLiteral("바코드"), metadata);
-    product_id_value_ = AddValueRow(fields, 2, 0, QStringLiteral("상품 ID"), metadata);
-    product_name_value_ = AddValueRow(fields, 3, 0, QStringLiteral("상품명"), metadata);
-    destination_value_ = AddValueRow(fields, 4, 0, QStringLiteral("목적지"), metadata);
-    confidence_value_ = AddValueRow(fields, 5, 0, QStringLiteral("신뢰도"), metadata);
-    updated_at_value_ = AddValueRow(fields, 6, 0, QStringLiteral("갱신"), metadata);
-    metadata_layout->addLayout(fields);
-    metadata_layout->addStretch(1);
-
-    auto* metadata_scroll = new WholeRowScrollArea(info_card);
-    metadata_scroll->setObjectName(QStringLiteral("productMetadata"));
-    metadata_scroll->setFrameShape(QFrame::NoFrame);
-    metadata_scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
-    metadata_scroll->setWidgetResizable(true);
-    metadata_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    metadata_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    metadata_scroll->setStyleSheet(
-        "QScrollArea{background-color:#141d26;border:0;}"
-        "QScrollBar:vertical{width:7px;background:#1f1f1f;margin:0;}"
-        "QScrollBar::handle:vertical{background:#4a4a4a;border-radius:3px;min-height:8px;}"
-        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;background:transparent;}"
-        "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:#1f1f1f;}");
-    metadata_scroll->viewport()->setStyleSheet("background-color:#141d26;");
-    metadata_scroll->setWidget(metadata);
-    metadata_scroll->verticalScrollBar()->setSingleStep(kMetadataRowExtent);
-    info_layout->addWidget(metadata_scroll);
+    fields->setColumnStretch(3, 1);
+    work_id_value_ = AddValueRow(fields, 0, 0, QStringLiteral("작업"), info_card, 3);
+    barcode_value_ = AddValueRow(fields, 1, 0, QStringLiteral("바코드"), info_card);
+    product_id_value_ = AddValueRow(fields, 1, 2, QStringLiteral("상품 ID"), info_card);
+    product_name_value_ = AddValueRow(fields, 2, 0, QStringLiteral("상품명"), info_card);
+    destination_value_ = AddValueRow(fields, 2, 2, QStringLiteral("목적지"), info_card);
+    confidence_value_ = AddValueRow(fields, 3, 0, QStringLiteral("신뢰도"), info_card);
+    updated_at_value_ = AddValueRow(fields, 3, 2, QStringLiteral("갱신"), info_card);
+    info_layout->addWidget(info_title);
+    info_layout->addLayout(fields);
 
     auto* detail_card = new QFrame(this);
     detail_card->setObjectName(QStringLiteral("productDetailCard"));
-    detail_card->setFixedHeight(46);
     auto* detail_layout = new QVBoxLayout(detail_card);
     detail_layout->setContentsMargins(9, 6, 9, 6);
     detail_layout->setSpacing(2);
     auto* detail_title = new QLabel(QStringLiteral("처리 메시지"), detail_card);
     detail_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
-    detail_value_ = new QLabel(QStringLiteral("상품 데이터 수신 대기 중"), detail_card);
-    detail_value_->setObjectName(QStringLiteral("productDetailValue"));
-    detail_value_->setWordWrap(false);
-    detail_value_->setMinimumWidth(0);
-    detail_value_->setFixedHeight(18);
-    detail_value_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    detail_value_->setStyleSheet("color:#e7eef3;font-size:9px;");
+    detail_value_ = new QLabel(QStringLiteral("MQTT 상품 메시지를 기다리고 있습니다."), detail_card);
+    detail_value_->setWordWrap(true);
+    detail_value_->setMaximumHeight(30);
+    detail_value_->setStyleSheet("color:#e7eef3;font-size:10px;");
     detail_layout->addWidget(detail_title);
     detail_layout->addWidget(detail_value_);
 
+    auto* metadata = new QWidget(this);
+    metadata->setObjectName(QStringLiteral("productMetadata"));
+    metadata->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+    auto* metadata_layout = new QVBoxLayout(metadata);
+    metadata_layout->setContentsMargins(0, 0, 0, 0);
+    metadata_layout->setSpacing(6);
+    metadata_layout->addWidget(info_card, 1);
+    metadata_layout->addWidget(detail_card);
     auto* content_layout = new QHBoxLayout();
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(8);
@@ -287,73 +227,22 @@ ProductResultPanel::ProductResultPanel(QUrl image_base_url, QWidget* parent)
     work_list_layout->setContentsMargins(0, 0, 0, 0);
     work_list_layout->setSpacing(4);
     auto* work_list_title = new QLabel(QStringLiteral("작업 중"), work_list_panel);
-    work_list_title->setObjectName(QStringLiteral("activeWorkListTitle"));
     work_list_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
-    auto* work_list_content = new QWidget(work_list_panel);
-    work_list_content->setMinimumWidth(110);
-    work_list_content->setMaximumWidth(170);
-    active_work_stack_ = new QStackedLayout(work_list_content);
-    active_work_stack_->setObjectName(QStringLiteral("activeWorkStack"));
-    active_work_stack_->setContentsMargins(0, 0, 0, 0);
-    active_work_stack_->setStackingMode(QStackedLayout::StackAll);
-    active_work_list_ = new QListWidget(work_list_content);
+    active_work_list_ = new QListWidget(work_list_panel);
     active_work_list_->setObjectName(QStringLiteral("activeWorkList"));
+    active_work_list_->setMinimumWidth(110);
+    active_work_list_->setMaximumWidth(170);
     active_work_list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     active_work_list_->setToolTip(QStringLiteral("현재 작업 중인 항목"));
     active_work_list_->setStyleSheet(
         "QListWidget{background:#141d26;color:#e7eef3;border:1px solid #24313d;border-radius:6px;outline:0;}"
         "QListWidget::item{padding:7px 6px;border-bottom:1px solid #24313d;}"
         "QListWidget::item:selected{background:#264f78;color:#ffffff;}");
-    active_work_empty_state_ = new QLabel(QStringLiteral("진행 중인 작업 없음"), work_list_content);
-    active_work_empty_state_->setObjectName(QStringLiteral("activeWorkListEmptyState"));
-    active_work_empty_state_->setAlignment(Qt::AlignCenter);
-    active_work_empty_state_->setStyleSheet(EmptyStateStyle());
-    active_work_stack_->addWidget(active_work_list_);
-    active_work_stack_->addWidget(active_work_empty_state_);
-    active_work_stack_->setCurrentWidget(active_work_empty_state_);
     work_list_layout->addWidget(work_list_title);
-    work_list_layout->addWidget(work_list_content, 1);
-
-    auto* image_panel = new QWidget(this);
-    image_panel->setObjectName(QStringLiteral("productImageColumn"));
-    image_panel->setMinimumWidth(0);
-    auto* image_layout = new QVBoxLayout(image_panel);
-    image_layout->setContentsMargins(0, 0, 0, 0);
-    image_layout->setSpacing(4);
-    auto* image_title = new QLabel(QStringLiteral("바코드 인식 이미지"), image_panel);
-    image_title->setObjectName(QStringLiteral("productImageTitle"));
-    image_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
-    image_title->ensurePolished();
-    image_title->setMinimumWidth(image_title->fontMetrics().horizontalAdvance(image_title->text()) + 2);
-    image_title->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
-    image_label_->ensurePolished();
-    image_panel->setMinimumWidth(std::max(image_title->minimumWidth(),
-                                          image_label_->fontMetrics().horizontalAdvance(image_label_->text()) + 12));
-    image_layout->addWidget(image_title);
-    image_layout->addWidget(image_label_, 1);
-
-    auto* metadata_panel = new QWidget(this);
-    metadata_panel->setObjectName(QStringLiteral("productMetadataColumn"));
-    metadata_panel->setMinimumWidth(0);
-    auto* metadata_column_layout = new QVBoxLayout(metadata_panel);
-    metadata_column_layout->setContentsMargins(0, 0, 0, 0);
-    metadata_column_layout->setSpacing(4);
-    auto* metadata_title = new QLabel(QStringLiteral("상품 정보"), metadata_panel);
-    metadata_title->setObjectName(QStringLiteral("productMetadataTitle"));
-    metadata_title->setStyleSheet("color:#91a3b0;font-size:9px;font-weight:700;");
-    metadata_title->ensurePolished();
-    work_id_value_->ensurePolished();
-    const int metadata_row_minimum_width =
-        36 + 6 + work_id_value_->fontMetrics().horizontalAdvance(QStringLiteral("미수신")) + 16;
-    metadata_panel->setMinimumWidth(std::max(
-        metadata_title->fontMetrics().horizontalAdvance(metadata_title->text()) + 2, metadata_row_minimum_width));
-    metadata_column_layout->addWidget(metadata_title);
-    metadata_column_layout->addWidget(info_card, 1);
-    metadata_column_layout->addWidget(detail_card);
-
+    work_list_layout->addWidget(active_work_list_, 1);
     content_layout->addWidget(work_list_panel);
-    content_layout->addWidget(image_panel, 3);
-    content_layout->addWidget(metadata_panel, 2);
+    content_layout->addWidget(image_label_, 3);
+    content_layout->addWidget(metadata, 2);
 
     layout->addLayout(header_layout);
     layout->addLayout(content_layout, 1);
@@ -369,9 +258,6 @@ void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
     active_products_.clear();
     processes_ = processes;
     for (const auto& product : products) {
-        if (product.barcode.isEmpty()) {
-            continue;
-        }
         const bool active = std::any_of(processes.cbegin(), processes.cend(), [&product](const auto& process) {
             return process.work_id == product.work_id && !process.work_completed;
         });
@@ -379,6 +265,18 @@ void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
                        product.processing_result != ProductProcessingResult::Failed)) {
             active_products_.append(product);
         }
+    }
+    for (const auto& process : processes) {
+        if (process.work_id.isEmpty() || process.work_completed ||
+            std::any_of(active_products_.cbegin(), active_products_.cend(),
+                        [&process](const auto& product) { return product.work_id == process.work_id; })) {
+            continue;
+        }
+        CurrentProduct product;
+        product.work_id = process.work_id;
+        product.destination = process.destination;
+        product.processing_result = ProductProcessingResult::Processing;
+        active_products_.append(product);
     }
     const QSignalBlocker blocker(active_work_list_);
     active_work_list_->clear();
@@ -398,16 +296,13 @@ void ProductResultPanel::setActiveWorks(const QList<CurrentProduct>& products,
         selected_index = active_work_list_->count() - 1;
     }
     active_work_list_->setCurrentRow(selected_index);
-    active_work_stack_->setCurrentWidget(active_work_list_->count() > 0 ? static_cast<QWidget*>(active_work_list_)
-                                                                        : active_work_empty_state_);
     showSelectedWork();
 }
 
 void ProductResultPanel::showSelectedWork() {
     const auto index = active_work_list_->currentRow();
     if (index < 0 || index >= active_products_.size()) {
-        tracking_status_->setText(QStringLiteral("활성 작업 없음"));
-        tracking_status_->setToolTip(QStringLiteral("진행 중인 상품 작업이 없습니다."));
+        tracking_status_->setText(QStringLiteral("위치 · 확인 중  |  경로 · 확인 중"));
         setCurrentProduct({});
         return;
     }
@@ -418,7 +313,6 @@ void ProductResultPanel::showSelectedWork() {
 }
 
 void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
-    const bool awaiting_product = product.work_id.isEmpty();
     const bool work_changed = current_work_id_ != product.work_id;
     const bool image_changed = current_image_path_ != product.image_path;
     if (work_changed) {
@@ -428,8 +322,7 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
         current_image_path_ = product.image_path;
         if (active_image_reply_ != nullptr)
             active_image_reply_->abort();
-        setImagePlaceholder(awaiting_product ? QStringLiteral("상품 데이터 수신 대기 중")
-                                             : QStringLiteral("상품 이미지 대기 중"));
+        setImagePlaceholder(QStringLiteral("상품 이미지 대기 중"));
     }
 
     switch (product.recognition_state) {
@@ -470,21 +363,17 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
             processing_status_->setStyleSheet(StatusPillStyle("#3b1f22", "#f14c4c", "#6e2b2f"));
             break;
     }
-    setValue(work_id_value_, product.work_id, awaiting_product);
-    setValue(barcode_value_, product.barcode, awaiting_product);
-    setValue(product_id_value_, product.product_id, awaiting_product);
-    setValue(product_name_value_, product.product_name, awaiting_product);
-    setValue(destination_value_, product.destination, awaiting_product);
+    setValue(work_id_value_, product.work_id);
+    setValue(barcode_value_, product.barcode);
+    setValue(product_id_value_, product.product_id);
+    setValue(product_name_value_, product.product_name);
+    setValue(destination_value_, product.destination);
     setValue(confidence_value_,
-             product.confidence >= 0.0 ? QStringLiteral("%1%").arg(product.confidence * 100.0, 0, 'f', 1) : QString{},
-             awaiting_product);
-    setValue(updated_at_value_,
-             product.updated_at.isValid() ? product.updated_at.toLocalTime().toString(QStringLiteral("MM-dd HH:mm:ss"))
-                                          : QString{},
-             awaiting_product);
-    detail_value_->setText(awaiting_product           ? QStringLiteral("상품 데이터 수신 대기 중")
-                           : product.detail.isEmpty() ? QStringLiteral("추가 처리 정보가 없습니다.")
-                                                      : product.detail);
+             product.confidence >= 0.0 ? QStringLiteral("%1%").arg(product.confidence * 100.0, 0, 'f', 1) : QString{});
+    setValue(updated_at_value_, product.updated_at.isValid()
+                                    ? product.updated_at.toLocalTime().toString(QStringLiteral("MM-dd HH:mm:ss"))
+                                    : QString{});
+    detail_value_->setText(product.detail.isEmpty() ? QStringLiteral("추가 처리 정보가 없습니다.") : product.detail);
     detail_value_->setToolTip(QStringLiteral("messageId: %1\nimageId: %2\nchecksum: %3")
                                   .arg(product.message_id, product.image_id, product.image_checksum));
 
@@ -493,26 +382,21 @@ void ProductResultPanel::setCurrentProduct(const CurrentProduct& product) {
     }
 }
 
-void ProductResultPanel::setValue(QLabel* label, const QString& value, bool awaiting_product) {
-    const bool missing = value.isEmpty();
-    label->setText(missing ? (awaiting_product ? QStringLiteral("—") : QStringLiteral("미수신")) : value);
-    label->setToolTip(missing ? (awaiting_product ? QStringLiteral("상품 데이터 수신 대기")
-                                                  : QStringLiteral("해당 값이 수신되지 않았습니다."))
-                              : value);
-    label->setStyleSheet(!missing           ? "color:#e7eef3;font-size:10px;font-weight:600;"
-                         : awaiting_product ? "color:#6e6e6e;font-size:10px;font-weight:600;"
-                                            : "color:#cca700;font-size:10px;font-weight:700;");
+void ProductResultPanel::setValue(QLabel* label, const QString& value) {
+    label->setText(value.isEmpty() ? QStringLiteral("데이터 없음") : value);
+    label->setToolTip(value);
+    label->setStyleSheet(value.isEmpty() ? "color:#cca700;font-size:10px;font-weight:700;"
+                                         : "color:#e7eef3;font-size:10px;font-weight:600;");
 }
 
 void ProductResultPanel::setImagePlaceholder(const QString& text, bool is_error) {
     source_image_ = {};
     image_label_->clear();
     image_label_->setText(text);
-    image_label_->setWordWrap(is_error);
     image_label_->setToolTip({});
-    image_label_->setStyleSheet(
-        is_error ? QStringLiteral("background:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;")
-                 : EmptyStateStyle());
+    image_label_->setStyleSheet(is_error
+                                    ? "background:#3b1f22;color:#f14c4c;border:1px solid #6e2b2f;border-radius:4px;"
+                                    : "background:#141d26;color:#91a3b0;border:1px solid #24313d;border-radius:6px;");
 }
 
 void ProductResultPanel::loadImage(const CurrentProduct& product) {
@@ -581,13 +465,6 @@ void ProductResultPanel::loadImage(const CurrentProduct& product) {
         updateImagePixmap();
         image_label_->setToolTip({});
     });
-}
-
-bool ProductResultPanel::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == image_label_ && event->type() == QEvent::Resize) {
-        updateImagePixmap();
-    }
-    return QWidget::eventFilter(watched, event);
 }
 
 void ProductResultPanel::resizeEvent(QResizeEvent* event) {

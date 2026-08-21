@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cctype>
-#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,36 +41,6 @@ struct DeviceControlRequestView final {
 [[nodiscard]] inline bool IsControlTargetForDevice(std::string_view target_device_id,
                                                    std::string_view device_id) noexcept {
     return target_device_id == device_id || target_device_id == "ALL" || target_device_id == "SYSTEM";
-}
-
-[[nodiscard]] inline std::optional<std::uint8_t> ReadControlSpeed(const contracts::mqtt::Json& params,
-                                                                  std::uint8_t maximum, bool& invalid) {
-    invalid = false;
-    const auto speed = params.find("speed");
-    if (speed == params.end()) {
-        return std::nullopt;
-    }
-    if (!speed->is_number_integer() && !speed->is_number_unsigned()) {
-        invalid = true;
-        return std::nullopt;
-    }
-
-    std::uint64_t value = 0U;
-    if (speed->is_number_unsigned()) {
-        value = speed->get<std::uint64_t>();
-    } else {
-        const auto signed_value = speed->get<std::int64_t>();
-        if (signed_value <= 0) {
-            invalid = true;
-            return std::nullopt;
-        }
-        value = static_cast<std::uint64_t>(signed_value);
-    }
-    if (value == 0U || value > maximum) {
-        invalid = true;
-        return std::nullopt;
-    }
-    return static_cast<std::uint8_t>(value);
 }
 
 [[nodiscard]] inline DeviceControlAction ResolveDeviceControlAction(const contracts::mqtt::ControlCommand command,

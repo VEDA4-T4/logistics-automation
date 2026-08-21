@@ -449,62 +449,32 @@ void TestInitializeMapsToResetAndClearsActiveJob() {
     assert(status->position_reset);
 }
 
-void TestEmergencyStopRecoveryClearsActiveJobAndRestoresInitialPosition() {
+void TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob() {
     Fixture fixture;
     AssignAndAcknowledge(fixture);
 
-    assert(fixture.node->HandleMqttCommand(MakeEmergencyStop()).Succeeded());
-    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_EMERGENCY_STOP);
-    fixture.reports.clear();
+    const std::string active_work_id{ fixture.node->ActiveWorkId() };
+    const std::uint16_t active_uart_job_id = fixture.node->ActiveUartJobId();
+    const std::uint8_t active_route_id = fixture.node->ActiveRouteId();
+    const std::uint8_t current_position = fixture.node->CurrentPosition();
 
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        const auto result = fixture.node->HandleMqttCommand(
-            MakeControl(mqtt::ControlCommand::kRecovery, "PI-LT-01", { { "currentPosition", "A" } }));
-        assert(result.Succeeded());
-        assert(fixture.LastFrame().command == UART_CMD_RESET_DEVICE);
-
-        fixture.AcknowledgeLastFrame(true);
-        assert(fixture.LastFrame().command == UART_CMD_LINETRACER_SET_CURRENT_POSITION);
-        assert(!fixture.node->HasActiveJob());
-        fixture.AcknowledgeLastFrame();
-
-        assert(!fixture.node->HasActiveJob());
-        assert(fixture.node->ActiveWorkId().empty());
-        assert(fixture.node->ActiveUartJobId() == UART_LINETRACER_JOB_ID_NONE);
-        assert(fixture.node->ActiveRouteId() == UART_LINETRACER_ROUTE_NONE);
-        assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_A);
-        const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
-        assert(status != nullptr && status->current_state == "IDLE" && !status->job_id.has_value());
-    }
-}
-
-void TestFaultRecoveryClearsJobAndRestoresInitialPosition() {
-    Fixture fixture;
-    AssignAndAcknowledge(fixture);
-    fixture.PushEvent(UART_LINETRACER_EVENT_FAULT, UART_ERROR_SENSOR);
-    fixture.reports.clear();
-
-    const auto result = fixture.node->HandleMqttCommand(
-        MakeControl(mqtt::ControlCommand::kRecovery, "PI-LT-01", { { "currentPosition", "A" } }));
+    const auto result = fixture.node->HandleMqttCommand(MakeControl(mqtt::ControlCommand::kRecovery));
+    const uart_frame_t frame = fixture.LastFrame();
 
     assert(result.Succeeded());
-    assert(fixture.LastFrame().command == UART_CMD_RESET_DEVICE);
+    assert(frame.command == UART_CMD_RESET_DEVICE);
+    assert(frame.length == 0U);
     assert(fixture.node->HasActiveJob());
-
-    fixture.AcknowledgeLastFrame(true);
-    assert(fixture.LastFrame().command == UART_CMD_LINETRACER_SET_CURRENT_POSITION);
-    assert(!fixture.node->HasActiveJob());
-
     fixture.AcknowledgeLastFrame();
-    assert(!fixture.node->HasActiveJob());
-    assert(fixture.node->ActiveWorkId().empty());
-    assert(fixture.node->CurrentPosition() == UART_LINETRACER_POSITION_DEST_A);
-    assert(!fixture.reports.empty());
-    const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&fixture.reports.back().data);
-    assert(status != nullptr);
-    assert(status->current_state == "IDLE");
-    assert(!status->job_id.has_value());
-    assert(!status->position_reset);
+    assert(fixture.node->HasActiveJob());
+    assert(fixture.node->ActiveWorkId() == active_work_id);
+    assert(fixture.node->ActiveUartJobId() == active_uart_job_id);
+    assert(fixture.node->ActiveRouteId() == active_route_id);
+    assert(fixture.node->CurrentPosition() == current_position);
+    assert(std::none_of(fixture.reports.begin(), fixture.reports.end(), [](const LineTracerReport& report) {
+        const auto* status = std::get_if<mqtt::DeviceStatusPayload>(&report.data);
+        return status != nullptr && status->current_state == "POSITION_UNKNOWN";
+    }));
 }
 
 void TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault() {
@@ -772,47 +742,21 @@ void TestFaultReportsMappedError() {
 void TestObstacleTransitionsPublishSensorStatusOnlyWhenReceived() {
     Fixture fixture;
 
-    // 4cm and 8cm straddle a typical obstacle threshold, but the node reports
-    // both the same way: the reading is valid, and whether that counts as an
-    // obstacle is the central server's call.
-    fixture.PushSensorStatus(1U, UART_SENSOR_OK, 4U);
+    fixture.PushSensorStatus(1U, UART_SENSOR_DETECTED, 4U);
     assert(fixture.reports.size() == 1U);
     assert(fixture.reports.front().channel == LineTracerReportChannel::kEvent);
     assert(fixture.reports.front().message_type == mqtt::MessageType::kSensorStatus);
-    const auto& near_reading = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.front());
-    assert(near_reading.sensor_id == 1);
-    assert(near_reading.measurement_status == "OK");
-    assert(near_reading.distance_cm == 4);
-    assert(!near_reading.detection_status.has_value());
+    const auto& detected = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.front());
+    assert(detected.sensor_id == 1);
+    assert(detected.measurement_status == "DETECTED");
+    assert(detected.distance_cm == 4);
 
-    fixture.PushSensorStatus(1U, UART_SENSOR_OK, 8U);
+    fixture.PushSensorStatus(1U, UART_SENSOR_CLEAR, 8U);
     assert(fixture.reports.size() == 2U);
-    const auto& far_reading = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.back());
-    assert(far_reading.sensor_id == 1);
-    assert(far_reading.measurement_status == "OK");
-    assert(far_reading.distance_cm == 8);
-
-    fixture.PushSensorStatus(1U, UART_SENSOR_FAULT, 0xFFFFU);
-    assert(fixture.reports.size() == 3U);
-    const auto& faulted = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.back());
-    assert(faulted.measurement_status == "FAULT");
-
-    // 0x01 is the retired DETECTED encoding and must now be dropped outright.
-    fixture.PushSensorStatus(1U, 0x01U, 4U);
-    assert(fixture.reports.size() == 3U);
-}
-
-void TestRemovedRearSensorStatusIsIgnored() {
-    Fixture fixture;
-
-    fixture.PushSensorStatus(UART_LINETRACER_RETIRED_REAR_SENSOR_ID, UART_SENSOR_OK, 18U);
-    assert(fixture.reports.empty());
-
-    fixture.PushSensorStatus(UART_LINETRACER_SENSOR_LEFT, UART_SENSOR_OK, 27U);
-    fixture.PushSensorStatus(UART_LINETRACER_SENSOR_RIGHT, UART_SENSOR_OK, 31U);
-    assert(fixture.reports.size() == 2U);
-    assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[0]).sensor_id == UART_LINETRACER_SENSOR_LEFT);
-    assert(ReportPayload<mqtt::SensorStatusPayload>(fixture.reports[1]).sensor_id == UART_LINETRACER_SENSOR_RIGHT);
+    const auto& cleared = ReportPayload<mqtt::SensorStatusPayload>(fixture.reports.back());
+    assert(cleared.sensor_id == 1);
+    assert(cleared.measurement_status == "CLEAR");
+    assert(cleared.distance_cm == 8);
 }
 
 void TestStaleJobEventIsIgnored() {
@@ -940,8 +884,7 @@ int main() {
     TestStartAndRestartWithoutActiveJobCompleteLocally();
     TestRestartMapsToResume();
     TestInitializeMapsToResetAndClearsActiveJob();
-    TestEmergencyStopRecoveryClearsActiveJobAndRestoresInitialPosition();
-    TestFaultRecoveryClearsJobAndRestoresInitialPosition();
+    TestRecoveryUsesCommonDeviceResetAndPreservesActiveJob();
     TestEmergencyStopPreemptsPendingAndCompletesFromSafetyFault();
     TestPendingSafetyCommandCannotBeOverwritten();
     TestEmergencyStopConfirmationTimesOut();
@@ -958,7 +901,6 @@ int main() {
     TestUnloadCompleteReportsCompletionAndClearsMapping();
     TestFaultReportsMappedError();
     TestObstacleTransitionsPublishSensorStatusOnlyWhenReceived();
-    TestRemovedRearSensorStatusIsIgnored();
     TestStaleJobEventIsIgnored();
     TestKeepaliveRunsWithoutActiveJob();
     TestKeepaliveWaitsForOneSecondAndSendsStatusRequest();

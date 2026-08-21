@@ -174,7 +174,7 @@ qint32 MqttClient::publishCommand(mqtt::ControlCommand command, const QString& t
     }
 
     if (track_response) {
-        emit commandPublished(message_id, request_id, command, target_device_id, component_id);
+        emit commandPublished(message_id, request_id, command);
     }
     return message_id;
 }

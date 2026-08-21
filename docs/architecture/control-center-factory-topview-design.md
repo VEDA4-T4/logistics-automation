@@ -66,8 +66,8 @@ The approved schematic is a simple dark top-view based on the supplied reference
 - the input conveyor runs horizontally across the top;
 - the sorting conveyor runs vertically on the right and is the same represented length;
 - the vision camera and input ultrasonic sensor share the recognition position;
-- the gripper pivot sits at the virtual intersection of the input and sorting conveyor axes without extending either conveyor;
-- the gripper rotates 90 degrees between the input conveyor end to the west and the sorting conveyor end to the south;
+- the gripper pivot is below the input conveyor and left of the sorting conveyor;
+- the gripper picks north, closes around the box, rotates clockwise to the east, and releases onto the sorting conveyor;
 - the sorting servo sits between line-tracer starts 1 and 2;
 - servo closed routes to 1, partially open routes to 2, and fully open routes to 3;
 - the line-tracer network has three starts, three intersections, and three destinations, matching the reference geometry;

@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -26,13 +25,9 @@ struct IncomingMqttMessage final {
 
 class MqttMessageProcessor final {
 public:
-    using WorkCreatedEpochReassignmentGuard = std::function<bool()>;
-
     explicit MqttMessageProcessor(std::string device_id);
 
     [[nodiscard]] IncomingMqttMessage DecodeCommand(std::string_view topic, std::string_view payload);
-    void SetWorkCreatedEpochReassignmentGuard(WorkCreatedEpochReassignmentGuard guard);
-    void ForgetCommand(std::string_view message_id);
 
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeHeartbeat(
         std::string message_id, std::string timestamp, std::string current_state, std::uint64_t uptime,
@@ -51,8 +46,6 @@ public:
 
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceEvent(const contracts::mqtt::MqttMessage& message) const;
     [[nodiscard]] contracts::mqtt::EncodeResult EncodeDeviceError(const contracts::mqtt::MqttMessage& message) const;
-    [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> PrepareOutboundMessage(
-        const contracts::mqtt::MqttMessage& message) const;
 
     void RememberCommandResponse(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> CachedCommandResponse(
@@ -68,11 +61,6 @@ private:
     mutable std::mutex response_cache_mutex_;
     std::unordered_map<std::string, contracts::mqtt::MqttMessage> response_cache_;
     std::deque<std::string> response_cache_order_;
-    mutable std::mutex epoch_mutex_;
-    WorkCreatedEpochReassignmentGuard work_created_epoch_reassignment_guard_;
-    std::optional<std::string> active_process_epoch_;
-    std::unordered_map<std::string, std::string> request_process_epochs_;
-    std::deque<std::string> request_epoch_order_;
 };
 
 }  // namespace logistics::device

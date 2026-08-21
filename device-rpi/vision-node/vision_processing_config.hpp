@@ -30,8 +30,6 @@ struct VisionProcessingConfig final {
     int super_resolution_scale{ 2 };
     int failure_frames_before_super_resolution{ 2 };
     std::size_t maximum_super_resolution_input_pixels{ 300000 };
-    int preassignment_timeout_ms{ 3000 };
-    int barcode_timeout_ms{ 10000 };
     std::filesystem::path super_resolution_model_path;
     FailureFrameCaptureConfig failure_frame_capture;
 

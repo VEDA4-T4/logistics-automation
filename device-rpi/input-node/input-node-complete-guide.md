@@ -131,7 +131,7 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 
 | MQTT `ControlCommand` | UART 명령 | 비고 |
 |---|---|---|
-| `kStart` | `SET_SPEED` 후 `CONVEYOR_START` | `params.speed`(1~100), 생략 시 기본값 35. MCU 재부팅 복구를 위해 START마다 속도를 재전송 |
+| `kStart` | `CONVEYOR_START` (+선택적 `SET_SPEED`) | `params.speed`(0~100) 있으면 SET_SPEED 먼저 |
 | `kStop` | `CONVEYOR_STOP` | |
 | `kStatusRequest` | `CONVEYOR_GET_STATUS` | 응답의 컨베이어 상태를 별도 status로도 발행 |
 | `kInitialize` | `INPUT_CONTROL_RESET` | 소프트 리셋(제어 오류 초기화). 동기 응답. 비상정지 latch 걸려있으면 STM32가 `ERR-EMERGENCY-STOP`으로 거부 |
@@ -143,25 +143,19 @@ transact가 **동기식**이라 linetracer의 비동기 pending 상태머신 없
 
 | UART 프레임 | MQTT 채널 / 타입 | 내용 |
 |---|---|---|
-| `SENSOR_STATUS` (모든 측정) | event / `SENSOR_STATUS` | `{sensorId, measurementStatus, distanceCm}`. `measurementStatus`는 계약상 `OK`/`FAULT`만 허용 — **측정이 믿을 만한지**만 담는다. 거리값이 매번 바뀌므로 **측정마다 발행** |
+| `SENSOR_STATUS` (모든 측정) | event / `SENSOR_STATUS` | `{sensorId, measurementStatus, distanceCm}`. `measurementStatus`는 계약상 `CLEAR`/`DETECTED`/`FAULT`만 허용. 거리값이 매번 바뀌므로 **측정마다 발행** |
 | `SENSOR_STATUS` (FAULT로 전환 시) | error / `ERROR_OCCURRED` | 위 telemetry에 더해 `error_code=ERR-SENSOR` 알림도 발행. `current_state="SENSOR_{id}_FAULT"`로 sensorId를 실어 보냄(투입 쪽은 센서가 1개뿐이라 항상 id=1) |
 
 > 센서 값은 telemetry라 `DEVICE_STATUS`가 아니라 **`SENSOR_STATUS` 이벤트**로 나간다(`device/{id}/event`,
 > `mqtt_validation.hpp`가 SENSOR_STATUS를 device event로 분류). 덕분에 센서 활동이 장치 운영 상태
 > (`current_state` = READY/EMERGENCY_STOP/RUNNING/STOPPED)를 덮어쓰지 않는다.
-
-> **상자가 로봇팔 앞에 있는지는 이 노드도, STM32도 판단하지 않는다.** 거리값만 올리고
-> 중앙 서버가 `server.ini`의 `[sensor_detection]` 임계값으로 판정해, 결과를
-> `detectionStatus`(`DETECTED`/`CLEAR`/`UNKNOWN`) 필드로 붙여 Qt에 전달한다. 임계값
-> 튜닝에 펌웨어 재플래시가 필요 없게 하려는 구조다. 이 노드가 보내는 메시지에는
-> `detectionStatus`가 아예 없다.
 | `DEVICE_STATUS` | status / `DEVICE_STATUS` | 장치 상태명 + 오류코드 |
 | `EVENT` (heartbeat, id=1) | status / `DEVICE_STATUS` | 9바이트 payload 디코딩: `device_state`/`error_code`/uptime/투입·분류 센서 상태. 상태 변화 시에만 보고(uptime만 바뀌면 무시) |
 | `EVENT` (safety, id=3, kind=1/3) | error / `ERROR_OCCURRED` | `ERR-SAFETY-ESTOP-LATCHED`(비상정지 latch) / `ERR-SAFETY-RESET-REJECTED`(해제 거부) |
 | `EVENT` (safety, id=3, kind=2) | status / `DEVICE_STATUS` | 비상정지 해제 **성공**이라 에러가 아닌 상태로 발행(`current_state=READY`). STM32도 같은 시점에 `DEVICE_READY`로 전환함 |
 | `EVENT` (health, id=4) | error / `ERROR_OCCURRED` | kind 디코딩: `ERR-HEALTH-UART-CHANNEL-TIMEOUT` / `ERR-HEALTH-QUEUE-OVERFLOW` / `ERR-HEALTH-SENSOR-STALE`(kind=3일 때 payload[3]의 sensorId를 `message`에 `sensorId=N`으로 포함) |
 
-> EVENT의 `(id, kind, cause, sensorId)`가 바뀔 때만 보고(중복 재발 억제). sensorId는 HEALTH/SENSOR_STALE에서만 의미 있고(그 외 kind와 SAFETY 이벤트는 항상 dedup 시그니처에 NONE=0xFF로 들어감), 이걸 시그니처에 포함시킨 이유는 분류 쪽처럼 센서 여러 개가 같은 채널(cause)을 공유할 때 "다른 센서의 새 stale"이 "같은 센서의 재발"로 오인되어 억제되는 걸 막기 위함. async EVENT는 `current_state`를 덮지 않고 `error_code`만 갱신(heartbeat의 운영 상태 보존). 이벤트 ID/layout/validator는 Pi와 STM32가 `conveyor_events.h`를 함께 사용합니다. HEALTH EVENT payload는 8바이트(`[0]event_id [1]kind [2]cause [3]sensorId [4..7]timestamp`)입니다.
+> EVENT의 `(id, kind, cause, sensorId)`가 바뀔 때만 보고(중복 재발 억제). sensorId는 HEALTH/SENSOR_STALE에서만 의미 있고(그 외 kind와 SAFETY 이벤트는 항상 dedup 시그니처에 NONE=0xFF로 들어감), 이걸 시그니처에 포함시킨 이유는 분류 쪽처럼 센서 여러 개가 같은 채널(cause)을 공유할 때 "다른 센서의 새 stale"이 "같은 센서의 재발"로 오인되어 억제되는 걸 막기 위함. async EVENT는 `current_state`를 덮지 않고 `error_code`만 갱신(heartbeat의 운영 상태 보존). 이벤트 id/kind/sensorId 상수는 공유 계약이 아니라 STM32 app 헤더(`app_comm_tx.h`/`safety_task.h`/`health_task.h`)에서 복제한 것 — 펌웨어가 값 바꾸면 같이 수정 필요. HEALTH EVENT payload는 이제 8바이트(`[0]event_id [1]kind [2]cause [3]sensorId [4..7]timestamp`, 기존엔 7바이트로 sensorId 없이 timestamp가 [3..6]이었음).
 
 `UART` 오류코드 → MQTT `error_code` 매핑, `InputTransactStatus` → `CommandResult` 매핑도 여기서 담당.
 
@@ -240,4 +234,8 @@ export LOGISTICS_UART_DEVICE='/dev/vedauart'
 2. **OpenCV 커플링**: 현재 device-node 빌드가 vision-node의 `find_package(OpenCV REQUIRED)`를 무조건
    호출해서, 카메라 없는 투입 Pi도 OpenCV 4.10.0이 필요합니다. 노드별 빌드 분리는 vision 담당 파일을
    건드려야 하므로 별도 과제로 남겨둡니다.
-3. **`kRestart`/`kDestinationSet` 미지원**: 투입 역할과 무관해 UART로 보내지 않고 즉시 거부 응답합니다.
+3. **`params.speed` 관례**: `kStart`에 speed를 실어 SET_SPEED를 먼저 보내는 방식은 계약에 명시된 관례가
+   없어 추론한 것입니다. 서버/Qt 팀과 확정 필요.
+4. **STM32 EVENT payload 미공유**: safety/health `EVENT`의 payload 레이아웃이 서버와 공유되지 않아
+   generic `ERROR_OCCURRED`로만 surface합니다. 규격 공유되면 구조화 필요.
+5. **`kRestart`/`kDestinationSet` 미지원**: 투입 역할과 무관해 UART로 보내지 않고 즉시 거부 응답합니다.

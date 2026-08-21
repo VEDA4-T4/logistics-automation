@@ -55,15 +55,45 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "logistics/contracts/uart/conveyor_events.h"
 #include "logistics/contracts/uart/input_commands.h"
 #include "logistics/contracts/uart/sorting_commands.h"
 #include "logistics/contracts/uart_parser.h"
 #include "logistics/contracts/uart_protocol.h"
 
+/* 애플리케이션 EVENT ID (펌웨어 Application/Inc/app_comm_tx.h와 동일) */
+#define APP_EVENT_HEARTBEAT 0x01U
+
+/* heartbeat payload 인덱스 (app_comm_tx.h와 동일) */
+#define APP_HEARTBEAT_STATE_INDEX 1U
+#define APP_HEARTBEAT_ERROR_INDEX 2U
+#define APP_HEARTBEAT_UPTIME_INDEX 3U
+#define APP_HEARTBEAT_INPUT_SENSOR_INDEX 7U
+#define APP_HEARTBEAT_SORTING_SENSOR_INDEX 8U
+#define APP_HEARTBEAT_PAYLOAD_SIZE 9U
+
 /* heartbeat 주기 판정 기준 */
 #define HEARTBEAT_PERIOD_S 1.0
 #define HEARTBEAT_TOLERANCE_S 0.5
+
+/* SafetyTask 안전 EVENT (펌웨어 Application/Inc/safety_task.h와 동일) */
+#define APP_EVENT_SAFETY 0x03U
+
+#define APP_SAFETY_EVENT_KIND_INDEX 1U
+#define APP_SAFETY_EVENT_CAUSE_INDEX 2U
+#define APP_SAFETY_EVENT_TIMESTAMP_INDEX 3U
+#define APP_SAFETY_EVENT_RESULT_INDEX 7U
+#define APP_SAFETY_EVENT_PAYLOAD_SIZE 8U
+
+/* HealthTask 헬스 EVENT (펌웨어 Application/Inc/health_task.h와 동일) */
+#define APP_EVENT_HEALTH 0x04U
+
+#define APP_HEALTH_EVENT_KIND_INDEX 1U
+#define APP_HEALTH_EVENT_CAUSE_INDEX 2U
+#define APP_HEALTH_EVENT_SENSOR_ID_INDEX 3U
+#define APP_HEALTH_EVENT_TIMESTAMP_INDEX 4U
+#define APP_HEALTH_EVENT_PAYLOAD_SIZE 8U
+#define HEALTH_ISSUE_CAUSE_DEVICE_WIDE 0xFFU
+#define HEALTH_ISSUE_SENSOR_ID_NONE 0xFFU
 
 /* 기본 수신 시간 */
 #define DEFAULT_DURATION_S 30.0
@@ -384,14 +414,17 @@ int main(int argc, char** argv) {
 
                 uint8_t sensor_id = frame.payload[UART_SENSOR_ID_INDEX];
                 uint8_t state = frame.payload[UART_SENSOR_STATE_INDEX];
-                uint16_t distance_cm = (uint16_t)(frame.payload[UART_SENSOR_DISTANCE_CM_LOW_INDEX] |
-                                                  ((uint16_t)frame.payload[UART_SENSOR_DISTANCE_CM_HIGH_INDEX] << 8U));
-                uint8_t sensor_id_is_valid = input_channel != 0U ? uart_input_sensor_id_is_valid(sensor_id)
-                                                                 : uart_sorting_sensor_id_is_valid(sensor_id);
+                uint16_t distance_cm =
+                    (uint16_t)(frame.payload[UART_SENSOR_DISTANCE_CM_LOW_INDEX] |
+                               ((uint16_t)frame.payload[UART_SENSOR_DISTANCE_CM_HIGH_INDEX] << 8U));
+                uint8_t sensor_id_is_valid =
+                    input_channel != 0U ? uart_input_sensor_id_is_valid(sensor_id)
+                                        : uart_sorting_sensor_id_is_valid(sensor_id);
 
                 if (sensor_id_is_valid == 0U) {
                     stats.wrong_channel++;
-                    printf("  라우팅 오류! sensor_id=%u (기대값 %s)\n", sensor_id, input_channel != 0U ? "1" : "1~3");
+                    printf("  라우팅 오류! sensor_id=%u (기대값 %s)\n", sensor_id,
+                           input_channel != 0U ? "1" : "1~3");
                 }
 
                 if (stats.sensor_status % 25U == 1U) {
@@ -435,16 +468,19 @@ int main(int argc, char** argv) {
                     stats.other++;
 
                     if (frame.length != APP_SAFETY_EVENT_PAYLOAD_SIZE) {
-                        printf("  안전 EVENT 크기 오류: %u (기대값 %u)\n", frame.length, APP_SAFETY_EVENT_PAYLOAD_SIZE);
+                        printf("  안전 EVENT 크기 오류: %u (기대값 %u)\n", frame.length,
+                               APP_SAFETY_EVENT_PAYLOAD_SIZE);
                     } else {
                         uint8_t kind = frame.payload[APP_SAFETY_EVENT_KIND_INDEX];
                         uint8_t cause = frame.payload[APP_SAFETY_EVENT_CAUSE_INDEX];
                         uint8_t result = frame.payload[APP_SAFETY_EVENT_RESULT_INDEX];
-                        uint32_t timestamp_ms =
-                            (uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX] |
-                            ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 1U] << 8U) |
-                            ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 2U] << 16U) |
-                            ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 3U] << 24U);
+                        uint32_t timestamp_ms = (uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX] |
+                                                ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 1U]
+                                                 << 8U) |
+                                                ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 2U]
+                                                 << 16U) |
+                                                ((uint32_t)frame.payload[APP_SAFETY_EVENT_TIMESTAMP_INDEX + 3U]
+                                                 << 24U);
 
                         printf("  안전 EVENT: kind=%s(%u) cause=%s(%u) timestamp=%ums result=%s(%u) seq=%u\n",
                                safety_event_kind_name(kind), kind, safety_cause_name(cause), cause, timestamp_ms,
@@ -454,16 +490,19 @@ int main(int argc, char** argv) {
                     stats.other++;
 
                     if (frame.length != APP_HEALTH_EVENT_PAYLOAD_SIZE) {
-                        printf("  헬스 EVENT 크기 오류: %u (기대값 %u)\n", frame.length, APP_HEALTH_EVENT_PAYLOAD_SIZE);
+                        printf("  헬스 EVENT 크기 오류: %u (기대값 %u)\n", frame.length,
+                               APP_HEALTH_EVENT_PAYLOAD_SIZE);
                     } else {
                         uint8_t kind = frame.payload[APP_HEALTH_EVENT_KIND_INDEX];
                         uint8_t cause = frame.payload[APP_HEALTH_EVENT_CAUSE_INDEX];
                         uint8_t sensor_id = frame.payload[APP_HEALTH_EVENT_SENSOR_ID_INDEX];
-                        uint32_t timestamp_ms =
-                            (uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX] |
-                            ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 1U] << 8U) |
-                            ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 2U] << 16U) |
-                            ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 3U] << 24U);
+                        uint32_t timestamp_ms = (uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX] |
+                                                ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 1U]
+                                                 << 8U) |
+                                                ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 2U]
+                                                 << 16U) |
+                                                ((uint32_t)frame.payload[APP_HEALTH_EVENT_TIMESTAMP_INDEX + 3U]
+                                                 << 24U);
 
                         if (sensor_id == HEALTH_ISSUE_SENSOR_ID_NONE) {
                             printf("  헬스 EVENT: kind=%s(%u) cause=%s(%u) timestamp=%ums seq=%u\n",

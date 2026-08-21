@@ -105,7 +105,8 @@ typedef struct {
  * 헬스 EVENT (UART_CMD_EVENT) - 공정별(비치명) 저하 보고
  * ============================================================================
  *
- * ID, payload layout, validator는 Pi와 함께 쓰는 conveyor_events.h에 정의한다.
+ * event_id 네임스페이스는 heartbeat(0x01)/CYCLE_COMPLETE(0x02)/SAFETY(0x03)와
+ * 공유하므로 0x04를 쓴다(Raspberry Pi 측 공유 필요 - 아직 미공유).
  *
  * payload 구조:
  *   [0]    event_id = APP_EVENT_HEALTH
@@ -117,6 +118,25 @@ typedef struct {
  *          단위라 분류 쪽 센서 3개(US2/US3/US4)를 구분 못 해서 추가함.
  *   [4..7] timestamp_ms (Little-endian uint32, HAL_GetTick)
  */
+#define APP_EVENT_HEALTH 0x04U
+
+#define APP_HEALTH_EVENT_KIND_INDEX 1U
+#define APP_HEALTH_EVENT_CAUSE_INDEX 2U
+#define APP_HEALTH_EVENT_SENSOR_ID_INDEX 3U
+#define APP_HEALTH_EVENT_TIMESTAMP_INDEX 4U
+#define APP_HEALTH_EVENT_PAYLOAD_SIZE 8U
+
+#define HEALTH_ISSUE_CAUSE_DEVICE_WIDE 0xFFU
+#define HEALTH_ISSUE_SENSOR_ID_NONE 0xFFU
+
+typedef enum {
+    HEALTH_ISSUE_UART_CHANNEL_TIMEOUT = 1U,
+    HEALTH_ISSUE_QUEUE_OVERFLOW_TRANSIENT = 2U,
+    HEALTH_ISSUE_SENSOR_STALE = 3U,
+    /* UART 오류를 감지해 복구(재시도/RX 재시작)를 시작했다는 진단 보고.
+     * 유실 여부와 무관하고 치명으로 승격되지 않는다. */
+    HEALTH_ISSUE_UART_RECOVERY = 4U
+} health_issue_kind_t;
 
 /* 통계. 디버거 Live Expressions로 관찰한다. */
 typedef struct {
