@@ -102,10 +102,10 @@ public:
 
     // Consumes one physical DETECTED interval. A stopped process or occupied
     // input station defers the interval so the next reading after it is ready
-    // can create the work. A prior CLEAR is not required because CLEAR
-    // telemetry can be missed while the process starts.
+    // can create the work. If the consumed work is gone, a sustained DETECTED
+    // reading is rearmed without requiring a CLEAR transition.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
-                                        bool input_station_occupied);
+                                        bool input_station_occupied, bool has_active_work);
     void RequireClear() noexcept;
     void Retry() noexcept;
     void RetryStop() noexcept;

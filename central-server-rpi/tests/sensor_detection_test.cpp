@@ -191,30 +191,39 @@ void TestInputDetectionGateCreatesWorkWithoutPriorClear() {
 
     assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldStopConveyor(detected));
-    assert(!gate.ShouldCreateWork(detected, false, false));
-    assert(gate.ShouldCreateWork(detected, true, false));
-    assert(!gate.ShouldCreateWork(detected, true, false));
+    assert(!gate.ShouldCreateWork(detected, false, false, false));
+    assert(gate.ShouldCreateWork(detected, true, false, false));
+    assert(!gate.ShouldCreateWork(detected, true, false, true));
 
     const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
     assert(!gate.ShouldStopConveyor(clear));
     assert(gate.ShouldStopConveyor(detected));
-    assert(!gate.ShouldCreateWork(clear, true, false));
-    assert(!gate.ShouldCreateWork(detected, true, true));
-    assert(gate.ShouldCreateWork(detected, true, false));
+    assert(!gate.ShouldCreateWork(clear, true, false, true));
+    assert(!gate.ShouldCreateWork(detected, true, true, true));
+    assert(gate.ShouldCreateWork(detected, true, false, true));
 
-    assert(!gate.ShouldCreateWork(clear, true, false));
-    assert(gate.ShouldCreateWork(detected, true, false));
+    assert(!gate.ShouldCreateWork(clear, true, false, true));
+    assert(gate.ShouldCreateWork(detected, true, false, true));
     gate.Retry();
-    assert(gate.ShouldCreateWork(detected, true, false));
+    assert(gate.ShouldCreateWork(detected, true, false, true));
     gate.RetryStop();
     assert(gate.ShouldStopConveyor(detected));
 
     gate.RequireClear();
-    assert(gate.ShouldCreateWork(detected, true, false));
-    assert(!gate.ShouldCreateWork(detected, true, false));
+    assert(gate.ShouldCreateWork(detected, true, false, false));
+    assert(!gate.ShouldCreateWork(detected, true, false, true));
 
     assert(!gate.ShouldStopConveyor(SensorMessage("PI-LT-01", "DETECTED")));
-    assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));
+    assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false, false));
+}
+
+void TestInputDetectionGateRearmsWhenWorkIsGone() {
+    logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
+    const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
+
+    assert(gate.ShouldCreateWork(detected, true, false, false));
+    assert(!gate.ShouldCreateWork(detected, true, false, true));
+    assert(gate.ShouldCreateWork(detected, true, false, false));
 }
 
 void TestInputDetectionGateLogsConsumedStopDecision() {
@@ -283,6 +292,7 @@ int main() {
     TestThresholdsComeFromConfig();
     TestConfigValidation();
     TestInputDetectionGateCreatesWorkWithoutPriorClear();
+    TestInputDetectionGateRearmsWhenWorkIsGone();
     TestInputDetectionGateLogsConsumedStopDecision();
     TestLineTracerLoadGateStopsSortingWorkOnce();
     std::cout << "sensor_detection_test passed\n";

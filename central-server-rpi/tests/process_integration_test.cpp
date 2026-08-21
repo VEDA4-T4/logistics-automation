@@ -399,7 +399,8 @@ private:
                     return false;
                 }
             }
-            if (input_detection_gate_.ShouldCreateWork(message, process_accepts_work, input_station_occupied)) {
+            if (input_detection_gate_.ShouldCreateWork(message, process_accepts_work, input_station_occupied,
+                                                       !orchestrator_.StateMachine().ActiveWorks().empty())) {
                 const auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(message);
                 if (sensor == nullptr) {
                     input_detection_gate_.Retry();

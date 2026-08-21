@@ -74,7 +74,7 @@ bool InputDetectionGate::ShouldStopConveyor(const contracts::mqtt::MqttMessage& 
 }
 
 bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& message, const bool process_accepts_work,
-                                          const bool input_station_occupied) {
+                                          const bool input_station_occupied, const bool has_active_work) {
     const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
     if (sensor == nullptr || message.source_id != input_device_id_ || sensor->sensor_id != sensor_id_ ||
         !sensor->detection_status.has_value()) {
@@ -86,6 +86,9 @@ bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& me
     }
     if (*sensor->detection_status != kDetectionDetected) {
         return false;
+    }
+    if (consumed_ && !has_active_work) {
+        consumed_ = false;
     }
     if (consumed_) {
         return false;

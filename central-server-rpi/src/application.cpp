@@ -1227,6 +1227,7 @@ int Application::Run(int argc, char* argv[]) {
             }
         }
         const bool process_accepts_work = process_orchestrator.AcceptsInputWorkCreation();
+        const bool has_active_work = !process_orchestrator.StateMachine().ActiveWorks().empty();
         const bool input_sensor_detected = input_detection_gate.ShouldStopConveyor(message);
         if (input_sensor_detected) {
             const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
@@ -1249,7 +1250,7 @@ int Application::Run(int argc, char* argv[]) {
             }
         }
         const bool create_work = input_detection_gate.ShouldCreateWork(
-            message, process_accepts_work, InputStationOccupied(process_orchestrator.StateMachine()));
+            message, process_accepts_work, InputStationOccupied(process_orchestrator.StateMachine()), has_active_work);
         if (create_work) {
             const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
             std::clog << "[server][PROCESS][INFO] input sensor created work; messageId=" << message.message_id
