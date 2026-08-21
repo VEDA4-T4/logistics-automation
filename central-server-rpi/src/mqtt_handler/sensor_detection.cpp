@@ -113,40 +113,32 @@ void InputDetectionGate::RetryStop() noexcept {
     stop_consumed_ = false;
 }
 
-SortingDetectionGate::SortingDetectionGate(std::string sorting_device_id)
-    : sorting_device_id_(std::move(sorting_device_id)) {}
+LineTracerLoadGate::LineTracerLoadGate(std::string line_tracer_device_id)
+    : line_tracer_device_id_(std::move(line_tracer_device_id)) {}
 
-std::optional<std::string> SortingDetectionGate::ShouldStop(const contracts::mqtt::MqttMessage& message,
-                                                            const bool process_running,
-                                                            const std::vector<WorkProcessSnapshot>& active_works) {
-    const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
-    if (sensor == nullptr || message.source_id != sorting_device_id_ || !sensor->detection_status.has_value()) {
+std::optional<std::string> LineTracerLoadGate::ShouldStop(const contracts::mqtt::MqttMessage& message,
+                                                          const bool process_running,
+                                                          const std::vector<WorkProcessSnapshot>& active_works) {
+    const auto* status = contracts::mqtt::GetPayload<contracts::mqtt::DeviceStatusPayload>(message);
+    if (status == nullptr || message.source_id != line_tracer_device_id_ || !status->job_id.has_value() ||
+        (status->current_state != "LOAD_ON_A" && status->current_state != "LOAD_ON_B" &&
+         status->current_state != "LOAD_ON_C") ||
+        !process_running || consumed_work_ids_.contains(*status->job_id)) {
         return std::nullopt;
     }
-    if (*sensor->detection_status == kDetectionClear) {
-        if (consumed_sensor_id_ == sensor->sensor_id) {
-            consumed_sensor_id_.reset();
-        }
-        return std::nullopt;
-    }
-    if (*sensor->detection_status != kDetectionDetected || consumed_sensor_id_.has_value() || !process_running) {
-        return std::nullopt;
-    }
-
-    const std::string destination = std::to_string(sensor->sensor_id);
-    const auto work = std::ranges::find_if(active_works, [&destination](const WorkProcessSnapshot& candidate) {
-        return candidate.stage == WorkStage::kSorting && candidate.destination == destination;
+    const auto work = std::ranges::find_if(active_works, [&status](const WorkProcessSnapshot& candidate) {
+        return candidate.stage == WorkStage::kSorting && candidate.work_id == *status->job_id;
     });
     if (work == active_works.end()) {
         return std::nullopt;
     }
 
-    consumed_sensor_id_ = sensor->sensor_id;
+    consumed_work_ids_.insert(work->work_id);
     return work->work_id;
 }
 
-void SortingDetectionGate::Retry() noexcept {
-    consumed_sensor_id_.reset();
+void LineTracerLoadGate::Retry(const std::string_view work_id) {
+    consumed_work_ids_.erase(std::string(work_id));
 }
 
 }  // namespace logistics::central_server

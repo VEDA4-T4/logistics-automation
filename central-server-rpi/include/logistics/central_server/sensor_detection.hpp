@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "logistics/central_server/process_state_machine.hpp"
@@ -116,21 +117,19 @@ private:
     bool stop_consumed_{ false };
 };
 
-class SortingDetectionGate final {
+class LineTracerLoadGate final {
 public:
-    explicit SortingDetectionGate(std::string sorting_device_id);
+    explicit LineTracerLoadGate(std::string line_tracer_device_id);
 
-    // Matches sensor N to destination N and consumes one DETECTED interval.
-    // The interval is deferred while the process is stopped or no matching
-    // sorting work exists, so START can resume the same physical box.
+    // Consumes an exact line-tracer LOAD_ON position for a sorting work once.
     [[nodiscard]] std::optional<std::string> ShouldStop(const contracts::mqtt::MqttMessage& message,
                                                         bool process_running,
                                                         const std::vector<WorkProcessSnapshot>& active_works);
-    void Retry() noexcept;
+    void Retry(std::string_view work_id);
 
 private:
-    std::string sorting_device_id_;
-    std::optional<std::int32_t> consumed_sensor_id_;
+    std::string line_tracer_device_id_;
+    std::unordered_set<std::string> consumed_work_ids_;
 };
 
 }  // namespace logistics::central_server
