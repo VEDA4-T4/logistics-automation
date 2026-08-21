@@ -119,25 +119,6 @@ std::string GenerateProcessEpoch() {
     return result.str();
 }
 
-bool IsVisionWorkCreatedDelivery(const PendingMqttDelivery& delivery, std::string_view vision_device_id) {
-    return delivery.topic == mqtt::DeviceCommandTopic(vision_device_id) &&
-           delivery.message.message_type == mqtt::MessageType::kWorkCreated &&
-           mqtt::GetPayload<mqtt::WorkCreatedPayload>(delivery.message) != nullptr;
-}
-
-std::optional<std::string> AcknowledgedVisionWorkId(const mqtt::MqttMessage& message,
-                                                    std::string_view vision_device_id) {
-    if (message.source_id != vision_device_id || message.message_type != mqtt::MessageType::kDeviceStatus) {
-        return std::nullopt;
-    }
-    const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(message);
-    if (status == nullptr || status->current_state != "WORK_ASSIGNED" || !status->job_id.has_value() ||
-        status->job_id->empty()) {
-        return std::nullopt;
-    }
-    return status->job_id;
-}
-
 DatabaseStatus ProcessStateStore::Load(std::optional<StoredProcessState>& output) {
     output.reset();
     Statement runtime;
