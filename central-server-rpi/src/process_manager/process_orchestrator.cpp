@@ -219,8 +219,12 @@ bool ProcessOrchestrator::Enabled() const noexcept {
     return config_.enabled;
 }
 
+bool ProcessOrchestrator::AcceptsInputWorkCreation() const noexcept {
+    return config_.enabled && state_machine_.AcceptsNewWork();
+}
+
 bool ProcessOrchestrator::AcceptsNewWork() const noexcept {
-    if (!config_.enabled || !state_machine_.AcceptsNewWork()) {
+    if (!AcceptsInputWorkCreation()) {
         return false;
     }
 

@@ -308,6 +308,57 @@ static void test_response_cache_and_retry(void) {
     assert(lastDeviceState == UART_DEVICE_RUNNING);
 }
 
+static void test_gate_motion_progresses_while_response_retry_is_pending(void) {
+    sorting_control_t controller;
+    fake_motor_t motor;
+    fake_gate_t gate;
+    control_command_t message;
+    const uint8_t route[] = { 0x34U, 0x12U, UART_SORTING_DESTINATION_1 };
+
+    initialize(&controller, &motor, &gate);
+    txQueue.failPut = 1U;
+
+    message = command(20U, UART_CMD_SORTING_ROUTE_ITEM, route, sizeof(route));
+    assert(sorting_control_task_process_message(&controller, &message) == SORTING_CONTROL_OK);
+    assert(controller.state.gateState == UART_SORTING_GATE_MOVING);
+
+    gate.motionComplete = 1U;
+    assert(sorting_control_task_service_motion(&controller) == SORTING_CONTROL_OK);
+    assert(controller.state.gateState == UART_SORTING_GATE_WAIT_ITEM);
+}
+
+static void test_cycle_complete_is_retried_after_transmit_backpressure(void) {
+    sorting_control_t controller;
+    fake_motor_t motor;
+    fake_gate_t gate;
+    control_command_t message;
+    tx_request_t event;
+    const uint8_t route[] = { 0x34U, 0x12U, UART_SORTING_DESTINATION_1 };
+    const uint8_t cycle[] = { 0x34U, 0x12U };
+
+    initialize(&controller, &motor, &gate);
+    message = command(20U, UART_CMD_SORTING_ROUTE_ITEM, route, sizeof(route));
+    assert(sorting_control_task_process_message(&controller, &message) == SORTING_CONTROL_OK);
+    (void)pop_tx();
+    gate.motionComplete = 1U;
+    assert(sorting_control_task_service_motion(&controller) == SORTING_CONTROL_OK);
+
+    message = command(21U, UART_CMD_SORTING_RETURN_HOME, cycle, sizeof(cycle));
+    assert(sorting_control_task_process_message(&controller, &message) == SORTING_CONTROL_OK);
+    (void)pop_tx();
+    gate.motionComplete = 1U;
+    txQueue.failPut = 1U;
+    assert(sorting_control_task_service_motion(&controller) == SORTING_CONTROL_OK);
+    assert(controller.state.gateState == UART_SORTING_GATE_HOME);
+    assert(txQueue.count == 0U);
+
+    txQueue.failPut = 0U;
+    assert(sorting_control_task_service_tx() == 1U);
+    event = pop_tx();
+    assert(event.command == UART_CMD_EVENT);
+    assert(event.payload[UART_EVENT_ID_INDEX] == UART_SORTING_EVENT_CYCLE_COMPLETE);
+}
+
 static void test_speed_errors_are_distinct(void) {
     sorting_control_t controller;
     fake_motor_t motor;
@@ -394,6 +445,8 @@ static void test_safety_epoch_rejects_old_command(void) {
 
 int main(void) {
     test_response_cache_and_retry();
+    test_gate_motion_progresses_while_response_retry_is_pending();
+    test_cycle_complete_is_retried_after_transmit_backpressure();
     test_speed_errors_are_distinct();
     test_route_return_home_emits_event();
     test_safety_epoch_rejects_old_command();

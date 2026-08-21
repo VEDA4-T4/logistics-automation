@@ -659,6 +659,7 @@ void TestFailedDeviceBlocksNewWorkUntilHealthy() {
     assert(orchestrator.FailDispatch(begin.commands.front(), "input conveyor stop timed out").Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
     assert(!orchestrator.AcceptsNewWork());
+    assert(orchestrator.AcceptsInputWorkCreation());
 
     assert(!orchestrator
                 .Handle(

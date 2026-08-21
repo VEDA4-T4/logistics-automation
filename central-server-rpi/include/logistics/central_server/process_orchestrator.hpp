@@ -74,6 +74,7 @@ public:
 
     void SetProcessEpoch(std::string process_epoch);
     [[nodiscard]] bool Enabled() const noexcept;
+    [[nodiscard]] bool AcceptsInputWorkCreation() const noexcept;
     [[nodiscard]] bool AcceptsNewWork() const noexcept;
     [[nodiscard]] bool IsWorkCreationSource(std::string_view device_id) const noexcept;
     [[nodiscard]] std::string_view VisionDeviceId() const noexcept;
