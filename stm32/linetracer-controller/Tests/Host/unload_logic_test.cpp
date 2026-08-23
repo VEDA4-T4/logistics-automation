@@ -8,6 +8,13 @@ extern "C" {
 
 namespace {
 
+void TestReleasePulsesRaiseMirroredServos() {
+    assert(UNLOAD_SERVO_1_RELEASE_PULSE_US < UNLOAD_SERVO_1_HOME_PULSE_US);
+    assert(UNLOAD_SERVO_2_RELEASE_PULSE_US > UNLOAD_SERVO_2_HOME_PULSE_US);
+    assert(UNLOAD_SERVO_1_HOME_PULSE_US - UNLOAD_SERVO_1_RELEASE_PULSE_US == UNLOAD_SERVO_RELEASE_PULSE_DELTA_US);
+    assert(UNLOAD_SERVO_2_RELEASE_PULSE_US - UNLOAD_SERVO_2_HOME_PULSE_US == UNLOAD_SERVO_RELEASE_PULSE_DELTA_US);
+}
+
 app_unload_command_t MakeStart(std::uint16_t job_id, uart_linetracer_route_t route_id, std::uint32_t now_ms) {
     app_unload_command_t command{};
 
@@ -123,6 +130,7 @@ void TestRejectsConcurrentOrInvalidStart() {
 }  // namespace
 
 int main() {
+    TestReleasePulsesRaiseMirroredServos();
     TestCompletionAfterTimedServoCycle();
     TestLoadStateDoesNotBlockCompletion();
     TestServoCycleHandlesTickWraparound();
