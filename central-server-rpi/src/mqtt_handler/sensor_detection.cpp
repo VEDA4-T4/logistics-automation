@@ -1,9 +1,11 @@
 #include "logistics/central_server/sensor_detection.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <utility>
 
+#include "logistics/contracts/device.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
 namespace logistics::central_server {
@@ -128,11 +130,12 @@ std::optional<std::string> LineTracerLoadGate::ShouldStop(const contracts::mqtt:
         });
     });
     const auto* status = contracts::mqtt::GetPayload<contracts::mqtt::DeviceStatusPayload>(message);
+    std::string current_state = status == nullptr ? std::string{} : status->current_state;
+    std::ranges::transform(current_state, current_state.begin(),
+                           [](unsigned char character) { return static_cast<char>(std::toupper(character)); });
     if (status == nullptr || message.source_id != line_tracer_device_id_ ||
         status->status != contracts::mqtt::ConnectionState::kOnline || status->error_code.has_value() ||
-        !status->job_id.has_value() ||
-        (status->current_state != "LOAD_ON_A" && status->current_state != "LOAD_ON_B" &&
-         status->current_state != "LOAD_ON_C") ||
+        !status->job_id.has_value() || !contracts::HasStateSuffix(current_state, "LOAD_ON_", 'A', 'C') ||
         !process_running || consumed_work_ids_.contains(*status->job_id)) {
         return std::nullopt;
     }

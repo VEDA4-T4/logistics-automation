@@ -455,14 +455,20 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleCommandCompletion(const Pr
             return completion;
         }
         ++revision_;
-        completion.commands.push_back(
-            MakeInputConveyorCommand(intent.work_id, mqtt::ControlCommand::kStart, response.timestamp));
+        if (!config_.line_tracer_enabled) {
+            completion.commands.push_back(
+                MakeInputConveyorCommand(intent.work_id, mqtt::ControlCommand::kStart, response.timestamp));
+        }
         return completion;
     }
     if (command->command == mqtt::ControlCommand::kStop && command->component_id == "sorting_conveyor" &&
         (work->stage == WorkStage::kSorting || work->stage == WorkStage::kTransporting)) {
         completion.commands.push_back(
             MakeSortingControlCommand(intent.work_id, mqtt::ControlCommand::kRecovery, "GATE", response.timestamp));
+        if (config_.line_tracer_enabled) {
+            completion.commands.push_back(
+                MakeInputConveyorCommand(intent.work_id, mqtt::ControlCommand::kStart, response.timestamp));
+        }
         return completion;
     }
     return NotHandled();
@@ -795,11 +801,38 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                                                                                : ProcessEventType::kSortingStarted,
                           message, *status->job_id);
         } else if (config_.line_tracer_enabled && message.source_id == config_.line_tracer_device_id) {
-            if (!IsOneOf(current_state, { "LOAD_ON_A", "LOAD_ON_B", "LOAD_ON_C" })) {
+            if (status->status != mqtt::ConnectionState::kOnline || status->error_code.has_value()) {
                 return NotHandled();
             }
             const auto work = machine.FindWork(*status->job_id);
-            if (!work.has_value() ||
+            if (!work.has_value()) {
+                return NotHandled();
+            }
+            if (contracts::HasStateSuffix(current_state, "PICKUP_READY_", 'A', 'C')) {
+                if (work->stage != WorkStage::kProductIdentified || DownstreamDevicesBusy(machine, work->work_id)) {
+                    return NotHandled();
+                }
+                ProcessOrchestrationResult pickup_ready{
+                    .handled = true,
+                    .transition =
+                        {
+                            .disposition = TransitionDisposition::kApplied,
+                            .previous_stage = work->stage,
+                            .current_stage = work->stage,
+                            .reason = {},
+                        },
+                    .commands = {},
+                };
+                if (create_commands) {
+                    const auto target =
+                        homography_.Enabled() ? gripper_targets_.find(work->work_id) : gripper_targets_.end();
+                    pickup_ready.commands.push_back(MakeGripperCommand(
+                        work->work_id, work->destination, target == gripper_targets_.end() ? nullptr : &target->second,
+                        message.timestamp));
+                }
+                return pickup_ready;
+            }
+            if (!contracts::HasStateSuffix(current_state, "LOAD_ON_", 'A', 'C') ||
                 (work->stage != WorkStage::kSorting && work->stage != WorkStage::kTransportRequested &&
                  work->stage != WorkStage::kTransporting)) {
                 return NotHandled();
@@ -882,11 +915,12 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
 
 void ProcessOrchestrator::AppendDownstreamCommands(ProcessOrchestrationResult& result, const WorkProcessSnapshot& work,
                                                    std::string_view timestamp) {
-    const auto target = homography_.Enabled() ? gripper_targets_.find(work.work_id) : gripper_targets_.end();
     if (config_.line_tracer_enabled) {
         result.commands.push_back(MakeDestinationCommand(work.work_id, work.destination, config_.line_tracer_device_id,
                                                          std::nullopt, timestamp));
+        return;
     }
+    const auto target = homography_.Enabled() ? gripper_targets_.find(work.work_id) : gripper_targets_.end();
     result.commands.push_back(MakeGripperCommand(
         work.work_id, work.destination, target == gripper_targets_.end() ? nullptr : &target->second, timestamp));
 }
