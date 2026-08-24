@@ -14,6 +14,7 @@
 namespace {
 
 using logistics::central_server::LineTracerLoadGate;
+using logistics::central_server::RuntimeBarcodeGate;
 using logistics::central_server::SensorDetectionConfig;
 using logistics::central_server::SensorDetector;
 using logistics::central_server::WorkProcessSnapshot;
@@ -227,6 +228,30 @@ void TestInputDetectionGateRearmsWhenWorkIsGone() {
     assert(gate.ShouldCreateWork(detected, true, false, false));
 }
 
+void TestInputDetectionGateBlocksDuplicateUntilClear() {
+    logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
+    const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
+    const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
+
+    assert(gate.ShouldCreateWork(detected, true, false, false));
+    gate.BlockUntilClear();
+    assert(!gate.ShouldCreateWork(detected, true, false, false));
+    assert(!gate.ShouldCreateWork(clear, true, false, false));
+    assert(gate.ShouldCreateWork(detected, true, false, false));
+}
+
+void TestRuntimeBarcodeGateOnlyRejectsRememberedBarcode() {
+    RuntimeBarcodeGate gate;
+    assert(!gate.IsDuplicate("5901234123457"));
+
+    gate.Remember("5901234123457");
+    assert(gate.IsDuplicate("5901234123457"));
+    assert(!gate.IsDuplicate("8801234567890"));
+
+    const RuntimeBarcodeGate restarted_gate;
+    assert(!restarted_gate.IsDuplicate("5901234123457"));
+}
+
 void TestInputDetectionGateLogsConsumedStopDecision() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
@@ -294,6 +319,8 @@ int main() {
     TestConfigValidation();
     TestInputDetectionGateCreatesWorkWithoutPriorClear();
     TestInputDetectionGateRearmsWhenWorkIsGone();
+    TestInputDetectionGateBlocksDuplicateUntilClear();
+    TestRuntimeBarcodeGateOnlyRejectsRememberedBarcode();
     TestInputDetectionGateLogsConsumedStopDecision();
     TestLineTracerLoadGateStopsSortingWorkOnce();
     std::cout << "sensor_detection_test passed\n";

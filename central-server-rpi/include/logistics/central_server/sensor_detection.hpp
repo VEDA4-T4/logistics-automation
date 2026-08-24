@@ -106,6 +106,7 @@ public:
     // reading is rearmed without requiring a CLEAR transition.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
                                         bool input_station_occupied, bool has_active_work);
+    void BlockUntilClear() noexcept;
     void RequireClear() noexcept;
     void Retry() noexcept;
     void RetryStop() noexcept;
@@ -115,6 +116,16 @@ private:
     std::int32_t sensor_id_;
     bool consumed_{ false };
     bool stop_consumed_{ false };
+    bool waiting_for_clear_{ false };
+};
+
+class RuntimeBarcodeGate final {
+public:
+    [[nodiscard]] bool IsDuplicate(std::string_view barcode) const;
+    void Remember(std::string barcode);
+
+private:
+    std::unordered_set<std::string> barcodes_;
 };
 
 class LineTracerLoadGate final {

@@ -84,9 +84,13 @@ bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& me
     }
     if (*sensor->detection_status == kDetectionClear) {
         consumed_ = false;
+        waiting_for_clear_ = false;
         return false;
     }
     if (*sensor->detection_status != kDetectionDetected) {
+        return false;
+    }
+    if (waiting_for_clear_) {
         return false;
     }
     if (consumed_ && !has_active_work) {
@@ -108,6 +112,13 @@ bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& me
 void InputDetectionGate::RequireClear() noexcept {
     consumed_ = false;
     stop_consumed_ = false;
+    waiting_for_clear_ = false;
+}
+
+void InputDetectionGate::BlockUntilClear() noexcept {
+    consumed_ = true;
+    stop_consumed_ = true;
+    waiting_for_clear_ = true;
 }
 
 void InputDetectionGate::Retry() noexcept {
@@ -116,6 +127,14 @@ void InputDetectionGate::Retry() noexcept {
 
 void InputDetectionGate::RetryStop() noexcept {
     stop_consumed_ = false;
+}
+
+bool RuntimeBarcodeGate::IsDuplicate(const std::string_view barcode) const {
+    return barcodes_.contains(std::string(barcode));
+}
+
+void RuntimeBarcodeGate::Remember(std::string barcode) {
+    barcodes_.insert(std::move(barcode));
 }
 
 LineTracerLoadGate::LineTracerLoadGate(std::string line_tracer_device_id)
