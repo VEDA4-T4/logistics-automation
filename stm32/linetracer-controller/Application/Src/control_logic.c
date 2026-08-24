@@ -1423,6 +1423,8 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, app_marker_
 
 static uint8_t ControlLogic_TargetEdgeDetected(const control_context_t* context, uint8_t line_left, uint8_t line_center,
                                                uint8_t line_right) {
+    (void)line_center;
+
     if (context == NULL ||
         (context->junction_action != ROUTE_ACTION_TURN_LEFT && context->junction_action != ROUTE_ACTION_TURN_RIGHT &&
          context->junction_action != ROUTE_ACTION_TURN_AROUND)) {
@@ -1443,7 +1445,7 @@ static uint8_t ControlLogic_TargetEdgeDetected(const control_context_t* context,
      * the directional outer edge
      * (100/110); 010 alone can still be the old
      * pickup line and must not hand control back to forward PID.
- */
+     */
     return (line_left != 0U && line_right == 0U) ? 1U : 0U;
 }
 
@@ -1626,7 +1628,7 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
                     (uint32_t)(now_ms - context->junction_turn_started_at_ms) < CONTROL_PICKUP_UTURN_MIN_PIVOT_MS) {
                     /*
                      * Reverse can leave 000/100 samples queued at the pickup.
- * Require real
+                     * Require real
                      * pivot output before those patterns can clear
                      * the source line and hand
                      * control back to forward PID.
