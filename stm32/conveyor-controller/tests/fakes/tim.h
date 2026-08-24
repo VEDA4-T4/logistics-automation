@@ -16,6 +16,7 @@ typedef enum {
 typedef struct {
     uint32_t autoreload;
     uint32_t compare;
+    uint32_t compareByChannel[4];
     uint32_t counter;
     HAL_TIM_ActiveChannel Channel;
 } TIM_HandleTypeDef;
@@ -47,8 +48,8 @@ extern TIM_HandleTypeDef htim11;
 
 #define __HAL_TIM_SET_COMPARE(handle, channel, value) \
     do {                                              \
-        (void)(channel);                              \
         (handle)->compare = (uint32_t)(value);        \
+        (handle)->compareByChannel[(channel) / 4U] = (uint32_t)(value); \
     } while (0)
 
 #define __HAL_TIM_GET_AUTORELOAD(handle) ((handle)->autoreload)

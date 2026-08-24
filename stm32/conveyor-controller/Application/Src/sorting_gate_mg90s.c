@@ -13,39 +13,50 @@ typedef struct {
 
 static sorting_gate_mg90s_context_t sortingGateContext;
 
-static uint32_t sorting_gate_mg90s_pulse(uart_sorting_destination_t destination) {
+typedef struct {
+    uint32_t mg90sPulse;
+    uint32_t sg90Pulse;
+} sorting_gate_pulses_t;
+
+static sorting_gate_pulses_t sorting_gate_pulses(uart_sorting_destination_t destination) {
     switch (destination) {
         case UART_SORTING_DESTINATION_NONE:
-            return SORTING_GATE_HOME_PULSE_US;
+            return (sorting_gate_pulses_t){ .mg90sPulse = SORTING_GATE_MG90S_HOME_PULSE_US,
+                                            .sg90Pulse = SORTING_GATE_SG90_HOME_PULSE_US };
 
         case UART_SORTING_DESTINATION_1:
-            return SORTING_GATE_DESTINATION_1_PULSE_US;
+            return (sorting_gate_pulses_t){ .mg90sPulse = SORTING_GATE_MG90S_DESTINATION_1_PULSE_US,
+                                            .sg90Pulse = SORTING_GATE_SG90_DESTINATION_1_PULSE_US };
 
         case UART_SORTING_DESTINATION_2:
-            return SORTING_GATE_DESTINATION_2_PULSE_US;
+            return (sorting_gate_pulses_t){ .mg90sPulse = SORTING_GATE_MG90S_DESTINATION_2_PULSE_US,
+                                            .sg90Pulse = SORTING_GATE_SG90_DESTINATION_2_PULSE_US };
 
         case UART_SORTING_DESTINATION_3:
-            return SORTING_GATE_DESTINATION_3_PULSE_US;
+            return (sorting_gate_pulses_t){ .mg90sPulse = SORTING_GATE_MG90S_DESTINATION_3_PULSE_US,
+                                            .sg90Pulse = SORTING_GATE_SG90_DESTINATION_3_PULSE_US };
 
         default:
-            return 0U;
+            return (sorting_gate_pulses_t){ 0U, 0U };
     }
 }
 
 static sorting_gate_result_t sorting_gate_mg90s_move(void* context, uart_sorting_destination_t destination) {
     sorting_gate_mg90s_context_t* gate;
     uint32_t periodCounts;
-    uint32_t pulseCounts;
+    sorting_gate_pulses_t pulses;
 
     gate = (sorting_gate_mg90s_context_t*)context;
-    pulseCounts = sorting_gate_mg90s_pulse(destination);
+    pulses = sorting_gate_pulses(destination);
     periodCounts = __HAL_TIM_GET_AUTORELOAD(&htim3) + 1U;
 
-    if ((gate == NULL) || (gate->initialized == 0U) || (pulseCounts == 0U) || (pulseCounts >= periodCounts)) {
+    if ((gate == NULL) || (gate->initialized == 0U) || (pulses.mg90sPulse == 0U) ||
+        (pulses.sg90Pulse == 0U) || (pulses.mg90sPulse >= periodCounts) || (pulses.sg90Pulse >= periodCounts)) {
         return SORTING_GATE_ERROR;
     }
 
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulseCounts);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulses.mg90sPulse);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, pulses.sg90Pulse);
     gate->motionStartedAt = HAL_GetTick();
     gate->motionActive = 1U;
     return SORTING_GATE_OK;
@@ -61,10 +72,18 @@ static sorting_gate_result_t sorting_gate_mg90s_initialize(void* context) {
     }
 
     if (gate->initialized == 0U) {
-        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SORTING_GATE_HOME_PULSE_US);
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, SORTING_GATE_MG90S_HOME_PULSE_US);
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, SORTING_GATE_SG90_HOME_PULSE_US);
 
         if (HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2) != HAL_OK) {
             __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0U);
+            __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0U);
+            return SORTING_GATE_ERROR;
+        }
+
+        if (HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3) != HAL_OK) {
+            __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0U);
+            __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0U);
             return SORTING_GATE_ERROR;
         }
 
