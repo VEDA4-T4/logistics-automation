@@ -672,6 +672,22 @@ void TestSortingDispatchFailureKeepsInputStopped() {
     assert(work->stage == central_server::WorkStage::kFailed);
 }
 
+void TestFailedWorkDoesNotBlockNextUltrasonicWork() {
+    ProcessIntegrationHarness harness;
+    harness.FailPublishingTo(std::string(kInputId));
+    assert(!harness.DetectBox());
+
+    const std::string failed_work_id = harness.WorkId();
+    const auto failed_work = harness.Orchestrator().StateMachine().FindWork(failed_work_id);
+    assert(failed_work.has_value());
+    assert(failed_work->stage == central_server::WorkStage::kFailed);
+    assert(harness.Orchestrator().StateMachine().ActiveWorks().empty());
+
+    harness.FailPublishingTo({});
+    assert(harness.DetectInputSensor());
+    assert(harness.WorkId() != failed_work_id);
+}
+
 void TestRejectedGripperCommandFailsWork() {
     ProcessIntegrationHarness harness;
     AdvanceToGripperRequested(harness);
@@ -1208,6 +1224,7 @@ int main() {
     }
     TestLineTracerLoadStopsSortingAndStartsTransportOnce();
     TestSortingDispatchFailureKeepsInputStopped();
+    TestFailedWorkDoesNotBlockNextUltrasonicWork();
     TestRejectedGripperCommandFailsWork();
     TestTimedOutGripperCommandFailsWork();
     TestTimedOutLineTracerDestinationWaitsForArrival();
