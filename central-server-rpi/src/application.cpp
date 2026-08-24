@@ -208,7 +208,6 @@ int Application::Run(int argc, char* argv[]) {
     std::unordered_set<std::string> restored_pending_process_commands;
     bool safe_restored_replay_pending = false;
     InputDetectionGate input_detection_gate(server_config.process.input_device_id);
-    RuntimeBarcodeGate runtime_barcode_gate;
     LineTracerLoadGate line_tracer_load_gate(server_config.process.line_tracer_device_id);
     ProcessStateStore process_state_store(database);
     // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
@@ -1077,10 +1076,9 @@ int Application::Run(int argc, char* argv[]) {
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_command,
                                            &dispatch_process_commands, &input_detection_gate, &line_tracer_load_gate,
                                            &process_state_persistence_healthy, &persist_process_state, &persistence,
-                                           &pending_vision_measurement, &publish_durable, &runtime_barcode_gate,
+                                           &pending_vision_measurement, &publish_durable,
                                            &replay_pending_vision_measurement,
                                            qt_client_id = server_config.qt_client_id,
-                                           server_id = server_config.process.server_id,
                                            default_destination = server_config.process.default_destination,
                                            line_tracer_enabled = server_config.process.line_tracer_enabled,
                                            &process_epoch](const contracts::mqtt::MqttMessage& message) {
@@ -1120,28 +1118,7 @@ int Application::Run(int argc, char* argv[]) {
                           << "; position=" << position_summary << '\n';
                 return true;
             }
-
             const auto& work = *work_it;
-            if (runtime_barcode_gate.IsDuplicate(measurement->barcode)) {
-                auto duplicate = MakeWorkFailureCompletion(
-                    server_id, "VISION-DUPLICATE-" + message.message_id, work.work_id,
-                    "duplicate barcode skipped in current server runtime", CurrentIso8601Timestamp());
-                const auto duplicate_result = process_orchestrator.Handle(duplicate);
-                if (!duplicate_result.transition.Applied()) {
-                    std::cerr << "[server][ERROR] duplicate barcode work rejection failed; workId=" << work.work_id
-                              << "; reason=" << duplicate_result.transition.reason << '\n';
-                    return false;
-                }
-                contracts::mqtt::GetPayload<contracts::mqtt::WorkCompletedPayload>(duplicate)->result = "SKIPPED";
-                input_detection_gate.BlockUntilClear();
-                if (!publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), duplicate) ||
-                    !persist_process_state()) {
-                    return false;
-                }
-                std::clog << "[server][INFO] duplicate barcode skipped; workId=" << work.work_id
-                          << "; barcode=" << measurement->barcode << "; waitingFor=ULTRASONIC_CLEAR\n";
-                return true;
-            }
             const std::string position_id = "VISION-POSITION-" + message.message_id;
             const std::string barcode_id = "VISION-BARCODE-" + message.message_id;
             const std::string bound_at = CurrentIso8601Timestamp();
@@ -1215,6 +1192,7 @@ int Application::Run(int argc, char* argv[]) {
             if (!publish_measurement_event(position_message) || !publish_measurement_event(barcode_message)) {
                 return false;
             }
+            input_detection_gate.BlockUntilClear();
 
             std::optional<CatalogProduct> catalog_product;
             const auto lookup_status = persistence.FindActiveProductByBarcode(measurement->barcode, catalog_product);
@@ -1265,7 +1243,6 @@ int Application::Run(int argc, char* argv[]) {
             if (!publish_measurement_event(product_message)) {
                 return false;
             }
-            runtime_barcode_gate.Remember(measurement->barcode);
             std::clog << "[server][INFO] VISION_MEASUREMENT accepted; workId=" << work.work_id
                       << "; barcode=" << measurement->barcode << "; position=" << position_summary
                       << "; destination=" << catalog_product->destination << "; state=PRODUCT_IDENTIFIED\n";

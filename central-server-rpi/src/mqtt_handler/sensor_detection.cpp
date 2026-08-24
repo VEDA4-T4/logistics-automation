@@ -129,14 +129,6 @@ void InputDetectionGate::RetryStop() noexcept {
     stop_consumed_ = false;
 }
 
-bool RuntimeBarcodeGate::IsDuplicate(const std::string_view barcode) const {
-    return barcodes_.contains(std::string(barcode));
-}
-
-void RuntimeBarcodeGate::Remember(std::string barcode) {
-    barcodes_.insert(std::move(barcode));
-}
-
 LineTracerLoadGate::LineTracerLoadGate(std::string line_tracer_device_id)
     : line_tracer_device_id_(std::move(line_tracer_device_id)) {}
 

@@ -711,8 +711,7 @@ DashboardUpdateResult OperationsDashboardState::applyEnvelope(const QJsonObject&
     }
     if (type == mqtt::MessageType::kWorkCompleted) {
         const auto completed_result = StringValue(data, "result").toUpper();
-        if (completed_result != QStringLiteral("SUCCESS") && completed_result != QStringLiteral("FAILED") &&
-            completed_result != QStringLiteral("SKIPPED")) {
+        if (completed_result != QStringLiteral("SUCCESS") && completed_result != QStringLiteral("FAILED")) {
             result.error = QStringLiteral("작업 완료 메시지의 result가 올바르지 않습니다.");
             return result;
         }

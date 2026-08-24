@@ -522,16 +522,6 @@ int main() {
     assert(failed_line.work_completed);
     assert(failed_line.has_error);
 
-    OperationsDashboardState skipped_completion_state;
-    result = skipped_completion_state.applyEnvelope(
-        Envelope("WORK-SKIPPED-COMPLETE", "WORK_COMPLETED",
-                 WorkData("WORK-SKIPPED", { { QStringLiteral("result"), QStringLiteral("SKIPPED") } }),
-                 "central-server", "2026-07-23T01:00:02.000Z"));
-    assert(result.applied);
-    const auto skipped_line = ProcessByKey(skipped_completion_state, QStringLiteral("linetracer"));
-    assert(skipped_line.work_completed);
-    assert(!skipped_line.has_error);
-
     failed_completion_state.markMqttDisconnected(
         QDateTime::fromString(QStringLiteral("2026-07-23T01:00:03.000Z"), Qt::ISODateWithMs));
     const auto reset_failed_line = ProcessByKey(failed_completion_state, QStringLiteral("linetracer"));

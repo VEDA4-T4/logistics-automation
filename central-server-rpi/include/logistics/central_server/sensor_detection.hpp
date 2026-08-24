@@ -119,15 +119,6 @@ private:
     bool waiting_for_clear_{ false };
 };
 
-class RuntimeBarcodeGate final {
-public:
-    [[nodiscard]] bool IsDuplicate(std::string_view barcode) const;
-    void Remember(std::string barcode);
-
-private:
-    std::unordered_set<std::string> barcodes_;
-};
-
 class LineTracerLoadGate final {
 public:
     explicit LineTracerLoadGate(std::string line_tracer_device_id);
