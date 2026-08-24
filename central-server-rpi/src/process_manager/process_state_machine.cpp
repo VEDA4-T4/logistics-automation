@@ -72,11 +72,6 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
         const auto iterator = works_.find(event.work_id);
         transition =
             iterator == works_.end() ? Reject("workId is not active") : ApplyToExisting(event, iterator->second);
-        if (iterator != works_.end() && event.type == ProcessEventType::kBarcodeFailed && transition.Applied()) {
-            works_.erase(iterator);
-            SuspendActiveWorks(WorkStage::kStopped);
-            system_state_ = ProcessSystemState::kStopped;
-        }
     }
 
     if (!event.message_id.empty()) {

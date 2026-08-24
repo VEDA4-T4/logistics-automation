@@ -304,20 +304,13 @@ void TestEventFlowCreatesCommandsForEachNode() {
                     .error_code = std::nullopt,
                     .message = "sorting conveyor stopped",
                 }));
-    assert(gate_recovery.commands.size() == 2);
+    assert(gate_recovery.commands.size() == 1);
     const auto* return_home = mqtt::GetPayload<mqtt::ControlCommandPayload>(gate_recovery.commands.front().message);
     assert(return_home != nullptr);
     assert(return_home->command == mqtt::ControlCommand::kRecovery);
     assert(return_home->target_device_id == "PI-SORTING-01");
     assert(return_home->component_id == "GATE");
     assert(return_home->params.at("workId") == kWorkId);
-    const auto& input_start = gate_recovery.commands.back();
-    const auto* input_start_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(input_start.message);
-    assert(input_start_payload != nullptr);
-    assert(input_start_payload->command == mqtt::ControlCommand::kStart);
-    assert(input_start_payload->target_device_id == "PI-INPUT-01");
-    assert(input_start_payload->component_id == "input_conveyor");
-    assert(input_start_payload->params.at("workId") == kWorkId);
     assert(orchestrator.SortingDetectionCommands("UNKNOWN-WORK", kTimestamp).empty());
     const auto sorting_done = orchestrator.Handle(Status("MSG-SORTING-DONE", "PI-SORTING-01", "CYCLE_COMPLETE"));
     assert(sorting_done.transition.Applied() && sorting_done.commands.empty());
@@ -331,7 +324,15 @@ void TestEventFlowCreatesCommandsForEachNode() {
                                        .result = "SUCCESS",
                                        .message = std::string("unload complete"),
                                    });
-    assert(orchestrator.Handle(completed).transition.Applied());
+    const auto unload_completed = orchestrator.Handle(completed);
+    assert(unload_completed.transition.Applied());
+    assert(unload_completed.commands.size() == 1);
+    const auto* input_start = mqtt::GetPayload<mqtt::ControlCommandPayload>(unload_completed.commands.front().message);
+    assert(input_start != nullptr);
+    assert(input_start->command == mqtt::ControlCommand::kStart);
+    assert(input_start->target_device_id == "PI-INPUT-01");
+    assert(input_start->component_id == "input_conveyor");
+    assert(input_start->params.at("workId") == kWorkId);
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kCompleted);
 }
 
@@ -979,9 +980,11 @@ void TestDownstreamDevicesServeOneWorkAtATime() {
                                         .message = std::string("unload complete"),
                                     }));
     assert(completed.transition.Applied());
-    assert(completed.commands.size() == 1);
-    assert(completed.commands.front().work_id == kQueuedWorkId);
-    const auto* line_tracer = mqtt::GetPayload<mqtt::DestinationSetPayload>(completed.commands.front().message);
+    assert(completed.commands.size() == 2);
+    const auto* input_start = mqtt::GetPayload<mqtt::ControlCommandPayload>(completed.commands.front().message);
+    assert(input_start != nullptr && input_start->target_device_id == "PI-INPUT-01");
+    assert(completed.commands.back().work_id == kQueuedWorkId);
+    const auto* line_tracer = mqtt::GetPayload<mqtt::DestinationSetPayload>(completed.commands.back().message);
     assert(line_tracer != nullptr && line_tracer->target_device_id == "PI-LT-01");
 }
 
