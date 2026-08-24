@@ -273,7 +273,7 @@ std::vector<WorkProcessSnapshot> ProcessStateMachine::ActiveWorks() const {
     std::vector<WorkProcessSnapshot> result;
     for (const auto& [work_id, work] : works_) {
         static_cast<void>(work_id);
-        if (!IsTerminal(work.stage)) {
+        if (!IsTerminal(work.stage) && work.stage != WorkStage::kFailed) {
             result.push_back(work);
         }
     }

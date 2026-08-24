@@ -220,29 +220,7 @@ bool ProcessOrchestrator::AcceptsInputWorkCreation() const noexcept {
 }
 
 bool ProcessOrchestrator::AcceptsNewWork() const noexcept {
-    if (!AcceptsInputWorkCreation()) {
-        return false;
-    }
-
-    const std::array process_devices{
-        std::string_view(config_.input_device_id),
-        std::string_view(config_.vision_device_id),
-        std::string_view(config_.gripper_device_id),
-        std::string_view(config_.sorting_device_id),
-    };
-    for (const auto device_id : process_devices) {
-        const auto health = device_health_.find(std::string(device_id));
-        if (health != device_health_.end() && !health->second) {
-            return false;
-        }
-    }
-    if (config_.line_tracer_enabled) {
-        const auto health = device_health_.find(config_.line_tracer_device_id);
-        if (health != device_health_.end() && !health->second) {
-            return false;
-        }
-    }
-    return true;
+    return AcceptsInputWorkCreation();
 }
 
 bool ProcessOrchestrator::IsWorkCreationSource(std::string_view device_id) const noexcept {
@@ -761,7 +739,10 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                                                                                : ProcessEventType::kSortingStarted,
                           message, *status->job_id);
         } else if (config_.line_tracer_enabled && message.source_id == config_.line_tracer_device_id) {
-            if (status->status != mqtt::ConnectionState::kOnline || status->error_code.has_value()) {
+            const bool ignorable_sensor_error =
+                status->error_code.has_value() && Uppercase(*status->error_code) == "ERR-SENSOR";
+            if (status->status != mqtt::ConnectionState::kOnline ||
+                (status->error_code.has_value() && !ignorable_sensor_error)) {
                 return NotHandled();
             }
             const auto work = machine.FindWork(*status->job_id);
@@ -805,6 +786,10 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         event = Event(completed->result == "SUCCESS" ? ProcessEventType::kWorkCompleted : ProcessEventType::kWorkFailed,
                       message, completed->work_id, completed->message.value_or("work failed"));
     } else if (const auto* error = mqtt::GetPayload<mqtt::ErrorOccurredPayload>(message)) {
+        if (config_.line_tracer_enabled && message.source_id == config_.line_tracer_device_id &&
+            Uppercase(error->error_code) == "ERR-SENSOR") {
+            return NotHandled();
+        }
         const std::string reason = error->error_code + ": " + error->message;
         const std::string error_level = Uppercase(error->error_level);
         if (!IsOneOf(error_level, { "ERROR", "CRITICAL" })) {

@@ -197,6 +197,18 @@ public:
                                                                   }));
     }
 
+    [[nodiscard]] bool ReportError(std::string_view device_id, std::string error_code) {
+        return Handle(mqtt::DeviceErrorTopic(device_id), Message(mqtt::MessageType::kErrorOccurred, device_id,
+                                                                 mqtt::ErrorOccurredPayload{
+                                                                     .job_id = work_id_,
+                                                                     .error_code = std::move(error_code),
+                                                                     .error_level = "ERROR",
+                                                                     .current_state = "FAULT",
+                                                                     .message = "controller reported a fault",
+                                                                     .distance = std::nullopt,
+                                                                 }));
+    }
+
     [[nodiscard]] bool DetectSortedProduct(std::int32_t sensor_id = 3) {
         for (int reading = 0; reading < 3; ++reading) {
             if (!Handle(mqtt::DeviceEventTopic(kSortingId), Message(mqtt::MessageType::kSensorStatus, kSortingId,
@@ -660,6 +672,22 @@ void TestSortingDispatchFailureKeepsInputStopped() {
     assert(work->stage == central_server::WorkStage::kFailed);
 }
 
+void TestFailedWorkDoesNotBlockNextUltrasonicWork() {
+    ProcessIntegrationHarness harness;
+    harness.FailPublishingTo(std::string(kInputId));
+    assert(!harness.DetectBox());
+
+    const std::string failed_work_id = harness.WorkId();
+    const auto failed_work = harness.Orchestrator().StateMachine().FindWork(failed_work_id);
+    assert(failed_work.has_value());
+    assert(failed_work->stage == central_server::WorkStage::kFailed);
+    assert(harness.Orchestrator().StateMachine().ActiveWorks().empty());
+
+    harness.FailPublishingTo({});
+    assert(harness.DetectInputSensor());
+    assert(harness.WorkId() != failed_work_id);
+}
+
 void TestRejectedGripperCommandFailsWork() {
     ProcessIntegrationHarness harness;
     AdvanceToGripperRequested(harness);
@@ -692,6 +720,20 @@ void TestTimedOutLineTracerDestinationWaitsForArrival() {
     assert(work->stage == central_server::WorkStage::kProductIdentified);
     assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
     assert(harness.ReportStatus(kLineTracerId, "PICKUP_READY_C"));
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
+}
+
+void TestLineTracerSensorErrorDoesNotSuppressPickupReady() {
+    ProcessIntegrationHarness harness;
+    assert(harness.DetectBox());
+    assert(harness.DetectPosition());
+    assert(harness.DetectBarcode());
+    assert(harness.ReportCommandResult(kLineTracerId, mqtt::CommandResult::kSuccess));
+
+    assert(harness.ReportError(kLineTracerId, "ERR-SENSOR"));
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kProductIdentified);
+    assert(harness.ReportStatus(kLineTracerId, "PICKUP_READY_C", "ERR-SENSOR"));
     assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
 }
 
@@ -1182,9 +1224,11 @@ int main() {
     }
     TestLineTracerLoadStopsSortingAndStartsTransportOnce();
     TestSortingDispatchFailureKeepsInputStopped();
+    TestFailedWorkDoesNotBlockNextUltrasonicWork();
     TestRejectedGripperCommandFailsWork();
     TestTimedOutGripperCommandFailsWork();
     TestTimedOutLineTracerDestinationWaitsForArrival();
+    TestLineTracerSensorErrorDoesNotSuppressPickupReady();
     TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess();
     for (const auto stage :
          std::to_array({ central_server::WorkStage::kInputDetected, central_server::WorkStage::kVisionAssigned,
