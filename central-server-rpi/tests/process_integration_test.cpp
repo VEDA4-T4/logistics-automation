@@ -546,12 +546,15 @@ void TestInputSensorCreatesWorkWithoutVisionBoxEvent() {
     assert(!harness.HasMessage(mqtt::MessageType::kBoxDetected, kVisionId));
 }
 
-void TestVisionBarcodeFailureDoesNotEmergencyStopProcess() {
+void TestVisionBarcodeFailureDoesNotBlockNextWork() {
     ProcessIntegrationHarness harness(false);
     assert(harness.DetectInputSensor());
+    const std::string failed_work_id = harness.WorkId();
     assert(harness.FailBarcode());
     assert(harness.Orchestrator().StateMachine().ActiveWorks().empty());
-    assert(harness.Orchestrator().StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(harness.Orchestrator().StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(harness.DetectInputSensor());
+    assert(harness.WorkId() != failed_work_id);
 }
 
 void AdvanceToGripperTransfer(ProcessIntegrationHarness& harness) {
@@ -598,12 +601,13 @@ void TestAutomaticProcessCompletes(bool line_tracer_enabled) {
         assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
         assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 0);
         assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
-        assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
-        assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
+        assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
         assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
         assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
         assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
         assert(harness.CompleteWork());
+        assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
+        assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
     } else {
         assert(harness.DetectSortedProduct());
         assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
@@ -651,12 +655,13 @@ void TestLineTracerLoadStopsSortingAndStartsTransportOnce() {
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
 
     assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
-    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
-    assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
     assert(harness.ReportStatus(kLineTracerId, "LOAD_ON_C"));
     assert(harness.DetectSortedProduct());
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 1);
+    assert(harness.CompleteWork());
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
 }
 
 void TestSortingDispatchFailureKeepsInputStopped() {
@@ -1218,7 +1223,7 @@ void TestBufferedVisionContinuesAfterFirstUltrasonicDetection() {
 
 int main() {
     TestInputSensorCreatesWorkWithoutVisionBoxEvent();
-    TestVisionBarcodeFailureDoesNotEmergencyStopProcess();
+    TestVisionBarcodeFailureDoesNotBlockNextWork();
     for (const bool line_tracer_enabled : std::to_array({ true, false })) {
         TestAutomaticProcessCompletes(line_tracer_enabled);
     }

@@ -1106,6 +1106,12 @@ int Application::Run(int argc, char* argv[]) {
                 return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
             });
             if (work_it == active_works.end()) {
+                if (!active_works.empty()) {
+                    std::clog << "[server][INFO] VISION_MEASUREMENT ignored; active work already passed vision; source="
+                              << message.source_id << "; barcode=" << measurement->barcode
+                              << "; position=" << position_summary << '\n';
+                    return true;
+                }
                 pending_vision_measurement.Store(message);
                 std::clog << "[server][INFO] VISION_MEASUREMENT buffered; no ultrasonic work; source="
                           << message.source_id << "; barcode=" << measurement->barcode
@@ -1116,6 +1122,7 @@ int Application::Run(int argc, char* argv[]) {
             const auto& work = *work_it;
             const std::string position_id = "VISION-POSITION-" + message.message_id;
             const std::string barcode_id = "VISION-BARCODE-" + message.message_id;
+            const std::string bound_at = CurrentIso8601Timestamp();
             const std::int32_t center_x = measurement->box_x + measurement->box_width / 2;
             const std::int32_t center_y = measurement->box_y + measurement->box_height / 2;
             const std::int32_t frame_center_x = measurement->frame_width / 2;
@@ -1125,7 +1132,7 @@ int Application::Run(int argc, char* argv[]) {
                 .message_id = position_id,
                 .message_type = contracts::mqtt::MessageType::kPositionDetected,
                 .source_id = message.source_id,
-                .timestamp = message.timestamp,
+                .timestamp = bound_at,
                 .process_epoch = process_epoch,
                 .data =
                     contracts::mqtt::PositionDetectedPayload{
@@ -1147,7 +1154,7 @@ int Application::Run(int argc, char* argv[]) {
                 .message_id = barcode_id,
                 .message_type = contracts::mqtt::MessageType::kBarcodeDetected,
                 .source_id = message.source_id,
-                .timestamp = message.timestamp,
+                .timestamp = bound_at,
                 .process_epoch = process_epoch,
                 .data =
                     contracts::mqtt::BarcodeDetectedPayload{
@@ -1179,10 +1186,13 @@ int Application::Run(int argc, char* argv[]) {
                 if (!publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), event)) {
                     std::cerr << "[server][ERROR] VISION_MEASUREMENT Qt event enqueue failed; messageId="
                               << event.message_id << '\n';
+                    return false;
                 }
+                return true;
             };
-            publish_measurement_event(position_message);
-            publish_measurement_event(barcode_message);
+            if (!publish_measurement_event(position_message) || !publish_measurement_event(barcode_message)) {
+                return false;
+            }
 
             std::optional<CatalogProduct> catalog_product;
             const auto lookup_status = persistence.FindActiveProductByBarcode(measurement->barcode, catalog_product);
@@ -1209,7 +1219,7 @@ int Application::Run(int argc, char* argv[]) {
                 .message_id = "VISION-PRODUCT-" + message.message_id,
                 .message_type = contracts::mqtt::MessageType::kProductInfo,
                 .source_id = "central-server",
-                .timestamp = message.timestamp,
+                .timestamp = bound_at,
                 .process_epoch = process_epoch,
                 .data =
                     contracts::mqtt::ProductInfoPayload{
@@ -1230,7 +1240,9 @@ int Application::Run(int argc, char* argv[]) {
                           << '\n';
                 return true;
             }
-            publish_measurement_event(product_message);
+            if (!publish_measurement_event(product_message)) {
+                return false;
+            }
             std::clog << "[server][INFO] VISION_MEASUREMENT accepted; workId=" << work.work_id
                       << "; barcode=" << measurement->barcode << "; position=" << position_summary
                       << "; destination=" << catalog_product->destination << "; state=PRODUCT_IDENTIFIED\n";

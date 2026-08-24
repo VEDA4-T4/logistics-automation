@@ -439,10 +439,6 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleCommandCompletion(const Pr
         (work->stage == WorkStage::kSorting || work->stage == WorkStage::kTransporting)) {
         completion.commands.push_back(
             MakeSortingControlCommand(intent.work_id, mqtt::ControlCommand::kRecovery, "GATE", response.timestamp));
-        if (config_.line_tracer_enabled) {
-            completion.commands.push_back(
-                MakeInputConveyorCommand(intent.work_id, mqtt::ControlCommand::kStart, response.timestamp));
-        }
         return completion;
     }
     return NotHandled();
@@ -842,6 +838,8 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
     }
     if (event.type == ProcessEventType::kWorkCompleted) {
         gripper_targets_.erase(event.work_id);
+        result.commands.push_back(
+            MakeInputConveyorCommand(event.work_id, mqtt::ControlCommand::kStart, message.timestamp));
         // ponytail: the stopped input conveyor leaves at most one routed work waiting; add a persisted FIFO if
         // multiple camera buffers are introduced.
         const auto active_works = machine.ActiveWorks();
