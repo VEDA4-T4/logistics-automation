@@ -386,7 +386,7 @@ void TestInvalidOrderAndDispatchFailureStaysProcessReady() {
     assert(pickup_ready.commands.size() == 1);
     assert(orchestrator.FailDispatch(pickup_ready.commands.front(), "gripper is offline").Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
-    assert(!orchestrator.AcceptsNewWork());
+    assert(orchestrator.AcceptsNewWork());
 }
 
 void TestInputFailureWithoutWorkIdPreservesTheProcess() {
@@ -575,13 +575,13 @@ void TestSystemCommandTimeoutDoesNotMutateActiveWorks() {
     assert(orchestrator.StateMachine().FindWork(other_work_id)->failure_reason.empty());
 }
 
-void TestFailedDeviceBlocksNewWorkUntilHealthy() {
+void TestFailedDeviceDoesNotBlockNewWork() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     const auto begin = orchestrator.BeginWork("MSG-INPUT-FAULT", kWorkId, "PI-INPUT-01", kTimestamp);
     assert(begin.transition.Applied() && begin.commands.size() == 1);
     assert(orchestrator.FailDispatch(begin.commands.front(), "input conveyor stop timed out").Applied());
     assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
-    assert(!orchestrator.AcceptsNewWork());
+    assert(orchestrator.AcceptsNewWork());
     assert(orchestrator.AcceptsInputWorkCreation());
 
     assert(!orchestrator
@@ -1148,7 +1148,7 @@ int main() {
     TestFailedSystemCommandsPreserveRequestedProcessStates();
     TestCommandTimeoutOnlyFailsIdentifiableWork();
     TestSystemCommandTimeoutDoesNotMutateActiveWorks();
-    TestFailedDeviceBlocksNewWorkUntilHealthy();
+    TestFailedDeviceDoesNotBlockNewWork();
     TestRecoveryPersistenceFailureKeepsMemoryStateAndPendingCommands();
     TestRecoveryRestartStaysRecovering();
     TestRestoredHomographyTargetCreatesGripperCommand();
