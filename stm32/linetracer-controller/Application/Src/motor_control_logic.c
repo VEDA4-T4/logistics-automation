@@ -146,6 +146,12 @@ uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output
                                         MOTOR_CONTROL_RIGHT_UTURN_PWM, output);
             return 1U;
 
+        case ROUTE_ACTION_REVERSE:
+            MotorControlLogic_MakePivot(MOTOR_DIRECTION_REVERSE, MOTOR_DIRECTION_REVERSE,
+                                        MOTOR_CONTROL_LEFT_PICKUP_REVERSE_PWM, MOTOR_CONTROL_RIGHT_PICKUP_REVERSE_PWM,
+                                        output);
+            return 1U;
+
         case ROUTE_ACTION_STOP_AT_PICKUP:
         case ROUTE_ACTION_STOP_AT_DEST:
         case ROUTE_ACTION_JOB_COMPLETE:
@@ -158,6 +164,25 @@ uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output
         default:
             return 0U;
     }
+}
+
+uint8_t MotorControlLogic_ComputePickupUTurn(uart_linetracer_position_t current_position,
+                                             uart_linetracer_route_t active_route, motor_output_t* output) {
+    uint16_t left_pwm = MOTOR_CONTROL_LEFT_UTURN_PWM;
+    uint16_t right_pwm = MOTOR_CONTROL_RIGHT_UTURN_PWM;
+
+    if (output == NULL) {
+        return 0U;
+    }
+
+    if ((current_position == UART_LINETRACER_POSITION_DEST_A && active_route == UART_LINETRACER_ROUTE_A) ||
+        (current_position == UART_LINETRACER_POSITION_DEST_B && active_route == UART_LINETRACER_ROUTE_B)) {
+        left_pwm = MOTOR_CONTROL_AB_LEFT_UTURN_PWM;
+        right_pwm = MOTOR_CONTROL_AB_RIGHT_UTURN_PWM;
+    }
+
+    MotorControlLogic_MakePivot(MOTOR_DIRECTION_FORWARD, MOTOR_DIRECTION_REVERSE, left_pwm, right_pwm, output);
+    return 1U;
 }
 
 uint8_t MotorControlLogic_ComputeControlOutput(linetracer_control_state_t state, route_action_t pending_action,

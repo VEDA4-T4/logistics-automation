@@ -12,18 +12,24 @@
  * calibrate each pair independently on the assembled unload mechanism.
  */
 #define UNLOAD_SERVO_REFERENCE_ANGLE_DEG 90U
-#define UNLOAD_SERVO_RELEASE_ANGLE_DEG 70U
+#define UNLOAD_SERVO_RELEASE_ANGLE_DEG 50U
 #define UNLOAD_SERVO_REFERENCE_PULSE_DELTA_US 1000U
-#define UNLOAD_SERVO_RELEASE_PULSE_DELTA_US                                                                   \
-    ((UNLOAD_SERVO_REFERENCE_PULSE_DELTA_US * UNLOAD_SERVO_RELEASE_ANGLE_DEG +                              \
-      (UNLOAD_SERVO_REFERENCE_ANGLE_DEG / 2U)) /                                                             \
+#define UNLOAD_SERVO_RELEASE_PULSE_DELTA_US                                    \
+    ((UNLOAD_SERVO_REFERENCE_PULSE_DELTA_US * UNLOAD_SERVO_RELEASE_ANGLE_DEG + \
+      (UNLOAD_SERVO_REFERENCE_ANGLE_DEG / 2U)) /                               \
      UNLOAD_SERVO_REFERENCE_ANGLE_DEG)
 
-/* Reverse the previous release direction while keeping the mirrored linkage. */
-#define UNLOAD_SERVO_1_HOME_PULSE_US 1000U
-#define UNLOAD_SERVO_1_RELEASE_PULSE_US (UNLOAD_SERVO_1_HOME_PULSE_US + UNLOAD_SERVO_RELEASE_PULSE_DELTA_US)
-#define UNLOAD_SERVO_2_HOME_PULSE_US 2000U
-#define UNLOAD_SERVO_2_RELEASE_PULSE_US (UNLOAD_SERVO_2_HOME_PULSE_US - UNLOAD_SERVO_RELEASE_PULSE_DELTA_US)
+/*
+ * On the assembled unload linkage, raising the platform requires CH1 to move
+ * toward a shorter pulse and CH2
+ * toward a longer pulse. The servos are mounted
+ * as a mirrored pair, so HOME and RELEASE must move in opposite
+ * directions.
+ */
+#define UNLOAD_SERVO_1_HOME_PULSE_US 2000U
+#define UNLOAD_SERVO_1_RELEASE_PULSE_US (UNLOAD_SERVO_1_HOME_PULSE_US - UNLOAD_SERVO_RELEASE_PULSE_DELTA_US)
+#define UNLOAD_SERVO_2_HOME_PULSE_US 1000U
+#define UNLOAD_SERVO_2_RELEASE_PULSE_US (UNLOAD_SERVO_2_HOME_PULSE_US + UNLOAD_SERVO_RELEASE_PULSE_DELTA_US)
 #define UNLOAD_SERVO_RAMP_STEP_US 40U
 
 /* Mechanical timings are intentionally conservative and must be calibrated on the vehicle. */
