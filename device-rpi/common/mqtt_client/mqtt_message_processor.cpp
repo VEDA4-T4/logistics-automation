@@ -48,7 +48,8 @@ namespace {
     const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
     return command != nullptr && (command->command == contracts::mqtt::ControlCommand::kStart ||
                                   command->command == contracts::mqtt::ControlCommand::kRestart ||
-                                  command->command == contracts::mqtt::ControlCommand::kInitialize);
+                                  command->command == contracts::mqtt::ControlCommand::kInitialize ||
+                                  command->command == contracts::mqtt::ControlCommand::kRecovery);
 }
 
 }  // namespace

@@ -321,6 +321,32 @@ void TestProcessEpochOwnershipAndPropagation() {
     assert(!processor.PrepareOutboundMessage(mismatched).has_value());
 }
 
+void TestRecoveryAdoptsNewProcessEpoch() {
+    device::MqttMessageProcessor processor("PI-01");
+    const auto start = ProcessCommand(mqtt::ControlCommand::kStart, "REQ-START-OLD", std::string(kProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(start)).IsSuccess());
+
+    const auto recovery =
+        ProcessCommand(mqtt::ControlCommand::kRecovery, "REQ-RECOVERY-NEW", std::string(kOtherProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(recovery)).IsSuccess());
+
+    mqtt::MqttMessage status{
+        .message_id = "STATUS-AFTER-RECOVERY",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "PI-01",
+        .timestamp = "2026-08-15T01:00:02Z",
+        .data = mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline,
+                                           .current_state = "IDLE",
+                                           .job_id = std::string("22a194c3-3e3c-410c-a329-7e8c4ebcac83") },
+    };
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
+
+    const auto stale_execute =
+        ProcessCommand(mqtt::ControlCommand::kExecute, "REQ-EXECUTE-OLD", std::string(kProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(stale_execute)).IsSuccess());
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
+}
+
 void TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval() {
     device::MqttMessageProcessor processor("PI-01");
     mqtt::MqttMessage created{
@@ -376,6 +402,7 @@ int main() {
     TestRegistrationAndOnlineStatusEncoding();
     TestDeviceEventAndErrorEncoding();
     TestProcessEpochOwnershipAndPropagation();
+    TestRecoveryAdoptsNewProcessEpoch();
     TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval();
     return 0;
 }
