@@ -99,10 +99,6 @@ namespace mqtt = contracts::mqtt;
     });
 }
 
-[[nodiscard]] bool CanAutomaticallyRecover(ProcessSystemState state) noexcept {
-    return state == ProcessSystemState::kError || state == ProcessSystemState::kEmergencyStop;
-}
-
 [[nodiscard]] std::optional<std::string> ProcessCommandRequestId(const mqtt::MqttMessage& message) {
     if (const auto* control = mqtt::GetPayload<mqtt::ControlCommandPayload>(message)) {
         return control->request_id;
@@ -583,28 +579,13 @@ ProcessTransition ProcessOrchestrator::FailSystemCommand(mqtt::ControlCommand co
         }
         return transition;
     }
-    if (result == mqtt::CommandResult::kTimeout || command == mqtt::ControlCommand::kRecovery) {
-        return {
-            .disposition = TransitionDisposition::kDuplicate,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = std::move(reason),
-        };
-    }
-    if (command != mqtt::ControlCommand::kStart && command != mqtt::ControlCommand::kRestart &&
-        command != mqtt::ControlCommand::kStop) {
-        return {
-            .disposition = TransitionDisposition::kDuplicate,
-            .previous_stage = std::nullopt,
-            .current_stage = std::nullopt,
-            .reason = "command failure does not change the process state",
-        };
-    }
-    auto transition = state_machine_.ApplySystemFailure(std::move(reason));
-    if (transition.Applied()) {
-        ++revision_;
-    }
-    return transition;
+    static_cast<void>(result);
+    return {
+        .disposition = TransitionDisposition::kDuplicate,
+        .previous_stage = std::nullopt,
+        .current_stage = std::nullopt,
+        .reason = std::move(reason),
+    };
 }
 
 ProcessTransition ProcessOrchestrator::CompleteSystemRecovery() {
@@ -734,14 +715,6 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         }
         const auto meaning = contracts::DeviceStateMeaningFor(*role, Uppercase(heartbeat->current_state));
         RememberDeviceHealth(message.source_id, meaning, heartbeat->status, heartbeat->error_code);
-        if (CanAutomaticallyRecover(machine.SystemState()) && machine.ActiveWorks().empty() &&
-            AllProcessDevicesHealthy()) {
-            return {
-                .handled = true,
-                .transition = machine.ClearSystemFailureIfIdle(),
-                .commands = {},
-            };
-        }
         return NotHandled();
     } else if (const auto* status = mqtt::GetPayload<mqtt::DeviceStatusPayload>(message)) {
         const std::string current_state = Uppercase(status->current_state);
@@ -750,39 +723,9 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                                               : contracts::DeviceStateMeaning::kUnknown;
         if (role.has_value()) {
             RememberDeviceHealth(message.source_id, meaning, status->status, status->error_code);
-            if (CanAutomaticallyRecover(machine.SystemState()) && machine.ActiveWorks().empty() &&
-                AllProcessDevicesHealthy()) {
-                return {
-                    .handled = true,
-                    .transition = machine.ClearSystemFailureIfIdle(),
-                    .commands = {},
-                };
-            }
         }
-        const bool expected_position_reset =
-            machine.SystemState() == ProcessSystemState::kRecovery && role == contracts::DeviceRole::kLineTracer &&
-            current_state == "POSITION_UNKNOWN" && status->status == mqtt::ConnectionState::kOnline &&
-            !status->error_code.has_value() && status->position_reset;
-        if (role.has_value() && status->status == mqtt::ConnectionState::kOffline) {
+        if (role.has_value() && mqtt::IsConnectionFailure(status->status)) {
             return NotHandled();
-        }
-        const bool connection_failure = mqtt::IsConnectionFailure(status->status);
-        if (role.has_value() && !expected_position_reset && !connection_failure &&
-            meaning == contracts::DeviceStateMeaning::kEmergencyStop) {
-            return {
-                .handled = true,
-                .transition = machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop),
-                .commands = {},
-            };
-        }
-        if (role.has_value() && !expected_position_reset &&
-            (connection_failure || meaning == contracts::DeviceStateMeaning::kError)) {
-            return {
-                .handled = true,
-                .transition = machine.ApplySystemFailure(std::string(contracts::ToString(*role)) +
-                                                         " node is unavailable: " + current_state),
-                .commands = {},
-            };
         }
         if (!status->job_id.has_value()) {
             return NotHandled();
@@ -854,11 +797,7 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
             if (DeviceRoleForSource(config_, message.source_id).has_value()) {
                 device_health_.insert_or_assign(message.source_id, false);
             }
-            return {
-                .handled = true,
-                .transition = machine.ApplySystemFailure(reason),
-                .commands = {},
-            };
+            return NotHandled();
         }
         event = Event(ProcessEventType::kWorkFailed, message, *error->job_id, reason);
     } else {
@@ -933,21 +872,6 @@ void ProcessOrchestrator::RememberDeviceHealth(std::string_view device_id, contr
         meaning == contracts::DeviceStateMeaning::kStopped || meaning == contracts::DeviceStateMeaning::kCompleted;
     device_health_.insert_or_assign(std::string(device_id), connection_state == mqtt::ConnectionState::kOnline &&
                                                                 !error_code.has_value() && healthy_state);
-}
-
-bool ProcessOrchestrator::AllProcessDevicesHealthy() const {
-    const std::array required_devices{
-        std::string_view(config_.input_device_id),
-        std::string_view(config_.vision_device_id),
-        std::string_view(config_.gripper_device_id),
-        std::string_view(config_.sorting_device_id),
-    };
-    const auto healthy = [this](std::string_view device_id) {
-        const auto health = device_health_.find(std::string(device_id));
-        return health != device_health_.end() && health->second;
-    };
-    return std::ranges::all_of(required_devices, healthy) &&
-           (!config_.line_tracer_enabled || healthy(config_.line_tracer_device_id));
 }
 
 ProcessCommandIntent ProcessOrchestrator::MakeInputConveyorCommand(std::string_view work_id,

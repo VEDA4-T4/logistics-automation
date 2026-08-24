@@ -102,23 +102,6 @@ ProcessTransition ProcessStateMachine::ApplySystemFailure(std::string reason) {
     };
 }
 
-ProcessTransition ProcessStateMachine::ClearSystemFailureIfIdle() {
-    if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop) {
-        return Reject("automatic recovery requires an error or emergency-stop state");
-    }
-    if (!ActiveWorks().empty()) {
-        return Reject("automatic recovery is not allowed while work is active");
-    }
-    system_state_ =
-        system_state_ == ProcessSystemState::kEmergencyStop ? ProcessSystemState::kStopped : ProcessSystemState::kIdle;
-    return {
-        .disposition = TransitionDisposition::kApplied,
-        .previous_stage = std::nullopt,
-        .current_stage = std::nullopt,
-        .reason = {},
-    };
-}
-
 ProcessTransition ProcessStateMachine::ApplySystemCommand(contracts::mqtt::ControlCommand command) {
     using contracts::mqtt::ControlCommand;
     switch (command) {

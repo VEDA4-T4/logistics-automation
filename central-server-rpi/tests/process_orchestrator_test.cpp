@@ -43,17 +43,6 @@ mqtt::MqttMessage Status(std::string id, std::string source, std::string state,
                    });
 }
 
-mqtt::MqttMessage Heartbeat(std::string id, std::string source, std::string state) {
-    return Message(std::move(id), mqtt::MessageType::kHeartbeat, std::move(source),
-                   mqtt::HeartbeatPayload{
-                       .status = mqtt::ConnectionState::kOnline,
-                       .current_state = std::move(state),
-                       .uptime = 1,
-                       .job_id = std::nullopt,
-                       .error_code = std::nullopt,
-                   });
-}
-
 mqtt::MqttMessage SuccessResponse(std::string id, std::string source,
                                   const central_server::ProcessCommandIntent& intent) {
     std::string request_id;
@@ -395,7 +384,7 @@ void TestInvalidOrderAndDispatchFailureStaysProcessReady() {
     assert(!orchestrator.AcceptsNewWork());
 }
 
-void TestInputFailureWithoutWorkIdStopsTheProcess() {
+void TestInputFailureWithoutWorkIdPreservesTheProcess() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-BOX-3", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
     const auto input_error = Message("MSG-INPUT-ERROR", mqtt::MessageType::kErrorOccurred, "PI-INPUT-01",
@@ -408,10 +397,9 @@ void TestInputFailureWithoutWorkIdStopsTheProcess() {
                                          .distance = std::nullopt,
                                      });
     const auto result = orchestrator.Handle(input_error);
-    assert(result.handled);
-    assert(result.transition.Applied());
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
-    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kFailed);
+    assert(!result.handled);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
 }
 
 void TestOfflineStatusPreservesTheProcess() {
@@ -430,7 +418,7 @@ void TestOfflineStatusPreservesTheProcess() {
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
 }
 
-void TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess() {
+void TestEveryConfiguredNodeFailurePreservesTheProcess() {
     struct FailureCase {
         std::string_view device_id;
         mqtt::ConnectionState connection;
@@ -450,23 +438,9 @@ void TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess() {
         const auto result = orchestrator.Handle(Status("MSG-NODE-FAILURE-" + std::to_string(index),
                                                        std::string(failures[index].device_id), "STOPPED",
                                                        failures[index].connection, std::nullopt));
-        assert(result.handled && result.transition.Applied());
-        assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
-        const auto failed = orchestrator.StateMachine().FindWork(kWorkId);
-        assert(failed->stage == central_server::WorkStage::kFailed);
-        assert(failed->suspended_stage == central_server::WorkStage::kInputDetected);
-
-        assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
-        if (failures[index].device_id == "PI-LT-01") {
-            const auto reset = orchestrator.Handle(Status("MSG-LINE-RESET", "PI-LT-01", "POSITION_UNKNOWN",
-                                                          mqtt::ConnectionState::kOnline, std::nullopt, true));
-            assert(!reset.handled);
-            assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRecovery);
-        }
-        assert(orchestrator.CompleteSystemRecovery().Applied());
-        assert(!orchestrator.StateMachine().FindWork(kWorkId).has_value());
-        assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kRestart).Applied());
+        assert(!result.handled);
         assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+        assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
     }
 }
 
@@ -484,70 +458,6 @@ void TestHealthyStoppedNodesDoNotFailTheProcess() {
         assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
         assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
     }
-}
-
-void TestIdleSystemRecoversAfterEveryNodeReportsHealthy() {
-    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
-    const auto failure = orchestrator.Handle(
-        Status("MSG-AUTO-RECOVERY-FAILURE", "PI-INPUT-01", "FAULT", mqtt::ConnectionState::kUartError, std::nullopt));
-    assert(failure.handled && failure.transition.Applied());
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
-
-    assert(!orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-INPUT", "PI-INPUT-01", "STOPPED")).handled);
-    assert(!orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-VISION", "PI-VISION-01", "STOPPED")).handled);
-    assert(!orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-GRIPPER", "PI-GRIPPER-01", "STOPPED")).handled);
-    assert(!orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-SORTING", "PI-SORTING-01", "STOPPED")).handled);
-
-    const auto unknown_position =
-        orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-LT-UNKNOWN", "PI-LT-01", "POSITION_UNKNOWN"));
-    assert(!unknown_position.handled);
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
-
-    const auto recovered = orchestrator.Handle(Heartbeat("MSG-AUTO-RECOVERY-LT-READY", "PI-LT-01", "IDLE"));
-    assert(recovered.handled && recovered.transition.Applied());
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kIdle);
-    assert(orchestrator.BeginWork("MSG-AUTO-RECOVERY-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
-}
-
-void TestActiveWorkPreventsAutomaticRecovery() {
-    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
-    assert(orchestrator.BeginWork("MSG-ACTIVE-RECOVERY-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
-    assert(orchestrator
-               .Handle(Status("MSG-ACTIVE-RECOVERY-FAILURE", "PI-GRIPPER-01", "FAULT",
-                              mqtt::ConnectionState::kUartError, std::nullopt))
-               .transition.Applied());
-
-    constexpr std::array healthy_nodes{
-        std::pair{ "PI-INPUT-01", "RUNNING" },   std::pair{ "PI-VISION-01", "WAITING_FOR_PRODUCT" },
-        std::pair{ "PI-GRIPPER-01", "RUNNING" }, std::pair{ "PI-SORTING-01", "RUNNING" },
-        std::pair{ "PI-LT-01", "IDLE" },
-    };
-    for (std::size_t index = 0; index < healthy_nodes.size(); ++index) {
-        static_cast<void>(orchestrator.Handle(Status("MSG-ACTIVE-RECOVERY-HEALTHY-" + std::to_string(index),
-                                                     healthy_nodes[index].first, healthy_nodes[index].second,
-                                                     mqtt::ConnectionState::kOnline, std::nullopt)));
-    }
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
-    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kFailed);
-}
-
-void TestIdleEmergencyStopRecoversAfterEveryNodeReportsHealthy() {
-    central_server::ProcessOrchestrator orchestrator({ .enabled = true });
-    const auto emergency_stop = orchestrator.Handle(
-        Status("MSG-ESTOP-INPUT", "PI-INPUT-01", "EMERGENCY_STOP", mqtt::ConnectionState::kOnline, std::nullopt));
-    assert(emergency_stop.handled && emergency_stop.transition.Applied());
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kEmergencyStop);
-
-    assert(!orchestrator.Handle(Heartbeat("MSG-ESTOP-VISION", "PI-VISION-01", "STOPPED")).handled);
-    assert(!orchestrator.Handle(Heartbeat("MSG-ESTOP-GRIPPER", "PI-GRIPPER-01", "STOPPED")).handled);
-    assert(!orchestrator.Handle(Heartbeat("MSG-ESTOP-SORTING", "PI-SORTING-01", "STOPPED")).handled);
-    assert(!orchestrator.Handle(Heartbeat("MSG-ESTOP-LT", "PI-LT-01", "IDLE")).handled);
-
-    const auto recovered = orchestrator.Handle(
-        Status("MSG-ESTOP-INPUT-RECOVERED", "PI-INPUT-01", "STOPPED", mqtt::ConnectionState::kOnline, std::nullopt));
-    assert(recovered.handled && recovered.transition.Applied());
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
-    assert(orchestrator.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
 }
 
 void TestFailedWorkIsDiscardedAfterServerRestart() {
@@ -571,38 +481,44 @@ void TestFailedWorkIsDiscardedAfterServerRestart() {
     assert(!orchestrator.StateMachine().FindWork(kWorkId).has_value());
 }
 
-void TestDeviceEmergencyStopPreservesEmergencyState() {
+void TestDeviceStatusDoesNotMutateCentralProcessState() {
     central_server::ProcessOrchestrator orchestrator({ .enabled = true });
     assert(orchestrator.BeginWork("MSG-ESTOP-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
 
-    const auto spontaneous = orchestrator.Handle(
+    const auto emergency = orchestrator.Handle(
         Status("MSG-ESTOP-INPUT", "PI-INPUT-01", "EMERGENCY_STOP", mqtt::ConnectionState::kOnline, std::nullopt));
-    assert(spontaneous.handled && spontaneous.transition.Applied());
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kEmergencyStop);
-    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kEmergencyStopped);
+    assert(!emergency.handled);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
 
-    const auto confirmation = orchestrator.Handle(
-        Status("MSG-ESTOP-LINE", "PI-LT-01", "EMERGENCY_STOP", mqtt::ConnectionState::kOnline, std::nullopt));
-    assert(confirmation.handled);
-    assert(confirmation.transition.disposition == central_server::TransitionDisposition::kDuplicate);
-    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kEmergencyStop);
-    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kEmergencyStopped);
+    const auto unavailable = orchestrator.Handle(
+        Status("MSG-UART-SORTING", "PI-SORTING-01", "FAULT", mqtt::ConnectionState::kUartError, std::nullopt));
+    assert(!unavailable.handled);
+    assert(orchestrator.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kInputDetected);
 }
 
-void TestFailedSystemCommandsEnterSafeProcessStates() {
+void TestFailedSystemCommandsPreserveRequestedProcessStates() {
     central_server::ProcessOrchestrator start_failure({ .enabled = true });
     assert(start_failure.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
     assert(start_failure
                .FailSystemCommand(mqtt::ControlCommand::kStart, mqtt::CommandResult::kRejected,
                                   "input node rejected START")
-               .Applied());
-    assert(start_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kError);
+               .disposition == central_server::TransitionDisposition::kDuplicate);
+    assert(start_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+
+    central_server::ProcessOrchestrator stop_failure({ .enabled = true });
+    assert(stop_failure.BeginWork("MSG-STOP-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
+    assert(stop_failure.ApplySystemCommand(mqtt::ControlCommand::kStop).Applied());
+    assert(stop_failure
+               .FailSystemCommand(mqtt::ControlCommand::kStop, mqtt::CommandResult::kFailed, "input node did not stop")
+               .disposition == central_server::TransitionDisposition::kDuplicate);
+    assert(stop_failure.StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(stop_failure.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kStopped);
 
     central_server::ProcessOrchestrator recovery_failure({ .enabled = true });
     assert(recovery_failure.BeginWork("MSG-RECOVERY-WORK", kWorkId, "PI-INPUT-01", kTimestamp).transition.Applied());
-    assert(recovery_failure
-               .FailSystemCommand(mqtt::ControlCommand::kStop, mqtt::CommandResult::kFailed, "input node did not stop")
-               .Applied());
+    assert(recovery_failure.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
     assert(recovery_failure.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
     assert(
         recovery_failure
@@ -1218,16 +1134,13 @@ int main() {
     TestEventFlowCreatesCommandsForEachNode();
     TestInputDetectionSafetyStopDoesNotCreateWork();
     TestInvalidOrderAndDispatchFailureStaysProcessReady();
-    TestInputFailureWithoutWorkIdStopsTheProcess();
+    TestInputFailureWithoutWorkIdPreservesTheProcess();
     TestOfflineStatusPreservesTheProcess();
-    TestEveryConfiguredNodeFailureStopsAndRecoversTheProcess();
+    TestEveryConfiguredNodeFailurePreservesTheProcess();
     TestHealthyStoppedNodesDoNotFailTheProcess();
-    TestIdleSystemRecoversAfterEveryNodeReportsHealthy();
-    TestActiveWorkPreventsAutomaticRecovery();
-    TestIdleEmergencyStopRecoversAfterEveryNodeReportsHealthy();
     TestFailedWorkIsDiscardedAfterServerRestart();
-    TestDeviceEmergencyStopPreservesEmergencyState();
-    TestFailedSystemCommandsEnterSafeProcessStates();
+    TestDeviceStatusDoesNotMutateCentralProcessState();
+    TestFailedSystemCommandsPreserveRequestedProcessStates();
     TestCommandTimeoutOnlyFailsIdentifiableWork();
     TestSystemCommandTimeoutDoesNotMutateActiveWorks();
     TestFailedDeviceBlocksNewWorkUntilHealthy();

@@ -103,7 +103,6 @@ public:
     [[nodiscard]] bool AcceptsNewWork() const noexcept;
     [[nodiscard]] ProcessTransition Apply(const ProcessEvent& event);
     [[nodiscard]] ProcessTransition ApplySystemFailure(std::string reason);
-    [[nodiscard]] ProcessTransition ClearSystemFailureIfIdle();
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);
     [[nodiscard]] ProcessTransition CompleteSystemRecovery();
     [[nodiscard]] bool RestoreAfterServerRestart(ProcessSystemState stored_state,

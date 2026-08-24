@@ -129,7 +129,6 @@ private:
     void RememberDeviceHealth(std::string_view device_id, contracts::DeviceStateMeaning meaning,
                               contracts::mqtt::ConnectionState connection_state,
                               const std::optional<std::string>& error_code);
-    [[nodiscard]] bool AllProcessDevicesHealthy() const;
     [[nodiscard]] std::string NextMessageId();
 
     ProcessOrchestratorConfig config_;
