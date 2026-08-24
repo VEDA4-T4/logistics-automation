@@ -40,6 +40,17 @@ int main() {
     assert(state.entries().front().occurred_at.isValid());
     assert(state.activeAlertCount() == 1);
 
+    result =
+        state.applyEnvelope(QStringLiteral("qt/control-center/event"),
+                            Envelope(QStringLiteral("VISION-DUPLICATE-1"), QStringLiteral("WORK_COMPLETED"),
+                                     QStringLiteral("central-server"),
+                                     { { QStringLiteral("workId"), QStringLiteral("WORK-DUPLICATE") },
+                                       { QStringLiteral("result"), QStringLiteral("SKIPPED") },
+                                       { QStringLiteral("message"), QStringLiteral("duplicate barcode skipped") } }));
+    assert(result.handled && !result.applied && result.error.isEmpty());
+    assert(state.entries().size() == 1);
+    assert(state.activeAlertCount() == 1);
+
     result = state.applyEnvelope(
         QStringLiteral("qt/control-center/error"),
         Envelope(QStringLiteral("ERROR-1"), QStringLiteral("ERROR_OCCURRED"), QStringLiteral("PI-SORTING-01"),

@@ -234,6 +234,10 @@ OperationalLogUpdateResult OperationalLogState::applyEnvelope(const QString& top
             break;
         case mqtt::MessageType::kWorkCompleted: {
             const auto result_text = StringValue(data, "result").toUpper();
+            if (result_text == QStringLiteral("SKIPPED")) {
+                should_append = false;
+                break;
+            }
             const bool succeeded = result_text == QStringLiteral("SUCCESS");
             entry.severity = succeeded ? OperationalLogSeverity::Info : OperationalLogSeverity::Error;
             entry.category = QStringLiteral("작업");
