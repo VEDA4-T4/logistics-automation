@@ -1123,21 +1123,22 @@ int Application::Run(int argc, char* argv[]) {
 
             const auto& work = *work_it;
             if (runtime_barcode_gate.IsDuplicate(measurement->barcode)) {
-                const auto duplicate = MakeWorkFailureCompletion(
+                auto duplicate = MakeWorkFailureCompletion(
                     server_id, "VISION-DUPLICATE-" + message.message_id, work.work_id,
-                    "duplicate barcode ignored in current server runtime", CurrentIso8601Timestamp());
+                    "duplicate barcode skipped in current server runtime", CurrentIso8601Timestamp());
                 const auto duplicate_result = process_orchestrator.Handle(duplicate);
                 if (!duplicate_result.transition.Applied()) {
                     std::cerr << "[server][ERROR] duplicate barcode work rejection failed; workId=" << work.work_id
                               << "; reason=" << duplicate_result.transition.reason << '\n';
                     return false;
                 }
+                contracts::mqtt::GetPayload<contracts::mqtt::WorkCompletedPayload>(duplicate)->result = "SKIPPED";
                 input_detection_gate.BlockUntilClear();
                 if (!publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), duplicate) ||
                     !persist_process_state()) {
                     return false;
                 }
-                std::clog << "[server][WARN] duplicate barcode ignored; workId=" << work.work_id
+                std::clog << "[server][INFO] duplicate barcode skipped; workId=" << work.work_id
                           << "; barcode=" << measurement->barcode << "; waitingFor=ULTRASONIC_CLEAR\n";
                 return true;
             }
