@@ -341,9 +341,11 @@ void TestRecoveryAdoptsNewProcessEpoch() {
     };
     assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
 
-    const auto stale_execute =
-        ProcessCommand(mqtt::ControlCommand::kExecute, "REQ-EXECUTE-OLD", std::string(kProcessEpoch));
-    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(stale_execute)).IsSuccess());
+    auto stale_execute = ProcessCommand(mqtt::ControlCommand::kExecute, "REQ-EXECUTE-OLD", std::string(kProcessEpoch));
+    auto* stale_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(stale_execute);
+    assert(stale_payload != nullptr);
+    stale_payload->params["workId"] = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
+    assert(!processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(stale_execute)).IsSuccess());
     assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
 }
 

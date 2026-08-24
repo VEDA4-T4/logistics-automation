@@ -134,6 +134,12 @@ IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, 
                 active_process_epoch_ = decoded.value.process_epoch;
             } else if (EstablishesProcessEpoch(decoded.value)) {
                 active_process_epoch_ = decoded.value.process_epoch;
+            } else if (active_process_epoch_.has_value() && *active_process_epoch_ != *decoded.value.process_epoch &&
+                       mqtt::IsProcessScopedMessage(decoded.value)) {
+                return {
+                    .message = {},
+                    .error = "process-scoped command has a stale processEpoch",
+                };
             }
             const auto request_id = RequestIdFromCommand(decoded.value);
             if (!request_id.empty()) {
