@@ -26,6 +26,8 @@ uint8_t MotorControlLogic_ComputeDifferentialForward(uint16_t left_base_pwm, uin
                                                      int16_t correction, motor_output_t* output);
 uint8_t MotorControlLogic_ComputeLineFollow(linetracer_line_state_t line_state, motor_output_t* output);
 uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output_t* output);
+uint8_t MotorControlLogic_ComputePickupUTurn(uart_linetracer_position_t current_position,
+                                             uart_linetracer_route_t active_route, motor_output_t* output);
 uint8_t MotorControlLogic_ComputeControlOutput(linetracer_control_state_t state, route_action_t pending_action,
                                                linetracer_line_state_t line_state, uint8_t route_active,
                                                uint8_t safety_latched, motor_output_t* output);
