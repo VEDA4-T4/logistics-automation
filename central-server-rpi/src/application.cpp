@@ -694,8 +694,7 @@ int Application::Run(int argc, char* argv[]) {
     };
     mqtt_handler.SetQtResponseHandler([&command_manager, &process_orchestrator, &commit_recovery_response,
                                        &finish_system_command, &process_command_tracker, &persist_process_state,
-                                       &publish_qt_response,
-                                       &dispatch_process_commands,
+                                       &publish_qt_response, &dispatch_process_commands,
                                        &pending_system_commands](const contracts::mqtt::MqttMessage& message) {
         const auto decision = command_manager.PreviewResponse(message);
         switch (decision.disposition) {
@@ -1048,10 +1047,35 @@ int Application::Run(int argc, char* argv[]) {
         return true;
     };
     mqtt_handler.SetCommandRouteHandler(dispatch_command);
+    const auto replay_pending_vision_measurement = [&]() {
+        const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
+        const bool vision_work_ready = std::ranges::any_of(active_works, [](const WorkProcessSnapshot& work) {
+            return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
+        });
+        std::string message_id;
+        bool replayed = false;
+        const bool handled =
+            pending_vision_measurement.ReplayWhen(vision_work_ready, [&](const contracts::mqtt::MqttMessage& pending) {
+                replayed = true;
+                message_id = pending.message_id;
+                const auto encoded = contracts::mqtt::SerializeMessage(pending);
+                return encoded.IsSuccess() && mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(pending.source_id),
+                                                                  encoded.payload, {}, 1, false);
+            });
+        if (!handled) {
+            std::cerr << "[server][WARN] buffered VISION_MEASUREMENT replay deferred; messageId=" << message_id << '\n';
+            return false;
+        }
+        if (replayed) {
+            std::clog << "[server][INFO] buffered VISION_MEASUREMENT replayed; messageId=" << message_id << '\n';
+        }
+        return true;
+    };
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_command,
                                            &dispatch_process_commands, &input_detection_gate, &line_tracer_load_gate,
                                            &process_state_persistence_healthy, &persist_process_state, &persistence,
                                            &pending_vision_measurement, &publish_durable,
+                                           &replay_pending_vision_measurement,
                                            qt_client_id = server_config.qt_client_id,
                                            default_destination = server_config.process.default_destination,
                                            line_tracer_enabled = server_config.process.line_tracer_enabled,
@@ -1275,6 +1299,7 @@ int Application::Run(int argc, char* argv[]) {
                 input_detection_gate.Retry();
                 return false;
             }
+            static_cast<void>(replay_pending_vision_measurement());
         }
         const auto result = process_orchestrator.Handle(message);
         if (!result.handled) {
@@ -1289,30 +1314,6 @@ int Application::Run(int argc, char* argv[]) {
         // command, so only command-free transitions are saved here.
         return result.commands.empty() ? persist_process_state() : dispatch_process_commands(result.commands);
     });
-
-    const auto replay_pending_vision_measurement = [&]() {
-        const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
-        const bool vision_work_ready = std::ranges::any_of(active_works, [](const WorkProcessSnapshot& work) {
-            return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
-        });
-        if (!vision_work_ready) {
-            return true;
-        }
-        auto pending = pending_vision_measurement.Take();
-        if (!pending.has_value()) {
-            return true;
-        }
-        const auto encoded = contracts::mqtt::SerializeMessage(*pending);
-        if (!encoded.IsSuccess() || !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(pending->source_id),
-                                                         encoded.payload, {}, 1, false)) {
-            const auto message_id = pending->message_id;
-            pending_vision_measurement.Store(std::move(*pending));
-            std::cerr << "[server][WARN] buffered VISION_MEASUREMENT replay deferred; messageId=" << message_id << '\n';
-            return false;
-        }
-        std::clog << "[server][INFO] buffered VISION_MEASUREMENT replayed; messageId=" << pending->message_id << '\n';
-        return true;
-    };
 
     mqtt_client.SetMessageHandler([&mqtt_handler, &process_orchestrator, &persist_process_state,
                                    &process_state_persistence_healthy, &process_mutex](

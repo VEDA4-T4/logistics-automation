@@ -25,6 +25,19 @@ public:
         return !latest_.has_value();
     }
 
+    template <typename Handler>
+    [[nodiscard]] bool ReplayWhen(const bool ready, Handler&& handler) {
+        if (!ready || !latest_.has_value()) {
+            return true;
+        }
+        auto pending = Take();
+        if (handler(*pending)) {
+            return true;
+        }
+        Store(std::move(*pending));
+        return false;
+    }
+
 private:
     std::optional<contracts::mqtt::MqttMessage> latest_;
 };

@@ -1107,13 +1107,52 @@ void TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly() {
     buffer.Store(make_measurement("VISION-MEASUREMENT-1", "5901234123457"));
     buffer.Store(make_measurement("VISION-MEASUREMENT-2", "8801234567893"));
     assert(!buffer.Empty());
-    const auto measurement = buffer.Take();
-    assert(measurement.has_value());
-    assert(measurement->message_id == "VISION-MEASUREMENT-2");
-    const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(*measurement);
-    assert(payload != nullptr && payload->barcode == "8801234567893");
+    bool processed = false;
+    assert(buffer.ReplayWhen(false, [&processed](const mqtt::MqttMessage&) {
+        processed = true;
+        return true;
+    }));
+    assert(!processed && !buffer.Empty());
+    assert(buffer.ReplayWhen(true, [&processed](const mqtt::MqttMessage& measurement) {
+        processed = true;
+        assert(measurement.message_id == "VISION-MEASUREMENT-2");
+        const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
+        assert(payload != nullptr && payload->barcode == "8801234567893");
+        return true;
+    }));
+    assert(processed);
     assert(buffer.Empty());
-    assert(!buffer.Take().has_value());
+
+    buffer.Store(make_measurement("VISION-MEASUREMENT-3", "5901234123457"));
+    assert(!buffer.ReplayWhen(true, [](const mqtt::MqttMessage&) { return false; }));
+    assert(!buffer.Empty());
+}
+
+void TestBufferedVisionContinuesAfterFirstUltrasonicDetection() {
+    central_server::VisionMeasurementBuffer buffer;
+    buffer.Store({
+        .message_id = "VISION-BEFORE-ULTRASONIC",
+        .message_type = mqtt::MessageType::kVisionMeasurement,
+        .source_id = std::string(kVisionId),
+        .timestamp = std::string(kTimestamp),
+        .data =
+            mqtt::VisionMeasurementPayload{
+                .barcode = "5901234123457",
+                .box_x = 206,
+                .box_y = 101,
+                .box_width = 558,
+                .box_height = 452,
+                .frame_width = 1280,
+                .frame_height = 720,
+            },
+    });
+
+    ProcessIntegrationHarness harness(false);
+    assert(harness.DetectInputSensor());
+    assert(buffer.ReplayWhen(
+        true, [&harness](const mqtt::MqttMessage&) { return harness.DetectPosition() && harness.DetectBarcode(); }));
+    assert(buffer.Empty());
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
 }
 
 }  // namespace
@@ -1140,5 +1179,6 @@ int main() {
     TestApplicationProcessEpochStamping();
     TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold();
     TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly();
+    TestBufferedVisionContinuesAfterFirstUltrasonicDetection();
     return 0;
 }
