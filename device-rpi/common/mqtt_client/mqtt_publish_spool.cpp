@@ -41,6 +41,20 @@ std::atomic_uint64_t sequence{};
     return error == std::errc{} && end == id.data() + id.size();
 }
 
+[[nodiscard]] bool IsDiscardableArtifact(const std::filesystem::path& path) {
+    const auto name = path.filename().string();
+    const auto separator = name.find('.');
+    if (separator == std::string::npos || !IsSafeId(std::string_view(name).substr(0, separator))) {
+        return false;
+    }
+    const auto suffix = std::string_view(name).substr(separator);
+    if (suffix == ".tmp" || suffix == kCorruptSuffix) {
+        return true;
+    }
+    constexpr std::string_view kRotatedCorruptPrefix = ".corrupt.";
+    return suffix.starts_with(kRotatedCorruptPrefix) && IsSafeId(suffix.substr(kRotatedCorruptPrefix.size()));
+}
+
 [[nodiscard]] std::vector<std::filesystem::path> Pending(const std::filesystem::path& directory) {
     std::vector<std::filesystem::path> files;
     std::error_code error;
@@ -58,28 +72,6 @@ std::atomic_uint64_t sequence{};
         return left.filename().string() < right.filename().string();
     });
     return files;
-}
-
-[[nodiscard]] std::optional<std::size_t> StoredRecordCount(const std::filesystem::path& directory) {
-    std::size_t count{};
-    std::error_code error;
-    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
-        if (error) {
-            return std::nullopt;
-        }
-        if (entry.is_regular_file(error)) {
-            if (error || count == std::numeric_limits<std::size_t>::max()) {
-                return std::nullopt;
-            }
-            ++count;
-        } else if (error) {
-            return std::nullopt;
-        }
-    }
-    if (error) {
-        return std::nullopt;
-    }
-    return count;
 }
 
 [[nodiscard]] std::optional<MqttPublishRecord> Read(const std::filesystem::path& path) {
@@ -105,13 +97,30 @@ std::atomic_uint64_t sequence{};
 }  // namespace
 
 MqttPublishSpool::MqttPublishSpool(std::filesystem::path directory, const std::size_t maximum_bytes,
-                                   const std::size_t maximum_records)
-    : directory_(std::move(directory)), maximum_bytes_(maximum_bytes), maximum_records_(maximum_records) {}
+                                   const std::size_t maximum_records, const MqttSpoolOverflowPolicy overflow_policy)
+    : directory_(std::move(directory)),
+      maximum_bytes_(maximum_bytes),
+      maximum_records_(maximum_records),
+      overflow_policy_(overflow_policy) {}
 
 bool MqttPublishSpool::Start() {
     std::lock_guard lock(mutex_);
     std::error_code error;
     std::filesystem::create_directories(directory_, error);
+    if (error) {
+        return false;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(directory_, error)) {
+        if (error) {
+            return false;
+        }
+        if (entry.is_regular_file(error) && IsDiscardableArtifact(entry.path())) {
+            std::filesystem::remove(entry.path(), error);
+        }
+        if (error) {
+            return false;
+        }
+    }
     return !error;
 }
 
@@ -123,11 +132,7 @@ std::optional<MqttPublishRecord> MqttPublishSpool::Enqueue(std::string topic, st
     if (topic.empty() || payload.empty() || qos != 1 || directory_error || maximum_records_ == 0U) {
         return std::nullopt;
     }
-    const auto stored_records = StoredRecordCount(directory_);
-    if (!stored_records.has_value() || *stored_records >= maximum_records_) {
-        return std::nullopt;
-    }
-    const auto pending_files = Pending(directory_);
+    auto pending_files = Pending(directory_);
     std::size_t total{};
     std::error_code error;
     for (const auto& path : pending_files) {
@@ -162,7 +167,20 @@ std::optional<MqttPublishRecord> MqttPublishSpool::Enqueue(std::string topic, st
         { "id", id }, { "topic", topic }, { "payload", payload }, { "qos", qos }, { "retain", retain }
     };
     const std::string encoded = value.dump();
-    if (encoded.size() > maximum_bytes_ - std::min(total, maximum_bytes_)) {
+    if (encoded.size() > maximum_bytes_) {
+        return std::nullopt;
+    }
+    while (overflow_policy_ == MqttSpoolOverflowPolicy::kDiscardOldest && !pending_files.empty() &&
+           (pending_files.size() >= maximum_records_ || total > maximum_bytes_ - encoded.size())) {
+        error.clear();
+        const auto oldest_size = std::filesystem::file_size(pending_files.front(), error);
+        if (error || oldest_size > total || !std::filesystem::remove(pending_files.front(), error) || error) {
+            return std::nullopt;
+        }
+        total -= static_cast<std::size_t>(oldest_size);
+        pending_files.erase(pending_files.begin());
+    }
+    if (pending_files.size() >= maximum_records_ || total > maximum_bytes_ - encoded.size()) {
         return std::nullopt;
     }
     {
@@ -212,8 +230,7 @@ bool MqttPublishSpool::Acknowledge(std::string_view id) {
     // A PUBACK may be observed after an equivalent completion path already
     // removed the record. Absence is therefore an idempotent success; real
     // filesystem errors still halt the durable pump.
-    static_cast<void>(
-        std::filesystem::remove(directory_ / (std::string(id) + std::string(kPendingSuffix)), error));
+    static_cast<void>(std::filesystem::remove(directory_ / (std::string(id) + std::string(kPendingSuffix)), error));
     return !error;
 }
 

@@ -156,7 +156,7 @@ void TestDroppedSensorIsNotReplayedAndNextSamplePublishes() {
     std::filesystem::remove_all(directory, error);
 }
 
-void TestRecordLimitBoundsInodeUsage() {
+void TestRecordLimitDiscardsOldestOutboundRecord() {
     const auto directory = TemporaryDirectory();
     logistics::device::MqttPublishSpool spool(directory, 65536, 2);
     assert(spool.Start());
@@ -165,11 +165,69 @@ void TestRecordLimitBoundsInodeUsage() {
     const auto second = spool.Enqueue("device/PI-01/event", "second", 1, false);
     assert(first.has_value());
     assert(second.has_value());
-    assert(!spool.Enqueue("device/PI-01/event", "third", 1, false).has_value());
-
-    assert(spool.Acknowledge(first->id));
     assert(spool.Enqueue("device/PI-01/event", "third", 1, false).has_value());
     assert(spool.PendingCount() == 2);
+    assert(spool.Next()->payload == "second");
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
+void TestRestartRemovesIncompleteAndQuarantinedArtifacts() {
+    const auto directory = TemporaryDirectory();
+    std::filesystem::create_directories(directory);
+    {
+        std::ofstream temporary(directory / "1.tmp");
+        temporary << "incomplete";
+    }
+    {
+        std::ofstream corrupt(directory / "2.corrupt");
+        corrupt << "invalid";
+    }
+    {
+        std::ofstream rotated_corrupt(directory / "3.corrupt.4");
+        rotated_corrupt << "invalid";
+    }
+    {
+        std::ofstream unrelated(directory / "operator-note.txt");
+        unrelated << "keep";
+    }
+
+    logistics::device::MqttPublishSpool spool(directory, 65536, 1);
+    assert(spool.Start());
+    assert(!std::filesystem::exists(directory / "1.tmp"));
+    assert(!std::filesystem::exists(directory / "2.corrupt"));
+    assert(!std::filesystem::exists(directory / "3.corrupt.4"));
+    assert(std::filesystem::exists(directory / "operator-note.txt"));
+    assert(spool.Enqueue("device/PI-01/event", "current", 1, false).has_value());
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
+void TestByteLimitDiscardsOldestOutboundRecord() {
+    const auto directory = TemporaryDirectory();
+    logistics::device::MqttPublishSpool spool(directory, 256, 4096);
+    assert(spool.Start());
+    assert(spool.Enqueue("device/PI-01/event", std::string(128, 'a'), 1, false).has_value());
+    assert(spool.Enqueue("device/PI-01/event", std::string(128, 'b'), 1, false).has_value());
+    assert(spool.PendingCount() == 1);
+    assert(spool.Next()->payload == std::string(128, 'b'));
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
+void TestInboundLimitRejectsNewCommandWithoutDiscardingOldest() {
+    const auto directory = TemporaryDirectory();
+    logistics::device::MqttPublishSpool spool(directory, 65536, 2,
+                                              logistics::device::MqttSpoolOverflowPolicy::kRejectNew);
+    assert(spool.Start());
+    assert(spool.Enqueue("device/PI-01/command", "first", 1, false).has_value());
+    assert(spool.Enqueue("device/PI-01/command", "second", 1, false).has_value());
+    assert(!spool.Enqueue("device/PI-01/command", "third", 1, false).has_value());
+    assert(spool.PendingCount() == 2);
+    assert(spool.Next()->payload == "first");
 
     std::error_code error;
     std::filesystem::remove_all(directory, error);
@@ -183,6 +241,9 @@ int main() {
     TestNumericOrderAndCorruptQuarantine();
     TestSensorTelemetryNeverEntersDurableSpool();
     TestDroppedSensorIsNotReplayedAndNextSamplePublishes();
-    TestRecordLimitBoundsInodeUsage();
+    TestRecordLimitDiscardsOldestOutboundRecord();
+    TestRestartRemovesIncompleteAndQuarantinedArtifacts();
+    TestInboundLimitRejectsNewCommandWithoutDiscardingOldest();
+    TestByteLimitDiscardsOldestOutboundRecord();
     return 0;
 }

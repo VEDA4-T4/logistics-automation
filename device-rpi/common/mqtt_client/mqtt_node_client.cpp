@@ -89,7 +89,8 @@ public:
           publish_spool_(config_.publish_spool_directory / config_.device_id, config_.publish_spool_maximum_bytes,
                          config_.publish_spool_maximum_records),
           inbound_spool_(config_.publish_spool_directory / config_.device_id / "inbound",
-                         config_.publish_spool_maximum_bytes, config_.publish_spool_maximum_records) {
+                         config_.publish_spool_maximum_bytes, config_.publish_spool_maximum_records,
+                         MqttSpoolOverflowPolicy::kRejectNew) {
         if (device_status_ == nullptr || !device_status_->IsForDevice(config_.device_id)) {
             throw std::invalid_argument("device status must belong to the configured device ID");
         }
