@@ -13,9 +13,9 @@
 
 namespace {
 
+using logistics::central_server::LineTracerLoadGate;
 using logistics::central_server::SensorDetectionConfig;
 using logistics::central_server::SensorDetector;
-using logistics::central_server::LineTracerLoadGate;
 using logistics::central_server::WorkProcessSnapshot;
 using logistics::central_server::WorkStage;
 namespace mqtt = logistics::contracts::mqtt;
@@ -171,17 +171,18 @@ mqtt::MqttMessage DeviceStatus(std::string_view source_id, std::string current_s
         .message_type = mqtt::MessageType::kDeviceStatus,
         .source_id = std::string(source_id),
         .timestamp = "2026-08-21T03:00:00Z",
-        .data = mqtt::DeviceStatusPayload{
-            .status = connection_state,
-            .current_state = std::move(current_state),
-            .job_id = std::move(job_id),
-            .error_code = std::move(error_code),
-            .departure_position = std::nullopt,
-            .target_position = std::nullopt,
-            .confirmed_position = std::nullopt,
-            .movement_state = std::nullopt,
-            .position_reset = false,
-        },
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = connection_state,
+                .current_state = std::move(current_state),
+                .job_id = std::move(job_id),
+                .error_code = std::move(error_code),
+                .departure_position = std::nullopt,
+                .target_position = std::nullopt,
+                .confirmed_position = std::nullopt,
+                .movement_state = std::nullopt,
+                .position_reset = false,
+            },
     };
 }
 
@@ -253,18 +254,18 @@ void TestLineTracerLoadGateStopsSortingWorkOnce() {
         },
     };
 
-    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "FOLLOWING_LINE", "WORK-SORTING"), true, works)
-                .has_value());
+    assert(
+        !gate.ShouldStop(DeviceStatus(kLineTracerDevice, "FOLLOWING_LINE", "WORK-SORTING"), true, works).has_value());
     assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C"), true, works).has_value());
     assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-UNKNOWN"), true, works).has_value());
     assert(!gate.ShouldStop(DeviceStatus(kDevice, "LOAD_ON_C", "WORK-SORTING"), true, works).has_value());
     assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING"), false, works).has_value());
-    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING",
-                                         mqtt::ConnectionState::kOffline),
-                            true, works)
-                .has_value());
-    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING",
-                                         mqtt::ConnectionState::kOnline, "ERR-LINE-TRACER"),
+    assert(
+        !gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING", mqtt::ConnectionState::kOffline),
+                         true, works)
+             .has_value());
+    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING", mqtt::ConnectionState::kOnline,
+                                         "ERR-LINE-TRACER"),
                             true, works)
                 .has_value());
     assert(!gate.ShouldStop(SensorMessage(kLineTracerDevice, "DETECTED"), true, works).has_value());

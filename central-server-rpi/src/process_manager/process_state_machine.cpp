@@ -420,7 +420,8 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             return Move(work, WorkStage::kTransporting, event.source_id);
 
         case ProcessEventType::kTransportStarted:
-            if (!IsOneOf(work.stage, { WorkStage::kSorting, WorkStage::kTransportRequested, WorkStage::kTransporting })) {
+            if (!IsOneOf(work.stage,
+                         { WorkStage::kSorting, WorkStage::kTransportRequested, WorkStage::kTransporting })) {
                 return Reject("line-tracer status is not allowed in the current work stage");
             }
             return Move(work, WorkStage::kTransporting, event.source_id);

@@ -46,9 +46,9 @@ extern TIM_HandleTypeDef htim11;
 #define TIM_ICSELECTION_DIRECTTI 0x00000001U
 #define TIM_ICPSC_DIV1 0x00000000U
 
-#define __HAL_TIM_SET_COMPARE(handle, channel, value) \
-    do {                                              \
-        (handle)->compare = (uint32_t)(value);        \
+#define __HAL_TIM_SET_COMPARE(handle, channel, value)                   \
+    do {                                                                \
+        (handle)->compare = (uint32_t)(value);                          \
         (handle)->compareByChannel[(channel) / 4U] = (uint32_t)(value); \
     } while (0)
 

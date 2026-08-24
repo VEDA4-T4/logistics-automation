@@ -204,10 +204,9 @@ bool MqttNodeConfig::IsValid() const noexcept {
     return contracts::mqtt::IsValidTopicLevel(device_id) && !node_name.empty() && !ip_address.empty() &&
            !host.empty() && contracts::mqtt::IsValidTopicLevel(client_id) && port != 0 && keep_alive_seconds != 0 &&
            reconnect_min_delay_seconds != 0 && reconnect_max_delay_seconds >= reconnect_min_delay_seconds &&
-           !publish_spool_directory.empty() && publish_spool_maximum_bytes != 0 &&
-           publish_spool_maximum_records != 0 && sorting_default_speed > 0 &&
-           sorting_default_speed <= 100 && (password.empty() || !username.empty()) && valid_mqtt_tls &&
-           valid_log_upload && valid_image_upload;
+           !publish_spool_directory.empty() && publish_spool_maximum_bytes != 0 && publish_spool_maximum_records != 0 &&
+           sorting_default_speed > 0 && sorting_default_speed <= 100 && (password.empty() || !username.empty()) &&
+           valid_mqtt_tls && valid_log_upload && valid_image_upload;
 }
 
 MqttNodeConfig LoadMqttNodeConfig(const std::filesystem::path& path) {
