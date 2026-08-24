@@ -24,7 +24,7 @@ struct MqttPublishRecord final {
 // current connection reports PUBACK for their assigned message identifier.
 class MqttPublishSpool final {
 public:
-    MqttPublishSpool(std::filesystem::path directory, std::size_t maximum_bytes);
+    MqttPublishSpool(std::filesystem::path directory, std::size_t maximum_bytes, std::size_t maximum_records);
 
     [[nodiscard]] bool Start();
     [[nodiscard]] std::optional<MqttPublishRecord> Enqueue(std::string topic, std::string payload, int qos,
@@ -38,6 +38,7 @@ public:
 private:
     std::filesystem::path directory_;
     std::size_t maximum_bytes_;
+    std::size_t maximum_records_;
     mutable std::mutex mutex_;
 };
 

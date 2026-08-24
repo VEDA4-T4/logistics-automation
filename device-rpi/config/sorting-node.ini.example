@@ -31,6 +31,9 @@ keep_alive_seconds=30
 reconnect_min_delay_seconds=1
 reconnect_max_delay_seconds=30
 clean_session=false
+publish_spool_directory=/var/lib/logistics/mqtt-spool
+publish_spool_maximum_bytes=52428800
+publish_spool_maximum_records=4096
 
 [sorting]
 # Used when START does not provide params.speed.
