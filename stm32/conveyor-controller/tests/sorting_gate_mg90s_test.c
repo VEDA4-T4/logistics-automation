@@ -15,7 +15,7 @@ TIM_HandleTypeDef htim3 = { .autoreload = 19999U, .compare = 0U };
 
 static uint32_t fakeTick;
 static uint32_t pwmStartCalls;
-static HAL_StatusTypeDef pwmStartResult;
+static uint32_t pwmStartFailureChannel;
 
 uint32_t HAL_GetTick(void) {
     return fakeTick;
@@ -29,9 +29,9 @@ void HAL_GPIO_WritePin(GPIO_TypeDef* gpioPort, uint16_t gpioPin, GPIO_PinState p
 
 HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef* handle, uint32_t channel) {
     assert(handle == &htim3);
-    assert(channel == TIM_CHANNEL_2);
+    assert((channel == TIM_CHANNEL_2) || (channel == TIM_CHANNEL_3));
     pwmStartCalls++;
-    return pwmStartResult;
+    return (channel == pwmStartFailureChannel) ? HAL_ERROR : HAL_OK;
 }
 
 int main(void) {
@@ -39,16 +39,25 @@ int main(void) {
     uint8_t complete;
 
     assert(port != NULL);
-    assert(SORTING_GATE_DESTINATION_3_PULSE_US == SORTING_GATE_HOME_PULSE_US);
-    pwmStartResult = HAL_ERROR;
+    assert(SORTING_GATE_MG90S_DESTINATION_3_PULSE_US == SORTING_GATE_MG90S_HOME_PULSE_US);
+    assert(SORTING_GATE_SG90_DESTINATION_3_PULSE_US == SORTING_GATE_SG90_HOME_PULSE_US);
+
+    pwmStartFailureChannel = TIM_CHANNEL_2;
     assert(port->initialize(port->context) == SORTING_GATE_ERROR);
-    assert(htim3.compare == 0U);
+    assert(htim3.compareByChannel[1] == 0U);
+    assert(htim3.compareByChannel[2] == 0U);
+
+    pwmStartFailureChannel = TIM_CHANNEL_3;
+    assert(port->initialize(port->context) == SORTING_GATE_ERROR);
+    assert(htim3.compareByChannel[1] == 0U);
+    assert(htim3.compareByChannel[2] == 0U);
 
     fakeTick = 100U;
-    pwmStartResult = HAL_OK;
+    pwmStartFailureChannel = UINT32_MAX;
     assert(port->initialize(port->context) == SORTING_GATE_OK);
-    assert(pwmStartCalls == 2U);
-    assert(htim3.compare == SORTING_GATE_HOME_PULSE_US);
+    assert(pwmStartCalls == 5U);
+    assert(htim3.compareByChannel[1] == SORTING_GATE_MG90S_HOME_PULSE_US);
+    assert(htim3.compareByChannel[2] == SORTING_GATE_SG90_HOME_PULSE_US);
     assert(port->motion_complete(port->context, &complete) == SORTING_GATE_OK);
     assert(complete == 0U);
 
@@ -57,9 +66,14 @@ int main(void) {
     assert(complete == 1U);
 
     assert(port->move(port->context, UART_SORTING_DESTINATION_1) == SORTING_GATE_OK);
-    assert(htim3.compare == SORTING_GATE_DESTINATION_1_PULSE_US);
+    assert(htim3.compareByChannel[1] == SORTING_GATE_MG90S_DESTINATION_1_PULSE_US);
+    assert(htim3.compareByChannel[2] == SORTING_GATE_SG90_DESTINATION_1_PULSE_US);
+    assert(port->move(port->context, UART_SORTING_DESTINATION_2) == SORTING_GATE_OK);
+    assert(htim3.compareByChannel[1] == SORTING_GATE_MG90S_DESTINATION_2_PULSE_US);
+    assert(htim3.compareByChannel[2] == SORTING_GATE_SG90_DESTINATION_2_PULSE_US);
     assert(port->move(port->context, UART_SORTING_DESTINATION_3) == SORTING_GATE_OK);
-    assert(htim3.compare == SORTING_GATE_DESTINATION_3_PULSE_US);
+    assert(htim3.compareByChannel[1] == SORTING_GATE_MG90S_DESTINATION_3_PULSE_US);
+    assert(htim3.compareByChannel[2] == SORTING_GATE_SG90_DESTINATION_3_PULSE_US);
     assert(port->move(port->context, (uart_sorting_destination_t)4U) == SORTING_GATE_ERROR);
     return 0;
 }
