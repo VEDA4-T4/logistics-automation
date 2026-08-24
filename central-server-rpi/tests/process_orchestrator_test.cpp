@@ -189,6 +189,11 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(line_tracer_payload->destination == "1");
     assert(!line_tracer.dispatched_event.has_value());
     assert(orchestrator.ConfirmDispatch(line_tracer).Applied());
+    assert(orchestrator
+               .FailCommandResponse(line_tracer, mqtt::CommandResult::kTimeout,
+                                    "DESTINATION_SET command timed out waiting for PI-LT-01")
+               .disposition == central_server::TransitionDisposition::kDuplicate);
+    assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kProductIdentified);
 
     const auto line_tracer_ready = orchestrator.Handle(Status("MSG-LT-PICKUP", "PI-LT-01", "PICKUP_READY_A"));
     assert(line_tracer_ready.handled && line_tracer_ready.commands.size() == 1);

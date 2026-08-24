@@ -91,6 +91,8 @@ public:
     [[nodiscard]] ProcessOrchestrationResult HandleCommandCompletion(const ProcessCommandIntent& intent,
                                                                      const contracts::mqtt::MqttMessage& response);
     [[nodiscard]] ProcessTransition ConfirmDispatch(const ProcessCommandIntent& intent);
+    [[nodiscard]] ProcessTransition FailCommandResponse(const ProcessCommandIntent& intent,
+                                                        contracts::mqtt::CommandResult result, std::string reason);
     [[nodiscard]] ProcessTransition FailDispatch(const ProcessCommandIntent& intent, std::string reason);
     [[nodiscard]] ProcessTransition PreviewSystemCommand(contracts::mqtt::ControlCommand command) const;
     [[nodiscard]] ProcessTransition ApplySystemCommand(contracts::mqtt::ControlCommand command);

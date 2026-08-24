@@ -733,9 +733,11 @@ int Application::Run(int argc, char* argv[]) {
                             return false;
                         }
                     } else {
-                        const auto transition = process_orchestrator.FailDispatch(
-                            *completed_intent, response == nullptr ? "process command failed" : response->message);
-                        if (!transition.Applied()) {
+                        const auto transition = process_orchestrator.FailCommandResponse(
+                            *completed_intent,
+                            response == nullptr ? contracts::mqtt::CommandResult::kFailed : response->result,
+                            response == nullptr ? "process command failed" : response->message);
+                        if (transition.disposition == TransitionDisposition::kRejected) {
                             std::cerr << "[server][ERROR] process command failure transition rejected: "
                                       << transition.reason << '\n';
                             return false;
@@ -1467,8 +1469,10 @@ int Application::Run(int argc, char* argv[]) {
                 if (const auto failed_intent = process_command_tracker.HandleResponse(timeout)) {
                     const auto* response =
                         contracts::mqtt::GetPayload<contracts::mqtt::CommandResponsePayload>(timeout);
-                    static_cast<void>(process_orchestrator.FailDispatch(
-                        *failed_intent, response == nullptr ? "process command timed out" : response->message));
+                    static_cast<void>(process_orchestrator.FailCommandResponse(
+                        *failed_intent,
+                        response == nullptr ? contracts::mqtt::CommandResult::kTimeout : response->result,
+                        response == nullptr ? "process command timed out" : response->message));
                 }
                 if (!finish_system_command(timeout)) {
                     std::cerr << "[server][ERROR] system command timeout transition failed\n";

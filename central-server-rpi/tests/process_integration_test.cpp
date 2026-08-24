@@ -465,8 +465,10 @@ private:
                         DispatchProcessCommands(completion.commands));
             }
             return orchestrator_
-                .FailDispatch(*completed_intent, response == nullptr ? "process command failed" : response->message)
-                .Applied();
+                       .FailCommandResponse(*completed_intent,
+                                            response == nullptr ? mqtt::CommandResult::kFailed : response->result,
+                                            response == nullptr ? "process command failed" : response->message)
+                       .disposition != central_server::TransitionDisposition::kRejected;
         });
     }
 
@@ -676,6 +678,21 @@ void TestTimedOutGripperCommandFailsWork() {
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
     assert(work.has_value());
     assert(work->stage == central_server::WorkStage::kFailed);
+}
+
+void TestTimedOutLineTracerDestinationWaitsForArrival() {
+    ProcessIntegrationHarness harness;
+    assert(harness.DetectBox());
+    assert(harness.DetectPosition());
+    assert(harness.DetectBarcode());
+    assert(harness.ReportCommandResult(kLineTracerId, mqtt::CommandResult::kTimeout));
+
+    const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
+    assert(work.has_value());
+    assert(work->stage == central_server::WorkStage::kProductIdentified);
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
+    assert(harness.ReportStatus(kLineTracerId, "PICKUP_READY_C"));
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
 }
 
 void TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess() {
@@ -1167,6 +1184,7 @@ int main() {
     TestSortingDispatchFailureKeepsInputStopped();
     TestRejectedGripperCommandFailsWork();
     TestTimedOutGripperCommandFailsWork();
+    TestTimedOutLineTracerDestinationWaitsForArrival();
     TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess();
     for (const auto stage :
          std::to_array({ central_server::WorkStage::kInputDetected, central_server::WorkStage::kVisionAssigned,
