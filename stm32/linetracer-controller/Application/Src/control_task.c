@@ -554,7 +554,16 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
 
     if (ControlTask_RouteMotionEnabled() != 0U) {
         (void)ControlLogic_StartPendingManeuver(&controlTaskContext, now_ms);
-        (void)ControlLogic_UpdateTimedManeuver(&controlTaskContext, now_ms);
+        if (ControlLogic_UpdateTimedManeuver(&controlTaskContext, now_ms) != 0U) {
+            /*
+             * Sensor snapshots captured during reverse must not become the
+             * pickup
+             * U-turn's source-clear or target-acquisition samples.
+             */
+            controlTaskRouteSensorEpochMs = now_ms;
+            LineFollowPid_Reset(&controlTaskLinePid);
+            SensorTask_RequestLineTrackingReset();
+        }
     }
     if (ControlTask_RouteMotionEnabled() != 0U && ControlLogic_JunctionReacquireActive(&controlTaskContext) != 0U) {
         int16_t correction = 0;
@@ -593,6 +602,11 @@ static void ControlTask_UpdateMotorOutput(uint32_t now_ms) {
         if (maneuver_action == ROUTE_ACTION_GO_STRAIGHT && ControlTask_CToBOrBToARightTurnApproachActive() != 0U) {
             (void)MotorControlLogic_ComputeDifferentialForward(MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM,
                                                                MOTOR_CONTROL_CB_BA_COMMON_LINE_PWM, 0, &output);
+            ControlTask_ApplyMotorOutput(&output, now_ms);
+        } else if (maneuver_action == ROUTE_ACTION_TURN_AROUND &&
+                   controlTaskContext.state == LINETRACER_CONTROL_TURNING_AT_PICKUP &&
+                   MotorControlLogic_ComputePickupUTurn(controlTaskContext.current_position,
+                                                        controlTaskContext.active_route, &output) != 0U) {
             ControlTask_ApplyMotorOutput(&output, now_ms);
         } else if (MotorControlLogic_ComputeRouteAction(maneuver_action, &output) != 0U) {
             ControlTask_ApplyMotorOutput(&output, now_ms);

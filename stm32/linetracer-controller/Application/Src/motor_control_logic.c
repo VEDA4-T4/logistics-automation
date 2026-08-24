@@ -166,6 +166,25 @@ uint8_t MotorControlLogic_ComputeRouteAction(route_action_t action, motor_output
     }
 }
 
+uint8_t MotorControlLogic_ComputePickupUTurn(uart_linetracer_position_t current_position,
+                                             uart_linetracer_route_t active_route, motor_output_t* output) {
+    uint16_t left_pwm = MOTOR_CONTROL_LEFT_UTURN_PWM;
+    uint16_t right_pwm = MOTOR_CONTROL_RIGHT_UTURN_PWM;
+
+    if (output == NULL) {
+        return 0U;
+    }
+
+    if ((current_position == UART_LINETRACER_POSITION_DEST_A && active_route == UART_LINETRACER_ROUTE_A) ||
+        (current_position == UART_LINETRACER_POSITION_DEST_B && active_route == UART_LINETRACER_ROUTE_B)) {
+        left_pwm = MOTOR_CONTROL_AB_LEFT_UTURN_PWM;
+        right_pwm = MOTOR_CONTROL_AB_RIGHT_UTURN_PWM;
+    }
+
+    MotorControlLogic_MakePivot(MOTOR_DIRECTION_FORWARD, MOTOR_DIRECTION_REVERSE, left_pwm, right_pwm, output);
+    return 1U;
+}
+
 uint8_t MotorControlLogic_ComputeControlOutput(linetracer_control_state_t state, route_action_t pending_action,
                                                linetracer_line_state_t line_state, uint8_t route_active,
                                                uint8_t safety_latched, motor_output_t* output) {

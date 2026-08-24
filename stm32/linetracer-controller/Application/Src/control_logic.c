@@ -34,7 +34,8 @@ static uint8_t ControlLogic_LineSamplePredatesActiveTurn(const control_context_t
         return 0U;
     }
 
-    return ((int32_t)(sampled_at_ms - context->junction_turn_started_at_ms) < 0) ? 1U : 0U;
+    /* A sample captured in the same tick still predates the motor write. */
+    return ((int32_t)(sampled_at_ms - context->junction_turn_started_at_ms) <= 0) ? 1U : 0U;
 }
 
 static void ControlLogic_ResetMarkerApproach(control_context_t* context) {
@@ -1437,8 +1438,13 @@ static uint8_t ControlLogic_TargetEdgeDetected(const control_context_t* context,
         return (line_left == 0U && line_right != 0U) ? 1U : 0U;
     }
 
-    /* The pickup U-turn reaches the return line from the left side: 100/110/010. */
-    return (line_right == 0U && (line_left != 0U || line_center != 0U)) ? 1U : 0U;
+    /*
+     * The pickup U-turn reaches the return line from the left side. Require
+     * the directional outer edge
+     * (100/110); 010 alone can still be the old
+     * pickup line and must not hand control back to forward PID.
+ */
+    return (line_left != 0U && line_right == 0U) ? 1U : 0U;
 }
 
 static uint8_t ControlLogic_TargetAligned(const control_context_t* context, uint8_t line_left, uint8_t line_center,
@@ -1615,6 +1621,20 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
         case CONTROL_JUNCTION_TURN_CLEAR_SOURCE:
             if (ControlLogic_IsNinetyDegreeTurn(context->junction_action) != 0U ||
                 context->junction_action == ROUTE_ACTION_TURN_AROUND) {
+                if (context->junction_action == ROUTE_ACTION_TURN_AROUND &&
+                    context->state == LINETRACER_CONTROL_TURNING_AT_PICKUP &&
+                    (uint32_t)(now_ms - context->junction_turn_started_at_ms) < CONTROL_PICKUP_UTURN_MIN_PIVOT_MS) {
+                    /*
+                     * Reverse can leave 000/100 samples queued at the pickup.
+ * Require real
+                     * pivot output before those patterns can clear
+                     * the source line and hand
+                     * control back to forward PID.
+                     */
+                    (void)ControlLogic_ConditionStable(context, 0U, now_ms, CONTROL_TURN_SOURCE_CLEAR_MS);
+                    break;
+                }
+
                 /* Every pivot must leave all three source-line sensors white for a stable interval. */
                 if (ControlLogic_ConditionStable(context, all_white, now_ms, CONTROL_TURN_SOURCE_CLEAR_MS) != 0U) {
                     ControlLogic_SetJunctionPhase(context, CONTROL_JUNCTION_TURN_SEARCH_TARGET, now_ms);
@@ -1643,9 +1663,10 @@ control_line_result_t ControlLogic_ProcessLineSampleWithCenter(control_context_t
                  * Stop pivoting and
                  * let normal PID consume this same sample.
                  * The U-turn also exits here on its first
-                 * 100/110/010 sample so
-                 * motor inertia cannot carry the sensors beyond the return
-                 * line.
+
+                 * * directional 100/110 sample so
+                 * motor inertia cannot carry the sensors beyond the
+                 * return line.
                  */
                 ControlLogic_ResetJunctionManeuver(context);
                 ControlLogic_StartJunctionGuard(context, now_ms);

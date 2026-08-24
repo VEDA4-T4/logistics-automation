@@ -151,6 +151,27 @@ void TestRouteActions() {
     assert(output.standby != 0U);
 }
 
+void TestPickupUTurnUsesABSameLocationCalibration() {
+    motor_output_t output{};
+
+    assert(MotorControlLogic_ComputePickupUTurn(UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_A, &output) !=
+           0U);
+    assert(output.left_direction == MOTOR_DIRECTION_FORWARD);
+    assert(output.right_direction == MOTOR_DIRECTION_REVERSE);
+    assert(output.left_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_AB_LEFT_UTURN_PWM + MOTOR_CONTROL_LEFT_TRIM));
+    assert(output.right_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_AB_RIGHT_UTURN_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+
+    assert(MotorControlLogic_ComputePickupUTurn(UART_LINETRACER_POSITION_DEST_B, UART_LINETRACER_ROUTE_B, &output) !=
+           0U);
+    assert(output.left_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_AB_LEFT_UTURN_PWM + MOTOR_CONTROL_LEFT_TRIM));
+    assert(output.right_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_AB_RIGHT_UTURN_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+
+    assert(MotorControlLogic_ComputePickupUTurn(UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_C, &output) !=
+           0U);
+    assert(output.left_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_LEFT_UTURN_PWM + MOTOR_CONTROL_LEFT_TRIM));
+    assert(output.right_pwm == MotorControlLogic_ClampPwm(MOTOR_CONTROL_RIGHT_UTURN_PWM + MOTOR_CONTROL_RIGHT_TRIM));
+}
+
 void TestStopActions() {
     const route_action_t actions[] = { ROUTE_ACTION_STOP_AT_PICKUP, ROUTE_ACTION_STOP_AT_DEST,
                                        ROUTE_ACTION_JOB_COMPLETE, ROUTE_ACTION_LOAD_LOST, ROUTE_ACTION_ERROR };
@@ -222,6 +243,7 @@ void RunMotorControlLogicTests() {
     TestDifferentialForwardKeepsBothWheelsTurning();
     TestWhiteGapKeepsPreviousOutput();
     TestRouteActions();
+    TestPickupUTurnUsesABSameLocationCalibration();
     TestStopActions();
     TestControlStateOutputPriority();
     TestControlWhiteGapHoldsPreviousOutput();

@@ -12,7 +12,7 @@
  * calibrate each pair independently on the assembled unload mechanism.
  */
 #define UNLOAD_SERVO_REFERENCE_ANGLE_DEG 90U
-#define UNLOAD_SERVO_RELEASE_ANGLE_DEG 70U
+#define UNLOAD_SERVO_RELEASE_ANGLE_DEG 50U
 #define UNLOAD_SERVO_REFERENCE_PULSE_DELTA_US 1000U
 #define UNLOAD_SERVO_RELEASE_PULSE_DELTA_US                                    \
     ((UNLOAD_SERVO_REFERENCE_PULSE_DELTA_US * UNLOAD_SERVO_RELEASE_ANGLE_DEG + \

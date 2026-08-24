@@ -38,6 +38,13 @@ extern "C" {
 #define CONTROL_JUNCTION_EXIT_GUARD_MS 100U
 #define CONTROL_MARKER_APPROACH_HOLD_MS 20U
 #define CONTROL_PICKUP_REVERSE_MS 1000U
+/*
+ * Do not let a pickup U-turn complete from line samples observed immediately
+ * after reverse. The pivot motors must
+ * be applied before source-line clearing
+ * and target-line acquisition are allowed to advance the maneuver.
+ */
+#define CONTROL_PICKUP_UTURN_MIN_PIVOT_MS 450U
 
 #if ((CONTROL_ROUTE_TIMEOUTS_ENABLED != 0U) && (CONTROL_ROUTE_TIMEOUTS_ENABLED != 1U))
 #error "CONTROL_ROUTE_TIMEOUTS_ENABLED must be either 0 or 1"
@@ -61,6 +68,10 @@ extern "C" {
 
 #if CONTROL_PICKUP_REVERSE_MS == 0U
 #error "Control pickup reverse time must be greater than zero"
+#endif
+
+#if CONTROL_PICKUP_UTURN_MIN_PIVOT_MS == 0U || CONTROL_PICKUP_UTURN_MIN_PIVOT_MS >= CONTROL_UTURN_TIMEOUT_MS
+#error "Control pickup U-turn minimum pivot time must be within the U-turn timeout"
 #endif
 
 #if CONTROL_TURN_REACQUIRE_CENTERED_MS == 0U

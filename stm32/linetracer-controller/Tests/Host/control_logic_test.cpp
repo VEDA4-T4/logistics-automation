@@ -528,7 +528,7 @@ void TestTurnAroundActivityDetection() {
     assert(ControlLogic_IsTurnAroundActive(&context) == 0U);
 }
 
-void AdvanceToTargetSearch(control_context_t& context, route_action_t action, std::uint32_t started_at_ms) {
+std::uint32_t AdvanceToTargetSearch(control_context_t& context, route_action_t action, std::uint32_t started_at_ms) {
     context.junction_phase = CONTROL_JUNCTION_TURN_CLEAR_SOURCE;
     context.junction_action = action;
     context.junction_turn_started_at_ms = started_at_ms;
@@ -540,11 +540,16 @@ void AdvanceToTargetSearch(control_context_t& context, route_action_t action, st
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
 
     /* Every pivot direction requires a stable 000 source-line gap. */
-    const auto clear_at = started_at_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 10U;
+    const auto minimum_pivot_ms =
+        (action == ROUTE_ACTION_TURN_AROUND && context.state == LINETRACER_CONTROL_TURNING_AT_PICKUP)
+            ? CONTROL_PICKUP_UTURN_MIN_PIVOT_MS
+            : 0U;
+    const auto clear_at = started_at_ms + minimum_pivot_ms + CONTROL_TURN_SOURCE_CLEAR_MS + 10U;
     (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, clear_at);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
     (void)ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, clear_at + CONTROL_TURN_SOURCE_CLEAR_MS);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
+    return clear_at + CONTROL_TURN_SOURCE_CLEAR_MS;
 }
 
 void TestJunctionAcceptsOneDebouncedOuterBlackSample() {
@@ -783,10 +788,10 @@ void TestCenteredSampleCannotCompleteTurnWithoutDirectionalEdge() {
     assert(context.junction_guard_active != 0U);
 }
 
-void TestTurnAroundHandsFirstLeftOrCenterTargetToPid() {
+void TestTurnAroundRequiresDirectionalLeftTargetBeforePid() {
     const std::array<std::array<std::uint8_t, 3>, 2> target_samples = { {
         { 1U, 0U, 0U },
-        { 0U, 1U, 0U },
+        { 1U, 1U, 0U },
     } };
 
     for (std::size_t index = 0U; index < target_samples.size(); ++index) {
@@ -795,18 +800,19 @@ void TestTurnAroundHandsFirstLeftOrCenterTargetToPid() {
                    static_cast<std::uint32_t>(409U + index), 0U);
         context.state = LINETRACER_CONTROL_TURNING_AT_PICKUP;
         context.pending_route_action = ROUTE_ACTION_TURN_AROUND;
-        AdvanceToTargetSearch(context, ROUTE_ACTION_TURN_AROUND, 100U);
-        const auto search_at = 100U + (2U * CONTROL_TURN_SOURCE_CLEAR_MS) + 10U;
+        const auto search_at = AdvanceToTargetSearch(context, ROUTE_ACTION_TURN_AROUND, 100U);
         assert(ControlLogic_ShouldIgnoreMarker(&context, APP_MARKER_JUNCTION, search_at, search_at) != 0U);
 
-        /* 000 and the old right-side edge cannot finish the U-turn. */
+        /* 000, the old right-side edge, and center-only 010 cannot finish the U-turn. */
         auto result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, search_at + 40U);
         assert(result.maneuver_completed == 0U);
         result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 1U, search_at + 50U);
         assert(result.maneuver_completed == 0U);
+        result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 1U, 0U, search_at + 55U);
+        assert(result.maneuver_completed == 0U);
         assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
-        /* The first 100 or 010 sample stops pivoting and is handed directly to normal PID. */
+        /* The first directional 100 or 110 sample stops pivoting and is handed directly to normal PID. */
         const auto completed_at = search_at + 60U;
         result = ControlLogic_ProcessLineSampleWithCenter(&context, target_samples[index][0], target_samples[index][1],
                                                           target_samples[index][2], completed_at);
@@ -849,17 +855,27 @@ void TestPickupTurnAroundRejectsReversePhaseLineSamples() {
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
 
-    /* Only post-reverse 000 samples establish the common source-line gap. */
+    /* Same-tick and early post-reverse samples cannot advance the U-turn. */
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, kTurnStartedAtMs);
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
+                                                      kTurnStartedAtMs + CONTROL_PICKUP_UTURN_MIN_PIVOT_MS - 1U);
+    assert(result.maneuver_completed == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
+
+    /* Only samples after real pivot output establish the source-line gap. */
+    const auto clear_started_at = kTurnStartedAtMs + CONTROL_PICKUP_UTURN_MIN_PIVOT_MS;
+    result = ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, clear_started_at);
+    assert(result.maneuver_completed == 0U);
+    assert(context.junction_phase == CONTROL_JUNCTION_TURN_CLEAR_SOURCE);
     result =
-        ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, kTurnStartedAtMs + CONTROL_TURN_SOURCE_CLEAR_MS);
+        ControlLogic_ProcessLineSampleWithCenter(&context, 0U, 0U, 0U, clear_started_at + CONTROL_TURN_SOURCE_CLEAR_MS);
     assert(result.maneuver_completed == 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_TURN_SEARCH_TARGET);
 
     result = ControlLogic_ProcessLineSampleWithCenter(&context, 1U, 0U, 0U,
-                                                      kTurnStartedAtMs + CONTROL_TURN_SOURCE_CLEAR_MS + 10U);
+                                                      clear_started_at + CONTROL_TURN_SOURCE_CLEAR_MS + 10U);
     assert(result.maneuver_completed != 0U);
     assert(context.junction_phase == CONTROL_JUNCTION_IDLE);
     assert(context.state == LINETRACER_CONTROL_MOVING_TO_DEST);
@@ -1549,7 +1565,7 @@ int main() {
     TestPersistentSingleOuterHitReturnsControlToPid();
     TestRightTurnHandsTargetEdgeToNormalPidImmediately();
     TestCenteredSampleCannotCompleteTurnWithoutDirectionalEdge();
-    TestTurnAroundHandsFirstLeftOrCenterTargetToPid();
+    TestTurnAroundRequiresDirectionalLeftTargetBeforePid();
     TestPickupTurnAroundRejectsReversePhaseLineSamples();
     TestLeftTurnHandsTargetEdgeToNormalPidImmediately();
     TestTurnTargetEdgeDoesNotWaitForCenterHit();
