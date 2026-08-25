@@ -66,20 +66,21 @@ switches to headless mode automatically when neither `DISPLAY` nor `WAYLAND_DISP
 The runtime sequence is:
 
 1. The vision node connects, publishes registration, and starts heartbeats.
-2. The node confirms a box and barcode locally and retains the latest observation while waiting for work assignment;
-   it does not create a work or publish `BOX_DETECTED`.
+2. Whenever a barcode is visible, the node publishes a fresh `VISION_MEASUREMENT` at a bounded rate. A measurement
+   may contain only the barcode; box geometry is included when both are detected in the same observation.
 3. The input ultrasonic event stops the input conveyor and immediately creates one work. The server replies with
    `WORK_CREATED`; repeated sensor samples cannot create another work in the same detection cycle.
-4. The vision node binds its retained observation to that `workId` and publishes durable `POSITION_DETECTED` and
-   `BARCODE_DETECTED` results. The central server adds catalog `PRODUCT_INFO` and routes the product events to Qt.
+4. The central server binds the newest complete measurement to that `workId`, derives `POSITION_DETECTED` and
+   `BARCODE_DETECTED`, adds catalog `PRODUCT_INFO`, and routes the product events to Qt. Barcode-only measurements are
+   accepted but cannot advance the work until box geometry is available.
 5. If image upload is enabled, the node uploads the JPEG over HTTP(S), verifies the response, and publishes
    `PRODUCT_IMAGE` for the central work flow.
 6. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. Durable result publication uses the
    existing `RESULT_PENDING` retry flow.
 
 The central server must therefore be running with its MQTT subscriptions and image upload endpoint enabled before the
-complete scenario can finish. The vision node retains observations locally, then waits for `WORK_CREATED` before
-publishing the durable position, barcode, and image results for that work.
+complete scenario can finish. Measurement delivery is best-effort and continuous; the central server owns work
+binding and duplicate process transitions. Durable image and failure results remain associated with `WORK_CREATED`.
 
 The product orientation is a system input constraint: the barcode must face upward when the product enters the vision
 area. The vision node does not request product rotation or search the other five faces.
@@ -120,7 +121,7 @@ error results still remain in `RESULT_PENDING` until reconnect and then return t
 
 No-box frames are not reported as a work failure because the node does not own a `workId`. The node keeps scanning
 without raising a system error. The central server owns the box-arrival gate: an input ultrasonic event creates the
-active work, and the vision node binds its retained observation when that work is assigned.
+active work, while a complete vision measurement supplies the position and barcode for that work.
 
 ## Vision ablation benchmark
 

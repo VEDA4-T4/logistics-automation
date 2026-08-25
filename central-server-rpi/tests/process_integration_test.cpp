@@ -21,6 +21,7 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 #include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/sensor_detection.hpp"
+#include "logistics/central_server/vision_measurement_buffer.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/contracts/mqtt_validation.hpp"
@@ -1202,6 +1203,82 @@ void TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold() {
     assert(failed_removal == central_server::Application::PendingDeliveryEpochResult::kError);
 }
 
+void TestVisionMeasurementBufferKeepsLatestCompleteObservation() {
+    central_server::VisionMeasurementBuffer buffer;
+    const auto make_measurement = [](std::string message_id, std::string barcode, const bool has_box) {
+        return mqtt::MqttMessage{
+            .message_id = std::move(message_id),
+            .message_type = mqtt::MessageType::kVisionMeasurement,
+            .source_id = std::string(kVisionId),
+            .timestamp = std::string(kTimestamp),
+            .data =
+                mqtt::VisionMeasurementPayload{
+                    .barcode = std::move(barcode),
+                    .box_x = has_box ? 100 : 0,
+                    .box_y = has_box ? 50 : 0,
+                    .box_width = has_box ? 200 : 0,
+                    .box_height = has_box ? 100 : 0,
+                    .frame_width = 640,
+                    .frame_height = 480,
+                    .box_corners = std::nullopt,
+                },
+        };
+    };
+
+    buffer.Store(make_measurement("VISION-BARCODE-ONLY", "5901234123457", false));
+    assert(buffer.Empty());
+    buffer.Store(make_measurement("VISION-MEASUREMENT-1", "5901234123457", true));
+    buffer.Store(make_measurement("VISION-MEASUREMENT-2", "8801234567893", true));
+    assert(!buffer.Empty());
+
+    bool processed = false;
+    assert(buffer.ReplayWhen(false, [&processed](const mqtt::MqttMessage&) {
+        processed = true;
+        return true;
+    }));
+    assert(!processed && !buffer.Empty());
+    assert(buffer.ReplayWhen(true, [&processed](const mqtt::MqttMessage& measurement) {
+        processed = true;
+        assert(measurement.message_id == "VISION-MEASUREMENT-2");
+        const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
+        assert(payload != nullptr && payload->barcode == "8801234567893");
+        return true;
+    }));
+    assert(processed && buffer.Empty());
+
+    buffer.Store(make_measurement("VISION-MEASUREMENT-3", "5901234123457", true));
+    assert(!buffer.ReplayWhen(true, [](const mqtt::MqttMessage&) { return false; }));
+    assert(!buffer.Empty());
+}
+
+void TestBufferedVisionContinuesAfterUltrasonicWorkCreation() {
+    central_server::VisionMeasurementBuffer buffer;
+    buffer.Store({
+        .message_id = "VISION-BEFORE-ULTRASONIC",
+        .message_type = mqtt::MessageType::kVisionMeasurement,
+        .source_id = std::string(kVisionId),
+        .timestamp = std::string(kTimestamp),
+        .data =
+            mqtt::VisionMeasurementPayload{
+                .barcode = "5901234123457",
+                .box_x = 206,
+                .box_y = 101,
+                .box_width = 558,
+                .box_height = 452,
+                .frame_width = 1280,
+                .frame_height = 720,
+                .box_corners = std::nullopt,
+            },
+    });
+
+    ProcessIntegrationHarness harness(false);
+    assert(harness.DetectInputSensor());
+    assert(buffer.ReplayWhen(
+        true, [&harness](const mqtt::MqttMessage&) { return harness.DetectPosition() && harness.DetectBarcode(); }));
+    assert(buffer.Empty());
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -1228,5 +1305,7 @@ int main() {
     TestApplicationRecoveryCommitFailureLeavesAllStateRetryable();
     TestApplicationProcessEpochStamping();
     TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold();
+    TestVisionMeasurementBufferKeepsLatestCompleteObservation();
+    TestBufferedVisionContinuesAfterUltrasonicWorkCreation();
     return 0;
 }

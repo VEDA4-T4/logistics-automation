@@ -53,6 +53,7 @@ constexpr std::size_t kBarcodeCornerCount = 4;
 constexpr double kLatencySmoothingFactor = 0.1;
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
 constexpr std::string_view kWaitingForProductState = "WAITING_FOR_PRODUCT";
+constexpr auto kVisionMeasurementInterval = std::chrono::milliseconds(200);
 #endif
 const cv::Scalar kBoxOutlineColor{ 255, 128, 0 };
 const cv::Scalar kBarcodeBoxColor{ 0, 255, 0 };
@@ -577,6 +578,9 @@ int main(const int argc, char* argv[]) {
     int exit_code = 0;
     bool super_resolution_error_reported = false;
     auto last_latency_log = Clock::now();
+#ifdef LOGISTICS_VISION_MQTT_ENABLED
+    auto last_measurement_publish = Clock::now() - kVisionMeasurementInterval;
+#endif
 
     std::cout << "Camera settings: " << settings.width << 'x' << settings.height << " @ " << settings.fps << " FPS\n";
     if (settings.headless) {
@@ -834,6 +838,21 @@ int main(const int argc, char* argv[]) {
                                           "capture-" + mqtt_session_id + '-' +
                                               std::to_string(mqtt_sequence.load(std::memory_order_relaxed)) + ".jpg");
         }
+        if (observation.has_value() && observation->barcode.has_value() &&
+            processing_finished - last_measurement_publish >= kVisionMeasurementInterval) {
+            const auto measurement = logistics::vision::MakeVisionMeasurementMessage(
+                device_id, *observation,
+                logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                 mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                logistics::device::CurrentIso8601Timestamp());
+            const bool published = mqtt_client.PublishEvent(measurement);
+            last_measurement_publish = processing_finished;
+            if (published) {
+                std::clog << "[vision][measurement][INFO] published barcode=" << *observation->barcode
+                          << "; box=" << (observation->box_detected ? "detected" : "missing")
+                          << "; message_id=" << measurement.message_id << '\n';
+            }
+        }
         vision_state.Synchronize([&](auto&) {
             if (!control_state.IsOperational()) {
                 return;
@@ -854,28 +873,9 @@ int main(const int argc, char* argv[]) {
         if (work.has_value()) {
             const std::string timestamp = logistics::device::CurrentIso8601Timestamp();
             std::vector<logistics::vision::VisionPublication> publications;
-            if (work->observation.has_value()) {
-                publications.push_back({
-                    logistics::vision::VisionPublicationChannel::kEvent,
-                    logistics::vision::MakePositionDetectedMessage(
-                        device_id, *work,
-                        logistics::device::MakeMessageId(device_id, mqtt_session_id,
-                                                         mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
-                        timestamp),
-                });
-            }
             bool result_deferred = false;
             const bool barcode_detected = work->observation.has_value() && work->observation->barcode.has_value();
-            if (barcode_detected) {
-                publications.push_back({
-                    logistics::vision::VisionPublicationChannel::kEvent,
-                    logistics::vision::MakeBarcodeDetectedMessage(
-                        device_id, *work,
-                        logistics::device::MakeMessageId(device_id, mqtt_session_id,
-                                                         mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
-                        timestamp),
-                });
-            } else {
+            if (!barcode_detected) {
                 if (pending_capture.Empty()) {
                     std::cerr << "[vision][WARN] barcode recognition failed without a retained box frame; work_id="
                               << work->work_id << '\n';
@@ -942,6 +942,11 @@ int main(const int argc, char* argv[]) {
                         logistics::device::CurrentIso8601Timestamp(), "ERR-VISION-IMAGE-CAPTURE-MISSING",
                         "VISION_ERROR", "barcode was detected without a captured frame", work->work_id),
                 });
+            } else if (barcode_detected) {
+                // Central owns success transitions from the continuously
+                // published measurement.
+                complete_work();
+                continue;
             }
             if (result_deferred) {
                 continue;

@@ -59,6 +59,8 @@ vision::VisionObservation Observation(std::optional<std::string> barcode = std::
 vision::VisionObservation BarcodeOnlyObservation(std::string barcode, const bool barcode_region_detected = true) {
     return {
         .image_name = "barcode-only.jpg",
+        .frame_width = 640,
+        .frame_height = 480,
         .barcode = std::move(barcode),
         .barcode_region_detected = barcode_region_detected,
         .box_detected = false,
@@ -159,6 +161,13 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), measurement).IsSuccess());
     const auto* measurement_payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
     assert(measurement_payload != nullptr && measurement_payload->barcode == "5901234123457");
+    const auto barcode_only_measurement =
+        vision::MakeVisionMeasurementMessage("PI-VISION-01", BarcodeOnlyObservation("5901234123457"),
+                                             "MSG-MEASUREMENT-BARCODE-ONLY", "2026-07-21T11:00:02Z");
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), barcode_only_measurement).IsSuccess());
+    const auto* barcode_only_payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(barcode_only_measurement);
+    assert(barcode_only_payload != nullptr && barcode_only_payload->barcode == "5901234123457");
+    assert(barcode_only_payload->box_width == 0 && barcode_only_payload->box_height == 0);
     const auto image = vision::MakeProductImageMessage(
         "PI-VISION-01", kWorkId, "42f8e6f1-1277-4748-9e5e-c41c7bf605f7",
         "/uploads/images/42f8e6f1-1277-4748-9e5e-c41c7bf605f7.jpg",

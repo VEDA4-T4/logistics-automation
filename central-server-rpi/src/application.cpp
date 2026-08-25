@@ -35,6 +35,7 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 #include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/server_config.hpp"
+#include "logistics/central_server/vision_measurement_buffer.hpp"
 #include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
@@ -211,6 +212,7 @@ int Application::Run(int argc, char* argv[]) {
     ProcessStateStore process_state_store(database);
     // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
     std::mutex process_mutex;
+    VisionMeasurementBuffer pending_vision_measurement;
 
     std::optional<StoredProcessState> stored_process_state;
     std::vector<PendingMqttDelivery> restored_mqtt_deliveries;
@@ -1046,10 +1048,38 @@ int Application::Run(int argc, char* argv[]) {
         return true;
     };
     mqtt_handler.SetCommandRouteHandler(dispatch_command);
+    const auto replay_pending_vision_measurement = [&]() {
+        const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
+        const bool vision_work_ready = std::ranges::any_of(active_works, [](const WorkProcessSnapshot& work) {
+            return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
+        });
+        std::string message_id;
+        bool replayed = false;
+        const bool handled =
+            pending_vision_measurement.ReplayWhen(vision_work_ready, [&](const contracts::mqtt::MqttMessage& pending) {
+                replayed = true;
+                message_id = pending.message_id;
+                const auto encoded = contracts::mqtt::SerializeMessage(pending);
+                return encoded.IsSuccess() && mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(pending.source_id),
+                                                                  encoded.payload, {}, 1, false);
+            });
+        if (!handled) {
+            std::cerr << "[server][WARN] buffered VISION_MEASUREMENT replay deferred; messageId=" << message_id << '\n';
+            return false;
+        }
+        if (replayed) {
+            std::clog << "[server][INFO] buffered VISION_MEASUREMENT replayed; messageId=" << message_id << '\n';
+        }
+        return true;
+    };
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_command,
                                            &dispatch_process_commands, &input_detection_gate, &line_tracer_load_gate,
-                                           &process_state_persistence_healthy, &persist_process_state,
+                                           &process_state_persistence_healthy, &persist_process_state, &persistence,
+                                           &pending_vision_measurement, &publish_durable,
+                                           &replay_pending_vision_measurement,
                                            input_device_id = server_config.process.input_device_id,
+                                           qt_client_id = server_config.qt_client_id,
+                                           default_destination = server_config.process.default_destination,
                                            line_tracer_enabled = server_config.process.line_tracer_enabled,
                                            &process_epoch](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
@@ -1067,10 +1097,137 @@ int Application::Run(int argc, char* argv[]) {
                           << '\n';
                 return true;
             }
-            // Backward compatibility for older vision nodes. Work creation is
-            // owned by the input ultrasonic cycle; the vision node retains the
-            // observation locally until WORK_CREATED arrives.
-            return true;
+            if (!measurement->HasBox()) {
+                std::clog << "[server][INFO] barcode-only VISION_MEASUREMENT observed; source=" << message.source_id
+                          << "; barcode=" << measurement->barcode << '\n';
+                return true;
+            }
+            const std::string position_summary =
+                std::to_string(measurement->box_x) + "," + std::to_string(measurement->box_y) + "," +
+                std::to_string(measurement->box_width) + "," + std::to_string(measurement->box_height);
+
+            const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
+            const auto work_it = std::ranges::find_if(active_works, [](const WorkProcessSnapshot& work) {
+                return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
+            });
+            if (work_it == active_works.end()) {
+                if (!active_works.empty()) {
+                    return true;
+                }
+                pending_vision_measurement.Store(message);
+                std::clog << "[server][INFO] VISION_MEASUREMENT buffered; no ultrasonic work; source="
+                          << message.source_id << "; barcode=" << measurement->barcode
+                          << "; position=" << position_summary << '\n';
+                return true;
+            }
+
+            const auto& work = *work_it;
+            const std::string bound_at = CurrentIso8601Timestamp();
+            const std::int32_t center_x = measurement->box_x + measurement->box_width / 2;
+            const std::int32_t center_y = measurement->box_y + measurement->box_height / 2;
+            const contracts::mqtt::MqttMessage position_message{
+                .protocol_version = message.protocol_version,
+                .message_id = "VISION-POSITION-" + message.message_id,
+                .message_type = contracts::mqtt::MessageType::kPositionDetected,
+                .source_id = message.source_id,
+                .timestamp = bound_at,
+                .process_epoch = process_epoch,
+                .data =
+                    contracts::mqtt::PositionDetectedPayload{
+                        .work_id = work.work_id,
+                        .box_x = measurement->box_x,
+                        .box_y = measurement->box_y,
+                        .box_width = measurement->box_width,
+                        .box_height = measurement->box_height,
+                        .center_x = center_x,
+                        .center_y = center_y,
+                        .offset_x = center_x - measurement->frame_width / 2,
+                        .offset_y = center_y - measurement->frame_height / 2,
+                        .position_status = "DETECTED",
+                        .box_corners = measurement->box_corners,
+                    },
+            };
+            const contracts::mqtt::MqttMessage barcode_message{
+                .protocol_version = message.protocol_version,
+                .message_id = "VISION-BARCODE-" + message.message_id,
+                .message_type = contracts::mqtt::MessageType::kBarcodeDetected,
+                .source_id = message.source_id,
+                .timestamp = bound_at,
+                .process_epoch = process_epoch,
+                .data =
+                    contracts::mqtt::BarcodeDetectedPayload{
+                        .work_id = work.work_id,
+                        .recognition_status = "SUCCESS",
+                        .barcode = measurement->barcode,
+                        .confidence = std::nullopt,
+                        .message = std::nullopt,
+                        .error_code = std::nullopt,
+                        .failure_stage = std::nullopt,
+                    },
+            };
+
+            const auto position_result = process_orchestrator.Handle(position_message);
+            if (position_result.transition.disposition == TransitionDisposition::kRejected) {
+                return true;
+            }
+            const auto barcode_result = process_orchestrator.Handle(barcode_message);
+            if (barcode_result.transition.disposition == TransitionDisposition::kRejected) {
+                return false;
+            }
+            const auto publish_measurement_event = [&publish_durable,
+                                                    qt_client_id](const contracts::mqtt::MqttMessage& event) {
+                return publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), event);
+            };
+            if (!publish_measurement_event(position_message) || !publish_measurement_event(barcode_message)) {
+                return false;
+            }
+
+            std::optional<CatalogProduct> catalog_product;
+            const auto lookup_status = persistence.FindActiveProductByBarcode(measurement->barcode, catalog_product);
+            if (!lookup_status.ok()) {
+                return false;
+            }
+            if (!catalog_product && !default_destination.empty()) {
+                catalog_product = CatalogProduct{
+                    .barcode = measurement->barcode,
+                    .product_id = "UNREGISTERED",
+                    .product_name = "Unregistered product",
+                    .destination = default_destination,
+                };
+            }
+            if (!catalog_product) {
+                return persist_process_state();
+            }
+
+            const contracts::mqtt::MqttMessage product_message{
+                .protocol_version = message.protocol_version,
+                .message_id = "VISION-PRODUCT-" + message.message_id,
+                .message_type = contracts::mqtt::MessageType::kProductInfo,
+                .source_id = "central-server",
+                .timestamp = bound_at,
+                .process_epoch = process_epoch,
+                .data =
+                    contracts::mqtt::ProductInfoPayload{
+                        .work_id = work.work_id,
+                        .recognition_status = "SUCCESS",
+                        .barcode = catalog_product->barcode,
+                        .product_id = catalog_product->product_id,
+                        .product_name = catalog_product->product_name,
+                        .destination = catalog_product->destination,
+                        .image = nullptr,
+                        .confidence = std::nullopt,
+                        .message = std::nullopt,
+                    },
+            };
+            const auto product_result = process_orchestrator.Handle(product_message);
+            if (product_result.transition.disposition == TransitionDisposition::kRejected ||
+                !publish_measurement_event(product_message)) {
+                return false;
+            }
+            std::clog << "[server][INFO] VISION_MEASUREMENT bound; workId=" << work.work_id
+                      << "; barcode=" << measurement->barcode << "; position=" << position_summary << '\n';
+            return product_result.commands.empty() ? persist_process_state()
+                                                   : dispatch_process_commands(product_result.commands);
         }
 
         const auto system_state = process_orchestrator.StateMachine().SystemState();
@@ -1131,6 +1288,9 @@ int Application::Run(int argc, char* argv[]) {
             if (!encoded.IsSuccess() || !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(input_device_id),
                                                              encoded.payload, {}, 1, false)) {
                 input_detection_gate.Reset();
+                return false;
+            }
+            if (!replay_pending_vision_measurement()) {
                 return false;
             }
         }
