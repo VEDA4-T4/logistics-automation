@@ -186,38 +186,34 @@ mqtt::MqttMessage DeviceStatus(std::string_view source_id, std::string current_s
     };
 }
 
-void TestInputDetectionGateWaitsForVisionBeforeConsumingCycle() {
+void TestInputDetectionGateCreatesOneWorkPerSensorCycle() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
     const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
 
     assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldStopConveyor(detected));
-    assert(!gate.ShouldAwaitVision(detected, false, false));
-    assert(!gate.WaitingForVision());
-    assert(gate.ShouldAwaitVision(detected, true, false));
-    assert(gate.WaitingForVision());
-    assert(!gate.ShouldAwaitVision(detected, true, false));
+    assert(!gate.ShouldCreateWork(detected, false, false));
+    assert(gate.ShouldCreateWork(detected, true, false));
+    assert(!gate.ShouldCreateWork(detected, true, false));
 
-    // Once detection has opened the vision step, CLEAR does not move the
-    // process backwards or permit a second assignment.
-    assert(!gate.ShouldAwaitVision(clear, true, false));
-    assert(gate.WaitingForVision());
+    // A CLEAR received before work creation is committed cannot open a second
+    // assignment. Once committed, a full CLEAR -> DETECTED cycle is required.
+    assert(!gate.ShouldCreateWork(clear, true, false));
     gate.MarkWorkCreated();
-    assert(!gate.WaitingForVision());
-    assert(!gate.ShouldAwaitVision(detected, true, false));
+    assert(!gate.ShouldCreateWork(detected, true, false));
 
     assert(!gate.ShouldStopConveyor(clear));
-    assert(!gate.ShouldAwaitVision(clear, true, false));
+    assert(!gate.ShouldCreateWork(clear, true, false));
     assert(gate.ShouldStopConveyor(detected));
-    assert(!gate.ShouldAwaitVision(detected, true, true));
-    assert(gate.ShouldAwaitVision(detected, true, false));
+    assert(!gate.ShouldCreateWork(detected, true, true));
+    assert(gate.ShouldCreateWork(detected, true, false));
 
     gate.RetryStop();
     assert(gate.ShouldStopConveyor(detected));
 
     assert(!gate.ShouldStopConveyor(SensorMessage("PI-LT-01", "DETECTED")));
-    assert(!gate.ShouldAwaitVision(SensorMessage("PI-LT-01", "DETECTED"), true, false));
+    assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));
 }
 
 void TestInputDetectionGateResetMatchesFreshServerState() {
@@ -225,13 +221,12 @@ void TestInputDetectionGateResetMatchesFreshServerState() {
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
 
     assert(gate.ShouldStopConveyor(detected));
-    assert(gate.ShouldAwaitVision(detected, true, false));
+    assert(gate.ShouldCreateWork(detected, true, false));
     gate.MarkWorkCreated();
 
     gate.Reset();
-    assert(!gate.WaitingForVision());
     assert(gate.ShouldStopConveyor(detected));
-    assert(gate.ShouldAwaitVision(detected, true, false));
+    assert(gate.ShouldCreateWork(detected, true, false));
 }
 
 void TestInputDetectionGateLogsConsumedStopDecision() {
@@ -299,7 +294,7 @@ int main() {
     TestChannelsAreIndependentPerDeviceAndSensor();
     TestThresholdsComeFromConfig();
     TestConfigValidation();
-    TestInputDetectionGateWaitsForVisionBeforeConsumingCycle();
+    TestInputDetectionGateCreatesOneWorkPerSensorCycle();
     TestInputDetectionGateResetMatchesFreshServerState();
     TestInputDetectionGateLogsConsumedStopDecision();
     TestLineTracerLoadGateStopsSortingWorkOnce();

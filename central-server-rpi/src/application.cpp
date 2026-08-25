@@ -1067,38 +1067,9 @@ int Application::Run(int argc, char* argv[]) {
                           << '\n';
                 return true;
             }
-            if (!input_detection_gate.WaitingForVision()) {
-                std::clog << "[server][INFO] VISION_MEASUREMENT ignored; process is not waiting for vision; source="
-                          << message.source_id << "; barcode=" << measurement->barcode << '\n';
-                return true;
-            }
-            if (!process_orchestrator.AcceptsInputWorkCreation() ||
-                !process_orchestrator.StateMachine().ActiveWorks().empty()) {
-                return true;
-            }
-            const contracts::mqtt::MqttMessage box_detected{
-                .protocol_version = message.protocol_version,
-                .message_id = "VISION-BOX-" + message.message_id,
-                .message_type = contracts::mqtt::MessageType::kBoxDetected,
-                .source_id = input_device_id,
-                .timestamp = message.timestamp,
-                .process_epoch = process_epoch,
-                .data =
-                    contracts::mqtt::BoxDetectedPayload{
-                        .detected = true,
-                        .image_name = "vision-measurement-" + message.message_id,
-                    },
-            };
-            const auto encoded = contracts::mqtt::SerializeMessage(box_detected);
-            const bool handled =
-                encoded.IsSuccess() &&
-                mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(input_device_id), encoded.payload, {}, 1, false);
-            const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
-            if (!handled || active_works.empty()) {
-                return false;
-            }
-            std::clog << "[server][PROCESS][INFO] vision measurement created work; workId="
-                      << active_works.front().work_id << "; barcode=" << measurement->barcode << '\n';
+            // Backward compatibility for older vision nodes. Work creation is
+            // owned by the input ultrasonic cycle; the vision node retains the
+            // observation locally until WORK_CREATED arrives.
             return true;
         }
 
@@ -1135,11 +1106,35 @@ int Application::Run(int argc, char* argv[]) {
                 return false;
             }
         }
-        if (input_detection_gate.ShouldAwaitVision(message, process_accepts_work, has_active_work)) {
+        if (input_detection_gate.ShouldCreateWork(message, process_accepts_work, has_active_work)) {
             const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
-            std::clog << "[server][PROCESS][INFO] input sensor waiting for vision; messageId=" << message.message_id
+            if (sensor == nullptr) {
+                input_detection_gate.Reset();
+                return false;
+            }
+            std::clog << "[server][PROCESS][INFO] input sensor creating work; messageId=" << message.message_id
                       << "; source=" << message.source_id
-                      << "; sensorId=" << (sensor != nullptr ? std::to_string(sensor->sensor_id) : "<unknown>") << '\n';
+                      << "; sensorId=" << sensor->sensor_id << '\n';
+            const contracts::mqtt::MqttMessage box_detected{
+                .protocol_version = message.protocol_version,
+                .message_id = "SENSOR-BOX-" + message.message_id,
+                .message_type = contracts::mqtt::MessageType::kBoxDetected,
+                .source_id = input_device_id,
+                .timestamp = message.timestamp,
+                .process_epoch = process_epoch,
+                .data =
+                    contracts::mqtt::BoxDetectedPayload{
+                        .detected = true,
+                        .image_name = "ultrasonic-sensor-" + std::to_string(sensor->sensor_id),
+                    },
+            };
+            const auto encoded = contracts::mqtt::SerializeMessage(box_detected);
+            if (!encoded.IsSuccess() ||
+                !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(input_device_id), encoded.payload, {}, 1,
+                                     false)) {
+                input_detection_gate.Reset();
+                return false;
+            }
         }
         const auto result = process_orchestrator.Handle(message);
         if (!result.handled) {

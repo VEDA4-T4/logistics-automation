@@ -100,18 +100,16 @@ public:
     // timed out.
     [[nodiscard]] bool ShouldStopConveyor(const contracts::mqtt::MqttMessage& message);
 
-    // Opens the next sequential step without creating a work. The first valid
-    // vision measurement consumes that step and creates the work; later sensor
-    // samples cannot move the process backwards.
-    [[nodiscard]] bool ShouldAwaitVision(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
-                                         bool has_active_work);
-    [[nodiscard]] bool WaitingForVision() const noexcept;
+    // Consumes one DETECTED interval for immediate work creation. A new work
+    // requires the sensor to return to CLEAR after the previous work is made.
+    [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
+                                        bool has_active_work);
     void MarkWorkCreated() noexcept;
     void Reset() noexcept;
     void RetryStop() noexcept;
 
 private:
-    enum class Phase { kWaitingForDetection, kWaitingForVision, kWaitingForClear };
+    enum class Phase { kWaitingForDetection, kCreatingWork, kWaitingForClear };
 
     std::string input_device_id_;
     std::int32_t sensor_id_;

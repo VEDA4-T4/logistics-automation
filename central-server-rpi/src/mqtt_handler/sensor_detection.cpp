@@ -75,8 +75,8 @@ bool InputDetectionGate::ShouldStopConveyor(const contracts::mqtt::MqttMessage& 
     return true;
 }
 
-bool InputDetectionGate::ShouldAwaitVision(const contracts::mqtt::MqttMessage& message, const bool process_accepts_work,
-                                           const bool has_active_work) {
+bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& message, const bool process_accepts_work,
+                                          const bool has_active_work) {
     const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
     if (sensor == nullptr || message.source_id != input_device_id_ || sensor->sensor_id != sensor_id_ ||
         !sensor->detection_status.has_value()) {
@@ -94,16 +94,12 @@ bool InputDetectionGate::ShouldAwaitVision(const contracts::mqtt::MqttMessage& m
     if (phase_ != Phase::kWaitingForDetection || !process_accepts_work || has_active_work) {
         return false;
     }
-    phase_ = Phase::kWaitingForVision;
+    phase_ = Phase::kCreatingWork;
     return true;
 }
 
-bool InputDetectionGate::WaitingForVision() const noexcept {
-    return phase_ == Phase::kWaitingForVision;
-}
-
 void InputDetectionGate::MarkWorkCreated() noexcept {
-    if (phase_ == Phase::kWaitingForVision) {
+    if (phase_ == Phase::kCreatingWork) {
         phase_ = Phase::kWaitingForClear;
     }
 }

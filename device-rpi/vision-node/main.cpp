@@ -53,7 +53,6 @@ constexpr std::size_t kBarcodeCornerCount = 4;
 constexpr double kLatencySmoothingFactor = 0.1;
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
 constexpr std::string_view kWaitingForProductState = "WAITING_FOR_PRODUCT";
-constexpr auto kVisionMeasurementInterval = std::chrono::milliseconds(200);
 #endif
 const cv::Scalar kBoxOutlineColor{ 255, 128, 0 };
 const cv::Scalar kBarcodeBoxColor{ 0, 255, 0 };
@@ -578,9 +577,6 @@ int main(const int argc, char* argv[]) {
     int exit_code = 0;
     bool super_resolution_error_reported = false;
     auto last_latency_log = Clock::now();
-#ifdef LOGISTICS_VISION_MQTT_ENABLED
-    auto last_measurement_publish = Clock::now() - kVisionMeasurementInterval;
-#endif
 
     std::cout << "Camera settings: " << settings.width << 'x' << settings.height << " @ " << settings.fps << " FPS\n";
     if (settings.headless) {
@@ -837,20 +833,6 @@ int main(const int argc, char* argv[]) {
             observation = MakeObservation(frame, detection_result,
                                           "capture-" + mqtt_session_id + '-' +
                                               std::to_string(mqtt_sequence.load(std::memory_order_relaxed)) + ".jpg");
-        }
-        if (observation.has_value() && observation->box_detected && observation->barcode.has_value() &&
-            processing_finished - last_measurement_publish >= kVisionMeasurementInterval) {
-            const auto measurement = logistics::vision::MakeVisionMeasurementMessage(
-                device_id, *observation,
-                logistics::device::MakeMessageId(device_id, mqtt_session_id,
-                                                 mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
-                logistics::device::CurrentIso8601Timestamp());
-            const bool published = mqtt_client.PublishEvent(measurement);
-            last_measurement_publish = processing_finished;
-            if (published) {
-                std::clog << "[vision][measurement][INFO] published barcode=" << *observation->barcode
-                          << "; message_id=" << measurement.message_id << '\n';
-            }
         }
         vision_state.Synchronize([&](auto&) {
             if (!control_state.IsOperational()) {

@@ -53,9 +53,10 @@ Control Center에 전달됩니다. 장치가 보내는 `measurementStatus`와는
 센서가 `FAULT`이면 판정은 `UNKNOWN`이 됩니다.
 
 설정된 input 장치의 센서 1이 `DETECTED`로 진입하면 서버가 투입 컨베이어를 정지시키고
-비전 측정을 기다립니다. 이후 최초의 유효한 `VISION_MEASUREMENT`가 작업을 하나 생성하며,
-서버는 `WORK_CREATED`로 비전 노드에 `workId`를 배정합니다. 같은 단계에서 반복 수신한
-측정은 새 작업을 만들지 않습니다. Line-tracer의 로컬 장애물 안전
+즉시 작업을 하나 생성한 뒤 `WORK_CREATED`로 비전 노드에 `workId`를 배정합니다.
+비전 노드는 작업 배정 전에 확보한 최신 관측값을 해당 작업에 연결합니다. 다음 작업은
+센서가 `CLEAR`로 복귀한 뒤 새 `DETECTED` 사이클에서 생성되며, 바코드 값은 이전 작업과
+같아도 허용됩니다. Line-tracer의 로컬 장애물 안전
 정지는 STM32의 150/220mm 판정과 safety event가 계속 담당하며, 이 서버 판정은 이를
 대체하지 않습니다.
 
