@@ -482,19 +482,7 @@ ProcessTransition ProcessOrchestrator::ConfirmDispatch(const ProcessCommandInten
 }
 
 ProcessTransition ProcessOrchestrator::FailCommandResponse(const ProcessCommandIntent& intent,
-                                                           const mqtt::CommandResult result, std::string reason) {
-    const auto* destination = mqtt::GetPayload<mqtt::DestinationSetPayload>(intent.message);
-    const auto work = state_machine_.FindWork(intent.work_id);
-    if (result == mqtt::CommandResult::kTimeout && destination != nullptr &&
-        destination->target_device_id == config_.line_tracer_device_id && work.has_value() &&
-        work->stage == WorkStage::kProductIdentified) {
-        return {
-            .disposition = TransitionDisposition::kDuplicate,
-            .previous_stage = work->stage,
-            .current_stage = work->stage,
-            .reason = std::move(reason),
-        };
-    }
+                                                           const mqtt::CommandResult /*result*/, std::string reason) {
     return FailDispatch(intent, std::move(reason));
 }
 

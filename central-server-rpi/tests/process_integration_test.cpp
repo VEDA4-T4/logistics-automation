@@ -769,7 +769,7 @@ void TestTimedOutGripperCommandFailsWork() {
     assert(work->stage == central_server::WorkStage::kFailed);
 }
 
-void TestTimedOutLineTracerDestinationWaitsForArrival() {
+void TestTimedOutLineTracerDestinationDiscardsWork() {
     ProcessIntegrationHarness harness;
     assert(harness.DetectBox());
     assert(harness.DetectPosition());
@@ -778,10 +778,11 @@ void TestTimedOutLineTracerDestinationWaitsForArrival() {
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
     assert(work.has_value());
-    assert(work->stage == central_server::WorkStage::kProductIdentified);
+    assert(work->stage == central_server::WorkStage::kFailed);
+    assert(harness.Orchestrator().AcceptsNewWork());
     assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
     assert(harness.ReportStatus(kLineTracerId, "PICKUP_READY_C"));
-    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
 }
 
 void TestLineTracerSensorErrorDoesNotSuppressPickupReady() {
@@ -1297,7 +1298,7 @@ int main() {
     TestFailedInputStopRetriesBeforeCreatingWork();
     TestRejectedGripperCommandFailsWork();
     TestTimedOutGripperCommandFailsWork();
-    TestTimedOutLineTracerDestinationWaitsForArrival();
+    TestTimedOutLineTracerDestinationDiscardsWork();
     TestLineTracerSensorErrorDoesNotSuppressPickupReady();
     TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess();
     for (const auto stage :
