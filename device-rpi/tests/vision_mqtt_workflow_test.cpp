@@ -217,7 +217,7 @@ void TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork() {
     assert(work->observation->barcode == "fresh-barcode");
 }
 
-void TestSensorWorkCanBeAssignedBeforeVisionDetection() {
+void TestWorkAssignmentCanRaceLocalObservationUpdate() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
     assert(workflow.CanAcceptWork());
     assert(workflow.AssignWork(WorkCreated()));
@@ -225,8 +225,8 @@ void TestSensorWorkCanBeAssignedBeforeVisionDetection() {
     assert(!workflow.TakeAssignedWork().has_value());
 
     workflow.Observe(Observation());
-    // The sensor already created the work, so vision must attach its observation
-    // without publishing a second BOX_DETECTED/work.
+    // Central can accept the published measurement before this frame reaches
+    // the local workflow, so the WORK_CREATED assignment must remain valid.
     workflow.Observe(Observation("8801234567893", true));
     const auto assigned = workflow.TakeAssignedWork();
     assert(assigned.has_value());
@@ -639,7 +639,7 @@ int main() {
     TestDetectionAssignmentAndResultMessages();
     TestBarcodeOnlyFrameCompletesConfirmedBoxWork();
     TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork();
-    TestSensorWorkCanBeAssignedBeforeVisionDetection();
+    TestWorkAssignmentCanRaceLocalObservationUpdate();
     TestBarcodeSurvivesDetectionConfirmation();
     TestMissingBarcodeProducesFailedResult();
     TestDefaultBarcodeWaitRetriesBeyondLegacyLimit();

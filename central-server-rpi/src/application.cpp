@@ -35,7 +35,6 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 #include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/server_config.hpp"
-#include "logistics/central_server/vision_measurement_buffer.hpp"
 #include "logistics/central_server/work_invalidation.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 
@@ -212,7 +211,6 @@ int Application::Run(int argc, char* argv[]) {
     ProcessStateStore process_state_store(database);
     // ponytail: one process lock is enough at current throughput; split command/timeout execution only if measured.
     std::mutex process_mutex;
-    VisionMeasurementBuffer pending_vision_measurement;
 
     std::optional<StoredProcessState> stored_process_state;
     std::vector<PendingMqttDelivery> restored_mqtt_deliveries;
@@ -471,7 +469,7 @@ int Application::Run(int argc, char* argv[]) {
     });
     mqtt_handler.SetWorkCreatedHandler([&publish_enqueued, &process_orchestrator, &process_command_tracker,
                                         &persist_process_state, &process_state_store, &run_runtime_store,
-                                        &dispatch_process_commands, &command_manager, &pending_system_commands,
+                                        &command_manager, &input_detection_gate, &pending_system_commands,
                                         &process_epoch, qt_client_id = server_config.qt_client_id](
                                            std::string_view device_id, std::string_view work_id) {
         if (!process_orchestrator.IsWorkCreationSource(device_id) ||
@@ -487,13 +485,15 @@ int Application::Run(int argc, char* argv[]) {
             .process_epoch = process_epoch,
             .data = contracts::mqtt::WorkCreatedPayload{ .work_id = std::string(work_id) },
         };
-        const auto begin = process_orchestrator.BeginWork(message.message_id, work_id, device_id, message.timestamp);
+        const auto begin =
+            process_orchestrator.BeginWorkAfterInputStopped(message.message_id, work_id, device_id, message.timestamp);
         const auto existing = process_orchestrator.StateMachine().FindWork(work_id);
         if (begin.transition.disposition == TransitionDisposition::kDuplicate) {
             // State and MQTT outbox are committed atomically.  A replay with no
             // active work was already completed/removed; a later stage already
             // has its WORK_CREATED delivery queued or acknowledged.
             if (!existing.has_value() || existing->stage != WorkStage::kInputDetected) {
+                input_detection_gate.MarkWorkCreated();
                 return WorkCreationDisposition::kCreated;
             }
         }
@@ -508,10 +508,6 @@ int Application::Run(int argc, char* argv[]) {
             }
             std::cerr << "[server][ERROR] WORK_CREATED process transition rejected: " << begin.transition.reason
                       << '\n';
-            return WorkCreationDisposition::kFailed;
-        }
-        if (!dispatch_process_commands || !dispatch_process_commands(begin.commands)) {
-            std::cerr << "[server][ERROR] input conveyor could not be stopped for workId=" << work_id << '\n';
             return WorkCreationDisposition::kFailed;
         }
         const auto qt_topic = contracts::mqtt::QtEventTopic(qt_client_id);
@@ -540,6 +536,7 @@ int Application::Run(int argc, char* argv[]) {
         for (const auto& delivery : deliveries) {
             published = publish_enqueued(delivery) && published;
         }
+        input_detection_gate.MarkWorkCreated();
         return published ? WorkCreationDisposition::kCreated : WorkCreationDisposition::kFailed;
     });
     mqtt_handler.SetQtEventHandler([&mqtt_client, &publish_durable, qt_client_id = server_config.qt_client_id](
@@ -847,7 +844,7 @@ int Application::Run(int argc, char* argv[]) {
                 *system_command == contracts::mqtt::ControlCommand::kRestart ||
                 *system_command == contracts::mqtt::ControlCommand::kStop ||
                 *system_command == contracts::mqtt::ControlCommand::kRecovery) {
-                input_detection_gate.RequireClear();
+                input_detection_gate.Reset();
             }
             const auto transition = process_orchestrator.ApplySystemCommand(*system_command);
             if (transition.disposition == TransitionDisposition::kRejected) {
@@ -1049,37 +1046,10 @@ int Application::Run(int argc, char* argv[]) {
         return true;
     };
     mqtt_handler.SetCommandRouteHandler(dispatch_command);
-    const auto replay_pending_vision_measurement = [&]() {
-        const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
-        const bool vision_work_ready = std::ranges::any_of(active_works, [](const WorkProcessSnapshot& work) {
-            return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
-        });
-        std::string message_id;
-        bool replayed = false;
-        const bool handled =
-            pending_vision_measurement.ReplayWhen(vision_work_ready, [&](const contracts::mqtt::MqttMessage& pending) {
-                replayed = true;
-                message_id = pending.message_id;
-                const auto encoded = contracts::mqtt::SerializeMessage(pending);
-                return encoded.IsSuccess() && mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(pending.source_id),
-                                                                  encoded.payload, {}, 1, false);
-            });
-        if (!handled) {
-            std::cerr << "[server][WARN] buffered VISION_MEASUREMENT replay deferred; messageId=" << message_id << '\n';
-            return false;
-        }
-        if (replayed) {
-            std::clog << "[server][INFO] buffered VISION_MEASUREMENT replayed; messageId=" << message_id << '\n';
-        }
-        return true;
-    };
     mqtt_handler.SetProcessMessageHandler([&mqtt_handler, &process_orchestrator, &dispatch_command,
                                            &dispatch_process_commands, &input_detection_gate, &line_tracer_load_gate,
-                                           &process_state_persistence_healthy, &persist_process_state, &persistence,
-                                           &pending_vision_measurement, &publish_durable,
-                                           &replay_pending_vision_measurement,
-                                           qt_client_id = server_config.qt_client_id,
-                                           default_destination = server_config.process.default_destination,
+                                           &process_state_persistence_healthy, &persist_process_state,
+                                           input_device_id = server_config.process.input_device_id,
                                            line_tracer_enabled = server_config.process.line_tracer_enabled,
                                            &process_epoch](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
@@ -1097,159 +1067,39 @@ int Application::Run(int argc, char* argv[]) {
                           << '\n';
                 return true;
             }
-            const std::string position_summary =
-                std::to_string(measurement->box_x) + "," + std::to_string(measurement->box_y) + "," +
-                std::to_string(measurement->box_width) + "," + std::to_string(measurement->box_height);
-
+            if (!input_detection_gate.WaitingForVision()) {
+                std::clog << "[server][INFO] VISION_MEASUREMENT ignored; process is not waiting for vision; source="
+                          << message.source_id << "; barcode=" << measurement->barcode << '\n';
+                return true;
+            }
+            if (!process_orchestrator.AcceptsInputWorkCreation() ||
+                !process_orchestrator.StateMachine().ActiveWorks().empty()) {
+                return true;
+            }
+            const contracts::mqtt::MqttMessage box_detected{
+                .protocol_version = message.protocol_version,
+                .message_id = "VISION-BOX-" + message.message_id,
+                .message_type = contracts::mqtt::MessageType::kBoxDetected,
+                .source_id = input_device_id,
+                .timestamp = message.timestamp,
+                .process_epoch = process_epoch,
+                .data =
+                    contracts::mqtt::BoxDetectedPayload{
+                        .detected = true,
+                        .image_name = "vision-measurement-" + message.message_id,
+                    },
+            };
+            const auto encoded = contracts::mqtt::SerializeMessage(box_detected);
+            const bool handled =
+                encoded.IsSuccess() &&
+                mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(input_device_id), encoded.payload, {}, 1, false);
             const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
-            const auto work_it = std::ranges::find_if(active_works, [](const WorkProcessSnapshot& work) {
-                return work.stage == WorkStage::kVisionAssigned || work.stage == WorkStage::kVisionProcessing;
-            });
-            if (work_it == active_works.end()) {
-                if (!active_works.empty()) {
-                    std::clog << "[server][INFO] VISION_MEASUREMENT ignored; active work already passed vision; source="
-                              << message.source_id << "; barcode=" << measurement->barcode
-                              << "; position=" << position_summary << '\n';
-                    return true;
-                }
-                pending_vision_measurement.Store(message);
-                std::clog << "[server][INFO] VISION_MEASUREMENT buffered; no ultrasonic work; source="
-                          << message.source_id << "; barcode=" << measurement->barcode
-                          << "; position=" << position_summary << '\n';
-                return true;
-            }
-            const auto& work = *work_it;
-            const std::string position_id = "VISION-POSITION-" + message.message_id;
-            const std::string barcode_id = "VISION-BARCODE-" + message.message_id;
-            const std::string bound_at = CurrentIso8601Timestamp();
-            const std::int32_t center_x = measurement->box_x + measurement->box_width / 2;
-            const std::int32_t center_y = measurement->box_y + measurement->box_height / 2;
-            const std::int32_t frame_center_x = measurement->frame_width / 2;
-            const std::int32_t frame_center_y = measurement->frame_height / 2;
-            const contracts::mqtt::MqttMessage position_message{
-                .protocol_version = message.protocol_version,
-                .message_id = position_id,
-                .message_type = contracts::mqtt::MessageType::kPositionDetected,
-                .source_id = message.source_id,
-                .timestamp = bound_at,
-                .process_epoch = process_epoch,
-                .data =
-                    contracts::mqtt::PositionDetectedPayload{
-                        .work_id = work.work_id,
-                        .box_x = measurement->box_x,
-                        .box_y = measurement->box_y,
-                        .box_width = measurement->box_width,
-                        .box_height = measurement->box_height,
-                        .center_x = center_x,
-                        .center_y = center_y,
-                        .offset_x = center_x - frame_center_x,
-                        .offset_y = center_y - frame_center_y,
-                        .position_status = "DETECTED",
-                        .box_corners = measurement->box_corners,
-                    },
-            };
-            const contracts::mqtt::MqttMessage barcode_message{
-                .protocol_version = message.protocol_version,
-                .message_id = barcode_id,
-                .message_type = contracts::mqtt::MessageType::kBarcodeDetected,
-                .source_id = message.source_id,
-                .timestamp = bound_at,
-                .process_epoch = process_epoch,
-                .data =
-                    contracts::mqtt::BarcodeDetectedPayload{
-                        .work_id = work.work_id,
-                        .recognition_status = "SUCCESS",
-                        .barcode = measurement->barcode,
-                        .confidence = std::nullopt,
-                        .message = std::nullopt,
-                        .error_code = std::nullopt,
-                        .failure_stage = std::nullopt,
-                    },
-            };
-
-            const auto position_result = process_orchestrator.Handle(position_message);
-            if (position_result.transition.disposition == TransitionDisposition::kRejected) {
-                std::clog << "[server][INFO] VISION_MEASUREMENT ignored; position already processed; workId="
-                          << work.work_id << '\n';
-                return true;
-            }
-            const auto barcode_result = process_orchestrator.Handle(barcode_message);
-            if (barcode_result.transition.disposition == TransitionDisposition::kRejected) {
-                std::cerr << "[server][ERROR] VISION_MEASUREMENT barcode transition rejected; workId=" << work.work_id
-                          << "; reason=" << barcode_result.transition.reason << '\n';
+            if (!handled || active_works.empty()) {
                 return false;
             }
-
-            const auto publish_measurement_event = [&publish_durable,
-                                                    qt_client_id](const contracts::mqtt::MqttMessage& event) {
-                if (!publish_durable(contracts::mqtt::QtEventTopic(qt_client_id), event)) {
-                    std::cerr << "[server][ERROR] VISION_MEASUREMENT Qt event enqueue failed; messageId="
-                              << event.message_id << '\n';
-                    return false;
-                }
-                return true;
-            };
-            if (!publish_measurement_event(position_message) || !publish_measurement_event(barcode_message)) {
-                return false;
-            }
-            input_detection_gate.BlockUntilClear();
-
-            std::optional<CatalogProduct> catalog_product;
-            const auto lookup_status = persistence.FindActiveProductByBarcode(measurement->barcode, catalog_product);
-            if (!lookup_status.ok()) {
-                std::cerr << "[server][ERROR] vision barcode catalog lookup failed: " << lookup_status.message << '\n';
-                return false;
-            }
-            if (!catalog_product && !default_destination.empty()) {
-                catalog_product = CatalogProduct{
-                    .barcode = measurement->barcode,
-                    .product_id = "UNREGISTERED",
-                    .product_name = "Unregistered product",
-                    .destination = default_destination,
-                };
-            }
-            if (!catalog_product) {
-                std::clog << "[server][INFO] VISION_MEASUREMENT accepted; product catalog pending; workId="
-                          << work.work_id << "; barcode=" << measurement->barcode << '\n';
-                return persist_process_state();
-            }
-
-            const contracts::mqtt::MqttMessage product_message{
-                .protocol_version = message.protocol_version,
-                .message_id = "VISION-PRODUCT-" + message.message_id,
-                .message_type = contracts::mqtt::MessageType::kProductInfo,
-                .source_id = "central-server",
-                .timestamp = bound_at,
-                .process_epoch = process_epoch,
-                .data =
-                    contracts::mqtt::ProductInfoPayload{
-                        .work_id = work.work_id,
-                        .recognition_status = "SUCCESS",
-                        .barcode = catalog_product->barcode,
-                        .product_id = catalog_product->product_id,
-                        .product_name = catalog_product->product_name,
-                        .destination = catalog_product->destination,
-                        .image = nullptr,
-                        .confidence = std::nullopt,
-                        .message = std::nullopt,
-                    },
-            };
-            const auto product_result = process_orchestrator.Handle(product_message);
-            if (product_result.transition.disposition == TransitionDisposition::kRejected) {
-                std::clog << "[server][INFO] VISION_MEASUREMENT product already processed; workId=" << work.work_id
-                          << '\n';
-                return true;
-            }
-            if (!publish_measurement_event(product_message)) {
-                return false;
-            }
-            std::clog << "[server][INFO] VISION_MEASUREMENT accepted; workId=" << work.work_id
-                      << "; barcode=" << measurement->barcode << "; position=" << position_summary
-                      << "; destination=" << catalog_product->destination << "; state=PRODUCT_IDENTIFIED\n";
-            if (!product_result.commands.empty()) {
-                return dispatch_process_commands(product_result.commands);
-            }
-            return persist_process_state();
+            std::clog << "[server][PROCESS][INFO] vision measurement created work; workId="
+                      << active_works.front().work_id << "; barcode=" << measurement->barcode << '\n';
+            return true;
         }
 
         const auto system_state = process_orchestrator.StateMachine().SystemState();
@@ -1278,42 +1128,18 @@ int Application::Run(int argc, char* argv[]) {
             }
             std::clog << '\n';
         }
-        if (process_orchestrator.Enabled() && !process_accepts_work && input_sensor_detected) {
+        if (process_orchestrator.Enabled() && input_sensor_detected) {
             const auto stop = process_orchestrator.MakeInputConveyorSafetyStop(message.message_id, message.timestamp);
             if (!dispatch_command(stop)) {
-                if (input_sensor_detected) {
-                    input_detection_gate.RetryStop();
-                }
+                input_detection_gate.RetryStop();
                 return false;
             }
         }
-        const bool create_work = input_detection_gate.ShouldCreateWork(
-            message, process_accepts_work, InputStationOccupied(process_orchestrator.StateMachine()), has_active_work);
-        if (create_work) {
+        if (input_detection_gate.ShouldAwaitVision(message, process_accepts_work, has_active_work)) {
             const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
-            std::clog << "[server][PROCESS][INFO] input sensor created work; messageId=" << message.message_id
+            std::clog << "[server][PROCESS][INFO] input sensor waiting for vision; messageId=" << message.message_id
                       << "; source=" << message.source_id
                       << "; sensorId=" << (sensor != nullptr ? std::to_string(sensor->sensor_id) : "<unknown>") << '\n';
-            const contracts::mqtt::MqttMessage box_detected{
-                .protocol_version = message.protocol_version,
-                .message_id = "SENSOR-BOX-" + message.message_id,
-                .message_type = contracts::mqtt::MessageType::kBoxDetected,
-                .source_id = message.source_id,
-                .timestamp = message.timestamp,
-                .process_epoch = process_epoch,
-                .data =
-                    contracts::mqtt::BoxDetectedPayload{
-                        .detected = true,
-                        .image_name = "ultrasonic-sensor-" + std::to_string(sensor->sensor_id),
-                    },
-            };
-            const auto encoded = contracts::mqtt::SerializeMessage(box_detected);
-            if (!encoded.IsSuccess() || !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(message.source_id),
-                                                             encoded.payload, {}, 1, false)) {
-                input_detection_gate.Retry();
-                return false;
-            }
-            static_cast<void>(replay_pending_vision_measurement());
         }
         const auto result = process_orchestrator.Handle(message);
         if (!result.handled) {
@@ -1413,7 +1239,6 @@ int Application::Run(int argc, char* argv[]) {
         {
             const std::lock_guard process_lock(process_mutex);
             static_cast<void>(pump_durable());
-            static_cast<void>(replay_pending_vision_measurement());
             // A restored input work may have been persisted after its STOP tracker was
             // recorded but before WORK_CREATED was committed.  Restore that interlock
             // before replaying the BOX event, otherwise replay could assign vision first.

@@ -83,6 +83,10 @@ public:
     [[nodiscard]] ProcessOrchestrationResult Handle(const contracts::mqtt::MqttMessage& message);
     [[nodiscard]] ProcessOrchestrationResult BeginWork(std::string_view message_id, std::string_view work_id,
                                                        std::string_view input_device_id, std::string_view timestamp);
+    [[nodiscard]] ProcessOrchestrationResult BeginWorkAfterInputStopped(std::string_view message_id,
+                                                                        std::string_view work_id,
+                                                                        std::string_view input_device_id,
+                                                                        std::string_view timestamp);
     [[nodiscard]] contracts::mqtt::MqttMessage MakeInputConveyorSafetyStop(std::string_view trigger_message_id,
                                                                            std::string_view timestamp) const;
     [[nodiscard]] std::vector<ProcessCommandIntent> SortingDetectionCommands(std::string_view work_id,
@@ -110,6 +114,9 @@ public:
     [[nodiscard]] std::uint64_t Revision() const noexcept;
 
 private:
+    [[nodiscard]] ProcessOrchestrationResult BeginWorkImpl(std::string_view message_id, std::string_view work_id,
+                                                           std::string_view input_device_id, std::string_view timestamp,
+                                                           bool stop_input_conveyor);
     [[nodiscard]] ProcessOrchestrationResult HandleWith(ProcessStateMachine& machine,
                                                         const contracts::mqtt::MqttMessage& message,
                                                         bool create_commands);

@@ -259,6 +259,20 @@ ProcessOrchestrationResult ProcessOrchestrator::Handle(const mqtt::MqttMessage& 
 ProcessOrchestrationResult ProcessOrchestrator::BeginWork(std::string_view message_id, std::string_view work_id,
                                                           std::string_view input_device_id,
                                                           std::string_view timestamp) {
+    return BeginWorkImpl(message_id, work_id, input_device_id, timestamp, true);
+}
+
+ProcessOrchestrationResult ProcessOrchestrator::BeginWorkAfterInputStopped(std::string_view message_id,
+                                                                           std::string_view work_id,
+                                                                           std::string_view input_device_id,
+                                                                           std::string_view timestamp) {
+    return BeginWorkImpl(message_id, work_id, input_device_id, timestamp, false);
+}
+
+ProcessOrchestrationResult ProcessOrchestrator::BeginWorkImpl(std::string_view message_id, std::string_view work_id,
+                                                              std::string_view input_device_id,
+                                                              std::string_view timestamp,
+                                                              const bool stop_input_conveyor) {
     if (!config_.enabled) {
         return {
             .handled = false,
@@ -288,7 +302,7 @@ ProcessOrchestrationResult ProcessOrchestrator::BeginWork(std::string_view messa
         .transition = std::move(transition),
         .commands = {},
     };
-    if (result.transition.Applied()) {
+    if (result.transition.Applied() && stop_input_conveyor) {
         result.commands.push_back(MakeInputConveyorCommand(work_id, mqtt::ControlCommand::kStop, timestamp));
     }
     return result;

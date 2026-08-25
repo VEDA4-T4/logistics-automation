@@ -872,9 +872,28 @@ int main(const int argc, char* argv[]) {
         if (work.has_value()) {
             const std::string timestamp = logistics::device::CurrentIso8601Timestamp();
             std::vector<logistics::vision::VisionPublication> publications;
+            if (work->observation.has_value()) {
+                publications.push_back({
+                    logistics::vision::VisionPublicationChannel::kEvent,
+                    logistics::vision::MakePositionDetectedMessage(
+                        device_id, *work,
+                        logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                         mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                        timestamp),
+                });
+            }
             bool result_deferred = false;
             const bool barcode_detected = work->observation.has_value() && work->observation->barcode.has_value();
-            if (!barcode_detected) {
+            if (barcode_detected) {
+                publications.push_back({
+                    logistics::vision::VisionPublicationChannel::kEvent,
+                    logistics::vision::MakeBarcodeDetectedMessage(
+                        device_id, *work,
+                        logistics::device::MakeMessageId(device_id, mqtt_session_id,
+                                                         mqtt_sequence.fetch_add(1, std::memory_order_relaxed)),
+                        timestamp),
+                });
+            } else {
                 if (pending_capture.Empty()) {
                     std::cerr << "[vision][WARN] barcode recognition failed without a retained box frame; work_id="
                               << work->work_id << '\n';
@@ -941,13 +960,6 @@ int main(const int argc, char* argv[]) {
                         logistics::device::CurrentIso8601Timestamp(), "ERR-VISION-IMAGE-CAPTURE-MISSING",
                         "VISION_ERROR", "barcode was detected without a captured frame", work->work_id),
                 });
-            } else if (barcode_detected) {
-                // Central binds the continuously published measurement to the
-                // work. This assignment is only for the optional image upload,
-                // so do not send a second position/barcode pair that could
-                // race the central transition.
-                complete_work();
-                continue;
             }
             if (result_deferred) {
                 continue;

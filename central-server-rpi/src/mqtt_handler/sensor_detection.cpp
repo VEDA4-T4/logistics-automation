@@ -75,54 +75,42 @@ bool InputDetectionGate::ShouldStopConveyor(const contracts::mqtt::MqttMessage& 
     return true;
 }
 
-bool InputDetectionGate::ShouldCreateWork(const contracts::mqtt::MqttMessage& message, const bool process_accepts_work,
-                                          const bool input_station_occupied, const bool has_active_work) {
+bool InputDetectionGate::ShouldAwaitVision(const contracts::mqtt::MqttMessage& message, const bool process_accepts_work,
+                                           const bool has_active_work) {
     const auto* sensor = contracts::mqtt::GetPayload<contracts::mqtt::SensorStatusPayload>(message);
     if (sensor == nullptr || message.source_id != input_device_id_ || sensor->sensor_id != sensor_id_ ||
         !sensor->detection_status.has_value()) {
         return false;
     }
     if (*sensor->detection_status == kDetectionClear) {
-        consumed_ = false;
-        waiting_for_clear_ = false;
+        if (phase_ == Phase::kWaitingForClear) {
+            phase_ = Phase::kWaitingForDetection;
+        }
         return false;
     }
     if (*sensor->detection_status != kDetectionDetected) {
         return false;
     }
-    if (waiting_for_clear_) {
+    if (phase_ != Phase::kWaitingForDetection || !process_accepts_work || has_active_work) {
         return false;
     }
-    if (consumed_ && !has_active_work) {
-        consumed_ = false;
-    }
-    if (consumed_) {
-        return false;
-    }
-    if (input_station_occupied) {
-        return false;
-    }
-    if (!process_accepts_work) {
-        return false;
-    }
-    consumed_ = true;
+    phase_ = Phase::kWaitingForVision;
     return true;
 }
 
-void InputDetectionGate::RequireClear() noexcept {
-    consumed_ = false;
+bool InputDetectionGate::WaitingForVision() const noexcept {
+    return phase_ == Phase::kWaitingForVision;
+}
+
+void InputDetectionGate::MarkWorkCreated() noexcept {
+    if (phase_ == Phase::kWaitingForVision) {
+        phase_ = Phase::kWaitingForClear;
+    }
+}
+
+void InputDetectionGate::Reset() noexcept {
+    phase_ = Phase::kWaitingForDetection;
     stop_consumed_ = false;
-    waiting_for_clear_ = false;
-}
-
-void InputDetectionGate::BlockUntilClear() noexcept {
-    consumed_ = true;
-    stop_consumed_ = true;
-    waiting_for_clear_ = true;
-}
-
-void InputDetectionGate::Retry() noexcept {
-    consumed_ = false;
 }
 
 void InputDetectionGate::RetryStop() noexcept {

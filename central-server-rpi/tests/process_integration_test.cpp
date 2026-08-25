@@ -21,7 +21,6 @@
 #include "logistics/central_server/process_orchestrator.hpp"
 #include "logistics/central_server/process_state_store.hpp"
 #include "logistics/central_server/sensor_detection.hpp"
-#include "logistics/central_server/vision_measurement_buffer.hpp"
 #include "logistics/contracts/mqtt_codec.hpp"
 #include "logistics/contracts/mqtt_topic.hpp"
 #include "logistics/contracts/mqtt_validation.hpp"
@@ -119,9 +118,7 @@ public:
     }
 
     [[nodiscard]] bool DetectBox() {
-        return Handle(mqtt::DeviceEventTopic(kInputId),
-                      Message(mqtt::MessageType::kBoxDetected, kInputId,
-                              mqtt::BoxDetectedPayload{ .detected = true, .image_name = "integration-box.jpg" }));
+        return DetectInputSensor() && DetectVisionMeasurement();
     }
 
     [[nodiscard]] bool DetectInputSensor() {
@@ -135,6 +132,38 @@ public:
                                                                   }))) {
                 return false;
             }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool ClearInputSensor() {
+        for (int reading = 0; reading < 3; ++reading) {
+            if (!Handle(mqtt::DeviceEventTopic(kInputId), Message(mqtt::MessageType::kSensorStatus, kInputId,
+                                                                  mqtt::SensorStatusPayload{
+                                                                      .sensor_id = 1,
+                                                                      .measurement_status = "OK",
+                                                                      .distance_cm = 40,
+                                                                      .detection_status = std::nullopt,
+                                                                  }))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool DetectVisionMeasurement(std::string barcode = "5901234123457") {
+        if (!Handle(mqtt::DeviceEventTopic(kVisionId), Message(mqtt::MessageType::kVisionMeasurement, kVisionId,
+                                                               mqtt::VisionMeasurementPayload{
+                                                                   .barcode = std::move(barcode),
+                                                                   .box_x = 100,
+                                                                   .box_y = 50,
+                                                                   .box_width = 200,
+                                                                   .box_height = 100,
+                                                                   .frame_width = 400,
+                                                                   .frame_height = 200,
+                                                                   .box_corners = std::nullopt,
+                                                               }))) {
+            return false;
         }
         return mqtt::IsValidUuid(work_id_);
     }
@@ -156,12 +185,12 @@ public:
                                                                  }));
     }
 
-    [[nodiscard]] bool DetectBarcode() {
+    [[nodiscard]] bool DetectBarcode(std::string barcode = "5901234123457") {
         return Handle(mqtt::DeviceEventTopic(kVisionId), Message(mqtt::MessageType::kBarcodeDetected, kVisionId,
                                                                  mqtt::BarcodeDetectedPayload{
                                                                      .work_id = work_id_,
                                                                      .recognition_status = "SUCCESS",
-                                                                     .barcode = "0000000000000",
+                                                                     .barcode = std::move(barcode),
                                                                      .confidence = 0.99,
                                                                      .message = std::nullopt,
                                                                      .error_code = std::nullopt,
@@ -256,6 +285,15 @@ public:
         return std::ranges::any_of(published_, [type, source_id](const PublishedMessage& publication) {
             return publication.message.message_type == type && publication.message.source_id == source_id;
         });
+    }
+
+    [[nodiscard]] std::size_t CountDeviceMessages(std::string_view target, mqtt::MessageType type) const {
+        return static_cast<std::size_t>(
+            std::count_if(published_.begin(), published_.end(), [target, type](const PublishedMessage& publication) {
+                const auto parsed = mqtt::ParseTopic(publication.topic);
+                return parsed.kind == mqtt::TopicKind::kDeviceCommand && parsed.endpoint_id == target &&
+                       publication.message.message_type == type;
+            }));
     }
 
     [[nodiscard]] bool ReportCommandResult(std::string_view target, mqtt::CommandResult result) {
@@ -356,6 +394,23 @@ private:
     }
 
     [[nodiscard]] bool HandleProcessMessage(const mqtt::MqttMessage& message) {
+        if (message.message_type == mqtt::MessageType::kVisionMeasurement) {
+            if (!input_detection_gate_.WaitingForVision() || !orchestrator_.StateMachine().ActiveWorks().empty()) {
+                return true;
+            }
+            const mqtt::MqttMessage box_detected{
+                .protocol_version = message.protocol_version,
+                .message_id = "VISION-BOX-" + message.message_id,
+                .message_type = mqtt::MessageType::kBoxDetected,
+                .source_id = std::string(kInputId),
+                .timestamp = message.timestamp,
+                .data = mqtt::BoxDetectedPayload{ .detected = true, .image_name = "vision-measurement" },
+            };
+            if (!Handle(mqtt::DeviceEventTopic(kInputId), box_detected)) {
+                return false;
+            }
+            return true;
+        }
         if (const auto work_id = line_tracer_load_gate_.ShouldStop(
                 message, orchestrator_.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning,
                 orchestrator_.StateMachine().ActiveWorks())) {
@@ -403,7 +458,6 @@ private:
         });
         handler_->SetProcessMessageHandler([this](const mqtt::MqttMessage& message) {
             const bool process_accepts_work = orchestrator_.Enabled() && orchestrator_.StateMachine().AcceptsNewWork();
-            const bool input_station_occupied = !orchestrator_.StateMachine().ActiveWorks().empty();
             if (input_detection_gate_.ShouldStopConveyor(message)) {
                 const auto stop = orchestrator_.MakeInputConveyorSafetyStop(message.message_id, message.timestamp);
                 if (!DispatchCommand(stop)) {
@@ -411,32 +465,8 @@ private:
                     return false;
                 }
             }
-            if (input_detection_gate_.ShouldCreateWork(message, process_accepts_work, input_station_occupied,
-                                                       !orchestrator_.StateMachine().ActiveWorks().empty())) {
-                const auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(message);
-                if (sensor == nullptr) {
-                    input_detection_gate_.Retry();
-                    return false;
-                }
-                const mqtt::MqttMessage box_detected{
-                    .protocol_version = message.protocol_version,
-                    .message_id = "SENSOR-BOX-" + message.message_id,
-                    .message_type = mqtt::MessageType::kBoxDetected,
-                    .source_id = message.source_id,
-                    .timestamp = message.timestamp,
-                    .data =
-                        mqtt::BoxDetectedPayload{
-                            .detected = true,
-                            .image_name = "ultrasonic-sensor-" + std::to_string(sensor->sensor_id),
-                        },
-                };
-                const auto encoded = mqtt::SerializeMessage(box_detected);
-                if (!encoded.IsSuccess() ||
-                    !handler_->Handle(mqtt::DeviceEventTopic(message.source_id), encoded.payload, kTimestamp)) {
-                    input_detection_gate_.Retry();
-                    return false;
-                }
-            }
+            static_cast<void>(input_detection_gate_.ShouldAwaitVision(
+                message, process_accepts_work, !orchestrator_.StateMachine().ActiveWorks().empty()));
             return HandleProcessMessage(message);
         });
         handler_->SetWorkCreatedHandler([this](std::string_view device_id, std::string_view work_id) {
@@ -449,16 +479,19 @@ private:
                 .timestamp = std::string(kTimestamp),
                 .data = mqtt::WorkCreatedPayload{ .work_id = work_id_ },
             };
-            const auto begin = orchestrator_.BeginWork(created.message_id, work_id_, device_id, created.timestamp);
-            if (!begin.transition.Applied() || !DispatchProcessCommands(begin.commands)) {
+            const auto begin =
+                orchestrator_.BeginWorkAfterInputStopped(created.message_id, work_id_, device_id, created.timestamp);
+            if (!begin.transition.Applied()) {
                 return central_server::WorkCreationDisposition::kFailed;
             }
             const bool sent_to_vision = Publish(mqtt::DeviceCommandTopic(kVisionId), created);
             const bool sent_to_qt = Publish(mqtt::QtEventTopic("control-center"), created);
-            return sent_to_vision && sent_to_qt &&
-                           orchestrator_.ConfirmVisionAssignment(created.message_id, work_id_).Applied()
-                       ? central_server::WorkCreationDisposition::kCreated
-                       : central_server::WorkCreationDisposition::kFailed;
+            if (!sent_to_vision || !sent_to_qt ||
+                !orchestrator_.ConfirmVisionAssignment(created.message_id, work_id_).Applied()) {
+                return central_server::WorkCreationDisposition::kFailed;
+            }
+            input_detection_gate_.MarkWorkCreated();
+            return central_server::WorkCreationDisposition::kCreated;
         });
         handler_->SetQtEventHandler([this](const mqtt::MqttMessage& message) {
             return Publish(mqtt::QtEventTopic("control-center"), message);
@@ -527,7 +560,7 @@ void AdvanceToGripperRequested(ProcessIntegrationHarness& harness, const bool li
     assert(harness.DetectBox());
     assert(mqtt::IsValidUuid(harness.WorkId()));
     assert(harness.DetectPosition());
-    assert(harness.DetectBarcode());
+    assert(harness.DetectBarcode("5901234123457"));
     if (line_tracer_enabled) {
         assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
         assert(harness.ReportCommandResult(kLineTracerId, mqtt::CommandResult::kSuccess));
@@ -537,23 +570,38 @@ void AdvanceToGripperRequested(ProcessIntegrationHarness& harness, const bool li
     assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
 }
 
-void TestInputSensorCreatesWorkWithoutVisionBoxEvent() {
+void TestInputSensorWaitsForFirstVisionMeasurement() {
     ProcessIntegrationHarness harness(false);
+    assert(!harness.DetectVisionMeasurement());
+    assert(harness.WorkId().empty());
     assert(harness.DetectInputSensor());
+    assert(harness.WorkId().empty());
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStop) == 1);
+    assert(harness.DetectVisionMeasurement("5901234123457"));
+    const std::string work_id = harness.WorkId();
+    assert(harness.CountDeviceMessages(kVisionId, mqtt::MessageType::kWorkCreated) == 1);
+    assert(harness.DetectVisionMeasurement("5901234123457"));
+    assert(harness.WorkId() == work_id);
+    assert(harness.CountDeviceMessages(kVisionId, mqtt::MessageType::kWorkCreated) == 1);
     assert(harness.DetectPosition());
     assert(harness.DetectBarcode());
     assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
     assert(!harness.HasMessage(mqtt::MessageType::kBoxDetected, kVisionId));
 }
 
-void TestVisionBarcodeFailureDoesNotBlockNextWork() {
+void TestFailedAcceptedWorkRequiresNextSensorCycle() {
     ProcessIntegrationHarness harness(false);
     assert(harness.DetectInputSensor());
+    assert(harness.DetectVisionMeasurement("5901234123457"));
     const std::string failed_work_id = harness.WorkId();
     assert(harness.FailBarcode());
     assert(harness.Orchestrator().StateMachine().ActiveWorks().empty());
     assert(harness.Orchestrator().StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(harness.DetectVisionMeasurement("5901234123457"));
+    assert(harness.WorkId() == failed_work_id);
+    assert(harness.ClearInputSensor());
     assert(harness.DetectInputSensor());
+    assert(harness.DetectVisionMeasurement("5901234123457"));
     assert(harness.WorkId() != failed_work_id);
 }
 
@@ -677,20 +725,17 @@ void TestSortingDispatchFailureKeepsInputStopped() {
     assert(work->stage == central_server::WorkStage::kFailed);
 }
 
-void TestFailedWorkDoesNotBlockNextUltrasonicWork() {
+void TestFailedInputStopRetriesBeforeCreatingWork() {
     ProcessIntegrationHarness harness;
     harness.FailPublishingTo(std::string(kInputId));
-    assert(!harness.DetectBox());
-
-    const std::string failed_work_id = harness.WorkId();
-    const auto failed_work = harness.Orchestrator().StateMachine().FindWork(failed_work_id);
-    assert(failed_work.has_value());
-    assert(failed_work->stage == central_server::WorkStage::kFailed);
+    assert(!harness.DetectInputSensor());
+    assert(harness.WorkId().empty());
     assert(harness.Orchestrator().StateMachine().ActiveWorks().empty());
 
     harness.FailPublishingTo({});
     assert(harness.DetectInputSensor());
-    assert(harness.WorkId() != failed_work_id);
+    assert(harness.DetectVisionMeasurement());
+    assert(mqtt::IsValidUuid(harness.WorkId()));
 }
 
 void TestRejectedGripperCommandFailsWork() {
@@ -1147,89 +1192,17 @@ void TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold() {
     assert(failed_removal == central_server::Application::PendingDeliveryEpochResult::kError);
 }
 
-void TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly() {
-    central_server::VisionMeasurementBuffer buffer;
-    const auto make_measurement = [](std::string message_id, std::string barcode) {
-        return mqtt::MqttMessage{
-            .message_id = std::move(message_id),
-            .message_type = mqtt::MessageType::kVisionMeasurement,
-            .source_id = std::string(kVisionId),
-            .timestamp = std::string(kTimestamp),
-            .data =
-                mqtt::VisionMeasurementPayload{
-                    .barcode = std::move(barcode),
-                    .box_x = 100,
-                    .box_y = 50,
-                    .box_width = 200,
-                    .box_height = 100,
-                    .frame_width = 640,
-                    .frame_height = 480,
-                },
-        };
-    };
-
-    buffer.Store(make_measurement("VISION-MEASUREMENT-1", "5901234123457"));
-    buffer.Store(make_measurement("VISION-MEASUREMENT-2", "8801234567893"));
-    assert(!buffer.Empty());
-    bool processed = false;
-    assert(buffer.ReplayWhen(false, [&processed](const mqtt::MqttMessage&) {
-        processed = true;
-        return true;
-    }));
-    assert(!processed && !buffer.Empty());
-    assert(buffer.ReplayWhen(true, [&processed](const mqtt::MqttMessage& measurement) {
-        processed = true;
-        assert(measurement.message_id == "VISION-MEASUREMENT-2");
-        const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
-        assert(payload != nullptr && payload->barcode == "8801234567893");
-        return true;
-    }));
-    assert(processed);
-    assert(buffer.Empty());
-
-    buffer.Store(make_measurement("VISION-MEASUREMENT-3", "5901234123457"));
-    assert(!buffer.ReplayWhen(true, [](const mqtt::MqttMessage&) { return false; }));
-    assert(!buffer.Empty());
-}
-
-void TestBufferedVisionContinuesAfterFirstUltrasonicDetection() {
-    central_server::VisionMeasurementBuffer buffer;
-    buffer.Store({
-        .message_id = "VISION-BEFORE-ULTRASONIC",
-        .message_type = mqtt::MessageType::kVisionMeasurement,
-        .source_id = std::string(kVisionId),
-        .timestamp = std::string(kTimestamp),
-        .data =
-            mqtt::VisionMeasurementPayload{
-                .barcode = "5901234123457",
-                .box_x = 206,
-                .box_y = 101,
-                .box_width = 558,
-                .box_height = 452,
-                .frame_width = 1280,
-                .frame_height = 720,
-            },
-    });
-
-    ProcessIntegrationHarness harness(false);
-    assert(harness.DetectInputSensor());
-    assert(buffer.ReplayWhen(
-        true, [&harness](const mqtt::MqttMessage&) { return harness.DetectPosition() && harness.DetectBarcode(); }));
-    assert(buffer.Empty());
-    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
-}
-
 }  // namespace
 
 int main() {
-    TestInputSensorCreatesWorkWithoutVisionBoxEvent();
-    TestVisionBarcodeFailureDoesNotBlockNextWork();
+    TestInputSensorWaitsForFirstVisionMeasurement();
+    TestFailedAcceptedWorkRequiresNextSensorCycle();
     for (const bool line_tracer_enabled : std::to_array({ true, false })) {
         TestAutomaticProcessCompletes(line_tracer_enabled);
     }
     TestLineTracerLoadStopsSortingAndStartsTransportOnce();
     TestSortingDispatchFailureKeepsInputStopped();
-    TestFailedWorkDoesNotBlockNextUltrasonicWork();
+    TestFailedInputStopRetriesBeforeCreatingWork();
     TestRejectedGripperCommandFailsWork();
     TestTimedOutGripperCommandFailsWork();
     TestTimedOutLineTracerDestinationWaitsForArrival();
@@ -1245,7 +1218,5 @@ int main() {
     TestApplicationRecoveryCommitFailureLeavesAllStateRetryable();
     TestApplicationProcessEpochStamping();
     TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold();
-    TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly();
-    TestBufferedVisionContinuesAfterFirstUltrasonicDetection();
     return 0;
 }

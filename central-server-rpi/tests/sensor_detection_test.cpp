@@ -186,57 +186,52 @@ mqtt::MqttMessage DeviceStatus(std::string_view source_id, std::string current_s
     };
 }
 
-void TestInputDetectionGateCreatesWorkWithoutPriorClear() {
+void TestInputDetectionGateWaitsForVisionBeforeConsumingCycle() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
+    const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
 
     assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldStopConveyor(detected));
-    assert(!gate.ShouldCreateWork(detected, false, false, false));
-    assert(gate.ShouldCreateWork(detected, true, false, false));
-    assert(!gate.ShouldCreateWork(detected, true, false, true));
+    assert(!gate.ShouldAwaitVision(detected, false, false));
+    assert(!gate.WaitingForVision());
+    assert(gate.ShouldAwaitVision(detected, true, false));
+    assert(gate.WaitingForVision());
+    assert(!gate.ShouldAwaitVision(detected, true, false));
 
-    const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
+    // Once detection has opened the vision step, CLEAR does not move the
+    // process backwards or permit a second assignment.
+    assert(!gate.ShouldAwaitVision(clear, true, false));
+    assert(gate.WaitingForVision());
+    gate.MarkWorkCreated();
+    assert(!gate.WaitingForVision());
+    assert(!gate.ShouldAwaitVision(detected, true, false));
+
     assert(!gate.ShouldStopConveyor(clear));
+    assert(!gate.ShouldAwaitVision(clear, true, false));
     assert(gate.ShouldStopConveyor(detected));
-    assert(!gate.ShouldCreateWork(clear, true, false, true));
-    assert(!gate.ShouldCreateWork(detected, true, true, true));
-    assert(gate.ShouldCreateWork(detected, true, false, true));
+    assert(!gate.ShouldAwaitVision(detected, true, true));
+    assert(gate.ShouldAwaitVision(detected, true, false));
 
-    assert(!gate.ShouldCreateWork(clear, true, false, true));
-    assert(gate.ShouldCreateWork(detected, true, false, true));
-    gate.Retry();
-    assert(gate.ShouldCreateWork(detected, true, false, true));
     gate.RetryStop();
     assert(gate.ShouldStopConveyor(detected));
 
-    gate.RequireClear();
-    assert(gate.ShouldCreateWork(detected, true, false, false));
-    assert(!gate.ShouldCreateWork(detected, true, false, true));
-
     assert(!gate.ShouldStopConveyor(SensorMessage("PI-LT-01", "DETECTED")));
-    assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false, false));
+    assert(!gate.ShouldAwaitVision(SensorMessage("PI-LT-01", "DETECTED"), true, false));
 }
 
-void TestInputDetectionGateRearmsWhenWorkIsGone() {
+void TestInputDetectionGateResetMatchesFreshServerState() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
 
-    assert(gate.ShouldCreateWork(detected, true, false, false));
-    assert(!gate.ShouldCreateWork(detected, true, false, true));
-    assert(gate.ShouldCreateWork(detected, true, false, false));
-}
+    assert(gate.ShouldStopConveyor(detected));
+    assert(gate.ShouldAwaitVision(detected, true, false));
+    gate.MarkWorkCreated();
 
-void TestInputDetectionGateKeepsAcceptedBoxConsumedUntilClear() {
-    logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
-    const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
-    const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
-
-    assert(gate.ShouldCreateWork(detected, true, false, false));
-    gate.BlockUntilClear();
-    assert(!gate.ShouldCreateWork(detected, true, false, false));
-    assert(!gate.ShouldCreateWork(clear, true, false, false));
-    assert(gate.ShouldCreateWork(detected, true, false, false));
+    gate.Reset();
+    assert(!gate.WaitingForVision());
+    assert(gate.ShouldStopConveyor(detected));
+    assert(gate.ShouldAwaitVision(detected, true, false));
 }
 
 void TestInputDetectionGateLogsConsumedStopDecision() {
@@ -304,9 +299,8 @@ int main() {
     TestChannelsAreIndependentPerDeviceAndSensor();
     TestThresholdsComeFromConfig();
     TestConfigValidation();
-    TestInputDetectionGateCreatesWorkWithoutPriorClear();
-    TestInputDetectionGateRearmsWhenWorkIsGone();
-    TestInputDetectionGateKeepsAcceptedBoxConsumedUntilClear();
+    TestInputDetectionGateWaitsForVisionBeforeConsumingCycle();
+    TestInputDetectionGateResetMatchesFreshServerState();
     TestInputDetectionGateLogsConsumedStopDecision();
     TestLineTracerLoadGateStopsSortingWorkOnce();
     std::cout << "sensor_detection_test passed\n";

@@ -100,23 +100,23 @@ public:
     // timed out.
     [[nodiscard]] bool ShouldStopConveyor(const contracts::mqtt::MqttMessage& message);
 
-    // Consumes one physical DETECTED interval. A stopped process or occupied
-    // input station defers the interval so the next reading after it is ready
-    // can create the work. If the consumed work is gone, a sustained DETECTED
-    // reading is rearmed without requiring a CLEAR transition.
-    [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
-                                        bool input_station_occupied, bool has_active_work);
-    void BlockUntilClear() noexcept;
-    void RequireClear() noexcept;
-    void Retry() noexcept;
+    // Opens the next sequential step without creating a work. The first valid
+    // vision measurement consumes that step and creates the work; later sensor
+    // samples cannot move the process backwards.
+    [[nodiscard]] bool ShouldAwaitVision(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
+                                         bool has_active_work);
+    [[nodiscard]] bool WaitingForVision() const noexcept;
+    void MarkWorkCreated() noexcept;
+    void Reset() noexcept;
     void RetryStop() noexcept;
 
 private:
+    enum class Phase { kWaitingForDetection, kWaitingForVision, kWaitingForClear };
+
     std::string input_device_id_;
     std::int32_t sensor_id_;
-    bool consumed_{ false };
     bool stop_consumed_{ false };
-    bool waiting_for_clear_{ false };
+    Phase phase_{ Phase::kWaitingForDetection };
 };
 
 class LineTracerLoadGate final {

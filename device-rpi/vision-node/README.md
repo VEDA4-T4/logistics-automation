@@ -68,19 +68,21 @@ The runtime sequence is:
 1. The vision node connects, publishes registration, and starts heartbeats.
 2. The node confirms a box locally and repeatedly publishes the work-free `VISION_MEASUREMENT` observation (barcode,
    box geometry, frame size, and optional corners); it does not create a work or publish `BOX_DETECTED`.
-3. The input ultrasonic event causes the central server to create the work and stop the input conveyor. The server
-   ignores measurements received before that event and binds the first measurement after it to the active work.
-4. The central server converts the bound measurement into its canonical `POSITION_DETECTED`, `BARCODE_DETECTED`, and
-   catalog `PRODUCT_INFO` transitions, then starts the existing ACK-gated gripper/sorting process.
-5. If image upload is enabled, the node uploads the JPEG over HTTP(S), verifies the response, and publishes
+3. The input ultrasonic event stops the input conveyor and opens the central server's vision-waiting step. Measurements
+   received before that step are ignored.
+4. The first valid measurement in that step creates one work. The server replies with `WORK_CREATED`, and repeated
+   measurements cannot create another work while the process is in a later step.
+5. The vision node binds its retained observation to that `workId` and publishes durable `POSITION_DETECTED` and
+   `BARCODE_DETECTED` results. The central server adds catalog `PRODUCT_INFO` and routes the product events to Qt.
+6. If image upload is enabled, the node uploads the JPEG over HTTP(S), verifies the response, and publishes
    `PRODUCT_IMAGE` for the central work flow.
-6. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. Measurement publication is transient
+7. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. Measurement publication is transient
    QoS0; a disconnected broker drops that sample and the next camera frame retries. Durable result publication still
    uses the existing `RESULT_PENDING` retry flow.
 
 The central server must therefore be running with its MQTT subscriptions and image upload endpoint enabled before the
-complete scenario can finish. The vision node does not wait for `WORK_CREATED` or `WORK_ASSIGNED`; it continuously
-reports measurements and the central server supplies the work ID only when it accepts an ultrasonic-gated sample.
+complete scenario can finish. The vision node continuously reports measurements without a work ID, then waits for
+`WORK_CREATED` before publishing the durable position, barcode, and image results for that work.
 
 The product orientation is a system input constraint: the barcode must face upward when the product enters the vision
 area. The vision node does not request product rotation or search the other five faces.
@@ -121,7 +123,7 @@ error results still remain in `RESULT_PENDING` until reconnect and then return t
 
 No-box frames are not reported as a work failure because the node does not own a `workId`. The node keeps scanning
 without raising a system error. The central server owns the box-arrival gate: it ignores observations until the input
-ultrasonic event creates the active work, rather than asking the vision node to infer an arrival timeout.
+ultrasonic event opens the vision-waiting step, and only the next valid observation creates the active work.
 
 ## Vision ablation benchmark
 
