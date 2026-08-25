@@ -12,6 +12,10 @@ namespace {
     return stage == WorkStage::kCompleted;
 }
 
+[[nodiscard]] bool IsActive(WorkStage stage) noexcept {
+    return !IsTerminal(stage) && stage != WorkStage::kFailed;
+}
+
 [[nodiscard]] bool IsSuspended(WorkStage stage) noexcept {
     return stage == WorkStage::kStopped || stage == WorkStage::kFailed || stage == WorkStage::kEmergencyStopped ||
            stage == WorkStage::kRecovering;
@@ -28,7 +32,10 @@ ProcessSystemState ProcessStateMachine::SystemState() const noexcept {
 }
 
 bool ProcessStateMachine::AcceptsNewWork() const noexcept {
-    return system_state_ == ProcessSystemState::kIdle || system_state_ == ProcessSystemState::kRunning;
+    if (system_state_ != ProcessSystemState::kIdle && system_state_ != ProcessSystemState::kRunning) {
+        return false;
+    }
+    return std::ranges::none_of(works_, [](const auto& entry) { return IsActive(entry.second.stage); });
 }
 
 ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
@@ -47,7 +54,7 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
     ProcessTransition transition;
     if (event.type == ProcessEventType::kWorkCreated) {
         if (!AcceptsNewWork()) {
-            transition = Reject("new work is not allowed while the system is stopped, failed, or recovering");
+            transition = Reject("new work is not allowed while another work is active or the system is unavailable");
         } else if (works_.contains(event.work_id)) {
             transition = Reject("workId already exists");
         } else {
@@ -213,6 +220,9 @@ ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
 bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_state,
                                                     std::vector<WorkProcessSnapshot> works,
                                                     std::vector<std::string> processed_message_ids) {
+    if (works.size() > 1) {
+        return false;
+    }
     std::unordered_map<std::string, WorkProcessSnapshot> restored;
     for (auto& work : works) {
         if (!contracts::IsValidUuid(work.work_id) || IsTerminal(work.stage) || restored.contains(work.work_id)) {
@@ -268,7 +278,7 @@ std::vector<WorkProcessSnapshot> ProcessStateMachine::ActiveWorks() const {
     std::vector<WorkProcessSnapshot> result;
     for (const auto& [work_id, work] : works_) {
         static_cast<void>(work_id);
-        if (!IsTerminal(work.stage) && work.stage != WorkStage::kFailed) {
+        if (IsActive(work.stage)) {
             result.push_back(work);
         }
     }

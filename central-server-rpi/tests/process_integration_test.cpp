@@ -1226,6 +1226,11 @@ void TestVisionMeasurementBufferKeepsLatestCompleteObservation() {
     };
 
     buffer.Store(make_measurement("VISION-BARCODE-ONLY", "5901234123457", false));
+    assert(!buffer.Empty());
+    assert(buffer.ReplayWhen(true, [](const mqtt::MqttMessage& measurement) {
+        const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
+        return payload != nullptr && payload->barcode == "5901234123457" && !payload->HasBox();
+    }));
     assert(buffer.Empty());
     buffer.Store(make_measurement("VISION-MEASUREMENT-1", "5901234123457", true));
     buffer.Store(make_measurement("VISION-MEASUREMENT-2", "8801234567893", true));

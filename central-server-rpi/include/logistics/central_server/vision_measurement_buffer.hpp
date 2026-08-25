@@ -7,13 +7,13 @@
 
 namespace logistics::central_server {
 
-// Vision is free-running. Keep the newest complete measurement received
+// Vision is free-running. Keep the newest valid measurement received
 // before the ultrasonic station creates a work item and consume it once.
 class VisionMeasurementBuffer final {
 public:
     void Store(contracts::mqtt::MqttMessage message) {
         const auto* measurement = contracts::mqtt::GetPayload<contracts::mqtt::VisionMeasurementPayload>(message);
-        if (measurement != nullptr && measurement->HasBox()) {
+        if (measurement != nullptr && measurement->IsValid()) {
             latest_complete_ = std::move(message);
         }
     }

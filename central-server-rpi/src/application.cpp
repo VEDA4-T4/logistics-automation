@@ -1080,6 +1080,7 @@ int Application::Run(int argc, char* argv[]) {
                                            input_device_id = server_config.process.input_device_id,
                                            qt_client_id = server_config.qt_client_id,
                                            default_destination = server_config.process.default_destination,
+                                           homography_enabled = server_config.process.homography.enabled,
                                            line_tracer_enabled = server_config.process.line_tracer_enabled,
                                            &process_epoch](const contracts::mqtt::MqttMessage& message) {
         if (!process_state_persistence_healthy.load()) {
@@ -1097,14 +1098,19 @@ int Application::Run(int argc, char* argv[]) {
                           << '\n';
                 return true;
             }
-            if (!measurement->HasBox()) {
-                std::clog << "[server][INFO] barcode-only VISION_MEASUREMENT observed; source=" << message.source_id
-                          << "; barcode=" << measurement->barcode << '\n';
+            const bool defaulted_position = !measurement->HasBox();
+            if (defaulted_position && homography_enabled) {
+                std::clog << "[server][INFO] barcode-only VISION_MEASUREMENT ignored while homography is enabled; "
+                             "source="
+                          << message.source_id << "; barcode=" << measurement->barcode << '\n';
                 return true;
             }
-            const std::string position_summary =
-                std::to_string(measurement->box_x) + "," + std::to_string(measurement->box_y) + "," +
-                std::to_string(measurement->box_width) + "," + std::to_string(measurement->box_height);
+            const std::int32_t box_x = defaulted_position ? 0 : measurement->box_x;
+            const std::int32_t box_y = defaulted_position ? 0 : measurement->box_y;
+            const std::int32_t box_width = defaulted_position ? measurement->frame_width : measurement->box_width;
+            const std::int32_t box_height = defaulted_position ? measurement->frame_height : measurement->box_height;
+            const std::string position_summary = std::to_string(box_x) + "," + std::to_string(box_y) + "," +
+                                                 std::to_string(box_width) + "," + std::to_string(box_height);
 
             const auto active_works = process_orchestrator.StateMachine().ActiveWorks();
             const auto work_it = std::ranges::find_if(active_works, [](const WorkProcessSnapshot& work) {
@@ -1123,8 +1129,8 @@ int Application::Run(int argc, char* argv[]) {
 
             const auto& work = *work_it;
             const std::string bound_at = CurrentIso8601Timestamp();
-            const std::int32_t center_x = measurement->box_x + measurement->box_width / 2;
-            const std::int32_t center_y = measurement->box_y + measurement->box_height / 2;
+            const std::int32_t center_x = box_x + box_width / 2;
+            const std::int32_t center_y = box_y + box_height / 2;
             const contracts::mqtt::MqttMessage position_message{
                 .protocol_version = message.protocol_version,
                 .message_id = "VISION-POSITION-" + message.message_id,
@@ -1135,16 +1141,16 @@ int Application::Run(int argc, char* argv[]) {
                 .data =
                     contracts::mqtt::PositionDetectedPayload{
                         .work_id = work.work_id,
-                        .box_x = measurement->box_x,
-                        .box_y = measurement->box_y,
-                        .box_width = measurement->box_width,
-                        .box_height = measurement->box_height,
+                        .box_x = box_x,
+                        .box_y = box_y,
+                        .box_width = box_width,
+                        .box_height = box_height,
                         .center_x = center_x,
                         .center_y = center_y,
                         .offset_x = center_x - measurement->frame_width / 2,
                         .offset_y = center_y - measurement->frame_height / 2,
-                        .position_status = "DETECTED",
-                        .box_corners = measurement->box_corners,
+                        .position_status = defaulted_position ? "DEFAULTED" : "DETECTED",
+                        .box_corners = defaulted_position ? std::nullopt : measurement->box_corners,
                     },
             };
             const contracts::mqtt::MqttMessage barcode_message{
