@@ -68,61 +68,22 @@ DetectionModule::DetectionModule(VisionProcessingConfig config) : config_(std::m
     }
 }
 
-DetectionResult DetectionModule::Process(const cv::Mat& frame, const bool allow_expensive_fallback) {
+DetectionResult DetectionModule::Process(const cv::Mat& frame) {
     DetectionResult result;
-    const auto box_started = Clock::now();
-    result.box = DetectStyrofoamBox(frame);
-    result.diagnostics.box_detection_ms = ToMilliseconds(Clock::now() - box_started);
-    if (!result.box.has_value()) {
-        consecutive_barcode_failures_ = 0;
-        return result;
-    }
-
-    const cv::Mat box_roi = frame(result.box->roi);
     std::vector<cv::Point2f> detected_corners;
-    const std::size_t next_consecutive_barcode_failures = consecutive_barcode_failures_ + 1;
-    const bool reached_failure_threshold =
-        next_consecutive_barcode_failures >= static_cast<std::size_t>(config_.failure_frames_before_super_resolution);
-    const bool detected =
-        DetectBarcodeRegionsWithFallback(box_roi, allow_expensive_fallback, reached_failure_threshold,
-                                         consecutive_barcode_failures_, detected_corners, result.diagnostics);
-
+    const auto detection_started = Clock::now();
+    const bool detected = DetectBarcodeRegions(frame, detected_corners);
+    result.diagnostics.barcode_detection_ms = ToMilliseconds(Clock::now() - detection_started);
     result.diagnostics.barcode_region_detected = detected;
     if (!detected) {
         return result;
     }
 
     const auto decode_started = Clock::now();
-    DecodeBarcodeRegions(box_roi, detected_corners);
+    DecodeBarcodeRegions(frame, detected_corners);
     result.diagnostics.barcode_decode_ms = ToMilliseconds(Clock::now() - decode_started);
-
-    const cv::Point2f frame_offset{ static_cast<float>(result.box->roi.x), static_cast<float>(result.box->roi.y) };
-    AppendDecodedBarcodes(detected_corners, frame_offset, result.barcodes);
+    AppendDecodedBarcodes(detected_corners, cv::Point2f{}, result.barcodes);
     if (!result.barcodes.empty()) {
-        consecutive_barcode_failures_ = 0;
-        result.diagnostics.barcode_decoded = true;
-        return result;
-    }
-
-    if (!allow_expensive_fallback || !reached_failure_threshold || !config_.barcode_decode_fallback) {
-        return result;
-    }
-
-    const std::size_t barcode_count = detected_corners.size() / kBarcodeCornerCount;
-    for (std::size_t barcode_index = 0; barcode_index < barcode_count && result.barcodes.empty(); ++barcode_index) {
-        const auto first_corner =
-            detected_corners.begin() + static_cast<std::ptrdiff_t>(barcode_index * kBarcodeCornerCount);
-        const std::vector<cv::Point2f> selected_corners(
-            first_corner, first_corner + static_cast<std::ptrdiff_t>(kBarcodeCornerCount));
-        cv::Mat decode_roi = PrepareBarcodeDecodeRoi(box_roi, detected_corners, barcode_index, result.diagnostics);
-        if (decode_roi.empty()) {
-            continue;
-        }
-        DecodeBarcodeCandidate(decode_roi, selected_corners, frame_offset, result.barcodes, result.diagnostics);
-    }
-
-    if (!result.barcodes.empty()) {
-        consecutive_barcode_failures_ = 0;
         result.diagnostics.barcode_decoded = true;
     }
     return result;

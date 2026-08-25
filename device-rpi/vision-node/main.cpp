@@ -576,7 +576,6 @@ int main(const int argc, char* argv[]) {
     cv::Mat frame;
     int consecutive_frame_errors = 0;
     int exit_code = 0;
-    bool super_resolution_error_reported = false;
     auto last_latency_log = Clock::now();
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
     auto last_measurement_publish = Clock::now() - kVisionMeasurementInterval;
@@ -807,20 +806,7 @@ int main(const int argc, char* argv[]) {
         }
 #endif
 
-#ifdef LOGISTICS_VISION_MQTT_ENABLED
-        const bool allow_expensive_fallback =
-            vision_state.Synchronize([&](auto&) { return mqtt_workflow.NeedsBarcodeFallback(); });
-#else
-        constexpr bool allow_expensive_fallback = true;
-#endif
-        const logistics::vision::DetectionResult detection_result =
-            detection_module->Process(frame, allow_expensive_fallback);
-        if (detection_result.diagnostics.super_resolution_failed && !super_resolution_error_reported) {
-            std::cerr << "[vision][WARN] super-resolution fallback failed; original-frame processing remains active\n";
-            super_resolution_error_reported = true;
-        } else if (!detection_result.diagnostics.super_resolution_failed) {
-            super_resolution_error_reported = false;
-        }
+        const logistics::vision::DetectionResult detection_result = detection_module->Process(frame);
         const auto processing_finished = Clock::now();
 
         const LatencyMetrics current_latency{
