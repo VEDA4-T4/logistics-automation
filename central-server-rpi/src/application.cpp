@@ -1113,8 +1113,7 @@ int Application::Run(int argc, char* argv[]) {
                 return false;
             }
             std::clog << "[server][PROCESS][INFO] input sensor creating work; messageId=" << message.message_id
-                      << "; source=" << message.source_id
-                      << "; sensorId=" << sensor->sensor_id << '\n';
+                      << "; source=" << message.source_id << "; sensorId=" << sensor->sensor_id << '\n';
             const contracts::mqtt::MqttMessage box_detected{
                 .protocol_version = message.protocol_version,
                 .message_id = "SENSOR-BOX-" + message.message_id,
@@ -1129,9 +1128,8 @@ int Application::Run(int argc, char* argv[]) {
                     },
             };
             const auto encoded = contracts::mqtt::SerializeMessage(box_detected);
-            if (!encoded.IsSuccess() ||
-                !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(input_device_id), encoded.payload, {}, 1,
-                                     false)) {
+            if (!encoded.IsSuccess() || !mqtt_handler.Handle(contracts::mqtt::DeviceEventTopic(input_device_id),
+                                                             encoded.payload, {}, 1, false)) {
                 input_detection_gate.Reset();
                 return false;
             }
