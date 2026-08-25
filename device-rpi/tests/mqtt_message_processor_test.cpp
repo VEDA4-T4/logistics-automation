@@ -340,12 +340,28 @@ void TestRecoveryAdoptsNewProcessEpoch() {
                                            .job_id = std::string("22a194c3-3e3c-410c-a329-7e8c4ebcac83") },
     };
     assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
+}
 
-    auto stale_execute = ProcessCommand(mqtt::ControlCommand::kExecute, "REQ-EXECUTE-OLD", std::string(kProcessEpoch));
-    auto* stale_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(stale_execute);
-    assert(stale_payload != nullptr);
-    stale_payload->params["workId"] = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
-    assert(!processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(stale_execute)).IsSuccess());
+void TestExecuteAdoptsNewProcessEpoch() {
+    device::MqttMessageProcessor processor("PI-01");
+    const auto start = ProcessCommand(mqtt::ControlCommand::kStart, "REQ-START-OLD", std::string(kProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(start)).IsSuccess());
+
+    auto execute = ProcessCommand(mqtt::ControlCommand::kExecute, "REQ-EXECUTE-NEW", std::string(kOtherProcessEpoch));
+    auto* execute_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(execute);
+    assert(execute_payload != nullptr);
+    execute_payload->params["workId"] = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(execute)).IsSuccess());
+
+    const mqtt::MqttMessage status{
+        .message_id = "STATUS-AFTER-EXECUTE",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "PI-01",
+        .timestamp = "2026-08-25T01:00:02Z",
+        .data = mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline,
+                                           .current_state = "PICKING",
+                                           .job_id = std::string("22a194c3-3e3c-410c-a329-7e8c4ebcac83") },
+    };
     assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
 }
 
@@ -473,6 +489,7 @@ int main() {
     TestDeviceEventAndErrorEncoding();
     TestProcessEpochOwnershipAndPropagation();
     TestRecoveryAdoptsNewProcessEpoch();
+    TestExecuteAdoptsNewProcessEpoch();
     TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval();
     TestDestinationSetAdoptsNewEpochForWorkStatus();
     return 0;

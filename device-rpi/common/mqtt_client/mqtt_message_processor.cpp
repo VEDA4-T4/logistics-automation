@@ -52,7 +52,8 @@ namespace {
     return command != nullptr && (command->command == contracts::mqtt::ControlCommand::kStart ||
                                   command->command == contracts::mqtt::ControlCommand::kRestart ||
                                   command->command == contracts::mqtt::ControlCommand::kInitialize ||
-                                  command->command == contracts::mqtt::ControlCommand::kRecovery);
+                                  command->command == contracts::mqtt::ControlCommand::kRecovery ||
+                                  command->command == contracts::mqtt::ControlCommand::kExecute);
 }
 
 }  // namespace
