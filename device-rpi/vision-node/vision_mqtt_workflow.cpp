@@ -30,6 +30,23 @@ VisionMqttWorkflow::VisionMqttWorkflow(std::string device_id, const std::size_t 
 void VisionMqttWorkflow::Observe(std::optional<VisionObservation> observation) {
     std::lock_guard lock(mutex_);
     const TimePoint now = monotonic_now_();
+
+    if ((phase_ == Phase::kIdle || phase_ == Phase::kPreassigned) && observation.has_value() &&
+        observation->barcode.has_value()) {
+        detected_frames_ = 0;
+        box_candidate_.reset();
+        barcode_ = observation->barcode;
+        barcode_region_detected_ = observation->barcode_region_detected;
+        confirmed_box_observation_ = std::move(observation);
+        if (work_id_.has_value()) {
+            preassignment_deadline_.reset();
+            phase_ = Phase::kAssigned;
+        } else {
+            phase_ = Phase::kAwaitingWork;
+        }
+        return;
+    }
+
     ExpirePreassignment(now);
 
     const bool barcode_deadline_expired =

@@ -198,32 +198,29 @@ void TestBarcodeOnlyFrameCompletesConfirmedBoxWork() {
     assert(work->observation->barcode == "8801234567893");
 }
 
-void TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork() {
-    {
-        vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
-        workflow.Observe(BarcodeOnlyObservation("stale-idle"));
-        workflow.Observe(Observation());
-        workflow.Observe(Observation());
-        assert(workflow.AssignWork(WorkCreated()));
-        assert(!workflow.TakeAssignedWork().has_value());
-    }
-
-    FakeClock clock;
-    vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1, std::chrono::seconds(3), std::chrono::seconds(10),
-                                        [&clock] { return clock.Now(); });
+void TestAssignedBarcodeDoesNotRequireBox() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 3, 1);
     assert(workflow.AssignWork(WorkCreated()));
-    workflow.Observe(BarcodeOnlyObservation("stale-preassigned"));
-    clock.Advance(std::chrono::milliseconds(2999));
-    assert(!workflow.TakeAssignedWork().has_value());
-    workflow.Observe(Observation());
-    workflow.Observe(Observation());
-    assert(!workflow.TakeAssignedWork().has_value());
 
-    workflow.Observe(BarcodeOnlyObservation("fresh-barcode"));
+    workflow.Observe(BarcodeOnlyObservation("8801234567893"));
     const auto work = workflow.TakeAssignedWork();
     assert(work.has_value());
     assert(work->observation.has_value());
-    assert(work->observation->barcode == "fresh-barcode");
+    assert(!work->observation->box_detected);
+    assert(work->observation->barcode == "8801234567893");
+}
+
+void TestBarcodeBeforeAssignmentIsRetainedForWork() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
+    workflow.Observe(BarcodeOnlyObservation("8801234567893"));
+    assert(workflow.CanAcceptWork());
+    assert(workflow.AssignWork(WorkCreated()));
+
+    const auto work = workflow.TakeAssignedWork();
+    assert(work.has_value());
+    assert(work->observation.has_value());
+    assert(!work->observation->box_detected);
+    assert(work->observation->barcode == "8801234567893");
 }
 
 void TestWorkAssignmentCanRaceLocalObservationUpdate() {
@@ -647,7 +644,8 @@ void TestRecoveryCannotInterleaveAfterResultValidation() {
 int main() {
     TestDetectionAssignmentAndResultMessages();
     TestBarcodeOnlyFrameCompletesConfirmedBoxWork();
-    TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork();
+    TestAssignedBarcodeDoesNotRequireBox();
+    TestBarcodeBeforeAssignmentIsRetainedForWork();
     TestWorkAssignmentCanRaceLocalObservationUpdate();
     TestBarcodeSurvivesDetectionConfirmation();
     TestMissingBarcodeProducesFailedResult();
