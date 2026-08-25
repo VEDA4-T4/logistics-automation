@@ -720,7 +720,10 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
         if (role.has_value() && mqtt::IsConnectionFailure(status->status)) {
             return NotHandled();
         }
-        if (!status->job_id.has_value()) {
+        const bool line_tracer_pickup_ready = config_.line_tracer_enabled &&
+                                              message.source_id == config_.line_tracer_device_id &&
+                                              contracts::HasStateSuffix(current_state, "PICKUP_READY_", 'A', 'C');
+        if (!status->job_id.has_value() && !line_tracer_pickup_ready) {
             return NotHandled();
         }
         if (message.source_id == config_.gripper_device_id) {
@@ -743,11 +746,21 @@ ProcessOrchestrationResult ProcessOrchestrator::HandleWith(ProcessStateMachine& 
                 (status->error_code.has_value() && !ignorable_sensor_error)) {
                 return NotHandled();
             }
-            const auto work = machine.FindWork(*status->job_id);
+            std::optional<WorkProcessSnapshot> work;
+            if (line_tracer_pickup_ready) {
+                const auto active_works = machine.ActiveWorks();
+                const auto current =
+                    std::ranges::find(active_works, WorkStage::kProductIdentified, &WorkProcessSnapshot::stage);
+                if (current != active_works.end()) {
+                    work = *current;
+                }
+            } else {
+                work = machine.FindWork(*status->job_id);
+            }
             if (!work.has_value()) {
                 return NotHandled();
             }
-            if (contracts::HasStateSuffix(current_state, "PICKUP_READY_", 'A', 'C')) {
+            if (line_tracer_pickup_ready) {
                 if (work->stage != WorkStage::kProductIdentified || DownstreamDevicesBusy(machine, work->work_id)) {
                     return NotHandled();
                 }

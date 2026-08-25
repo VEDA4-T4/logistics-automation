@@ -190,7 +190,8 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(!line_tracer.dispatched_event.has_value());
     assert(orchestrator.ConfirmDispatch(line_tracer).Applied());
 
-    const auto line_tracer_ready = orchestrator.Handle(Status("MSG-LT-PICKUP", "PI-LT-01", "PICKUP_READY_A"));
+    const auto line_tracer_ready = orchestrator.Handle(
+        Status("MSG-LT-PICKUP", "PI-LT-01", "PICKUP_READY_A", mqtt::ConnectionState::kOnline, std::nullopt));
     assert(line_tracer_ready.handled && line_tracer_ready.commands.size() == 1);
     const auto& gripper = line_tracer_ready.commands.front();
     const auto* gripper_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(gripper.message);
@@ -209,6 +210,9 @@ void TestEventFlowCreatesCommandsForEachNode() {
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceCommandTopic("PI-GRIPPER-01"), gripper.message).IsSuccess());
     assert(orchestrator.ConfirmDispatch(gripper).Applied());
     assert(orchestrator.StateMachine().FindWork(kWorkId)->stage == central_server::WorkStage::kGripperRequested);
+    const auto duplicate_pickup = orchestrator.Handle(
+        Status("MSG-LT-PICKUP-DUPLICATE", "PI-LT-01", "PICKUP_READY_A", mqtt::ConnectionState::kOnline, std::nullopt));
+    assert(!duplicate_pickup.handled && duplicate_pickup.commands.empty());
 
     const auto unknown_gripper = orchestrator.Handle(Status("MSG-GRIPPER-FUTURE", "PI-GRIPPER-01", "FUTURE_STATE"));
     assert(!unknown_gripper.handled);
