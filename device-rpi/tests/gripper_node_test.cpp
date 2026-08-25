@@ -819,7 +819,7 @@ void test_coordinate_free_full_cycle_uses_the_compact_taught_sequence() {
     fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
     assert(fixture.node->ActiveStep() == GripperCycleStep::kCloseClaw);
     assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_SET_GRIPPER);
-    assert(fixture.backend->last_written.payload[UART_GRIPPER_SET_POSITION_INDEX] == 30U);
+    assert(fixture.backend->last_written.payload[UART_GRIPPER_SET_POSITION_INDEX] == 50U);
 
     fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_GRIPPER);
     assert(fixture.node->ActiveStep() == GripperCycleStep::kPickRetreat);
@@ -836,7 +836,7 @@ void test_coordinate_free_full_cycle_uses_the_compact_taught_sequence() {
     fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_ARM);
     assert(fixture.node->ActiveStep() == GripperCycleStep::kReleaseClaw);
     assert(fixture.backend->last_written.command == UART_CMD_GRIPPER_SET_GRIPPER);
-    assert(fixture.backend->last_written.payload[UART_GRIPPER_SET_POSITION_INDEX] == 60U);
+    assert(fixture.backend->last_written.payload[UART_GRIPPER_SET_POSITION_INDEX] == 65U);
 
     fixture.CompleteCurrentMotion(motion_id++, UART_GRIPPER_MOTION_GRIPPER);
     assert(fixture.node->ActiveStep() == GripperCycleStep::kPlaceDescend);

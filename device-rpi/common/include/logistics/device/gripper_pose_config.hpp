@@ -50,8 +50,8 @@ struct GripperPoseConfig {
     GripperPose place{ 1800U, 700U, 1200U };
 
     // Calibrated operating positions for gripping and releasing the box.
-    std::uint8_t open_position_percent{ 60U };
-    std::uint8_t closed_position_percent{ 30U };
+    std::uint8_t open_position_percent{ 65U };
+    std::uint8_t closed_position_percent{ 50U };
 
     // Interpolation time the controller uses for each motion class.
     std::uint16_t arm_duration_ms{ 1500U };
