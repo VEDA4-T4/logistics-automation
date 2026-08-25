@@ -393,6 +393,69 @@ void TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval() {
     assert(processor.PrepareOutboundMessage(event)->process_epoch == kOtherProcessEpoch);
 }
 
+void TestDestinationSetInitializesMissingEpochForWorkStatus() {
+    device::MqttMessageProcessor processor("PI-LT-01");
+    const mqtt::MqttMessage destination{
+        .message_id = "MSG-DESTINATION-EPOCH",
+        .message_type = mqtt::MessageType::kDestinationSet,
+        .source_id = "central-server",
+        .timestamp = "2026-08-25T01:00:00Z",
+        .process_epoch = std::string(kProcessEpoch),
+        .data =
+            mqtt::DestinationSetPayload{
+                .request_id = "REQ-DESTINATION-EPOCH",
+                .work_id = "22a194c3-3e3c-410c-a329-7e8c4ebcac83",
+                .command = mqtt::ControlCommand::kDestinationSet,
+                .target_device_id = "PI-LT-01",
+                .destination = "3",
+            },
+    };
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-LT-01"), Encode(destination)).IsSuccess());
+
+    const mqtt::MqttMessage response{
+        .message_id = "RESP-DESTINATION-EPOCH",
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .source_id = "PI-LT-01",
+        .timestamp = "2026-08-25T01:00:01Z",
+        .data =
+            mqtt::CommandResponsePayload{
+                .request_id = "REQ-DESTINATION-EPOCH",
+                .command = mqtt::ControlCommand::kDestinationSet,
+                .result = mqtt::CommandResult::kSuccess,
+                .error_code = std::nullopt,
+                .message = "destination accepted",
+            },
+    };
+    assert(processor.PrepareOutboundMessage(response)->process_epoch == kProcessEpoch);
+
+    const mqtt::MqttMessage pickup_ready{
+        .message_id = "STATUS-PICKUP-READY-EPOCH",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "PI-LT-01",
+        .timestamp = "2026-08-25T01:00:02Z",
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = mqtt::ConnectionState::kOnline,
+                .current_state = "PICKUP_READY_C",
+                .job_id = "22a194c3-3e3c-410c-a329-7e8c4ebcac83",
+                .error_code = std::nullopt,
+                .departure_position = std::nullopt,
+                .target_position = std::nullopt,
+                .confirmed_position = std::nullopt,
+                .movement_state = std::nullopt,
+                .position_reset = false,
+            },
+    };
+    assert(processor.PrepareOutboundMessage(pickup_ready)->process_epoch == kProcessEpoch);
+
+    auto stale_destination = destination;
+    stale_destination.message_id = "MSG-DESTINATION-STALE-EPOCH";
+    stale_destination.process_epoch = std::string(kOtherProcessEpoch);
+    mqtt::GetPayload<mqtt::DestinationSetPayload>(stale_destination)->request_id = "REQ-DESTINATION-STALE-EPOCH";
+    assert(!processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-LT-01"), Encode(stale_destination)).IsSuccess());
+    assert(processor.PrepareOutboundMessage(pickup_ready)->process_epoch == kProcessEpoch);
+}
+
 }  // namespace
 
 int main() {
@@ -406,5 +469,6 @@ int main() {
     TestProcessEpochOwnershipAndPropagation();
     TestRecoveryAdoptsNewProcessEpoch();
     TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval();
+    TestDestinationSetInitializesMissingEpochForWorkStatus();
     return 0;
 }
