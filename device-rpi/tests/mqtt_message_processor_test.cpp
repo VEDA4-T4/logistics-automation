@@ -393,7 +393,7 @@ void TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval() {
     assert(processor.PrepareOutboundMessage(event)->process_epoch == kOtherProcessEpoch);
 }
 
-void TestDestinationSetInitializesMissingEpochForWorkStatus() {
+void TestDestinationSetAdoptsNewEpochForWorkStatus() {
     device::MqttMessageProcessor processor("PI-LT-01");
     const mqtt::MqttMessage destination{
         .message_id = "MSG-DESTINATION-EPOCH",
@@ -448,12 +448,17 @@ void TestDestinationSetInitializesMissingEpochForWorkStatus() {
     };
     assert(processor.PrepareOutboundMessage(pickup_ready)->process_epoch == kProcessEpoch);
 
-    auto stale_destination = destination;
-    stale_destination.message_id = "MSG-DESTINATION-STALE-EPOCH";
-    stale_destination.process_epoch = std::string(kOtherProcessEpoch);
-    mqtt::GetPayload<mqtt::DestinationSetPayload>(stale_destination)->request_id = "REQ-DESTINATION-STALE-EPOCH";
-    assert(!processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-LT-01"), Encode(stale_destination)).IsSuccess());
-    assert(processor.PrepareOutboundMessage(pickup_ready)->process_epoch == kProcessEpoch);
+    auto reassigned_destination = destination;
+    reassigned_destination.message_id = "MSG-DESTINATION-NEW-EPOCH";
+    reassigned_destination.process_epoch = std::string(kOtherProcessEpoch);
+    mqtt::GetPayload<mqtt::DestinationSetPayload>(reassigned_destination)->request_id = "REQ-DESTINATION-NEW-EPOCH";
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-LT-01"), Encode(reassigned_destination)).IsSuccess());
+
+    auto reassigned_response = response;
+    reassigned_response.message_id = "RESP-DESTINATION-NEW-EPOCH";
+    mqtt::GetPayload<mqtt::CommandResponsePayload>(reassigned_response)->request_id = "REQ-DESTINATION-NEW-EPOCH";
+    assert(processor.PrepareOutboundMessage(reassigned_response)->process_epoch == kOtherProcessEpoch);
+    assert(processor.PrepareOutboundMessage(pickup_ready)->process_epoch == kOtherProcessEpoch);
 }
 
 }  // namespace
@@ -469,6 +474,6 @@ int main() {
     TestProcessEpochOwnershipAndPropagation();
     TestRecoveryAdoptsNewProcessEpoch();
     TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval();
-    TestDestinationSetInitializesMissingEpochForWorkStatus();
+    TestDestinationSetAdoptsNewEpochForWorkStatus();
     return 0;
 }

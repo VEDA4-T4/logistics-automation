@@ -45,6 +45,9 @@ namespace {
 }
 
 [[nodiscard]] bool EstablishesProcessEpoch(const contracts::mqtt::MqttMessage& message) noexcept {
+    if (message.message_type == contracts::mqtt::MessageType::kDestinationSet) {
+        return true;
+    }
     const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
     return command != nullptr && (command->command == contracts::mqtt::ControlCommand::kStart ||
                                   command->command == contracts::mqtt::ControlCommand::kRestart ||
@@ -140,9 +143,6 @@ IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, 
                     .message = {},
                     .error = "process-scoped command has a stale processEpoch",
                 };
-            } else if (!active_process_epoch_.has_value() &&
-                       decoded.value.message_type == mqtt::MessageType::kDestinationSet) {
-                active_process_epoch_ = decoded.value.process_epoch;
             }
             const auto request_id = RequestIdFromCommand(decoded.value);
             if (!request_id.empty()) {
