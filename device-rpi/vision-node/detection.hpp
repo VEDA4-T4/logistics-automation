@@ -51,7 +51,7 @@ class DetectionModule final {
 public:
     explicit DetectionModule(VisionProcessingConfig config = {});
 
-    [[nodiscard]] DetectionResult Process(const cv::Mat& frame, bool allow_expensive_fallback = true);
+    [[nodiscard]] DetectionResult Process(const cv::Mat& frame);
     [[nodiscard]] cv::Mat SuperResolveForPreview(const cv::Mat& image);
 
 private:

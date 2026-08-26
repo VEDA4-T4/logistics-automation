@@ -576,7 +576,6 @@ int main(const int argc, char* argv[]) {
     cv::Mat frame;
     int consecutive_frame_errors = 0;
     int exit_code = 0;
-    bool super_resolution_error_reported = false;
     auto last_latency_log = Clock::now();
 #ifdef LOGISTICS_VISION_MQTT_ENABLED
     auto last_measurement_publish = Clock::now() - kVisionMeasurementInterval;
@@ -807,20 +806,7 @@ int main(const int argc, char* argv[]) {
         }
 #endif
 
-#ifdef LOGISTICS_VISION_MQTT_ENABLED
-        const bool allow_expensive_fallback =
-            vision_state.Synchronize([&](auto&) { return mqtt_workflow.NeedsBarcodeFallback(); });
-#else
-        constexpr bool allow_expensive_fallback = true;
-#endif
-        const logistics::vision::DetectionResult detection_result =
-            detection_module->Process(frame, allow_expensive_fallback);
-        if (detection_result.diagnostics.super_resolution_failed && !super_resolution_error_reported) {
-            std::cerr << "[vision][WARN] super-resolution fallback failed; original-frame processing remains active\n";
-            super_resolution_error_reported = true;
-        } else if (!detection_result.diagnostics.super_resolution_failed) {
-            super_resolution_error_reported = false;
-        }
+        const logistics::vision::DetectionResult detection_result = detection_module->Process(frame);
         const auto processing_finished = Clock::now();
 
         const LatencyMetrics current_latency{
@@ -838,7 +824,7 @@ int main(const int argc, char* argv[]) {
                                           "capture-" + mqtt_session_id + '-' +
                                               std::to_string(mqtt_sequence.load(std::memory_order_relaxed)) + ".jpg");
         }
-        if (observation.has_value() && observation->box_detected && observation->barcode.has_value() &&
+        if (observation.has_value() && observation->barcode.has_value() &&
             processing_finished - last_measurement_publish >= kVisionMeasurementInterval) {
             const auto measurement = logistics::vision::MakeVisionMeasurementMessage(
                 device_id, *observation,
@@ -849,6 +835,7 @@ int main(const int argc, char* argv[]) {
             last_measurement_publish = processing_finished;
             if (published) {
                 std::clog << "[vision][measurement][INFO] published barcode=" << *observation->barcode
+                          << "; box=" << (observation->box_detected ? "detected" : "missing")
                           << "; message_id=" << measurement.message_id << '\n';
             }
         }
@@ -942,10 +929,8 @@ int main(const int argc, char* argv[]) {
                         "VISION_ERROR", "barcode was detected without a captured frame", work->work_id),
                 });
             } else if (barcode_detected) {
-                // Central binds the continuously published measurement to the
-                // work. This assignment is only for the optional image upload,
-                // so do not send a second position/barcode pair that could
-                // race the central transition.
+                // Central owns success transitions from the continuously
+                // published measurement.
                 complete_work();
                 continue;
             }

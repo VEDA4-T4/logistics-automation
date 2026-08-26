@@ -540,7 +540,7 @@ void TestLightFsrLoadTriggersAfterStableWindow() {
     CHECK_TRUE(context.diagnostics.fsr_empty_baseline == 1000U);
 
     for (std::uint32_t now = SENSOR_FSR_BASELINE_SAMPLES * 10U; now <= 700U; now += 10U) {
-        const auto update = UpdateFsr(context, 1080U, now);
+        const auto update = UpdateFsr(context, static_cast<std::uint16_t>(1000U + SENSOR_FSR_LOAD_ON_DELTA), now);
         if ((update.event_flags & APP_SENSOR_EVENT_LOAD_ON) != 0U) {
             ++load_on_count;
         }

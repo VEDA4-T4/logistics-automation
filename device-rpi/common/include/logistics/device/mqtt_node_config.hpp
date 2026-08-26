@@ -26,6 +26,9 @@ struct MqttNodeConfig final {
     // Root directory; the client appends device_id to isolate node processes.
     std::filesystem::path publish_spool_directory{ "/var/lib/logistics/mqtt-spool" };
     std::size_t publish_spool_maximum_bytes{ 50U * 1024U * 1024U };
+    // Bound inode usage as well as payload bytes. Each durable record occupies
+    // at least one filesystem inode and allocation block.
+    std::size_t publish_spool_maximum_records{ 4096U };
     std::uint8_t sorting_default_speed{ 60 };
     // Persistent sessions preserve broker-side QoS1 deliveries while a node reconnects.
     // Set true only when at-most-once delivery during offline periods is intentional.

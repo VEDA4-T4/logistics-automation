@@ -252,7 +252,7 @@ BenchmarkResult RunProfile(const BenchmarkProfile& profile, const std::vector<Da
     vision::DetectionModule detector(profile.config);
     for (int iteration = 0; iteration < arguments.warmup_iterations; ++iteration) {
         for (const DatasetSample& sample : samples) {
-            static_cast<void>(detector.Process(sample.image, true));
+            static_cast<void>(detector.Process(sample.image));
         }
     }
 
@@ -264,7 +264,7 @@ BenchmarkResult RunProfile(const BenchmarkProfile& profile, const std::vector<Da
     do {
         for (const DatasetSample& sample : samples) {
             const auto started = std::chrono::steady_clock::now();
-            const vision::DetectionResult result = detector.Process(sample.image, true);
+            const vision::DetectionResult result = detector.Process(sample.image);
             const double elapsed_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
             benchmark.elapsed_ms += elapsed_ms;
@@ -441,7 +441,7 @@ void WriteVisualComparisons(const Arguments& arguments, const std::vector<Datase
     const std::size_t count = std::min(samples.size(), static_cast<std::size_t>(arguments.visual_limit));
     for (std::size_t index = 0; index < count; ++index) {
         const DatasetSample& sample = samples[index];
-        const vision::DetectionResult located = locator.Process(sample.image, false);
+        const vision::DetectionResult located = locator.Process(sample.image);
         const cv::Mat region = SelectPreviewRegion(sample, located);
 
         cv::Mat nearest;

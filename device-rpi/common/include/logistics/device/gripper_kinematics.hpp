@@ -143,7 +143,7 @@ struct GripperGeometry {
 
     // Mirror of GRIPPER_HOME_POSITION_PERCENT. Needed because a completed HOME is
     // the node's anchor for claw travel arithmetic as well as arm travel.
-    std::uint8_t home_claw_percent{ 60U };
+    std::uint8_t home_claw_percent{ 65U };
 
     [[nodiscard]] bool IsValid() const noexcept;
 

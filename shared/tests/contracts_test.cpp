@@ -146,6 +146,19 @@ void TestAllMqttMessageRoundTrips() {
                                                                         },
                                                                 }));
 
+    AssertRoundTrip<mqtt::VisionMeasurementPayload>(MakeMessage("MSG-0003-V-BARCODE",
+                                                                mqtt::MessageType::kVisionMeasurement,
+                                                                mqtt::VisionMeasurementPayload{
+                                                                    .barcode = "5901234123457",
+                                                                    .box_x = 0,
+                                                                    .box_y = 0,
+                                                                    .box_width = 0,
+                                                                    .box_height = 0,
+                                                                    .frame_width = 1280,
+                                                                    .frame_height = 720,
+                                                                    .box_corners = std::nullopt,
+                                                                }));
+
     AssertRoundTrip<mqtt::WorkCreatedPayload>(MakeMessage("MSG-0003-A", mqtt::MessageType::kWorkCreated,
                                                           mqtt::WorkCreatedPayload{
                                                               .work_id = std::string(kTestWorkId),

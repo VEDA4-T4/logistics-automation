@@ -13,14 +13,15 @@
 
 namespace {
 
+using logistics::central_server::LineTracerLoadGate;
 using logistics::central_server::SensorDetectionConfig;
 using logistics::central_server::SensorDetector;
-using logistics::central_server::SortingDetectionGate;
 using logistics::central_server::WorkProcessSnapshot;
 using logistics::central_server::WorkStage;
 namespace mqtt = logistics::contracts::mqtt;
 
 constexpr const char* kDevice = "PI-SORTING-01";
+constexpr const char* kLineTracerDevice = "PI-LT-01";
 
 [[nodiscard]] SensorDetectionConfig MakeConfig(int debounce = 3) {
     return SensorDetectionConfig{
@@ -160,15 +161,35 @@ mqtt::MqttMessage SensorMessage(std::string_view source_id, std::string detectio
     };
 }
 
-mqtt::MqttMessage SortingSensorMessage(std::int32_t sensor_id, std::string detection_status) {
-    auto message = SensorMessage(kDevice, std::move(detection_status));
-    mqtt::GetPayload<mqtt::SensorStatusPayload>(message)->sensor_id = sensor_id;
-    return message;
+mqtt::MqttMessage DeviceStatus(std::string_view source_id, std::string current_state,
+                               std::optional<std::string> job_id = std::nullopt,
+                               mqtt::ConnectionState connection_state = mqtt::ConnectionState::kOnline,
+                               std::optional<std::string> error_code = std::nullopt) {
+    return {
+        .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
+        .message_id = "MSG-LINE-TRACER-LOAD-GATE",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = std::string(source_id),
+        .timestamp = "2026-08-21T03:00:00Z",
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = connection_state,
+                .current_state = std::move(current_state),
+                .job_id = std::move(job_id),
+                .error_code = std::move(error_code),
+                .departure_position = std::nullopt,
+                .target_position = std::nullopt,
+                .confirmed_position = std::nullopt,
+                .movement_state = std::nullopt,
+                .position_reset = false,
+            },
+    };
 }
 
-void TestInputDetectionGateCreatesWorkWithoutPriorClear() {
+void TestInputDetectionGateCreatesOneWorkPerSensorCycle() {
     logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
     const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
+    const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
 
     assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldStopConveyor(detected));
@@ -176,26 +197,36 @@ void TestInputDetectionGateCreatesWorkWithoutPriorClear() {
     assert(gate.ShouldCreateWork(detected, true, false));
     assert(!gate.ShouldCreateWork(detected, true, false));
 
-    const auto clear = SensorMessage("PI-INPUT-01", "CLEAR");
-    assert(!gate.ShouldStopConveyor(clear));
-    assert(gate.ShouldStopConveyor(detected));
+    // A CLEAR received before work creation is committed cannot open a second
+    // assignment. Once committed, a full CLEAR -> DETECTED cycle is required.
     assert(!gate.ShouldCreateWork(clear, true, false));
+    gate.MarkWorkCreated();
+    assert(!gate.ShouldCreateWork(detected, true, false));
+
+    assert(!gate.ShouldStopConveyor(clear));
+    assert(!gate.ShouldCreateWork(clear, true, false));
+    assert(gate.ShouldStopConveyor(detected));
     assert(!gate.ShouldCreateWork(detected, true, true));
     assert(gate.ShouldCreateWork(detected, true, false));
 
-    assert(!gate.ShouldCreateWork(clear, true, false));
-    assert(gate.ShouldCreateWork(detected, true, false));
-    gate.Retry();
-    assert(gate.ShouldCreateWork(detected, true, false));
     gate.RetryStop();
     assert(gate.ShouldStopConveyor(detected));
 
-    gate.RequireClear();
-    assert(gate.ShouldCreateWork(detected, true, false));
-    assert(!gate.ShouldCreateWork(detected, true, false));
-
     assert(!gate.ShouldStopConveyor(SensorMessage("PI-LT-01", "DETECTED")));
     assert(!gate.ShouldCreateWork(SensorMessage("PI-LT-01", "DETECTED"), true, false));
+}
+
+void TestInputDetectionGateResetMatchesFreshServerState() {
+    logistics::central_server::InputDetectionGate gate("PI-INPUT-01");
+    const auto detected = SensorMessage("PI-INPUT-01", "DETECTED");
+
+    assert(gate.ShouldStopConveyor(detected));
+    assert(gate.ShouldCreateWork(detected, true, false));
+    gate.MarkWorkCreated();
+
+    gate.Reset();
+    assert(gate.ShouldStopConveyor(detected));
+    assert(gate.ShouldCreateWork(detected, true, false));
 }
 
 void TestInputDetectionGateLogsConsumedStopDecision() {
@@ -212,34 +243,43 @@ void TestInputDetectionGateLogsConsumedStopDecision() {
     assert(logs.str().find("distanceCm=5") != std::string::npos);
 }
 
-void TestSortingDetectionGateMatchesDestinationAndConsumesOneInterval() {
-    SortingDetectionGate gate(kDevice);
+void TestLineTracerLoadGateStopsSortingWorkOnce() {
+    LineTracerLoadGate gate(kLineTracerDevice);
     const std::vector works{
         WorkProcessSnapshot{
-            .work_id = "WORK-DESTINATION-2",
+            .work_id = "WORK-SORTING",
             .stage = WorkStage::kSorting,
             .suspended_stage = std::nullopt,
-            .destination = "2",
-            .last_source_id = "PI-SORTING-01",
+            .destination = "3",
+            .last_source_id = kLineTracerDevice,
             .failure_reason = {},
         },
     };
 
-    assert(!gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), false, works).has_value());
-    assert(!gate.ShouldStop(SortingSensorMessage(1, "DETECTED"), true, works).has_value());
+    assert(
+        !gate.ShouldStop(DeviceStatus(kLineTracerDevice, "FOLLOWING_LINE", "WORK-SORTING"), true, works).has_value());
+    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C"), true, works).has_value());
+    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-UNKNOWN"), true, works).has_value());
+    assert(!gate.ShouldStop(DeviceStatus(kDevice, "LOAD_ON_C", "WORK-SORTING"), true, works).has_value());
+    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING"), false, works).has_value());
+    assert(
+        !gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING", mqtt::ConnectionState::kOffline),
+                         true, works)
+             .has_value());
+    assert(!gate.ShouldStop(DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING", mqtt::ConnectionState::kOnline,
+                                         "ERR-LINE-TRACER"),
+                            true, works)
+                .has_value());
+    assert(!gate.ShouldStop(SensorMessage(kLineTracerDevice, "DETECTED"), true, works).has_value());
 
-    const auto matched = gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works);
-    assert(matched == "WORK-DESTINATION-2");
-    assert(!gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works).has_value());
+    const auto load_on = DeviceStatus(kLineTracerDevice, "LOAD_ON_C", "WORK-SORTING");
+    assert(gate.ShouldStop(load_on, true, works) == "WORK-SORTING");
+    assert(!gate.ShouldStop(load_on, true, works).has_value());
 
-    // Another channel's continuous CLEAR telemetry must not re-arm sensor 2.
-    assert(!gate.ShouldStop(SortingSensorMessage(1, "CLEAR"), true, works).has_value());
-    assert(!gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works).has_value());
-    assert(!gate.ShouldStop(SortingSensorMessage(2, "CLEAR"), true, works).has_value());
-    assert(gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works) == "WORK-DESTINATION-2");
-
-    gate.Retry();
-    assert(gate.ShouldStop(SortingSensorMessage(2, "DETECTED"), true, works) == "WORK-DESTINATION-2");
+    gate.Retry("WORK-OTHER");
+    assert(!gate.ShouldStop(load_on, true, works).has_value());
+    gate.Retry("WORK-SORTING");
+    assert(gate.ShouldStop(load_on, true, works) == "WORK-SORTING");
 }
 
 }  // namespace
@@ -254,9 +294,10 @@ int main() {
     TestChannelsAreIndependentPerDeviceAndSensor();
     TestThresholdsComeFromConfig();
     TestConfigValidation();
-    TestInputDetectionGateCreatesWorkWithoutPriorClear();
+    TestInputDetectionGateCreatesOneWorkPerSensorCycle();
+    TestInputDetectionGateResetMatchesFreshServerState();
     TestInputDetectionGateLogsConsumedStopDecision();
-    TestSortingDetectionGateMatchesDestinationAndConsumesOneInterval();
+    TestLineTracerLoadGateStopsSortingWorkOnce();
     std::cout << "sensor_detection_test passed\n";
     return 0;
 }

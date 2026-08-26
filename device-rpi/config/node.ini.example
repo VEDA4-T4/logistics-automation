@@ -18,6 +18,7 @@ clean_session=false
 # Root directory; each node stores durable MQTT records under <root>/<device_id>.
 publish_spool_directory=/var/lib/logistics/mqtt-spool
 publish_spool_maximum_bytes=52428800
+publish_spool_maximum_records=4096
 
 [log_upload]
 enabled=true

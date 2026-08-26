@@ -39,7 +39,7 @@ constexpr std::uint32_t kClawSpeedPercentPerSecond = 40U;
 constexpr std::uint16_t kHomeBaseAngle = 1000U;
 constexpr std::uint16_t kHomeShoulderAngle = 700U;
 constexpr std::uint16_t kHomeElbowAngle = 1200U;
-constexpr std::uint8_t kHomeGripperPosition = 60U;
+constexpr std::uint8_t kHomeGripperPosition = 65U;
 
 struct StatusSnapshot {
     std::uint8_t state{};

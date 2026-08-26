@@ -10,10 +10,6 @@ namespace mqtt = logistics::contracts::mqtt;
 
 constexpr auto kWorkOne = "d8e9b2be-bfc0-471c-9000-590123412345";
 constexpr auto kWorkTwo = "a8e9b2be-bfc0-471c-9000-590123412346";
-constexpr auto kWorkThree = "b8e9b2be-bfc0-471c-9000-590123412347";
-constexpr auto kWorkFour = "c8e9b2be-bfc0-471c-9000-590123412348";
-constexpr auto kWorkFive = "e8e9b2be-bfc0-471c-9000-590123412349";
-constexpr auto kWorkSix = "f8e9b2be-bfc0-471c-9000-590123412350";
 
 central_server::ProcessEvent Event(central_server::ProcessEventType type, std::string message_id,
                                    std::string work_id = kWorkOne, std::string source_id = "PI-VISION-01") {
@@ -120,6 +116,8 @@ void TestCompleteNormalFlow() {
     assert(work->destination == "1");
     assert(machine.SystemState() == central_server::ProcessSystemState::kIdle);
     assert(machine.ActiveWorks().empty());
+    assert(machine.AcceptsNewWork());
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-NEXT-WORK", kWorkTwo)).Applied());
 }
 
 void TestStopAndRestartRestoreWork() {
@@ -193,7 +191,7 @@ void TestAcceptsNewWorkOnlyWhileIdleOrRunning() {
     assert(!machine.AcceptsNewWork());
 }
 
-void TestBarcodeFailureStopsAndDiscardsTheWork() {
+void TestBarcodeFailureOnlyFailsTheCurrentWork() {
     central_server::ProcessStateMachine machine;
     assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BARCODE-WORK")).Applied());
     assert(machine
@@ -212,51 +210,32 @@ void TestBarcodeFailureStopsAndDiscardsTheWork() {
 
     assert(transition.Applied());
     assert(transition.current_stage == central_server::WorkStage::kFailed);
-    assert(machine.SystemState() == central_server::ProcessSystemState::kStopped);
-    assert(!machine.FindWork(kWorkOne).has_value());
-    assert(machine.ActiveWorks().empty());
-    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
     assert(machine.SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kFailed);
+    assert(machine.ActiveWorks().empty());
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-NEXT-WORK", kWorkTwo)).Applied());
 }
 
-void TestBarcodeFailureSuspendsOtherActiveWork() {
+void TestSecondWorkIsRejectedWhileOneIsActive() {
     central_server::ProcessStateMachine machine;
-    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BARCODE-WORK-ONE")).Applied());
-    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-BARCODE-WORK-TWO", kWorkTwo))
-               .Applied());
+    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-WORK-ONE")).Applied());
+    assert(!machine.AcceptsNewWork());
 
-    auto failed =
-        Event(central_server::ProcessEventType::kBarcodeFailed, "MSG-BARCODE-FAILED-ONE", kWorkOne, "PI-VISION-01");
-    failed.reason = "barcode region was not detected";
-    assert(machine.Apply(failed).Applied());
-
-    assert(!machine.FindWork(kWorkOne).has_value());
-    const auto remaining = machine.FindWork(kWorkTwo);
-    assert(remaining.has_value());
-    assert(remaining->stage == central_server::WorkStage::kStopped);
-    assert(remaining->suspended_stage == central_server::WorkStage::kInputDetected);
-
-    assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
-    const auto restored = machine.FindWork(kWorkTwo);
-    assert(restored.has_value());
-    assert(restored->stage == central_server::WorkStage::kInputDetected);
-    assert(!restored->suspended_stage.has_value());
+    const auto second = machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-WORK-TWO", kWorkTwo));
+    assert(second.disposition == central_server::TransitionDisposition::kRejected);
+    assert(machine.ActiveWorks().size() == 1);
+    assert(!machine.FindWork(kWorkTwo).has_value());
 }
 
 void TestRecoveryDiscardsAllActiveWork() {
     central_server::ProcessStateMachine machine;
     std::vector works{
         WorkAtStage(kWorkOne, central_server::WorkStage::kInputDetected),
-        WorkAtStage(kWorkTwo, central_server::WorkStage::kVisionAssigned),
-        WorkAtStage(kWorkThree, central_server::WorkStage::kBarcodeRecognized),
-        WorkAtStage(kWorkFour, central_server::WorkStage::kGripperTransferring),
-        WorkAtStage(kWorkFive, central_server::WorkStage::kSorting),
-        WorkAtStage(kWorkSix, central_server::WorkStage::kTransporting),
     };
 
     assert(machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, std::move(works)));
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kStart).Applied());
-    assert(machine.ActiveWorks().size() == 6);
+    assert(machine.ActiveWorks().size() == 1);
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kEmergencyStop).Applied());
     assert(machine.ApplySystemCommand(mqtt::ControlCommand::kRecovery).Applied());
     assert(machine.CompleteSystemRecovery().Applied());
@@ -290,36 +269,22 @@ void TestServerRestartSuspendsTransportRequest() {
             .last_source_id = "PI-LT-01",
             .failure_reason = {},
         },
-        central_server::WorkProcessSnapshot{
-            .work_id = kWorkTwo,
-            .stage = central_server::WorkStage::kStopped,
-            .suspended_stage = central_server::WorkStage::kVisionProcessing,
-            .destination = {},
-            .last_source_id = "PI-VISION-01",
-            .failure_reason = {},
-        },
     };
 
     assert(machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kStopped, std::move(works)));
     assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kStopped);
     assert(machine.FindWork(kWorkOne)->suspended_stage == central_server::WorkStage::kTransportRequested);
-    assert(machine.FindWork(kWorkTwo)->stage == central_server::WorkStage::kStopped);
-    assert(machine.FindWork(kWorkTwo)->suspended_stage == central_server::WorkStage::kVisionProcessing);
 }
 
-void TestParallelWorksRemainIndependent() {
+void TestServerRestartRejectsMultipleActiveWorks() {
     central_server::ProcessStateMachine machine;
-    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-WORK-1", kWorkOne)).Applied());
-    assert(machine.Apply(Event(central_server::ProcessEventType::kWorkCreated, "MSG-WORK-2", kWorkTwo)).Applied());
-    assert(machine
-               .Apply(Event(central_server::ProcessEventType::kVisionCommandDispatched, "MSG-WORK-1-VISION", kWorkOne,
-                            "central-server"))
-               .Applied());
-    assert(machine.Apply(Event(central_server::ProcessEventType::kBarcodeSucceeded, "MSG-WORK-1-BARCODE", kWorkOne))
-               .Applied());
-    assert(machine.FindWork(kWorkOne)->stage == central_server::WorkStage::kBarcodeRecognized);
-    assert(machine.FindWork(kWorkTwo)->stage == central_server::WorkStage::kInputDetected);
-    assert(machine.ActiveWorks().size() == 2);
+    std::vector works{
+        WorkAtStage(kWorkOne, central_server::WorkStage::kVisionProcessing),
+        WorkAtStage(kWorkTwo, central_server::WorkStage::kSorting),
+    };
+
+    assert(!machine.RestoreAfterServerRestart(central_server::ProcessSystemState::kRunning, std::move(works)));
+    assert(machine.ActiveWorks().empty());
 }
 
 void TestNodeFailureWithoutWorkStopsTheProcess() {
@@ -368,12 +333,12 @@ int main() {
     TestAcceptsNewWorkOnlyWhileIdleOrRunning();
     TestErrorRecovery();
     TestWorkFailureKeepsProcessRunning();
-    TestBarcodeFailureStopsAndDiscardsTheWork();
-    TestBarcodeFailureSuspendsOtherActiveWork();
+    TestBarcodeFailureOnlyFailsTheCurrentWork();
+    TestSecondWorkIsRejectedWhileOneIsActive();
     TestServerRestartSuspendsTransportRequest();
     TestRecoveryDiscardsAllActiveWork();
     TestRecoveryCompletionClearsProcessedMessages();
-    TestParallelWorksRemainIndependent();
+    TestServerRestartRejectsMultipleActiveWorks();
     TestNodeFailureWithoutWorkStopsTheProcess();
     TestServerRestartRestoresSafeState();
     return 0;

@@ -263,12 +263,17 @@ struct VisionMeasurementPayload {
     std::int32_t frame_height{ 0 };
     std::optional<std::array<PixelPoint, 4>> box_corners;
 
+    [[nodiscard]] bool HasBox() const noexcept {
+        return box_width > 0 && box_height > 0;
+    }
+
     [[nodiscard]] bool IsValid() const noexcept {
         const bool valid_corners =
             !box_corners.has_value() || std::all_of(box_corners->begin(), box_corners->end(),
                                                     [](const PixelPoint& point) { return point.IsValid(); });
-        return !barcode.empty() && box_x >= 0 && box_y >= 0 && box_width > 0 && box_height > 0 && frame_width > 0 &&
-               frame_height > 0 && valid_corners;
+        const bool valid_box = HasBox() && box_x >= 0 && box_y >= 0;
+        const bool no_box = box_x == 0 && box_y == 0 && box_width == 0 && box_height == 0 && !box_corners.has_value();
+        return !barcode.empty() && frame_width > 0 && frame_height > 0 && valid_corners && (valid_box || no_box);
     }
 };
 

@@ -89,6 +89,15 @@ void TestPendingWorkFrameLocksTheBarcodeFrame() {
     Require(pending.Frame().at<unsigned char>(0, 0) == 84);
 }
 
+void TestPendingWorkFrameRetainsBarcodeWithoutBox() {
+    vision::PendingWorkFrame pending;
+    const cv::Mat barcode_frame(4, 4, CV_8UC1, cv::Scalar(42));
+
+    pending.Observe(barcode_frame, false, true, true);
+    Require(!pending.Empty());
+    Require(pending.Frame().at<unsigned char>(0, 0) == 42);
+}
+
 }  // namespace
 
 int main() {
@@ -96,5 +105,6 @@ int main() {
     TestDisabledStoreDoesNotCreateDirectory();
     TestPendingWorkFrameRetainsLastFrameContainingABox();
     TestPendingWorkFrameLocksTheBarcodeFrame();
+    TestPendingWorkFrameRetainsBarcodeWithoutBox();
     return 0;
 }

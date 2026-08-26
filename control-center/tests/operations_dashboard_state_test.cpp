@@ -521,6 +521,7 @@ int main() {
     assert(failed_line.destination == QStringLiteral("2"));
     assert(failed_line.work_completed);
     assert(failed_line.has_error);
+
     failed_completion_state.markMqttDisconnected(
         QDateTime::fromString(QStringLiteral("2026-07-23T01:00:03.000Z"), Qt::ISODateWithMs));
     const auto reset_failed_line = ProcessByKey(failed_completion_state, QStringLiteral("linetracer"));

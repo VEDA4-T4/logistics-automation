@@ -59,6 +59,8 @@ vision::VisionObservation Observation(std::optional<std::string> barcode = std::
 vision::VisionObservation BarcodeOnlyObservation(std::string barcode, const bool barcode_region_detected = true) {
     return {
         .image_name = "barcode-only.jpg",
+        .frame_width = 640,
+        .frame_height = 480,
         .barcode = std::move(barcode),
         .barcode_region_detected = barcode_region_detected,
         .box_detected = false,
@@ -159,6 +161,13 @@ void TestDetectionAssignmentAndResultMessages() {
     assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), measurement).IsSuccess());
     const auto* measurement_payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
     assert(measurement_payload != nullptr && measurement_payload->barcode == "5901234123457");
+    const auto barcode_only_measurement =
+        vision::MakeVisionMeasurementMessage("PI-VISION-01", BarcodeOnlyObservation("5901234123457"),
+                                             "MSG-MEASUREMENT-BARCODE-ONLY", "2026-07-21T11:00:02Z");
+    assert(mqtt::ValidateTopicMessage(mqtt::DeviceEventTopic("PI-VISION-01"), barcode_only_measurement).IsSuccess());
+    const auto* barcode_only_payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(barcode_only_measurement);
+    assert(barcode_only_payload != nullptr && barcode_only_payload->barcode == "5901234123457");
+    assert(barcode_only_payload->box_width == 0 && barcode_only_payload->box_height == 0);
     const auto image = vision::MakeProductImageMessage(
         "PI-VISION-01", kWorkId, "42f8e6f1-1277-4748-9e5e-c41c7bf605f7",
         "/uploads/images/42f8e6f1-1277-4748-9e5e-c41c7bf605f7.jpg",
@@ -189,35 +198,32 @@ void TestBarcodeOnlyFrameCompletesConfirmedBoxWork() {
     assert(work->observation->barcode == "8801234567893");
 }
 
-void TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork() {
-    {
-        vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
-        workflow.Observe(BarcodeOnlyObservation("stale-idle"));
-        workflow.Observe(Observation());
-        workflow.Observe(Observation());
-        assert(workflow.AssignWork(WorkCreated()));
-        assert(!workflow.TakeAssignedWork().has_value());
-    }
-
-    FakeClock clock;
-    vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1, std::chrono::seconds(3), std::chrono::seconds(10),
-                                        [&clock] { return clock.Now(); });
+void TestAssignedBarcodeDoesNotRequireBox() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 3, 1);
     assert(workflow.AssignWork(WorkCreated()));
-    workflow.Observe(BarcodeOnlyObservation("stale-preassigned"));
-    clock.Advance(std::chrono::milliseconds(2999));
-    assert(!workflow.TakeAssignedWork().has_value());
-    workflow.Observe(Observation());
-    workflow.Observe(Observation());
-    assert(!workflow.TakeAssignedWork().has_value());
 
-    workflow.Observe(BarcodeOnlyObservation("fresh-barcode"));
+    workflow.Observe(BarcodeOnlyObservation("8801234567893"));
     const auto work = workflow.TakeAssignedWork();
     assert(work.has_value());
     assert(work->observation.has_value());
-    assert(work->observation->barcode == "fresh-barcode");
+    assert(!work->observation->box_detected);
+    assert(work->observation->barcode == "8801234567893");
 }
 
-void TestSensorWorkCanBeAssignedBeforeVisionDetection() {
+void TestBarcodeBeforeAssignmentIsRetainedForWork() {
+    vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
+    workflow.Observe(BarcodeOnlyObservation("8801234567893"));
+    assert(workflow.CanAcceptWork());
+    assert(workflow.AssignWork(WorkCreated()));
+
+    const auto work = workflow.TakeAssignedWork();
+    assert(work.has_value());
+    assert(work->observation.has_value());
+    assert(!work->observation->box_detected);
+    assert(work->observation->barcode == "8801234567893");
+}
+
+void TestWorkAssignmentCanRaceLocalObservationUpdate() {
     vision::VisionMqttWorkflow workflow("PI-VISION-01", 2, 1);
     assert(workflow.CanAcceptWork());
     assert(workflow.AssignWork(WorkCreated()));
@@ -225,8 +231,8 @@ void TestSensorWorkCanBeAssignedBeforeVisionDetection() {
     assert(!workflow.TakeAssignedWork().has_value());
 
     workflow.Observe(Observation());
-    // The sensor already created the work, so vision must attach its observation
-    // without publishing a second BOX_DETECTED/work.
+    // Central can accept the published measurement before this frame reaches
+    // the local workflow, so the WORK_CREATED assignment must remain valid.
     workflow.Observe(Observation("8801234567893", true));
     const auto assigned = workflow.TakeAssignedWork();
     assert(assigned.has_value());
@@ -638,8 +644,9 @@ void TestRecoveryCannotInterleaveAfterResultValidation() {
 int main() {
     TestDetectionAssignmentAndResultMessages();
     TestBarcodeOnlyFrameCompletesConfirmedBoxWork();
-    TestBarcodeBeforeConfirmedBoxDoesNotContaminateWork();
-    TestSensorWorkCanBeAssignedBeforeVisionDetection();
+    TestAssignedBarcodeDoesNotRequireBox();
+    TestBarcodeBeforeAssignmentIsRetainedForWork();
+    TestWorkAssignmentCanRaceLocalObservationUpdate();
     TestBarcodeSurvivesDetectionConfirmation();
     TestMissingBarcodeProducesFailedResult();
     TestDefaultBarcodeWaitRetriesBeyondLegacyLimit();

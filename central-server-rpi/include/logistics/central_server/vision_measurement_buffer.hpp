@@ -7,26 +7,37 @@
 
 namespace logistics::central_server {
 
-// Vision is free-running. Keep the newest valid measurement received before
-// the ultrasonic station creates a work item and consume it once.
+// Vision is free-running. Keep the newest valid measurement received
+// before the ultrasonic station creates a work item and consume it once.
 class VisionMeasurementBuffer final {
 public:
     void Store(contracts::mqtt::MqttMessage message) {
-        latest_ = std::move(message);
-    }
-
-    [[nodiscard]] std::optional<contracts::mqtt::MqttMessage> Take() {
-        auto result = std::move(latest_);
-        latest_.reset();
-        return result;
+        const auto* measurement = contracts::mqtt::GetPayload<contracts::mqtt::VisionMeasurementPayload>(message);
+        if (measurement != nullptr && measurement->IsValid()) {
+            latest_complete_ = std::move(message);
+        }
     }
 
     [[nodiscard]] bool Empty() const noexcept {
-        return !latest_.has_value();
+        return !latest_complete_.has_value();
+    }
+
+    template <typename Handler>
+    [[nodiscard]] bool ReplayWhen(const bool ready, Handler&& handler) {
+        if (!ready || !latest_complete_.has_value()) {
+            return true;
+        }
+        auto pending = std::move(latest_complete_);
+        latest_complete_.reset();
+        if (handler(*pending)) {
+            return true;
+        }
+        latest_complete_ = std::move(*pending);
+        return false;
     }
 
 private:
-    std::optional<contracts::mqtt::MqttMessage> latest_;
+    std::optional<contracts::mqtt::MqttMessage> latest_complete_;
 };
 
 }  // namespace logistics::central_server

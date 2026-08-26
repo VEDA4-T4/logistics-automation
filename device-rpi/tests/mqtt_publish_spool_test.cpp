@@ -20,7 +20,7 @@ namespace {
 void TestPubackControlsRemovalAndRestartReplay() {
     const auto directory = TemporaryDirectory();
     {
-        logistics::device::MqttPublishSpool spool(directory, 4096);
+        logistics::device::MqttPublishSpool spool(directory, 4096, 4096);
         assert(spool.Start());
         const auto first = spool.Enqueue("device/PI-01/event", "first", 1, false);
         const auto second = spool.Enqueue("device/PI-01/response", "second", 1, false);
@@ -29,10 +29,11 @@ void TestPubackControlsRemovalAndRestartReplay() {
         assert(spool.PendingCount() == 2);
         assert(spool.Next()->id == first->id);
         assert(spool.Acknowledge(first->id));
+        assert(spool.Acknowledge(first->id));
         assert(spool.PendingCount() == 1);
     }
     {
-        logistics::device::MqttPublishSpool restarted(directory, 4096);
+        logistics::device::MqttPublishSpool restarted(directory, 4096, 4096);
         assert(restarted.Start());
         const auto replay = restarted.Next();
         assert(replay.has_value());
@@ -46,12 +47,12 @@ void TestPubackControlsRemovalAndRestartReplay() {
 
 void TestRestartDoesNotOverwriteUnacknowledgedRecord() {
     const auto directory = TemporaryDirectory();
-    logistics::device::MqttPublishSpool first(directory, 4096);
+    logistics::device::MqttPublishSpool first(directory, 4096, 4096);
     assert(first.Start());
     const auto original = first.Enqueue("device/PI-01/event", "original", 1, false);
     assert(original.has_value());
 
-    logistics::device::MqttPublishSpool restarted(directory, 4096);
+    logistics::device::MqttPublishSpool restarted(directory, 4096, 4096);
     assert(restarted.Start());
     const auto later = restarted.Enqueue("device/PI-01/event", "later", 1, false);
     assert(later.has_value());
@@ -65,7 +66,7 @@ void TestRestartDoesNotOverwriteUnacknowledgedRecord() {
 
 void TestNumericOrderAndCorruptQuarantine() {
     const auto directory = TemporaryDirectory();
-    logistics::device::MqttPublishSpool spool(directory, 65536);
+    logistics::device::MqttPublishSpool spool(directory, 65536, 4096);
     assert(spool.Start());
     for (int index = 0; index < 12; ++index) {
         assert(spool.Enqueue("device/PI-01/event", std::to_string(index), 1, false).has_value());
@@ -102,7 +103,7 @@ void TestNumericOrderAndCorruptQuarantine() {
 void TestSensorTelemetryNeverEntersDurableSpool() {
     namespace mqtt = logistics::contracts::mqtt;
     const auto directory = TemporaryDirectory();
-    logistics::device::MqttPublishSpool spool(directory, 65536);
+    logistics::device::MqttPublishSpool spool(directory, 65536, 4096);
     assert(spool.Start());
 
     std::vector<std::string> volatile_payloads;
@@ -133,7 +134,7 @@ void TestSensorTelemetryNeverEntersDurableSpool() {
 void TestDroppedSensorIsNotReplayedAndNextSamplePublishes() {
     namespace mqtt = logistics::contracts::mqtt;
     const auto directory = TemporaryDirectory();
-    logistics::device::MqttPublishSpool spool(directory, 4096);
+    logistics::device::MqttPublishSpool spool(directory, 4096, 4096);
     assert(spool.Start());
 
     std::vector<std::string> attempts;
@@ -155,6 +156,83 @@ void TestDroppedSensorIsNotReplayedAndNextSamplePublishes() {
     std::filesystem::remove_all(directory, error);
 }
 
+void TestRecordLimitDiscardsOldestOutboundRecord() {
+    const auto directory = TemporaryDirectory();
+    logistics::device::MqttPublishSpool spool(directory, 65536, 2);
+    assert(spool.Start());
+
+    const auto first = spool.Enqueue("device/PI-01/event", "first", 1, false);
+    const auto second = spool.Enqueue("device/PI-01/event", "second", 1, false);
+    assert(first.has_value());
+    assert(second.has_value());
+    assert(spool.Enqueue("device/PI-01/event", "third", 1, false).has_value());
+    assert(spool.PendingCount() == 2);
+    assert(spool.Next()->payload == "second");
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
+void TestRestartRemovesIncompleteAndQuarantinedArtifacts() {
+    const auto directory = TemporaryDirectory();
+    std::filesystem::create_directories(directory);
+    {
+        std::ofstream temporary(directory / "1.tmp");
+        temporary << "incomplete";
+    }
+    {
+        std::ofstream corrupt(directory / "2.corrupt");
+        corrupt << "invalid";
+    }
+    {
+        std::ofstream rotated_corrupt(directory / "3.corrupt.4");
+        rotated_corrupt << "invalid";
+    }
+    {
+        std::ofstream unrelated(directory / "operator-note.txt");
+        unrelated << "keep";
+    }
+
+    logistics::device::MqttPublishSpool spool(directory, 65536, 1);
+    assert(spool.Start());
+    assert(!std::filesystem::exists(directory / "1.tmp"));
+    assert(!std::filesystem::exists(directory / "2.corrupt"));
+    assert(!std::filesystem::exists(directory / "3.corrupt.4"));
+    assert(std::filesystem::exists(directory / "operator-note.txt"));
+    assert(spool.Enqueue("device/PI-01/event", "current", 1, false).has_value());
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
+void TestByteLimitDiscardsOldestOutboundRecord() {
+    const auto directory = TemporaryDirectory();
+    logistics::device::MqttPublishSpool spool(directory, 256, 4096);
+    assert(spool.Start());
+    assert(spool.Enqueue("device/PI-01/event", std::string(128, 'a'), 1, false).has_value());
+    assert(spool.Enqueue("device/PI-01/event", std::string(128, 'b'), 1, false).has_value());
+    assert(spool.PendingCount() == 1);
+    assert(spool.Next()->payload == std::string(128, 'b'));
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
+void TestInboundLimitRejectsNewCommandWithoutDiscardingOldest() {
+    const auto directory = TemporaryDirectory();
+    logistics::device::MqttPublishSpool spool(directory, 65536, 2,
+                                              logistics::device::MqttSpoolOverflowPolicy::kRejectNew);
+    assert(spool.Start());
+    assert(spool.Enqueue("device/PI-01/command", "first", 1, false).has_value());
+    assert(spool.Enqueue("device/PI-01/command", "second", 1, false).has_value());
+    assert(!spool.Enqueue("device/PI-01/command", "third", 1, false).has_value());
+    assert(spool.PendingCount() == 2);
+    assert(spool.Next()->payload == "first");
+
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
 }  // namespace
 
 int main() {
@@ -163,5 +241,9 @@ int main() {
     TestNumericOrderAndCorruptQuarantine();
     TestSensorTelemetryNeverEntersDurableSpool();
     TestDroppedSensorIsNotReplayedAndNextSamplePublishes();
+    TestRecordLimitDiscardsOldestOutboundRecord();
+    TestRestartRemovesIncompleteAndQuarantinedArtifacts();
+    TestInboundLimitRejectsNewCommandWithoutDiscardingOldest();
+    TestByteLimitDiscardsOldestOutboundRecord();
     return 0;
 }

@@ -66,6 +66,8 @@ vision_device_id=PI-VISION-01
 gripper_device_id=PI-GRIPPER-01
 sorting_device_id=PI-SORTING-01
 line_tracer_device_id=PI-LT-01
+line_tracer_enabled=true
+line_tracer_initial_position=A
 default_destination=3
 
 [sensor_detection]
@@ -76,6 +78,12 @@ debounce_count=3
 ```
 
 현재 Gripper 전용 Raspberry Pi 실행 파일이 없으므로 전체 실제 공정이 준비되기 전에는 `enabled=false`가 안전합니다.
+
+라인트레이서를 포함한 공정에서는 `line_tracer_enabled=true`로 두고, 실제 MQTT 등록 ID를
+`line_tracer_device_id`에 일치시켜야 합니다. `line_tracer_initial_position`은 `A`, `B`, `C` 중
+현재 주차 위치입니다. 중앙 서버는 라인트레이서가 `jobId`와 함께 보고하는 `LOAD_ON_A/B/C`를
+물건 인계 신호로 사용합니다. 배포 시 활성 INI뿐 아니라 일반 실행 스크립트와 `/state` 아래의
+실행 스크립트에 남은 `line_tracer_enabled=false` 재정의도 함께 제거해야 합니다.
 
 `[sensor_detection]`은 초음파 상자 존재 판정 임계값입니다. STM32는 거리(cm)와 측정
 건전성(`OK`/`FAULT`)만 보고하고 판정은 서버가 하므로, **임계값을 바꿀 때 펌웨어를 다시

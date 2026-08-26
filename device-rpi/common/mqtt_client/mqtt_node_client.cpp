@@ -86,9 +86,11 @@ public:
           processor_(config_.device_id),
           message_session_id_(GenerateMessageSessionId()),
           device_status_(std::move(device_status)),
-          publish_spool_(config_.publish_spool_directory / config_.device_id, config_.publish_spool_maximum_bytes),
+          publish_spool_(config_.publish_spool_directory / config_.device_id, config_.publish_spool_maximum_bytes,
+                         config_.publish_spool_maximum_records),
           inbound_spool_(config_.publish_spool_directory / config_.device_id / "inbound",
-                         config_.publish_spool_maximum_bytes) {
+                         config_.publish_spool_maximum_bytes, config_.publish_spool_maximum_records,
+                         MqttSpoolOverflowPolicy::kRejectNew) {
         if (device_status_ == nullptr || !device_status_->IsForDevice(config_.device_id)) {
             throw std::invalid_argument("device status must belong to the configured device ID");
         }
@@ -751,15 +753,19 @@ private:
                 return;
             }
             record_id = it->second;
+            // Keep the publish slot occupied until its durable record has been
+            // removed. Otherwise another thread can select and publish the
+            // same .pending file between map erasure and acknowledgement.
+            if (!self->publish_spool_.Acknowledge(record_id)) {
+                self->inflight_publishes_.erase(it);
+                self->spool_blocked_ = true;
+                std::cerr << "[device][mqtt][ERROR] unable to remove PUBACKed MQTT record " << record_id
+                          << "; durable spool pump is halted\n";
+                return;
+            }
             self->inflight_publishes_.erase(it);
+            self->spool_blocked_ = false;
         }
-        if (!self->publish_spool_.Acknowledge(record_id)) {
-            self->spool_blocked_ = true;
-            std::cerr << "[device][mqtt][ERROR] unable to remove PUBACKed MQTT record " << record_id
-                      << "; durable spool pump is halted\n";
-            return;
-        }
-        self->spool_blocked_ = false;
         bool lifecycle_acknowledged = false;
         {
             std::lock_guard lifecycle_lock(self->lifecycle_mutex_);

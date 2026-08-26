@@ -321,6 +321,50 @@ void TestProcessEpochOwnershipAndPropagation() {
     assert(!processor.PrepareOutboundMessage(mismatched).has_value());
 }
 
+void TestRecoveryAdoptsNewProcessEpoch() {
+    device::MqttMessageProcessor processor("PI-01");
+    const auto start = ProcessCommand(mqtt::ControlCommand::kStart, "REQ-START-OLD", std::string(kProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(start)).IsSuccess());
+
+    const auto recovery =
+        ProcessCommand(mqtt::ControlCommand::kRecovery, "REQ-RECOVERY-NEW", std::string(kOtherProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(recovery)).IsSuccess());
+
+    mqtt::MqttMessage status{
+        .message_id = "STATUS-AFTER-RECOVERY",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "PI-01",
+        .timestamp = "2026-08-15T01:00:02Z",
+        .data = mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline,
+                                           .current_state = "IDLE",
+                                           .job_id = std::string("22a194c3-3e3c-410c-a329-7e8c4ebcac83") },
+    };
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
+}
+
+void TestExecuteAdoptsNewProcessEpoch() {
+    device::MqttMessageProcessor processor("PI-01");
+    const auto start = ProcessCommand(mqtt::ControlCommand::kStart, "REQ-START-OLD", std::string(kProcessEpoch));
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(start)).IsSuccess());
+
+    auto execute = ProcessCommand(mqtt::ControlCommand::kExecute, "REQ-EXECUTE-NEW", std::string(kOtherProcessEpoch));
+    auto* execute_payload = mqtt::GetPayload<mqtt::ControlCommandPayload>(execute);
+    assert(execute_payload != nullptr);
+    execute_payload->params["workId"] = "22a194c3-3e3c-410c-a329-7e8c4ebcac83";
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-01"), Encode(execute)).IsSuccess());
+
+    const mqtt::MqttMessage status{
+        .message_id = "STATUS-AFTER-EXECUTE",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "PI-01",
+        .timestamp = "2026-08-25T01:00:02Z",
+        .data = mqtt::DeviceStatusPayload{ .status = mqtt::ConnectionState::kOnline,
+                                           .current_state = "PICKING",
+                                           .job_id = std::string("22a194c3-3e3c-410c-a329-7e8c4ebcac83") },
+    };
+    assert(processor.PrepareOutboundMessage(status)->process_epoch == kOtherProcessEpoch);
+}
+
 void TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval() {
     device::MqttMessageProcessor processor("PI-01");
     mqtt::MqttMessage created{
@@ -365,6 +409,74 @@ void TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval() {
     assert(processor.PrepareOutboundMessage(event)->process_epoch == kOtherProcessEpoch);
 }
 
+void TestDestinationSetAdoptsNewEpochForWorkStatus() {
+    device::MqttMessageProcessor processor("PI-LT-01");
+    const mqtt::MqttMessage destination{
+        .message_id = "MSG-DESTINATION-EPOCH",
+        .message_type = mqtt::MessageType::kDestinationSet,
+        .source_id = "central-server",
+        .timestamp = "2026-08-25T01:00:00Z",
+        .process_epoch = std::string(kProcessEpoch),
+        .data =
+            mqtt::DestinationSetPayload{
+                .request_id = "REQ-DESTINATION-EPOCH",
+                .work_id = "22a194c3-3e3c-410c-a329-7e8c4ebcac83",
+                .command = mqtt::ControlCommand::kDestinationSet,
+                .target_device_id = "PI-LT-01",
+                .destination = "3",
+            },
+    };
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-LT-01"), Encode(destination)).IsSuccess());
+
+    const mqtt::MqttMessage response{
+        .message_id = "RESP-DESTINATION-EPOCH",
+        .message_type = mqtt::MessageType::kCommandResponse,
+        .source_id = "PI-LT-01",
+        .timestamp = "2026-08-25T01:00:01Z",
+        .data =
+            mqtt::CommandResponsePayload{
+                .request_id = "REQ-DESTINATION-EPOCH",
+                .command = mqtt::ControlCommand::kDestinationSet,
+                .result = mqtt::CommandResult::kSuccess,
+                .error_code = std::nullopt,
+                .message = "destination accepted",
+            },
+    };
+    assert(processor.PrepareOutboundMessage(response)->process_epoch == kProcessEpoch);
+
+    const mqtt::MqttMessage pickup_ready{
+        .message_id = "STATUS-PICKUP-READY-EPOCH",
+        .message_type = mqtt::MessageType::kDeviceStatus,
+        .source_id = "PI-LT-01",
+        .timestamp = "2026-08-25T01:00:02Z",
+        .data =
+            mqtt::DeviceStatusPayload{
+                .status = mqtt::ConnectionState::kOnline,
+                .current_state = "PICKUP_READY_C",
+                .job_id = "22a194c3-3e3c-410c-a329-7e8c4ebcac83",
+                .error_code = std::nullopt,
+                .departure_position = std::nullopt,
+                .target_position = std::nullopt,
+                .confirmed_position = std::nullopt,
+                .movement_state = std::nullopt,
+                .position_reset = false,
+            },
+    };
+    assert(processor.PrepareOutboundMessage(pickup_ready)->process_epoch == kProcessEpoch);
+
+    auto reassigned_destination = destination;
+    reassigned_destination.message_id = "MSG-DESTINATION-NEW-EPOCH";
+    reassigned_destination.process_epoch = std::string(kOtherProcessEpoch);
+    mqtt::GetPayload<mqtt::DestinationSetPayload>(reassigned_destination)->request_id = "REQ-DESTINATION-NEW-EPOCH";
+    assert(processor.DecodeCommand(mqtt::DeviceCommandTopic("PI-LT-01"), Encode(reassigned_destination)).IsSuccess());
+
+    auto reassigned_response = response;
+    reassigned_response.message_id = "RESP-DESTINATION-NEW-EPOCH";
+    mqtt::GetPayload<mqtt::CommandResponsePayload>(reassigned_response)->request_id = "REQ-DESTINATION-NEW-EPOCH";
+    assert(processor.PrepareOutboundMessage(reassigned_response)->process_epoch == kOtherProcessEpoch);
+    assert(processor.PrepareOutboundMessage(pickup_ready)->process_epoch == kOtherProcessEpoch);
+}
+
 }  // namespace
 
 int main() {
@@ -376,6 +488,9 @@ int main() {
     TestRegistrationAndOnlineStatusEncoding();
     TestDeviceEventAndErrorEncoding();
     TestProcessEpochOwnershipAndPropagation();
+    TestRecoveryAdoptsNewProcessEpoch();
+    TestExecuteAdoptsNewProcessEpoch();
     TestWorkCreatedEpochConflictRequiresExplicitReassignmentApproval();
+    TestDestinationSetAdoptsNewEpochForWorkStatus();
     return 0;
 }

@@ -45,10 +45,15 @@ namespace {
 }
 
 [[nodiscard]] bool EstablishesProcessEpoch(const contracts::mqtt::MqttMessage& message) noexcept {
+    if (message.message_type == contracts::mqtt::MessageType::kDestinationSet) {
+        return true;
+    }
     const auto* command = contracts::mqtt::GetPayload<contracts::mqtt::ControlCommandPayload>(message);
     return command != nullptr && (command->command == contracts::mqtt::ControlCommand::kStart ||
                                   command->command == contracts::mqtt::ControlCommand::kRestart ||
-                                  command->command == contracts::mqtt::ControlCommand::kInitialize);
+                                  command->command == contracts::mqtt::ControlCommand::kInitialize ||
+                                  command->command == contracts::mqtt::ControlCommand::kRecovery ||
+                                  command->command == contracts::mqtt::ControlCommand::kExecute);
 }
 
 }  // namespace
@@ -133,6 +138,12 @@ IncomingMqttMessage MqttMessageProcessor::DecodeCommand(std::string_view topic, 
                 active_process_epoch_ = decoded.value.process_epoch;
             } else if (EstablishesProcessEpoch(decoded.value)) {
                 active_process_epoch_ = decoded.value.process_epoch;
+            } else if (active_process_epoch_.has_value() && *active_process_epoch_ != *decoded.value.process_epoch &&
+                       mqtt::IsProcessScopedMessage(decoded.value)) {
+                return {
+                    .message = {},
+                    .error = "process-scoped command has a stale processEpoch",
+                };
             }
             const auto request_id = RequestIdFromCommand(decoded.value);
             if (!request_id.empty()) {

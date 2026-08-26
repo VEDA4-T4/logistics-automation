@@ -30,6 +30,23 @@ VisionMqttWorkflow::VisionMqttWorkflow(std::string device_id, const std::size_t 
 void VisionMqttWorkflow::Observe(std::optional<VisionObservation> observation) {
     std::lock_guard lock(mutex_);
     const TimePoint now = monotonic_now_();
+
+    if ((phase_ == Phase::kIdle || phase_ == Phase::kPreassigned) && observation.has_value() &&
+        observation->barcode.has_value()) {
+        detected_frames_ = 0;
+        box_candidate_.reset();
+        barcode_ = observation->barcode;
+        barcode_region_detected_ = observation->barcode_region_detected;
+        confirmed_box_observation_ = std::move(observation);
+        if (work_id_.has_value()) {
+            preassignment_deadline_.reset();
+            phase_ = Phase::kAssigned;
+        } else {
+            phase_ = Phase::kAwaitingWork;
+        }
+        return;
+    }
+
     ExpirePreassignment(now);
 
     const bool barcode_deadline_expired =
@@ -320,8 +337,8 @@ mqtt::MqttMessage MakeBarcodeDetectedMessage(std::string_view device_id, const A
 
 mqtt::MqttMessage MakeVisionMeasurementMessage(std::string_view device_id, const VisionObservation& observation,
                                                std::string message_id, std::string timestamp) {
-    if (!observation.box_detected || !observation.barcode.has_value()) {
-        throw std::invalid_argument("vision measurement requires a detected box and barcode");
+    if (!observation.barcode.has_value()) {
+        throw std::invalid_argument("vision measurement requires a barcode");
     }
     return {
         .protocol_version = std::string(mqtt::kCurrentProtocolVersion),
@@ -332,13 +349,15 @@ mqtt::MqttMessage MakeVisionMeasurementMessage(std::string_view device_id, const
         .data =
             mqtt::VisionMeasurementPayload{
                 .barcode = *observation.barcode,
-                .box_x = observation.box_x,
-                .box_y = observation.box_y,
-                .box_width = observation.box_width,
-                .box_height = observation.box_height,
+                .box_x = observation.box_detected ? observation.box_x : 0,
+                .box_y = observation.box_detected ? observation.box_y : 0,
+                .box_width = observation.box_detected ? observation.box_width : 0,
+                .box_height = observation.box_detected ? observation.box_height : 0,
                 .frame_width = observation.frame_width,
                 .frame_height = observation.frame_height,
-                .box_corners = observation.box_corners,
+                .box_corners = observation.box_detected
+                                   ? std::optional<std::array<mqtt::PixelPoint, 4>>{ observation.box_corners }
+                                   : std::nullopt,
             },
     };
 }

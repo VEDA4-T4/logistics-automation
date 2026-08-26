@@ -20,11 +20,17 @@ struct MqttPublishRecord final {
     bool retain{};
 };
 
+enum class MqttSpoolOverflowPolicy {
+    kDiscardOldest,
+    kRejectNew,
+};
+
 // QoS acknowledgements are broker-local, so records remain durable until the
 // current connection reports PUBACK for their assigned message identifier.
 class MqttPublishSpool final {
 public:
-    MqttPublishSpool(std::filesystem::path directory, std::size_t maximum_bytes);
+    MqttPublishSpool(std::filesystem::path directory, std::size_t maximum_bytes, std::size_t maximum_records,
+                     MqttSpoolOverflowPolicy overflow_policy = MqttSpoolOverflowPolicy::kDiscardOldest);
 
     [[nodiscard]] bool Start();
     [[nodiscard]] std::optional<MqttPublishRecord> Enqueue(std::string topic, std::string payload, int qos,
@@ -38,6 +44,8 @@ public:
 private:
     std::filesystem::path directory_;
     std::size_t maximum_bytes_;
+    std::size_t maximum_records_;
+    MqttSpoolOverflowPolicy overflow_policy_;
     mutable std::mutex mutex_;
 };
 

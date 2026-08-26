@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "logistics/central_server/process_state_machine.hpp"
@@ -99,38 +100,36 @@ public:
     // timed out.
     [[nodiscard]] bool ShouldStopConveyor(const contracts::mqtt::MqttMessage& message);
 
-    // Consumes one physical DETECTED interval. A stopped process or occupied
-    // input station defers the interval so the next reading after it is ready
-    // can create the work. A prior CLEAR is not required because CLEAR
-    // telemetry can be missed while the process starts.
+    // Consumes one DETECTED interval for immediate work creation. A new work
+    // requires the sensor to return to CLEAR after the previous work is made.
     [[nodiscard]] bool ShouldCreateWork(const contracts::mqtt::MqttMessage& message, bool process_accepts_work,
-                                        bool input_station_occupied);
-    void RequireClear() noexcept;
-    void Retry() noexcept;
+                                        bool has_active_work);
+    void MarkWorkCreated() noexcept;
+    void Reset() noexcept;
     void RetryStop() noexcept;
 
 private:
+    enum class Phase { kWaitingForDetection, kCreatingWork, kWaitingForClear };
+
     std::string input_device_id_;
     std::int32_t sensor_id_;
-    bool consumed_{ false };
     bool stop_consumed_{ false };
+    Phase phase_{ Phase::kWaitingForDetection };
 };
 
-class SortingDetectionGate final {
+class LineTracerLoadGate final {
 public:
-    explicit SortingDetectionGate(std::string sorting_device_id);
+    explicit LineTracerLoadGate(std::string line_tracer_device_id);
 
-    // Matches sensor N to destination N and consumes one DETECTED interval.
-    // The interval is deferred while the process is stopped or no matching
-    // sorting work exists, so START can resume the same physical box.
+    // Consumes an exact line-tracer LOAD_ON position for a sorting work once.
     [[nodiscard]] std::optional<std::string> ShouldStop(const contracts::mqtt::MqttMessage& message,
                                                         bool process_running,
                                                         const std::vector<WorkProcessSnapshot>& active_works);
-    void Retry() noexcept;
+    void Retry(std::string_view work_id);
 
 private:
-    std::string sorting_device_id_;
-    std::optional<std::int32_t> consumed_sensor_id_;
+    std::string line_tracer_device_id_;
+    std::unordered_set<std::string> consumed_work_ids_;
 };
 
 }  // namespace logistics::central_server

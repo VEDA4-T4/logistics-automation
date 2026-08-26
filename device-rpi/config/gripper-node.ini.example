@@ -76,8 +76,8 @@ place_pose=1800,700,1200
 # Calibrated claw travel for the assembled mechanism.
 # closed_position_percent must be smaller than open_position_percent; set it to
 # the value that grips a box firmly without stalling the servo.
-open_position_percent=60
-closed_position_percent=30
+open_position_percent=65
+closed_position_percent=50
 
 # Nominal interpolation time for each motion, in milliseconds (100 - 10000).
 # Longer is gentler on the servos and the held box.
@@ -193,4 +193,4 @@ elbow_max_speed_deci_deg_per_sec=200
 claw_max_speed_percent_per_sec=40
 
 # Claw position the controller homes to (GRIPPER_HOME_POSITION_PERCENT).
-home_claw_percent=60
+home_claw_percent=65

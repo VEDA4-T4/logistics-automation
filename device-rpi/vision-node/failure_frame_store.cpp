@@ -26,7 +26,7 @@ namespace {
 
 void PendingWorkFrame::Observe(const cv::Mat& frame, const bool box_detected, const bool barcode_detected,
                                const bool work_pending) {
-    if (!barcode_frame_locked_ && box_detected && work_pending && !frame.empty()) {
+    if (!barcode_frame_locked_ && (box_detected || barcode_detected) && work_pending && !frame.empty()) {
         frame_ = frame.clone();
         barcode_frame_locked_ = barcode_detected;
     }

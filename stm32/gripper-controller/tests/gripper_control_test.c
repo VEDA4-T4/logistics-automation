@@ -230,11 +230,11 @@ static void test_gripper_motion_and_servo_fault(void) {
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     home_controller(&controller, 0U);
     write_u16(payload, UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, 9U);
-    payload[UART_GRIPPER_SET_POSITION_INDEX] = 30U;
+    payload[UART_GRIPPER_SET_POSITION_INDEX] = 50U;
     write_u16(payload, UART_GRIPPER_SET_DURATION_LOW_INDEX, 100U);
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_SET_GRIPPER, payload, sizeof(payload),
                                            2100U) == GRIPPER_CONTROL_OK);
-    assert(controller.motion_duration_ms == 750U);
+    assert(controller.motion_duration_ms == 375U);
 
     servo.write_result = -1;
     gripper_control_tick(&controller, 2120U);
@@ -258,7 +258,7 @@ static void test_gripper_can_move_before_arm_home(void) {
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_SET_GRIPPER, payload, sizeof(payload), 0U) ==
            GRIPPER_CONTROL_OK);
     assert(controller.homed == 0U);
-    assert(controller.motion_duration_ms == 250U);
+    assert(controller.motion_duration_ms == 375U);
 
     gripper_control_tick(&controller, controller.motion_duration_ms);
     assert(servo.gripper_position == 50U);
@@ -274,7 +274,7 @@ static void test_gripper_rejects_position_outside_calibrated_range(void) {
 
     assert(gripper_control_init(&controller, &port) == GRIPPER_CONTROL_OK);
     write_u16(payload, UART_GRIPPER_SET_MOTION_ID_LOW_INDEX, 11U);
-    payload[UART_GRIPPER_SET_POSITION_INDEX] = 61U;
+    payload[UART_GRIPPER_SET_POSITION_INDEX] = 66U;
     write_u16(payload, UART_GRIPPER_SET_DURATION_LOW_INDEX, UART_GRIPPER_DURATION_MS_MIN);
 
     assert(gripper_control_process_command(&controller, UART_CMD_GRIPPER_SET_GRIPPER, payload, sizeof(payload), 0U) ==

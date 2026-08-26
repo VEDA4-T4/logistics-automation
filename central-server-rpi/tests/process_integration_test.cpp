@@ -119,9 +119,7 @@ public:
     }
 
     [[nodiscard]] bool DetectBox() {
-        return Handle(mqtt::DeviceEventTopic(kInputId),
-                      Message(mqtt::MessageType::kBoxDetected, kInputId,
-                              mqtt::BoxDetectedPayload{ .detected = true, .image_name = "integration-box.jpg" }));
+        return DetectInputSensor() && DetectVisionMeasurement();
     }
 
     [[nodiscard]] bool DetectInputSensor() {
@@ -135,6 +133,38 @@ public:
                                                                   }))) {
                 return false;
             }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool ClearInputSensor() {
+        for (int reading = 0; reading < 3; ++reading) {
+            if (!Handle(mqtt::DeviceEventTopic(kInputId), Message(mqtt::MessageType::kSensorStatus, kInputId,
+                                                                  mqtt::SensorStatusPayload{
+                                                                      .sensor_id = 1,
+                                                                      .measurement_status = "OK",
+                                                                      .distance_cm = 40,
+                                                                      .detection_status = std::nullopt,
+                                                                  }))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool DetectVisionMeasurement(std::string barcode = "5901234123457") {
+        if (!Handle(mqtt::DeviceEventTopic(kVisionId), Message(mqtt::MessageType::kVisionMeasurement, kVisionId,
+                                                               mqtt::VisionMeasurementPayload{
+                                                                   .barcode = std::move(barcode),
+                                                                   .box_x = 100,
+                                                                   .box_y = 50,
+                                                                   .box_width = 200,
+                                                                   .box_height = 100,
+                                                                   .frame_width = 400,
+                                                                   .frame_height = 200,
+                                                                   .box_corners = std::nullopt,
+                                                               }))) {
+            return false;
         }
         return mqtt::IsValidUuid(work_id_);
     }
@@ -156,12 +186,12 @@ public:
                                                                  }));
     }
 
-    [[nodiscard]] bool DetectBarcode() {
+    [[nodiscard]] bool DetectBarcode(std::string barcode = "5901234123457") {
         return Handle(mqtt::DeviceEventTopic(kVisionId), Message(mqtt::MessageType::kBarcodeDetected, kVisionId,
                                                                  mqtt::BarcodeDetectedPayload{
                                                                      .work_id = work_id_,
                                                                      .recognition_status = "SUCCESS",
-                                                                     .barcode = "0000000000000",
+                                                                     .barcode = std::move(barcode),
                                                                      .confidence = 0.99,
                                                                      .message = std::nullopt,
                                                                      .error_code = std::nullopt,
@@ -182,18 +212,31 @@ public:
                                                                  }));
     }
 
-    [[nodiscard]] bool ReportStatus(std::string_view device_id, std::string state) {
+    [[nodiscard]] bool ReportStatus(std::string_view device_id, std::string state,
+                                    std::optional<std::string> error_code = std::nullopt) {
         return Handle(mqtt::DeviceStatusTopic(device_id), Message(mqtt::MessageType::kDeviceStatus, device_id,
                                                                   mqtt::DeviceStatusPayload{
                                                                       .status = mqtt::ConnectionState::kOnline,
                                                                       .current_state = std::move(state),
                                                                       .job_id = work_id_,
-                                                                      .error_code = std::nullopt,
+                                                                      .error_code = std::move(error_code),
                                                                       .departure_position = std::nullopt,
                                                                       .target_position = std::nullopt,
                                                                       .confirmed_position = std::nullopt,
                                                                       .movement_state = std::nullopt,
                                                                   }));
+    }
+
+    [[nodiscard]] bool ReportError(std::string_view device_id, std::string error_code) {
+        return Handle(mqtt::DeviceErrorTopic(device_id), Message(mqtt::MessageType::kErrorOccurred, device_id,
+                                                                 mqtt::ErrorOccurredPayload{
+                                                                     .job_id = work_id_,
+                                                                     .error_code = std::move(error_code),
+                                                                     .error_level = "ERROR",
+                                                                     .current_state = "FAULT",
+                                                                     .message = "controller reported a fault",
+                                                                     .distance = std::nullopt,
+                                                                 }));
     }
 
     [[nodiscard]] bool DetectSortedProduct(std::int32_t sensor_id = 3) {
@@ -245,6 +288,15 @@ public:
         });
     }
 
+    [[nodiscard]] std::size_t CountDeviceMessages(std::string_view target, mqtt::MessageType type) const {
+        return static_cast<std::size_t>(
+            std::count_if(published_.begin(), published_.end(), [target, type](const PublishedMessage& publication) {
+                const auto parsed = mqtt::ParseTopic(publication.topic);
+                return parsed.kind == mqtt::TopicKind::kDeviceCommand && parsed.endpoint_id == target &&
+                       publication.message.message_type == type;
+            }));
+    }
+
     [[nodiscard]] bool ReportCommandResult(std::string_view target, mqtt::CommandResult result) {
         const auto publication =
             std::ranges::find_if(published_.rbegin(), published_.rend(), [target](const PublishedMessage& candidate) {
@@ -265,21 +317,20 @@ public:
             command = destination->command;
         }
         const bool accepted = result == mqtt::CommandResult::kSuccess || result == mqtt::CommandResult::kProcessing;
-        const std::string response_message = result == mqtt::CommandResult::kSuccess
-                                                 ? "integration command completed"
+        const std::string response_message = result == mqtt::CommandResult::kSuccess ? "integration command completed"
                                              : result == mqtt::CommandResult::kProcessing
                                                  ? "integration command accepted"
                                                  : "integration command failure";
-        return Handle(mqtt::DeviceResponseTopic(target),
-                      Message(mqtt::MessageType::kCommandResponse, target,
-                              mqtt::CommandResponsePayload{
-                                  .request_id = std::move(request_id),
-                                  .command = command,
-                                  .result = result,
-                                  .error_code = accepted ? std::nullopt
-                                                         : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
-                                  .message = response_message,
-                              }));
+        return Handle(
+            mqtt::DeviceResponseTopic(target),
+            Message(mqtt::MessageType::kCommandResponse, target,
+                    mqtt::CommandResponsePayload{
+                        .request_id = std::move(request_id),
+                        .command = command,
+                        .result = result,
+                        .error_code = accepted ? std::nullopt : std::optional<std::string>{ "ERR-INTEGRATION-COMMAND" },
+                        .message = response_message,
+                    }));
     }
 
 private:
@@ -344,12 +395,15 @@ private:
     }
 
     [[nodiscard]] bool HandleProcessMessage(const mqtt::MqttMessage& message) {
-        if (const auto work_id = sorting_detection_gate_.ShouldStop(
+        if (message.message_type == mqtt::MessageType::kVisionMeasurement) {
+            return true;
+        }
+        if (const auto work_id = line_tracer_load_gate_.ShouldStop(
                 message, orchestrator_.StateMachine().SystemState() == central_server::ProcessSystemState::kRunning,
                 orchestrator_.StateMachine().ActiveWorks())) {
             const auto commands = orchestrator_.SortingDetectionCommands(*work_id, message.timestamp);
             if (commands.empty() || !DispatchProcessCommands(commands)) {
-                sorting_detection_gate_.Retry();
+                line_tracer_load_gate_.Retry(*work_id);
                 return false;
             }
         }
@@ -391,7 +445,6 @@ private:
         });
         handler_->SetProcessMessageHandler([this](const mqtt::MqttMessage& message) {
             const bool process_accepts_work = orchestrator_.Enabled() && orchestrator_.StateMachine().AcceptsNewWork();
-            const bool input_station_occupied = !orchestrator_.StateMachine().ActiveWorks().empty();
             if (input_detection_gate_.ShouldStopConveyor(message)) {
                 const auto stop = orchestrator_.MakeInputConveyorSafetyStop(message.message_id, message.timestamp);
                 if (!DispatchCommand(stop)) {
@@ -399,10 +452,11 @@ private:
                     return false;
                 }
             }
-            if (input_detection_gate_.ShouldCreateWork(message, process_accepts_work, input_station_occupied)) {
+            if (input_detection_gate_.ShouldCreateWork(message, process_accepts_work,
+                                                       !orchestrator_.StateMachine().ActiveWorks().empty())) {
                 const auto* sensor = mqtt::GetPayload<mqtt::SensorStatusPayload>(message);
                 if (sensor == nullptr) {
-                    input_detection_gate_.Retry();
+                    input_detection_gate_.Reset();
                     return false;
                 }
                 const mqtt::MqttMessage box_detected{
@@ -420,7 +474,7 @@ private:
                 const auto encoded = mqtt::SerializeMessage(box_detected);
                 if (!encoded.IsSuccess() ||
                     !handler_->Handle(mqtt::DeviceEventTopic(message.source_id), encoded.payload, kTimestamp)) {
-                    input_detection_gate_.Retry();
+                    input_detection_gate_.Reset();
                     return false;
                 }
             }
@@ -436,16 +490,19 @@ private:
                 .timestamp = std::string(kTimestamp),
                 .data = mqtt::WorkCreatedPayload{ .work_id = work_id_ },
             };
-            const auto begin = orchestrator_.BeginWork(created.message_id, work_id_, device_id, created.timestamp);
-            if (!begin.transition.Applied() || !DispatchProcessCommands(begin.commands)) {
+            const auto begin =
+                orchestrator_.BeginWorkAfterInputStopped(created.message_id, work_id_, device_id, created.timestamp);
+            if (!begin.transition.Applied()) {
                 return central_server::WorkCreationDisposition::kFailed;
             }
             const bool sent_to_vision = Publish(mqtt::DeviceCommandTopic(kVisionId), created);
             const bool sent_to_qt = Publish(mqtt::QtEventTopic("control-center"), created);
-            return sent_to_vision && sent_to_qt &&
-                           orchestrator_.ConfirmVisionAssignment(created.message_id, work_id_).Applied()
-                       ? central_server::WorkCreationDisposition::kCreated
-                       : central_server::WorkCreationDisposition::kFailed;
+            if (!sent_to_vision || !sent_to_qt ||
+                !orchestrator_.ConfirmVisionAssignment(created.message_id, work_id_).Applied()) {
+                return central_server::WorkCreationDisposition::kFailed;
+            }
+            input_detection_gate_.MarkWorkCreated();
+            return central_server::WorkCreationDisposition::kCreated;
         });
         handler_->SetQtEventHandler([this](const mqtt::MqttMessage& message) {
             return Publish(mqtt::QtEventTopic("control-center"), message);
@@ -464,8 +521,10 @@ private:
                         DispatchProcessCommands(completion.commands));
             }
             return orchestrator_
-                .FailDispatch(*completed_intent, response == nullptr ? "process command failed" : response->message)
-                .Applied();
+                       .FailCommandResponse(*completed_intent,
+                                            response == nullptr ? mqtt::CommandResult::kFailed : response->result,
+                                            response == nullptr ? "process command failed" : response->message)
+                       .disposition != central_server::TransitionDisposition::kRejected;
         });
     }
 
@@ -499,7 +558,7 @@ private:
     central_server::CommandManager command_manager_;
     central_server::ProcessOrchestrator orchestrator_;
     central_server::InputDetectionGate input_detection_gate_{ std::string(kInputId) };
-    central_server::SortingDetectionGate sorting_detection_gate_{ std::string(kSortingId) };
+    central_server::LineTracerLoadGate line_tracer_load_gate_{ std::string(kLineTracerId) };
     central_server::ProcessCommandTracker process_command_tracker_;
     std::unique_ptr<central_server::MqttHandler> handler_;
     std::vector<PublishedMessage> published_;
@@ -508,28 +567,46 @@ private:
     std::uint64_t message_sequence_{};
 };
 
-void AdvanceToGripperRequested(ProcessIntegrationHarness& harness) {
+void AdvanceToGripperRequested(ProcessIntegrationHarness& harness, const bool line_tracer_enabled = true) {
     assert(harness.DetectBox());
     assert(mqtt::IsValidUuid(harness.WorkId()));
     assert(harness.DetectPosition());
-    assert(harness.DetectBarcode());
+    assert(harness.DetectBarcode("5901234123457"));
+    if (line_tracer_enabled) {
+        assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
+        assert(harness.ReportCommandResult(kLineTracerId, mqtt::CommandResult::kSuccess));
+        assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
+        assert(harness.ReportStatus(kLineTracerId, "PICKUP_READY_C"));
+    }
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
 }
 
-void TestInputSensorCreatesWorkWithoutVisionBoxEvent() {
+void TestInputSensorCreatesWorkWithoutWaitingForVisionMeasurement() {
     ProcessIntegrationHarness harness(false);
+    assert(!harness.DetectVisionMeasurement());
+    assert(harness.WorkId().empty());
     assert(harness.DetectInputSensor());
+    assert(mqtt::IsValidUuid(harness.WorkId()));
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStop) == 1);
+    assert(harness.CountDeviceMessages(kVisionId, mqtt::MessageType::kWorkCreated) == 1);
     assert(harness.DetectPosition());
     assert(harness.DetectBarcode());
     assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
     assert(!harness.HasMessage(mqtt::MessageType::kBoxDetected, kVisionId));
 }
 
-void TestVisionBarcodeFailureDoesNotEmergencyStopProcess() {
+void TestFailedAcceptedWorkRequiresNextSensorCycle() {
     ProcessIntegrationHarness harness(false);
     assert(harness.DetectInputSensor());
+    const std::string failed_work_id = harness.WorkId();
     assert(harness.FailBarcode());
     assert(harness.Orchestrator().StateMachine().ActiveWorks().empty());
-    assert(harness.Orchestrator().StateMachine().SystemState() == central_server::ProcessSystemState::kStopped);
+    assert(harness.Orchestrator().StateMachine().SystemState() == central_server::ProcessSystemState::kRunning);
+    assert(harness.DetectVisionMeasurement("5901234123457"));
+    assert(harness.WorkId() == failed_work_id);
+    assert(harness.ClearInputSensor());
+    assert(harness.DetectInputSensor());
+    assert(harness.WorkId() != failed_work_id);
 }
 
 void AdvanceToGripperTransfer(ProcessIntegrationHarness& harness) {
@@ -539,7 +616,7 @@ void AdvanceToGripperTransfer(ProcessIntegrationHarness& harness) {
 
 void TestAutomaticProcessCompletes(bool line_tracer_enabled) {
     ProcessIntegrationHarness harness(line_tracer_enabled);
-    AdvanceToGripperRequested(harness);
+    AdvanceToGripperRequested(harness, line_tracer_enabled);
     assert(harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kSuccess));
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 0);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
@@ -564,40 +641,86 @@ void TestAutomaticProcessCompletes(bool line_tracer_enabled) {
     assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
            central_server::WorkStage::kSortingRequested);
     assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
-    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == (line_tracer_enabled ? 0 : 1));
     assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
            central_server::WorkStage::kSorting);
-    assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
+    if (!line_tracer_enabled) {
+        assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
+    }
     assert(harness.ReportStatus(kSortingId, "ROUTING"));
-    assert(harness.DetectSortedProduct());
-    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 0);
-    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
-    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
-    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
-    assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
     if (line_tracer_enabled) {
-        assert(harness.ReportStatus(kLineTracerId, "FOLLOWING_LINE"));
+        assert(harness.ReportStatus(kLineTracerId, "LOAD_ON_C"));
+        assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+        assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 0);
+        assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+        assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+        assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
+        assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+        assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
         assert(harness.CompleteWork());
+        assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
+        assert(harness.ReportCommandResult(kInputId, mqtt::CommandResult::kSuccess));
+    } else {
+        assert(harness.DetectSortedProduct());
+        assert(harness.ReportStatus(kSortingId, "CYCLE_COMPLETE"));
     }
 
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStop) == 1);
     assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
     assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStart) == 1);
-    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 1);
-    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == (line_tracer_enabled ? 1 : 0));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == (line_tracer_enabled ? 1 : 0));
     const auto expected_targets =
         line_tracer_enabled
             ? std::vector<std::string>{ std::string(kInputId),   std::string(kVisionId),  std::string(kLineTracerId),
                                         std::string(kGripperId), std::string(kSortingId), std::string(kSortingId),
-                                        std::string(kInputId),   std::string(kSortingId), std::string(kSortingId) }
+                                        std::string(kSortingId), std::string(kSortingId), std::string(kInputId) }
             : std::vector<std::string>{ std::string(kInputId),   std::string(kVisionId),  std::string(kGripperId),
-                                        std::string(kSortingId), std::string(kSortingId), std::string(kInputId),
-                                        std::string(kSortingId), std::string(kSortingId) };
+                                        std::string(kSortingId), std::string(kSortingId), std::string(kInputId) };
     assert(harness.DeviceCommandTargets() == expected_targets);
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
     assert(work.has_value());
     assert(work->stage == central_server::WorkStage::kCompleted);
+
+    const std::string completed_work_id = harness.WorkId();
+    assert(harness.ClearInputSensor());
+    assert(harness.DetectInputSensor());
+    assert(harness.WorkId() != completed_work_id);
+    assert(harness.DetectPosition());
+    assert(harness.DetectBarcode("5901234123457"));
+}
+
+void TestLineTracerLoadStopsSortingAndStartsTransportOnce() {
+    ProcessIntegrationHarness harness;
+    AdvanceToGripperRequested(harness);
+    assert(harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kSuccess));
+    assert(harness.ReportStatus(kGripperId, "COMPLETED"));
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kSorting);
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+
+    assert(harness.ReportStatus(kLineTracerId, "LOAD_ON_C", "ERR-LOAD-SENSOR"));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 0);
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kSorting);
+
+    assert(harness.ReportStatus(kLineTracerId, "load_on_c"));
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 1);
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kTransporting);
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+
+    assert(harness.ReportCommandResult(kSortingId, mqtt::CommandResult::kSuccess));
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 0);
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kRecovery) == 1);
+    assert(harness.ReportStatus(kLineTracerId, "LOAD_ON_C"));
+    assert(harness.DetectSortedProduct());
+    assert(harness.CountControlCommands(kSortingId, mqtt::ControlCommand::kStop) == 1);
+    assert(harness.CompleteWork());
+    assert(harness.CountControlCommands(kInputId, mqtt::ControlCommand::kStart) == 1);
 }
 
 void TestSortingDispatchFailureKeepsInputStopped() {
@@ -613,11 +736,22 @@ void TestSortingDispatchFailureKeepsInputStopped() {
     assert(work->stage == central_server::WorkStage::kFailed);
 }
 
+void TestFailedInputStopRetriesBeforeCreatingWork() {
+    ProcessIntegrationHarness harness;
+    harness.FailPublishingTo(std::string(kInputId));
+    assert(!harness.DetectInputSensor());
+    assert(harness.WorkId().empty());
+    assert(harness.Orchestrator().StateMachine().ActiveWorks().empty());
+
+    harness.FailPublishingTo({});
+    assert(harness.DetectInputSensor());
+    assert(harness.DetectVisionMeasurement());
+    assert(mqtt::IsValidUuid(harness.WorkId()));
+}
+
 void TestRejectedGripperCommandFailsWork() {
     ProcessIntegrationHarness harness;
-    assert(harness.DetectBox());
-    assert(harness.DetectPosition());
-    assert(harness.DetectBarcode());
+    AdvanceToGripperRequested(harness);
     assert(harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kRejected));
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
@@ -627,14 +761,42 @@ void TestRejectedGripperCommandFailsWork() {
 
 void TestTimedOutGripperCommandFailsWork() {
     ProcessIntegrationHarness harness;
-    assert(harness.DetectBox());
-    assert(harness.DetectPosition());
-    assert(harness.DetectBarcode());
+    AdvanceToGripperRequested(harness);
     assert(harness.ReportCommandResult(kGripperId, mqtt::CommandResult::kTimeout));
 
     const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
     assert(work.has_value());
     assert(work->stage == central_server::WorkStage::kFailed);
+}
+
+void TestTimedOutLineTracerDestinationDiscardsWork() {
+    ProcessIntegrationHarness harness;
+    assert(harness.DetectBox());
+    assert(harness.DetectPosition());
+    assert(harness.DetectBarcode());
+    assert(harness.ReportCommandResult(kLineTracerId, mqtt::CommandResult::kTimeout));
+
+    const auto work = harness.Orchestrator().StateMachine().FindWork(harness.WorkId());
+    assert(work.has_value());
+    assert(work->stage == central_server::WorkStage::kFailed);
+    assert(harness.Orchestrator().AcceptsNewWork());
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
+    assert(harness.ReportStatus(kLineTracerId, "PICKUP_READY_C"));
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 0);
+}
+
+void TestLineTracerSensorErrorDoesNotSuppressPickupReady() {
+    ProcessIntegrationHarness harness;
+    assert(harness.DetectBox());
+    assert(harness.DetectPosition());
+    assert(harness.DetectBarcode());
+    assert(harness.ReportCommandResult(kLineTracerId, mqtt::CommandResult::kSuccess));
+
+    assert(harness.ReportError(kLineTracerId, "ERR-SENSOR"));
+    assert(harness.Orchestrator().StateMachine().FindWork(harness.WorkId())->stage ==
+           central_server::WorkStage::kProductIdentified);
+    assert(harness.ReportStatus(kLineTracerId, "PICKUP_READY_C", "ERR-SENSOR"));
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
 }
 
 void TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess() {
@@ -1042,9 +1204,9 @@ void TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold() {
     assert(failed_removal == central_server::Application::PendingDeliveryEpochResult::kError);
 }
 
-void TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly() {
+void TestVisionMeasurementBufferKeepsLatestCompleteObservation() {
     central_server::VisionMeasurementBuffer buffer;
-    const auto make_measurement = [](std::string message_id, std::string barcode) {
+    const auto make_measurement = [](std::string message_id, std::string barcode, const bool has_box) {
         return mqtt::MqttMessage{
             .message_id = std::move(message_id),
             .message_type = mqtt::MessageType::kVisionMeasurement,
@@ -1053,39 +1215,91 @@ void TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly() {
             .data =
                 mqtt::VisionMeasurementPayload{
                     .barcode = std::move(barcode),
-                    .box_x = 100,
-                    .box_y = 50,
-                    .box_width = 200,
-                    .box_height = 100,
+                    .box_x = has_box ? 100 : 0,
+                    .box_y = has_box ? 50 : 0,
+                    .box_width = has_box ? 200 : 0,
+                    .box_height = has_box ? 100 : 0,
                     .frame_width = 640,
                     .frame_height = 480,
+                    .box_corners = std::nullopt,
                 },
         };
     };
 
-    buffer.Store(make_measurement("VISION-MEASUREMENT-1", "5901234123457"));
-    buffer.Store(make_measurement("VISION-MEASUREMENT-2", "8801234567893"));
+    buffer.Store(make_measurement("VISION-BARCODE-ONLY", "5901234123457", false));
     assert(!buffer.Empty());
-    const auto measurement = buffer.Take();
-    assert(measurement.has_value());
-    assert(measurement->message_id == "VISION-MEASUREMENT-2");
-    const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(*measurement);
-    assert(payload != nullptr && payload->barcode == "8801234567893");
+    assert(buffer.ReplayWhen(true, [](const mqtt::MqttMessage& measurement) {
+        const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
+        return payload != nullptr && payload->barcode == "5901234123457" && !payload->HasBox();
+    }));
     assert(buffer.Empty());
-    assert(!buffer.Take().has_value());
+    buffer.Store(make_measurement("VISION-MEASUREMENT-1", "5901234123457", true));
+    buffer.Store(make_measurement("VISION-MEASUREMENT-2", "8801234567893", true));
+    assert(!buffer.Empty());
+
+    bool processed = false;
+    assert(buffer.ReplayWhen(false, [&processed](const mqtt::MqttMessage&) {
+        processed = true;
+        return true;
+    }));
+    assert(!processed && !buffer.Empty());
+    assert(buffer.ReplayWhen(true, [&processed](const mqtt::MqttMessage& measurement) {
+        processed = true;
+        assert(measurement.message_id == "VISION-MEASUREMENT-2");
+        const auto* payload = mqtt::GetPayload<mqtt::VisionMeasurementPayload>(measurement);
+        assert(payload != nullptr && payload->barcode == "8801234567893");
+        return true;
+    }));
+    assert(processed && buffer.Empty());
+
+    buffer.Store(make_measurement("VISION-MEASUREMENT-3", "5901234123457", true));
+    assert(!buffer.ReplayWhen(true, [](const mqtt::MqttMessage&) { return false; }));
+    assert(!buffer.Empty());
+}
+
+void TestBufferedVisionContinuesAfterUltrasonicWorkCreation() {
+    central_server::VisionMeasurementBuffer buffer;
+    buffer.Store({
+        .message_id = "VISION-BEFORE-ULTRASONIC",
+        .message_type = mqtt::MessageType::kVisionMeasurement,
+        .source_id = std::string(kVisionId),
+        .timestamp = std::string(kTimestamp),
+        .data =
+            mqtt::VisionMeasurementPayload{
+                .barcode = "5901234123457",
+                .box_x = 206,
+                .box_y = 101,
+                .box_width = 558,
+                .box_height = 452,
+                .frame_width = 1280,
+                .frame_height = 720,
+                .box_corners = std::nullopt,
+            },
+    });
+
+    ProcessIntegrationHarness harness(false);
+    assert(harness.DetectInputSensor());
+    assert(buffer.ReplayWhen(
+        true, [&harness](const mqtt::MqttMessage&) { return harness.DetectPosition() && harness.DetectBarcode(); }));
+    assert(buffer.Empty());
+    assert(harness.CountControlCommands(kGripperId, mqtt::ControlCommand::kExecute) == 1);
 }
 
 }  // namespace
 
 int main() {
-    TestInputSensorCreatesWorkWithoutVisionBoxEvent();
-    TestVisionBarcodeFailureDoesNotEmergencyStopProcess();
+    TestInputSensorCreatesWorkWithoutWaitingForVisionMeasurement();
+    TestFailedAcceptedWorkRequiresNextSensorCycle();
     for (const bool line_tracer_enabled : std::to_array({ true, false })) {
         TestAutomaticProcessCompletes(line_tracer_enabled);
     }
+    TestLineTracerLoadStopsSortingAndStartsTransportOnce();
     TestSortingDispatchFailureKeepsInputStopped();
+    TestFailedInputStopRetriesBeforeCreatingWork();
     TestRejectedGripperCommandFailsWork();
     TestTimedOutGripperCommandFailsWork();
+    TestTimedOutLineTracerDestinationDiscardsWork();
+    TestLineTracerSensorErrorDoesNotSuppressPickupReady();
     TestRecoveryTimeoutNamesMissingDeviceAndPreservesProcess();
     for (const auto stage :
          std::to_array({ central_server::WorkStage::kInputDetected, central_server::WorkStage::kVisionAssigned,
@@ -1097,6 +1311,7 @@ int main() {
     TestApplicationRecoveryCommitFailureLeavesAllStateRetryable();
     TestApplicationProcessEpochStamping();
     TestPendingVisionWorkCreatedEpochIsResolvedBeforeHold();
-    TestVisionMeasurementBeforeUltrasonicWorkIsBufferedLatestOnly();
+    TestVisionMeasurementBufferKeepsLatestCompleteObservation();
+    TestBufferedVisionContinuesAfterUltrasonicWorkCreation();
     return 0;
 }

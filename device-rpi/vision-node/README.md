@@ -66,21 +66,21 @@ switches to headless mode automatically when neither `DISPLAY` nor `WAYLAND_DISP
 The runtime sequence is:
 
 1. The vision node connects, publishes registration, and starts heartbeats.
-2. The node confirms a box locally and repeatedly publishes the work-free `VISION_MEASUREMENT` observation (barcode,
-   box geometry, frame size, and optional corners); it does not create a work or publish `BOX_DETECTED`.
-3. The input ultrasonic event causes the central server to create the work and stop the input conveyor. The server
-   ignores measurements received before that event and binds the first measurement after it to the active work.
-4. The central server converts the bound measurement into its canonical `POSITION_DETECTED`, `BARCODE_DETECTED`, and
-   catalog `PRODUCT_INFO` transitions, then starts the existing ACK-gated gripper/sorting process.
+2. Whenever a barcode is visible, the node publishes a fresh `VISION_MEASUREMENT` at a bounded rate. A measurement
+   may contain only the barcode; box geometry is included when both are detected in the same observation.
+3. The input ultrasonic event stops the input conveyor and immediately creates one work. The server replies with
+   `WORK_CREATED`; repeated sensor samples cannot create another work in the same detection cycle.
+4. The central server binds the newest complete measurement to that `workId`, derives `POSITION_DETECTED` and
+   `BARCODE_DETECTED`, adds catalog `PRODUCT_INFO`, and routes the product events to Qt. Barcode-only measurements are
+   accepted but cannot advance the work until box geometry is available.
 5. If image upload is enabled, the node uploads the JPEG over HTTP(S), verifies the response, and publishes
    `PRODUCT_IMAGE` for the central work flow.
-6. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. Measurement publication is transient
-   QoS0; a disconnected broker drops that sample and the next camera frame retries. Durable result publication still
-   uses the existing `RESULT_PENDING` retry flow.
+6. Camera, encoding, and upload failures are reported with `ERROR_OCCURRED`. Durable result publication uses the
+   existing `RESULT_PENDING` retry flow.
 
 The central server must therefore be running with its MQTT subscriptions and image upload endpoint enabled before the
-complete scenario can finish. The vision node does not wait for `WORK_CREATED` or `WORK_ASSIGNED`; it continuously
-reports measurements and the central server supplies the work ID only when it accepts an ultrasonic-gated sample.
+complete scenario can finish. Measurement delivery is best-effort and continuous; the central server owns work
+binding and duplicate process transitions. Durable image and failure results remain associated with `WORK_CREATED`.
 
 The product orientation is a system input constraint: the barcode must face upward when the product enters the vision
 area. The vision node does not request product rotation or search the other five faces.
@@ -120,8 +120,8 @@ dropped while disconnected; the next visible frame publishes a fresh barcode/pos
 error results still remain in `RESULT_PENDING` until reconnect and then return to `WAITING_FOR_PRODUCT`.
 
 No-box frames are not reported as a work failure because the node does not own a `workId`. The node keeps scanning
-without raising a system error. The central server owns the box-arrival gate: it ignores observations until the input
-ultrasonic event creates the active work, rather than asking the vision node to infer an arrival timeout.
+without raising a system error. The central server owns the box-arrival gate: an input ultrasonic event creates the
+active work, while a complete vision measurement supplies the position and barcode for that work.
 
 ## Vision ablation benchmark
 
@@ -224,7 +224,7 @@ vision_pid="$(pgrep -n logistics_vision_node)"
   --label operational --load-pid "${vision_pid}" --load-log /tmp/vision-operational.log
 ```
 
-The operational run succeeds only when the real node stays alive and the measurement window adds both an MQTT result
+The operational run succeeds only when the real node stays alive and the work window adds both an MQTT result
 publication and a confirmed HTTP image upload to the log. Compare `benchmark-baseline.csv` with
 `benchmark-operational.csv` and retain the separate `visuals-baseline/` and `visuals-operational/` directories.
 

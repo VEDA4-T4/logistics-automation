@@ -12,6 +12,10 @@ namespace {
     return stage == WorkStage::kCompleted;
 }
 
+[[nodiscard]] bool IsActive(WorkStage stage) noexcept {
+    return !IsTerminal(stage) && stage != WorkStage::kFailed;
+}
+
 [[nodiscard]] bool IsSuspended(WorkStage stage) noexcept {
     return stage == WorkStage::kStopped || stage == WorkStage::kFailed || stage == WorkStage::kEmergencyStopped ||
            stage == WorkStage::kRecovering;
@@ -28,7 +32,10 @@ ProcessSystemState ProcessStateMachine::SystemState() const noexcept {
 }
 
 bool ProcessStateMachine::AcceptsNewWork() const noexcept {
-    return system_state_ == ProcessSystemState::kIdle || system_state_ == ProcessSystemState::kRunning;
+    if (system_state_ != ProcessSystemState::kIdle && system_state_ != ProcessSystemState::kRunning) {
+        return false;
+    }
+    return std::ranges::none_of(works_, [](const auto& entry) { return IsActive(entry.second.stage); });
 }
 
 ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
@@ -47,7 +54,7 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
     ProcessTransition transition;
     if (event.type == ProcessEventType::kWorkCreated) {
         if (!AcceptsNewWork()) {
-            transition = Reject("new work is not allowed while the system is stopped, failed, or recovering");
+            transition = Reject("new work is not allowed while another work is active or the system is unavailable");
         } else if (works_.contains(event.work_id)) {
             transition = Reject("workId already exists");
         } else {
@@ -72,11 +79,6 @@ ProcessTransition ProcessStateMachine::Apply(const ProcessEvent& event) {
         const auto iterator = works_.find(event.work_id);
         transition =
             iterator == works_.end() ? Reject("workId is not active") : ApplyToExisting(event, iterator->second);
-        if (iterator != works_.end() && event.type == ProcessEventType::kBarcodeFailed && transition.Applied()) {
-            works_.erase(iterator);
-            SuspendActiveWorks(WorkStage::kStopped);
-            system_state_ = ProcessSystemState::kStopped;
-        }
     }
 
     if (!event.message_id.empty()) {
@@ -94,23 +96,6 @@ ProcessTransition ProcessStateMachine::ApplySystemFailure(std::string reason) {
         }
     }
     system_state_ = ProcessSystemState::kError;
-    return {
-        .disposition = TransitionDisposition::kApplied,
-        .previous_stage = std::nullopt,
-        .current_stage = std::nullopt,
-        .reason = {},
-    };
-}
-
-ProcessTransition ProcessStateMachine::ClearSystemFailureIfIdle() {
-    if (system_state_ != ProcessSystemState::kError && system_state_ != ProcessSystemState::kEmergencyStop) {
-        return Reject("automatic recovery requires an error or emergency-stop state");
-    }
-    if (!ActiveWorks().empty()) {
-        return Reject("automatic recovery is not allowed while work is active");
-    }
-    system_state_ =
-        system_state_ == ProcessSystemState::kEmergencyStop ? ProcessSystemState::kStopped : ProcessSystemState::kIdle;
     return {
         .disposition = TransitionDisposition::kApplied,
         .previous_stage = std::nullopt,
@@ -235,6 +220,9 @@ ProcessTransition ProcessStateMachine::CompleteSystemRecovery() {
 bool ProcessStateMachine::RestoreAfterServerRestart(ProcessSystemState stored_state,
                                                     std::vector<WorkProcessSnapshot> works,
                                                     std::vector<std::string> processed_message_ids) {
+    if (works.size() > 1) {
+        return false;
+    }
     std::unordered_map<std::string, WorkProcessSnapshot> restored;
     for (auto& work : works) {
         if (!contracts::IsValidUuid(work.work_id) || IsTerminal(work.stage) || restored.contains(work.work_id)) {
@@ -290,7 +278,7 @@ std::vector<WorkProcessSnapshot> ProcessStateMachine::ActiveWorks() const {
     std::vector<WorkProcessSnapshot> result;
     for (const auto& [work_id, work] : works_) {
         static_cast<void>(work_id);
-        if (!IsTerminal(work.stage)) {
+        if (IsActive(work.stage)) {
             result.push_back(work);
         }
     }
@@ -400,6 +388,14 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             return Move(work, WorkStage::kSorting, event.source_id);
 
         case ProcessEventType::kSortingCompleted:
+            if (work.stage == WorkStage::kTransporting) {
+                return {
+                    .disposition = TransitionDisposition::kDuplicate,
+                    .previous_stage = work.stage,
+                    .current_stage = work.stage,
+                    .reason = "sorting completion was already superseded by line-tracer load-on",
+                };
+            }
             if (work.stage != WorkStage::kSorting) {
                 return Reject("sorting completion is not allowed in the current work stage");
             }
@@ -412,7 +408,8 @@ ProcessTransition ProcessStateMachine::ApplyToExisting(const ProcessEvent& event
             return Move(work, WorkStage::kTransporting, event.source_id);
 
         case ProcessEventType::kTransportStarted:
-            if (!IsOneOf(work.stage, { WorkStage::kTransportRequested, WorkStage::kTransporting })) {
+            if (!IsOneOf(work.stage,
+                         { WorkStage::kSorting, WorkStage::kTransportRequested, WorkStage::kTransporting })) {
                 return Reject("line-tracer status is not allowed in the current work stage");
             }
             return Move(work, WorkStage::kTransporting, event.source_id);

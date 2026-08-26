@@ -43,6 +43,7 @@ reconnect_max_delay_seconds=20
 clean_session=no
 publish_spool_directory=/var/lib/logistics/mqtt-spool
 publish_spool_maximum_bytes=16384
+publish_spool_maximum_records=128
 
 [sorting]
 default_speed=65
@@ -89,6 +90,7 @@ allow_insecure_http=false
     assert(!config.clean_session);
     assert(config.publish_spool_directory == "/var/lib/logistics/mqtt-spool");
     assert(config.publish_spool_maximum_bytes == 16384);
+    assert(config.publish_spool_maximum_records == 128);
     assert(config.log_upload_enabled);
     assert(config.log_upload.device_id == "PI-01");
     assert(config.log_upload.endpoint_url == "https://server.example/api/v1/uploads/logs");
