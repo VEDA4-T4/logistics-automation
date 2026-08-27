@@ -133,10 +133,10 @@ route_action_t RoutePlanner_OnMarker(route_plan_t* plan) {
             }
 
             if (RoutePlanner_TargetUsesCBranch(plan) != 0U) {
-                /* Pass C's common-line crossing before turning into the offset pickup branch. */
+                /* Turn from the common line, then turn once more at C's offset pickup branch. */
                 plan->phase = ROUTE_PHASE_TO_C_PICKUP_TURN;
                 plan->expected_marker = ROUTE_MARKER_C_PICKUP_TURN;
-                return ROUTE_ACTION_GO_STRAIGHT;
+                return ROUTE_ACTION_TURN_LEFT;
             }
 
             plan->phase = ROUTE_PHASE_TO_PICKUP;
