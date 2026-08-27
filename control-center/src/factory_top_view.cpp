@@ -284,9 +284,12 @@ std::optional<QPointF> LineTracerPositionPoint(const LineTracerPositionStatus& p
 
 QList<QPointF> LineTracerPositionPath(const LineTracerPositionStatus& departure, const LineTracerPositionStatus& target,
                                       LineTravelLeg leg) {
-    const auto departure_route = LineTracerPositionRoute(departure);
     const auto target_route = LineTracerPositionRoute(target);
-    const auto departure_point = LineTracerPositionPoint(departure, leg);
+    const auto departure_route =
+        leg == LineTravelLeg::ToDestination ? target_route : LineTracerPositionRoute(departure);
+    const auto departure_point = leg == LineTravelLeg::ToDestination && target_route.has_value()
+                                     ? std::optional<QPointF>{ kSortingPositions[*target_route] }
+                                     : LineTracerPositionPoint(departure, leg);
     const auto target_point = LineTracerPositionPoint(target, leg);
     if (!departure_route.has_value() || !target_route.has_value() || !departure_point.has_value() ||
         !target_point.has_value()) {
@@ -860,6 +863,7 @@ struct FactoryTopViewWidget::Impl {
                 }
                 if (load_on_route.has_value()) {
                     line_travel_leg = LineTravelLeg::ToDestination;
+                    line_origin_route = load_on_route;
                 } else if (pickup_route.has_value()) {
                     line_travel_leg = LineTravelLeg::AtPickup;
                     line_origin_route = pickup_route;
@@ -887,7 +891,11 @@ struct FactoryTopViewWidget::Impl {
                     node.moving_item->show();
                     const auto travel_leg = line_travel_leg == LineTravelLeg::ToPickup ? LineTravelLeg::ToPickup
                                                                                        : LineTravelLeg::ToDestination;
-                    const auto confirmed_point = LineTracerPositionPoint(*process.confirmed_position, travel_leg);
+                    const auto confirmed_point =
+                        process.movement_state == QStringLiteral("MOVING") &&
+                                travel_leg == LineTravelLeg::ToDestination && process.target_position.has_value()
+                            ? LineTracerPositionPoint(*process.target_position, LineTravelLeg::ToPickup)
+                            : LineTracerPositionPoint(*process.confirmed_position, travel_leg);
                     if (confirmed_point.has_value() && process.movement_state == QStringLiteral("MOVING") &&
                         process.departure_position.has_value() && process.target_position.has_value()) {
                         const auto reported_path =
