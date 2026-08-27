@@ -38,6 +38,35 @@ void TestSafeStop() {
     assert(output.standby == 0U);
 }
 
+void TestForwardPwmFloorsRestartDirectionChangedWheel() {
+    motor_output_t output{};
+
+    output.left_pwm = 180U;
+    output.right_pwm = 410U;
+    output.left_direction = MOTOR_DIRECTION_FORWARD;
+    output.right_direction = MOTOR_DIRECTION_FORWARD;
+    output.standby = 1U;
+    assert(MotorControlLogic_ApplyForwardPwmFloors(MOTOR_CONTROL_TURN_EXIT_MIN_PWM, MOTOR_CONTROL_TURN_EXIT_MIN_PWM,
+                                                   &output) != 0U);
+    AssertForward(output, MOTOR_CONTROL_TURN_EXIT_MIN_PWM, 410U);
+
+    output.left_pwm = 410U;
+    output.right_pwm = 180U;
+    assert(MotorControlLogic_ApplyForwardPwmFloors(MOTOR_CONTROL_TURN_EXIT_MIN_PWM,
+                                                   MOTOR_CONTROL_RIGHT_TURN_EXIT_RESTART_PWM, &output) != 0U);
+    AssertForward(output, 410U, MOTOR_CONTROL_RIGHT_TURN_EXIT_RESTART_PWM);
+
+    output.left_pwm = 230U;
+    output.right_pwm = 230U;
+    assert(MotorControlLogic_ApplyForwardPwmFloors(MOTOR_CONTROL_TURN_EXIT_MIN_PWM, MOTOR_CONTROL_TURN_EXIT_MIN_PWM,
+                                                   &output) != 0U);
+    AssertForward(output, MOTOR_CONTROL_TURN_EXIT_MIN_PWM, MOTOR_CONTROL_TURN_EXIT_MIN_PWM);
+
+    output.left_direction = MOTOR_DIRECTION_REVERSE;
+    assert(MotorControlLogic_ApplyForwardPwmFloors(MOTOR_CONTROL_TURN_EXIT_MIN_PWM, MOTOR_CONTROL_TURN_EXIT_MIN_PWM,
+                                                   &output) == 0U);
+}
+
 void TestLineFollow() {
     motor_output_t output{};
 
@@ -238,6 +267,7 @@ void TestControlWhiteGapHoldsPreviousOutput() {
 void RunMotorControlLogicTests() {
     TestClamp();
     TestSafeStop();
+    TestForwardPwmFloorsRestartDirectionChangedWheel();
     TestLineFollow();
     TestDifferentialForward();
     TestDifferentialForwardKeepsBothWheelsTurning();

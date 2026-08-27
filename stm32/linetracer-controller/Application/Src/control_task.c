@@ -29,6 +29,8 @@ static uint16_t controlTaskLineRightRaw;
 static uint32_t controlTaskNextPidTraceMs;
 static uint8_t controlTaskMotorReady;
 static uint32_t controlTaskStartBoostUntilMs;
+static uint32_t controlTaskTurnExitBoostUntilMs;
+static route_action_t controlTaskTurnExitBoostAction;
 static volatile uint8_t controlTaskInitialized;
 static app_control_safety_event_t controlTaskPendingUnloadReset;
 static uint8_t controlTaskPendingUnloadResetActive;
@@ -186,6 +188,8 @@ static void ControlTask_ResetRouteSensorPipeline(uint32_t now_ms) {
     controlTaskRouteMarkerClearSinceMs = 0U;
     controlTaskRouteMarkerClearActive = 0U;
     controlTaskRouteMarkerArmed = 0U;
+    controlTaskTurnExitBoostUntilMs = 0U;
+    controlTaskTurnExitBoostAction = ROUTE_ACTION_NONE;
     LineFollowPid_Reset(&controlTaskLinePid);
 }
 
@@ -347,6 +351,8 @@ static void ControlTask_ProcessSafetyEvents(void) {
 
         LineFollowPid_Reset(&controlTaskLinePid);
         controlTaskStartBoostUntilMs = 0U;
+        controlTaskTurnExitBoostUntilMs = 0U;
+        controlTaskTurnExitBoostAction = ROUTE_ACTION_NONE;
         MotorControl_ForceStop();
         if (event.type == APP_CONTROL_SAFETY_RESET_APPROVED) {
             uint32_t request_id = 0U;
@@ -426,6 +432,35 @@ static void ControlTask_ApplyStartBoost(motor_output_t* output, uint32_t now_ms)
     }
 }
 
+static void ControlTask_ApplyTurnExitBoost(motor_output_t* output, uint32_t now_ms) {
+    uint16_t right_pwm_floor = MOTOR_CONTROL_TURN_EXIT_MIN_PWM;
+
+    if (controlTaskTurnExitBoostUntilMs == 0U) {
+        return;
+    }
+
+    if (ControlTask_TimeReached(now_ms, controlTaskTurnExitBoostUntilMs) != 0U) {
+        controlTaskTurnExitBoostUntilMs = 0U;
+        controlTaskTurnExitBoostAction = ROUTE_ACTION_NONE;
+        return;
+    }
+
+    if (controlTaskTurnExitBoostAction == ROUTE_ACTION_TURN_RIGHT) {
+        /* The right wheel must overcome reverse-to-forward static friction after a right pivot. */
+        right_pwm_floor = MOTOR_CONTROL_RIGHT_TURN_EXIT_RESTART_PWM;
+    } else if (controlTaskTurnExitBoostAction != ROUTE_ACTION_TURN_LEFT) {
+        controlTaskTurnExitBoostUntilMs = 0U;
+        controlTaskTurnExitBoostAction = ROUTE_ACTION_NONE;
+        return;
+    }
+
+    if (MotorControlLogic_ApplyForwardPwmFloors(MOTOR_CONTROL_TURN_EXIT_MIN_PWM, right_pwm_floor, output) == 0U) {
+        /* A stop, safety event, or another pivot cancels this forward-only assist. */
+        controlTaskTurnExitBoostUntilMs = 0U;
+        controlTaskTurnExitBoostAction = ROUTE_ACTION_NONE;
+    }
+}
+
 static uint8_t ControlTask_ApplyMotorOutput(const motor_output_t* output, uint32_t now_ms) {
     motor_output_t adjusted_output;
 
@@ -441,6 +476,7 @@ static uint8_t ControlTask_ApplyMotorOutput(const motor_output_t* output, uint32
 
     adjusted_output = *output;
     ControlTask_ApplyStartBoost(&adjusted_output, now_ms);
+    ControlTask_ApplyTurnExitBoost(&adjusted_output, now_ms);
     if (MotorControl_Apply(&adjusted_output) == 0U) {
         controlTaskMotorReady = 0U;
         MotorControl_ForceStop();
@@ -960,6 +996,7 @@ static uint8_t ControlTask_ProcessLineInput(uint8_t line_left, uint8_t line_cent
                                             uint32_t sampled_at_ms, uint32_t now_ms) {
     linetracer_control_state_t previous_state = controlTaskContext.state;
     control_junction_phase_t previous_junction_phase = controlTaskContext.junction_phase;
+    route_action_t previous_junction_action = controlTaskContext.junction_action;
     control_line_result_t line_result = ControlLogic_ProcessLineSampleWithCenter(
         &controlTaskContext, line_left, line_center, line_right, sampled_at_ms);
     uint8_t turn_completed =
@@ -978,6 +1015,11 @@ static uint8_t ControlTask_ProcessLineInput(uint8_t line_left, uint8_t line_cent
         if (turn_completed != 0U) {
             /* Keep this target sample, but discard AO steering history from the completed pivot. */
             SensorTask_RequestLineTrackingReset();
+            if (previous_junction_action == ROUTE_ACTION_TURN_LEFT ||
+                previous_junction_action == ROUTE_ACTION_TURN_RIGHT) {
+                controlTaskTurnExitBoostUntilMs = now_ms + CONTROL_TURN_EXIT_BOOST_MS;
+                controlTaskTurnExitBoostAction = previous_junction_action;
+            }
         }
     }
     if (line_result.action_valid != 0U) {
@@ -1201,6 +1243,9 @@ void StartControlTask(void* argument) {
     controlTaskRouteMarkerClearSinceMs = 0U;
     controlTaskRouteMarkerClearActive = 0U;
     controlTaskRouteMarkerArmed = 0U;
+    controlTaskStartBoostUntilMs = 0U;
+    controlTaskTurnExitBoostUntilMs = 0U;
+    controlTaskTurnExitBoostAction = ROUTE_ACTION_NONE;
     next_wake_tick = osKernelGetTickCount();
     last_alive_tick = next_wake_tick;
     ControlLogic_Init(&controlTaskContext, next_wake_tick);
