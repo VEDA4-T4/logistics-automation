@@ -82,7 +82,7 @@ void TestDestinationNoiseDoesNotClearLoad() {
 
     now_ms = CaptureBaseline(context, SENSOR_FSR_BASELINE_FOR_LOAD_OFF, 2000U, now_ms);
     for (std::uint32_t index = 0U; index < 80U; ++index, now_ms += 10U) {
-        const auto noisy_raw = ((index % 2U) == 0U) ? 1800U : 2000U;
+        const auto noisy_raw = static_cast<std::uint16_t>(((index % 2U) == 0U) ? 1800U : 2000U);
         const auto update = UpdateFsr(context, noisy_raw, now_ms);
         assert((update.event_flags & APP_SENSOR_EVENT_LOAD_OFF) == 0U);
     }
