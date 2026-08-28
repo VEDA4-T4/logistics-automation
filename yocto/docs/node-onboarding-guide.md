@@ -35,7 +35,7 @@ Yocto를 처음 접하는 사람이 환경 구축부터 순서대로 따라갈 �
 |---|---|---|---|---|
 | **라인트레이서** | ✅ | ✅ `LOGISTICS_BUILD_LINETRACER_NODE` | ✅ | ✅ **바로 가능** |
 | **비전** | ✅ | ✅ `LOGISTICS_BUILD_VISION_NODE` | ❌ | ⚠️ OpenCV 선결 |
-| **그리퍼** | ❌ `feature/gripper-node`에만 | ❌ **없음** | ✅ | ❌ 선결 작업 필요 |
+| **그리퍼** | ✅ | ✅ `LOGISTICS_BUILD_GRIPPER_NODE` | ✅ | ✅ **바로 가능** |
 
 ## 확인 명령
 
@@ -52,11 +52,6 @@ git show origin/main:CMakeLists.txt | grep LOGISTICS_BUILD
 ```
 
 ## 막혔다면 — 선결 작업
-
-**그리퍼**: Yocto 이전에 두 가지가 먼저입니다.
-1. `feature/gripper-node`를 `main`에 머지
-2. 최상위 `CMakeLists.txt`에 `option(LOGISTICS_BUILD_GRIPPER_NODE ...)` 추가하고
-   `device-rpi/CMakeLists.txt`에 타깃 등록
 
 **비전**: OpenCV 버전 충돌을 먼저 풀어야 합니다.
 
@@ -836,19 +831,16 @@ A를 택한다면 4.10 전용 API를 쓰는지 먼저 확인하세요.
 - 이미지 업로드를 쓰면 `[image_upload]` 섹션 설정이 필요합니다
 - **OpenCV가 들어가면 이미지가 3~4배 커지고 빌드 시간이 크게 늘어납니다**
 
-## 7-3. 그리퍼 — 선결 작업 두 가지
+## 7-3. 그리퍼 — Input/Sorting과 같은 UART 노드
 
-1. **소스 머지**: `feature/gripper-node` → `main` (또는 SRCREV가 그 브랜치를 가리키게)
-2. **CMake 옵션 추가**: `LOGISTICS_BUILD_GRIPPER_NODE`가 **아예 없습니다**
+그리퍼 소스와 `LOGISTICS_BUILD_GRIPPER_NODE` CMake 옵션은 main에 포함되어 있습니다.
+Yocto 구성은 Input/Sorting과 동일하게 VEDAUART 드라이버와 `/dev/vedauart`를 사용하며,
+`gripper-node.ini`의 `[gripper]` 섹션에 taught pose·관절 한계·속도·클로 위치를 함께 설정합니다.
 
-```cmake
-# 최상위 CMakeLists.txt
-option(LOGISTICS_BUILD_GRIPPER_NODE "Build the gripper Raspberry Pi node" ON)
-```
-
-`device-rpi/CMakeLists.txt`에도 타깃 등록이 필요합니다.
-
-그 뒤로는 라인트레이서와 동일합니다 (UART 사용).
+- KAS: `yocto/kas/gripper.yml`
+- 애플리케이션 레시피: `recipes-apps/logistics-gripper-node`
+- 이미지: `logistics-gripper-image`
+- 서비스 실행 인자: `/etc/logistics/gripper-node.ini /dev/vedauart`
 
 ---
 
