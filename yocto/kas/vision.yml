@@ -1,0 +1,24 @@
+header:
+  version: 23
+  includes:
+    - yocto/kas/base.yml
+
+target:
+  - logistics-vision-image
+
+repos:
+  meta-openembedded:
+    layers:
+      meta-multimedia:
+
+local_conf_header:
+  vision-camera: |
+    RASPBERRYPI_CAMERA_V2 = "1"
+    PACKAGECONFIG:append:pn-opencv = " dnn"
+    PACKAGECONFIG:append:pn-libcamera = " gst"
+
+  production-security: |
+    EXTRA_IMAGE_FEATURES += "allow-root-login"
+
+  production-identity: |
+    hostname:pn-base-files = "vision-node-01"

@@ -207,7 +207,7 @@ target_include_directories(vision_processing_config PUBLIC vision-node)
 logistics_enable_warnings(vision_processing_config)
 
 if(LOGISTICS_BUILD_VISION_NODE)
-    find_package(OpenCV 4.10.0 EXACT REQUIRED COMPONENTS core dnn highgui imgcodecs imgproc objdetect videoio)
+    find_package(OpenCV 4.9 REQUIRED COMPONENTS core dnn highgui imgcodecs imgproc objdetect videoio)
 
     add_library(
         vision_failure_frame_store
