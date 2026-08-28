@@ -1,0 +1,37 @@
+[Unit]
+Description=Logistics Vision Node
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/logistics/vision-node.ini
+ConditionPathExists=/etc/logistics/tls/ca.crt
+
+[Service]
+Type=simple
+User=logistics-vision
+Group=logistics
+SupplementaryGroups=video
+WorkingDirectory=/var/lib/logistics
+ExecStart=/usr/bin/logistics_vision_node --headless --config /etc/logistics/vision-node.ini
+Restart=on-failure
+RestartSec=3
+StateDirectory=logistics
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
