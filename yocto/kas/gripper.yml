@@ -1,0 +1,17 @@
+header:
+  version: 23
+  includes:
+    - yocto/kas/base.yml
+
+target:
+  - logistics-gripper-image
+
+local_conf_header:
+  gripper-vedauart: |
+    RPI_EXTRA_CONFIG:append = "\n# Enable VEDAUART\ndtoverlay=vedauart\n"
+
+  production-security: |
+    EXTRA_IMAGE_FEATURES += "allow-root-login"
+
+  production-identity: |
+    hostname:pn-base-files = "gripper-node-01"
