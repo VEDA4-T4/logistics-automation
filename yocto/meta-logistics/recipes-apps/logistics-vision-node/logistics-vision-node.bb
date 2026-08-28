@@ -9,8 +9,7 @@ SRC_URI = " \
     file://logistics-vision-node.service \
 "
 
-# Update this revision after the Vision Yocto changes are committed and pushed.
-SRCREV = "8a398f7c761b65fdfee2dbbafb18496b02ae4a08"
+SRCREV = "8771e025180cac6395732aeaaf28755347f9b0eb"
 
 S = "${WORKDIR}/git"
 
