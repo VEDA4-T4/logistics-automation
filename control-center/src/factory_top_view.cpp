@@ -254,6 +254,8 @@ constexpr QPointF kLineTracerSensorPositions[]{ { 80, 165 }, { 80, 183 }, { 195,
 constexpr qreal kLineTracerSensorFontIncreasePoints = 1.0;
 constexpr QRectF kLineTracerSelectionRect{ 70, 235, 445, 222 };
 
+enum class LineTravelLeg { Unknown, ToPickup, AtPickup, ToDestination };
+
 std::optional<int> LineTracerPositionRoute(const LineTracerPositionStatus& position) {
     const auto location = position.location.trimmed().toUpper();
     return location.size() == 1 && location.front() >= QLatin1Char('A') && location.front() <= QLatin1Char('C')
@@ -261,27 +263,34 @@ std::optional<int> LineTracerPositionRoute(const LineTracerPositionStatus& posit
                : std::nullopt;
 }
 
-std::optional<QPointF> LineTracerPositionPoint(const LineTracerPositionStatus& position) {
+std::optional<QPointF> LineTracerPositionPoint(const LineTracerPositionStatus& position, LineTravelLeg leg) {
     const auto route = LineTracerPositionRoute(position);
     const auto area = position.area.trimmed().toUpper();
     if (!route.has_value()) {
         return std::nullopt;
     }
+    if (leg != LineTravelLeg::ToPickup && leg != LineTravelLeg::ToDestination) {
+        return std::nullopt;
+    }
+    const bool to_pickup = leg == LineTravelLeg::ToPickup;
     if (area == QStringLiteral("DEPARTURE")) {
-        return kSortingPositions[*route];
+        return to_pickup ? kLineDestinations[*route] : kSortingPositions[*route];
     }
     if (area == QStringLiteral("DESTINATION")) {
-        return kLineDestinations[*route];
+        return to_pickup ? kSortingPositions[*route] : kLineDestinations[*route];
     }
     return std::nullopt;
 }
 
-QList<QPointF> LineTracerPositionPath(const LineTracerPositionStatus& departure,
-                                      const LineTracerPositionStatus& target) {
-    const auto departure_route = LineTracerPositionRoute(departure);
+QList<QPointF> LineTracerPositionPath(const LineTracerPositionStatus& departure, const LineTracerPositionStatus& target,
+                                      LineTravelLeg leg) {
     const auto target_route = LineTracerPositionRoute(target);
-    const auto departure_point = LineTracerPositionPoint(departure);
-    const auto target_point = LineTracerPositionPoint(target);
+    const auto departure_route =
+        leg == LineTravelLeg::ToDestination ? target_route : LineTracerPositionRoute(departure);
+    const auto departure_point = leg == LineTravelLeg::ToDestination && target_route.has_value()
+                                     ? std::optional<QPointF>{ kSortingPositions[*target_route] }
+                                     : LineTracerPositionPoint(departure, leg);
+    const auto target_point = LineTracerPositionPoint(target, leg);
     if (!departure_route.has_value() || !target_route.has_value() || !departure_point.has_value() ||
         !target_point.has_value()) {
         return {};
@@ -715,13 +724,14 @@ struct FactoryTopViewWidget::Impl {
         }
     }
 
-    void beginLineTravel(NodeItems& node, const QString& work_id, int target_route) {
+    void beginLineTravel(NodeItems& node, const QString& work_id, int target_route, LineTravelLeg leg) {
         const int origin_route = line_origin_route.value_or(target_route);
         line_work_id = work_id;
         line_target_route = target_route;
         line_path.clear();
 
-        line_path.append(kSortingPositions[origin_route - 1]);
+        const bool to_pickup = leg == LineTravelLeg::ToPickup;
+        line_path.append(to_pickup ? kLineDestinations[origin_route - 1] : kSortingPositions[origin_route - 1]);
         const int step = origin_route <= target_route ? 1 : -1;
         for (int route = origin_route;; route += step) {
             line_path.append(kLineIntersections[route - 1]);
@@ -729,7 +739,7 @@ struct FactoryTopViewWidget::Impl {
                 break;
             }
         }
-        line_path.append(kLineDestinations[target_route - 1]);
+        line_path.append(to_pickup ? kSortingPositions[target_route - 1] : kLineDestinations[target_route - 1]);
         node.moving_item->setPos(line_path.front());
         line_arrow_phase = 0;
         updateLineArrows();
@@ -843,13 +853,53 @@ struct FactoryTopViewWidget::Impl {
                     continue;
                 }
 
+                const auto state = NormalizedState(process.current_state);
+                const auto arrived_route = RouteSuffix(state, u"ARRIVED_");
+                const auto unloading_route = RouteSuffix(state, u"UNLOADING_");
+                const auto pickup_route = RouteSuffix(state, u"PICKUP_READY_");
+                const auto load_on_route = RouteSuffix(state, u"LOAD_ON_");
+                if (line_work_id != process.work_id) {
+                    line_travel_leg = LineTravelLeg::Unknown;
+                }
+                if (load_on_route.has_value()) {
+                    line_travel_leg = LineTravelLeg::ToDestination;
+                    line_origin_route = load_on_route;
+                } else if (pickup_route.has_value()) {
+                    line_travel_leg = LineTravelLeg::AtPickup;
+                    line_origin_route = pickup_route;
+                } else if (state == QStringLiteral("MOVING") && line_travel_leg == LineTravelLeg::Unknown) {
+                    line_travel_leg = LineTravelLeg::ToPickup;
+                } else if ((state == QStringLiteral("FOLLOWING_LINE") || state == QStringLiteral("STOPPED") ||
+                            state == QStringLiteral("DELIVERING")) &&
+                           line_travel_leg == LineTravelLeg::AtPickup) {
+                    line_travel_leg = LineTravelLeg::ToDestination;
+                }
+
+                if (pickup_route.has_value()) {
+                    line_origin_route = pickup_route;
+                    line_target_route.reset();
+                    line_work_id = process.work_id;
+                    line_path.clear();
+                    node.motion_enabled = false;
+                    node.moving_item->show();
+                    node.moving_item->setPos(kSortingPositions[*pickup_route - 1]);
+                    hideLineArrows();
+                    continue;
+                }
+
                 if (process.confirmed_position.has_value()) {
                     node.moving_item->show();
-                    const auto confirmed_point = LineTracerPositionPoint(*process.confirmed_position);
+                    const auto travel_leg = line_travel_leg == LineTravelLeg::ToPickup ? LineTravelLeg::ToPickup
+                                                                                       : LineTravelLeg::ToDestination;
+                    const auto confirmed_point =
+                        process.movement_state == QStringLiteral("MOVING") &&
+                                travel_leg == LineTravelLeg::ToDestination && process.target_position.has_value()
+                            ? LineTracerPositionPoint(*process.target_position, LineTravelLeg::ToPickup)
+                            : LineTracerPositionPoint(*process.confirmed_position, travel_leg);
                     if (confirmed_point.has_value() && process.movement_state == QStringLiteral("MOVING") &&
                         process.departure_position.has_value() && process.target_position.has_value()) {
                         const auto reported_path =
-                            LineTracerPositionPath(*process.departure_position, *process.target_position);
+                            LineTracerPositionPath(*process.departure_position, *process.target_position, travel_leg);
                         const bool path_changed = reported_path.isEmpty() || line_path.isEmpty() ||
                                                   line_path.front() != reported_path.front() ||
                                                   line_path.back() != reported_path.back() ||
@@ -873,7 +923,7 @@ struct FactoryTopViewWidget::Impl {
                     }
                     continue;
                 }
-                if (NormalizedState(process.current_state) == QStringLiteral("POSITION_UNKNOWN")) {
+                if (state == QStringLiteral("POSITION_UNKNOWN")) {
                     node.motion_enabled = false;
                     node.moving_item->hide();
                     line_path.clear();
@@ -882,10 +932,6 @@ struct FactoryTopViewWidget::Impl {
                 }
                 node.moving_item->show();
 
-                const auto state = NormalizedState(process.current_state);
-                const auto arrived_route = RouteSuffix(state, u"ARRIVED_");
-                const auto unloading_route = RouteSuffix(state, u"UNLOADING_");
-                const auto pickup_route = RouteSuffix(state, u"PICKUP_READY_");
                 if (const auto route = arrived_route.has_value() ? arrived_route : unloading_route; route.has_value()) {
                     line_origin_route.reset();
                     line_target_route = route;
@@ -893,14 +939,6 @@ struct FactoryTopViewWidget::Impl {
                     line_work_id = process.work_id;
                     node.motion_enabled = false;
                     node.moving_item->setPos(kLineDestinations[*route - 1]);
-                    hideLineArrows();
-                } else if (pickup_route.has_value()) {
-                    line_origin_route = pickup_route;
-                    line_target_route.reset();
-                    line_work_id = process.work_id;
-                    line_path.clear();
-                    node.motion_enabled = false;
-                    node.moving_item->setPos(kSortingPositions[*pickup_route - 1]);
                     hideLineArrows();
                 } else if (node.visual.motion_phase == FactoryMotionPhase::LineCompleted) {
                     if (const auto route = FactoryRouteIndex(process.destination); route.has_value()) {
@@ -922,7 +960,10 @@ struct FactoryTopViewWidget::Impl {
                         hideLineArrows();
                     } else if (line_work_id != process.work_id || line_target_route != target_route ||
                                line_path.isEmpty()) {
-                        beginLineTravel(node, process.work_id, *target_route);
+                        const auto travel_leg = line_travel_leg == LineTravelLeg::ToPickup
+                                                    ? LineTravelLeg::ToPickup
+                                                    : LineTravelLeg::ToDestination;
+                        beginLineTravel(node, process.work_id, *target_route, travel_leg);
                     }
                     node.motion_enabled = state == QStringLiteral("FOLLOWING_LINE") && line_path.size() > 1;
                 }
@@ -1055,6 +1096,7 @@ struct FactoryTopViewWidget::Impl {
     QList<QPointF> line_path;
     int line_arrow_phase{ 0 };
     QString line_work_id;
+    LineTravelLeg line_travel_leg{ LineTravelLeg::Unknown };
 };
 
 FactoryTopViewWidget::FactoryTopViewWidget(QWidget* parent)
