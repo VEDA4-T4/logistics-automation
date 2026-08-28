@@ -1379,7 +1379,10 @@ route_action_t ControlLogic_HandleMarker(control_context_t* context, app_marker_
 
         case LINETRACER_CONTROL_MOVING_ON_COMMON_LINE:
             if (action == ROUTE_ACTION_TURN_LEFT || action == ROUTE_ACTION_TURN_RIGHT) {
-                transition_ok = ControlLogic_Transition(context, LINETRACER_CONTROL_TURNING_TO_PICKUP, now_ms);
+                /* C needs one turn off the common line and a second turn into its pickup branch. */
+                if (context->route_plan.phase != ROUTE_PHASE_TO_C_PICKUP_TURN) {
+                    transition_ok = ControlLogic_Transition(context, LINETRACER_CONTROL_TURNING_TO_PICKUP, now_ms);
+                }
             } else if (action != ROUTE_ACTION_GO_STRAIGHT) {
                 transition_ok = 0U;
             }

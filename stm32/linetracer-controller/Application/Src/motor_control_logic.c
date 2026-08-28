@@ -54,6 +54,23 @@ void MotorControlLogic_MakeSafeStop(motor_output_t* output) {
     output->standby = 0U;
 }
 
+uint8_t MotorControlLogic_ApplyForwardPwmFloors(uint16_t left_pwm_floor, uint16_t right_pwm_floor,
+                                                motor_output_t* output) {
+    if (output == NULL || left_pwm_floor > MOTOR_CONTROL_PWM_MAX || right_pwm_floor > MOTOR_CONTROL_PWM_MAX ||
+        output->standby == 0U || output->left_direction != MOTOR_DIRECTION_FORWARD ||
+        output->right_direction != MOTOR_DIRECTION_FORWARD) {
+        return 0U;
+    }
+
+    if (output->left_pwm != 0U && output->left_pwm < left_pwm_floor) {
+        output->left_pwm = left_pwm_floor;
+    }
+    if (output->right_pwm != 0U && output->right_pwm < right_pwm_floor) {
+        output->right_pwm = right_pwm_floor;
+    }
+    return 1U;
+}
+
 uint8_t MotorControlLogic_ComputeDifferentialForward(uint16_t left_base_pwm, uint16_t right_base_pwm,
                                                      int16_t correction, motor_output_t* output) {
     int32_t fast_boost;

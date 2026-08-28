@@ -1378,6 +1378,53 @@ void TestMarkerAndLoadEventsDriveRouteB() {
     assert(context.route_plan.valid == 0U);
 }
 
+void TestBToCUsesRightThenTwoLeftTurns() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_B, UART_LINETRACER_ROUTE_C, 204U, 0U);
+
+    assert(HandleExpectedMarker(context, 10U) == ROUTE_ACTION_TURN_RIGHT);
+    assert(context.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE);
+    assert(ControlLogic_CompleteTurn(&context, 20U) != 0U);
+
+    assert(HandleExpectedMarker(context, 30U) == ROUTE_ACTION_TURN_LEFT);
+    assert(context.route_plan.phase == ROUTE_PHASE_TO_C_PICKUP_TURN);
+    assert(context.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE);
+    assert(ControlLogic_CompleteTurn(&context, 40U) != 0U);
+
+    assert(HandleExpectedMarker(context, 50U) == ROUTE_ACTION_TURN_LEFT);
+    assert(context.route_plan.phase == ROUTE_PHASE_TO_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_TURNING_TO_PICKUP);
+    assert(ControlLogic_CompleteTurn(&context, 60U) != 0U);
+    assert(context.state == LINETRACER_CONTROL_MOVING_TO_PICKUP);
+
+    assert(HandleExpectedMarker(context, 70U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
+}
+
+void TestAToCUsesRightStraightThenTwoLeftTurns() {
+    control_context_t context{};
+    StartRoute(context, UART_LINETRACER_POSITION_DEST_A, UART_LINETRACER_ROUTE_C, 205U, 0U);
+
+    assert(HandleExpectedMarker(context, 10U) == ROUTE_ACTION_TURN_RIGHT);
+    assert(ControlLogic_CompleteTurn(&context, 20U) != 0U);
+
+    assert(HandleExpectedMarker(context, 30U) == ROUTE_ACTION_GO_STRAIGHT);
+    assert(context.route_plan.junctions_remaining == 1U);
+
+    assert(HandleExpectedMarker(context, 40U) == ROUTE_ACTION_TURN_LEFT);
+    assert(context.route_plan.phase == ROUTE_PHASE_TO_C_PICKUP_TURN);
+    assert(context.state == LINETRACER_CONTROL_MOVING_ON_COMMON_LINE);
+    assert(ControlLogic_CompleteTurn(&context, 50U) != 0U);
+
+    assert(HandleExpectedMarker(context, 60U) == ROUTE_ACTION_TURN_LEFT);
+    assert(context.route_plan.phase == ROUTE_PHASE_TO_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_TURNING_TO_PICKUP);
+    assert(ControlLogic_CompleteTurn(&context, 70U) != 0U);
+
+    assert(HandleExpectedMarker(context, 80U) == ROUTE_ACTION_STOP_AT_PICKUP);
+    assert(context.state == LINETRACER_CONTROL_WAITING_LOAD);
+}
+
 void TestMarkerAndLoadEventsDriveRouteC() {
     control_context_t context{};
     StartRoute(context, UART_LINETRACER_POSITION_DEST_C, UART_LINETRACER_ROUTE_C, 203U, 0U);
@@ -1580,6 +1627,8 @@ int main() {
     TestCompletionOutsideUnloadingDoesNothing();
     TestStopDuringUnloadRequestsAbort();
     TestMarkerAndLoadEventsDriveRouteB();
+    TestBToCUsesRightThenTwoLeftTurns();
+    TestAToCUsesRightStraightThenTwoLeftTurns();
     TestMarkerAndLoadEventsDriveRouteC();
     TestLoadOffDuringReturnIsFault();
     TestEveryPickupReversesForTwoSecondsBeforeTurnAround();

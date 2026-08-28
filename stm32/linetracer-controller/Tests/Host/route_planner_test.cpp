@@ -51,8 +51,7 @@ void TestPickupAndSameZoneUnload(std::uint8_t origin, std::uint8_t target) {
 
         for (std::uint8_t marker = 0U; marker < distance; ++marker) {
             const auto at_target_junction = (marker + 1U == distance);
-            const auto expected_action =
-                (at_target_junction && route != UART_LINETRACER_ROUTE_C) ? target_action : ROUTE_ACTION_GO_STRAIGHT;
+            const auto expected_action = at_target_junction ? target_action : ROUTE_ACTION_GO_STRAIGHT;
             assert(RoutePlanner_OnMarker(&plan) == expected_action);
         }
 
@@ -129,7 +128,7 @@ void TestDirectedCrossZoneTurns() {
             assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
         }
         if (expected.target == UART_LINETRACER_ROUTE_C) {
-            assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_GO_STRAIGHT);
+            assert(RoutePlanner_OnMarker(&plan) == expected.target_turn);
         }
         assert(RoutePlanner_OnMarker(&plan) == expected.target_turn);
         assert(RoutePlanner_OnMarker(&plan) == ROUTE_ACTION_STOP_AT_PICKUP);
