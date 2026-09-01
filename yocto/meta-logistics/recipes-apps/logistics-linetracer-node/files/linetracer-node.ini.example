@@ -1,0 +1,27 @@
+# Copy this file to linetracer-node.ini before running the line tracer node.
+# Do not commit linetracer-node.ini because it can contain deployment IP addresses
+# and MQTT credentials.
+
+[device]
+device_id=PI-LT-01
+node_name=linetracer-node-01
+ip_address=192.0.2.25
+
+[mqtt]
+host=mqtt.logistics.local
+port=8883
+client_id=PI-LT-01
+username=PI-LT-01
+password=replace-with-linetracer-mqtt-password
+tls_enabled=true
+ca_certificate=/etc/logistics/tls/ca.crt
+keep_alive_seconds=30
+reconnect_min_delay_seconds=1
+reconnect_max_delay_seconds=30
+clean_session=false
+publish_spool_directory=/var/lib/logistics/mqtt-spool
+publish_spool_maximum_bytes=52428800
+publish_spool_maximum_records=4096
+
+[log_upload]
+enabled=false
